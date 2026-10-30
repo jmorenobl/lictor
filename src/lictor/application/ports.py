@@ -79,6 +79,14 @@ class Vcs(Protocol):
         """Get trailer values for the given key from git log."""
         ...
 
+    def revert_paths(self, paths: Sequence[str]) -> None:
+        """Selectively revert modified or untracked file paths."""
+        ...
+
+    def diff(self) -> str:
+        """Return working tree diff."""
+        ...
+
 
 @runtime_checkable
 class CommandRunner(Protocol):
