@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "AcceptanceConfig": {
+      "additionalProperties": false,
+      "description": "Configuración de la suite de aceptación (L3).",
+      "properties": {
+        "run": {
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "report": {
+          "default": "junit",
+          "enum": [
+            "exit-code",
+            "junit"
+          ],
+          "title": "Report",
+          "type": "string"
+        },
+        "driver_hints": {
+          "default": "",
+          "title": "Driver Hints",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 600,
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "AcceptanceConfig",
+      "type": "object"
+    },
+    "BackendConfig": {
+      "additionalProperties": false,
+      "description": "Configuración del backend de agente.",
+      "properties": {
+        "kind": {
+          "default": "claude-cli",
+          "enum": [
+            "claude-cli",
+            "fake"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "default": "claude-sonnet-4-5-20250929",
+          "title": "Model",
+          "type": "string"
+        },
+        "auth": {
+          "default": "subscription",
+          "enum": [
+            "subscription",
+            "api_key"
+          ],
+          "title": "Auth",
+          "type": "string"
+        },
+        "max_turns": {
+          "default": 40,
+          "exclusiveMinimum": 0,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "timeout_s": {
+          "default": 1800,
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "integer"
+        }
+      },
+      "title": "BackendConfig",
+      "type": "object"
+    },
+    "ControlConfig": {
+      "additionalProperties": false,
+      "description": "Control determinista de verificación.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "L1",
+            "L2",
+            "L4",
+            "L5"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "run": {
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "report": {
+          "enum": [
+            "exit-code",
+            "junit"
+          ],
+          "title": "Report",
+          "type": "string"
+        },
+        "mode": {
+          "default": "block",
+          "enum": [
+            "block",
+            "measure"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "allow_empty": {
+          "default": false,
+          "title": "Allow Empty",
+          "type": "boolean"
+        },
+        "timeout_s": {
+          "default": 600,
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "run",
+        "report"
+      ],
+      "title": "ControlConfig",
+      "type": "object"
+    },
+    "LimitsConfig": {
+      "additionalProperties": false,
+      "description": "Límites de intentos y tamaño de error.",
+      "properties": {
+        "max_attempts": {
+          "default": 3,
+          "exclusiveMinimum": 0,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_driver_attempts": {
+          "default": 2,
+          "exclusiveMinimum": 0,
+          "title": "Max Driver Attempts",
+          "type": "integer"
+        },
+        "error_max_chars": {
+          "default": 4000,
+          "exclusiveMinimum": 0,
+          "title": "Error Max Chars",
+          "type": "integer"
+        }
+      },
+      "title": "LimitsConfig",
+      "type": "object"
+    },
+    "PathsConfig": {
+      "additionalProperties": false,
+      "description": "Rutas escribibles, del driver y protegidas del proyecto.",
+      "properties": {
+        "writable": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Writable",
+          "type": "array"
+        },
+        "driver": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Driver",
+          "type": "array"
+        },
+        "protected": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Protected",
+          "type": "array"
+        }
+      },
+      "required": [
+        "writable",
+        "driver",
+        "protected"
+      ],
+      "title": "PathsConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Configuración completa de un proyecto (lictor.json).",
+  "properties": {
+    "version": {
+      "default": "0.1",
+      "title": "Version",
+      "type": "string"
+    },
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "backend": {
+      "$ref": "#/$defs/BackendConfig"
+    },
+    "limits": {
+      "$ref": "#/$defs/LimitsConfig"
+    },
+    "paths": {
+      "$ref": "#/$defs/PathsConfig"
+    },
+    "acceptance": {
+      "$ref": "#/$defs/AcceptanceConfig"
+    },
+    "controls": {
+      "items": {
+        "$ref": "#/$defs/ControlConfig"
+      },
+      "title": "Controls",
+      "type": "array"
+    },
+    "suppressions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Suppressions",
+      "type": "array"
+    },
+    "agent_tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Agent Tools",
+      "type": "array"
+    },
+    "hints": {
+      "default": "",
+      "title": "Hints",
+      "type": "string"
+    },
+    "gitignore": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Gitignore",
+      "type": "array"
+    }
+  },
+  "required": [
+    "profile",
+    "paths",
+    "acceptance",
+    "controls"
+  ],
+  "title": "LictorConfig",
+  "type": "object"
+}
