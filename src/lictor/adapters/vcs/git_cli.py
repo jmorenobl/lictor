@@ -39,17 +39,17 @@ class GitCli(Vcs):
 
     def status(self) -> list[str]:
         """Return modified or untracked file paths via git status --porcelain=v1 -uall."""
-        res = self._run_git(["status", "--porcelain=v1", "-uall"])
+        res = self._run_git(["-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall"])
         paths: list[str] = []
         for line in res.stdout.splitlines():
             if len(line) < _MIN_PORCELAIN_LINE_LEN:
                 continue
-            raw_path = line[_PORCELAIN_PREFIX_LEN:].strip()
+            raw_path = line[_PORCELAIN_PREFIX_LEN:]
             if " -> " in raw_path:
-                raw_path = raw_path.split(" -> ")[-1].strip()
+                raw_path = raw_path.split(" -> ")[-1]
             if raw_path.startswith('"') and raw_path.endswith('"'):
                 raw_path = raw_path[1:-1]
-            if raw_path:
+            if raw_path.strip():
                 paths.append(raw_path)
         return paths
 

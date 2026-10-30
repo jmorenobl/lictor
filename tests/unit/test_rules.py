@@ -153,4 +153,3 @@ def test_condense_error_strict_truncation() -> None:
     condensed = condense_error("L1", raw_error, max_chars=200)
     assert len(condensed) <= 200
     assert condensed.startswith("Falló L1")
-

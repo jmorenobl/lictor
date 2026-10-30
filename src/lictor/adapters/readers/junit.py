@@ -18,6 +18,8 @@ def _load_raw_xml(output: str) -> str:
             path = Path(cleaned)
             if path.is_file():
                 return path.read_text(encoding="utf-8")
+            if path.suffix == ".xml" or "/" in cleaned or "\\" in cleaned:
+                return ""
         except OSError:
             pass
     return output

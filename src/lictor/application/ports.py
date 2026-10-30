@@ -107,7 +107,13 @@ class CommandRunner(Protocol):
 class ResultReader(Protocol):
     """Abstraction for translating command output into a ControlResult."""
 
-    def read(self, output: str, exit_code: int, duration_ms: int) -> ControlResult:
+    def read(
+        self,
+        output: str,
+        exit_code: int,
+        duration_ms: int,
+        allow_empty: bool = False,
+    ) -> ControlResult:
         """Parse raw output or report files into a ControlResult."""
         ...
 

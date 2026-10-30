@@ -78,28 +78,33 @@ class VerifyAttemptRequest:
 
 
 class IntegritySnapshot:
-    """ADR-0001: In-memory integrity snapshot of .lictor/ metadata files."""
+    """ADR-0001: In-memory integrity snapshot of .lictor/ and configuration metadata files."""
 
-    MONITORED_FILES = ("seal.json", "lictor.json", "checkpoints.sqlite", "journal.jsonl")
+    MONITORED_LICTOR_FILES = ("seal.json", "checkpoints.sqlite", "journal.jsonl")
 
-    def __init__(self, lictor_dir: Path) -> None:
+    def __init__(self, lictor_dir: Path, project_root: Path | None = None) -> None:
         self.lictor_dir = lictor_dir
-        self.snapshots: dict[str, bytes | None] = {}
+        self.project_root = project_root if project_root is not None else lictor_dir.parent
+        self.snapshots: dict[Path, bytes | None] = {}
         self.take()
 
+    def _monitored_paths(self) -> list[Path]:
+        paths = [self.lictor_dir / name for name in self.MONITORED_LICTOR_FILES]
+        paths.append(self.project_root / "lictor.json")
+        paths.append(self.lictor_dir / "lictor.json")
+        return paths
+
     def take(self) -> None:
-        for name in self.MONITORED_FILES:
-            target = self.lictor_dir / name
+        for target in self._monitored_paths():
             if target.is_file():
-                self.snapshots[name] = target.read_bytes()
+                self.snapshots[target] = target.read_bytes()
             else:
-                self.snapshots[name] = None
+                self.snapshots[target] = None
 
     def verify_and_restore(self) -> bool:
         """Check if monitored files changed. If so, restore them and return False."""
         changed = False
-        for name, initial_bytes in self.snapshots.items():
-            target = self.lictor_dir / name
+        for target, initial_bytes in self.snapshots.items():
             if initial_bytes is None:
                 if target.exists():
                     changed = True
@@ -113,15 +118,25 @@ class IntegritySnapshot:
 def _collect_added_lines(vcs: Vcs, project_root: Path) -> list[str]:
     added_lines: list[str] = []
     diff_text = vcs.diff()
+    diff_files: set[str] = set()
+
     for line in diff_text.splitlines():
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("diff --git a/"):
+            _, sep, b_path = line.partition(" b/")
+            if sep:
+                diff_files.add(b_path.strip().strip('"'))
+        elif line.startswith("+") and not line.startswith("+++"):
             added_lines.append(line[1:])
 
     for rel_path in vcs.status():
-        target = project_root / rel_path
-        if target.is_file():
-            with contextlib.suppress(OSError):
-                added_lines.extend(target.read_text(encoding="utf-8", errors="ignore").splitlines())
+        norm_rel = rel_path.strip('"')
+        if norm_rel not in diff_files:
+            target = project_root / norm_rel
+            if target.is_file():
+                with contextlib.suppress(OSError):
+                    added_lines.extend(
+                        target.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    )
     return added_lines
 
 
@@ -178,8 +193,9 @@ class VerifyAttempt:
 
             control_results[ctrl.id] = ctrl_res
             if not ctrl_ok and ctrl.mode == "block":
+                failed_label = f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id
                 condensed = condense_error(
-                    ctrl.id,
+                    failed_label,
                     ctrl_res.error or "",
                     ctrl_res.test_cases,
                     max_chars=req.error_max_chars,
@@ -229,21 +245,35 @@ class VerifyAttempt:
             condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
             return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
 
+        validation_err = self._validate_sealed_files(sealed_files)
+        if validation_err:
+            condensed = condense_error("L0-sello", validation_err, max_chars=req.error_max_chars)
+            return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+
+        return VerifyResult(ok=True)
+
+    def _validate_sealed_files(self, sealed_files: dict[str, str]) -> str | None:
+        if not sealed_files:
+            return "El archivo de sello .lictor/seal.json no contiene archivos sellados"
+
         for rel_path, expected_hash in sealed_files.items():
             target = self.project_root / rel_path
             if not target.is_file():
-                err = f"Falta archivo sellado: {rel_path}"
-                condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
-                return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+                return f"Falta archivo sellado: {rel_path}"
 
             actual_sha = hashlib.sha256(target.read_bytes()).hexdigest()
             expected_sha = expected_hash.removeprefix("sha256:")
             if actual_sha != expected_sha:
-                err = f"El sello no coincide para {rel_path}"
-                condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
-                return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+                return f"El sello no coincide para {rel_path}"
 
-        return VerifyResult(ok=True)
+        features_dir = self.project_root / "features"
+        if features_dir.is_dir():
+            for feature_file in features_dir.rglob("*.feature"):
+                rel = str(feature_file.relative_to(self.project_root))
+                if rel not in sealed_files:
+                    return f"Archivo de características no sellado: {rel}"
+
+        return None
 
     def _check_suppressions(self, req: VerifyAttemptRequest) -> VerifyResult:
         if not req.suppressions:
@@ -271,11 +301,12 @@ class VerifyAttempt:
         runs_dir = self.project_root / ".lictor" / "runs" / req.run_id
         runs_dir.mkdir(parents=True, exist_ok=True)
         out_file = runs_dir / f"control_{ctrl.id}.xml"
-        cmd_str = ctrl.run.replace("{out}", str(out_file))
+        split_cmd = shlex.split(ctrl.run)
+        cmd_tokens = [tok.replace("{out}", str(out_file)) for tok in split_cmd]
 
-        snapshot = IntegritySnapshot(self.project_root / ".lictor")
+        snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
-            shlex.split(cmd_str),
+            cmd_tokens,
             cwd=self.project_root,
             timeout_s=ctrl.timeout_s,
         )
@@ -293,6 +324,7 @@ class VerifyAttempt:
                 output=output_content,
                 exit_code=cmd_out.returncode,
                 duration_ms=cmd_out.duration_ms,
+                allow_empty=ctrl.allow_empty,
             )
         else:
             combined = f"{cmd_out.stdout}\n{cmd_out.stderr}".strip()
@@ -300,6 +332,7 @@ class VerifyAttempt:
                 output=combined,
                 exit_code=cmd_out.returncode,
                 duration_ms=cmd_out.duration_ms,
+                allow_empty=ctrl.allow_empty,
             )
 
         return c_res.ok, c_res, None
@@ -312,11 +345,12 @@ class VerifyAttempt:
         runs_dir = self.project_root / ".lictor" / "runs" / req.run_id
         runs_dir.mkdir(parents=True, exist_ok=True)
         out_file = runs_dir / "acceptance.xml"
-        cmd_str = req.acceptance_run.replace("{out}", str(out_file))
+        split_cmd = shlex.split(req.acceptance_run)
+        cmd_tokens = [tok.replace("{out}", str(out_file)) for tok in split_cmd]
 
-        snapshot = IntegritySnapshot(self.project_root / ".lictor")
+        snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
-            shlex.split(cmd_str),
+            cmd_tokens,
             cwd=self.project_root,
             timeout_s=req.acceptance_timeout_s,
         )
@@ -341,6 +375,7 @@ class VerifyAttempt:
             output=output_content,
             exit_code=cmd_out.returncode,
             duration_ms=cmd_out.duration_ms,
+            allow_empty=False,
         )
         control_results["acceptance"] = acc_res
 

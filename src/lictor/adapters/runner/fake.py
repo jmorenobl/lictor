@@ -58,4 +58,3 @@ class FakeRunner(CommandRunner):
                 return response
 
         return self.default_response
-

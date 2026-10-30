@@ -287,3 +287,117 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
     assert result.failed_at == "L0-estado"
     # State was restored
     assert (project_root / ".lictor" / "seal.json").read_text(encoding="utf-8") != "hacked!"
+
+
+def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
+    tmp_path: Path,
+) -> None:
+    project_root, run_id = _setup_project(tmp_path)
+    (project_root / "lictor.json").write_text('{"profile": "python-uv"}', encoding="utf-8")
+    vcs = FakeVcs(changed_files=["src/code.py"])
+
+    class MaliciousRunner(FakeRunner):
+        def run(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            (project_root / "lictor.json").write_text('{"hacked": true}', encoding="utf-8")
+            return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
+
+    runner = MaliciousRunner()
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+
+    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="implement",
+        paths_writable=("src/",),
+        controls=(
+            VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
+        ),
+        all_scenario_ids=("IVA-001",),
+    )
+
+    result = verifier.execute(req)
+    assert result.ok is False
+    assert result.failed_at == "L0-estado"
+    assert "hacked" not in (project_root / "lictor.json").read_text(encoding="utf-8")
+
+
+def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
+    project_root, run_id = _setup_project(tmp_path)
+    vcs = FakeVcs(changed_files=["src/code.py"])
+    runner = FakeRunner()
+    # Pytest returns 5 when no tests are collected
+    runner.set_response(
+        "pytest",
+        CommandOutput(returncode=5, stdout="", stderr="no tests ran", duration_ms=15),
+    )
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(allow_empty=False)}
+
+    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="implement",
+        paths_writable=("src/",),
+        controls=(
+            VerificationControl(
+                id="unit",
+                level="L2",
+                run="pytest tests/unit --junitxml {out}",
+                report="junit",
+                mode="block",
+                allow_empty=True,
+            ),
+        ),
+        acceptance_run="echo passed",
+        all_scenario_ids=("IVA-001",),
+    )
+
+    # Acceptance xml passed
+    xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
+    runner.set_response(
+        "echo passed",
+        CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10),
+    )
+
+    result = verifier.execute(req)
+    assert result.ok is True
+    assert result.control_results["unit"].ok is True
+
+
+def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
+    tmp_path: Path,
+) -> None:
+    project_root, run_id = _setup_project(tmp_path)
+    # File has existing suppression on line 1, but agent only added line 2
+    code_file = project_root / "src" / "code.py"
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("x = 1  # noqa\ny = 2\n", encoding="utf-8")
+
+    diff_text = """diff --git a/src/code.py b/src/code.py
+index 1111..2222 100644
+--- a/src/code.py
++++ b/src/code.py
+@@ -1 +1,2 @@
+ x = 1  # noqa
++y = 2
+"""
+    vcs = FakeVcs(changed_files=["src/code.py"], diff_output=diff_text)
+    runner = FakeRunner()
+    xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
+    runner.default_response = CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10)
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+
+    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="implement",
+        paths_writable=("src/",),
+        suppressions=("# noqa",),
+        acceptance_run="pytest",
+        all_scenario_ids=("IVA-001",),
+    )
+
+    result = verifier.execute(req)
+    assert result.ok is True

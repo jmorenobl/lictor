@@ -117,4 +117,3 @@ def test_junit_reader_rejects_malicious_xml() -> None:
     res = reader.read(output=malicious_xml, exit_code=0, duration_ms=10)
     assert res.ok is False
     assert res.error is not None
-
