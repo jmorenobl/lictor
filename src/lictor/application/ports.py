@@ -1,6 +1,7 @@
 """Ports (Protocols) of the application layer in hexagonal architecture."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -145,4 +146,27 @@ class SpecSource(Protocol):
         driver_paths: Sequence[str],
     ) -> dict[str, Any]:
         """Compute and write seal to .lictor/seal.json."""
+        ...
+
+
+@dataclass(frozen=True)
+class ProfileInitConfig:
+    """Configuration payload and gitignore entries for project initialization."""
+
+    profile_name: str
+    gitignore_entries: Sequence[str]
+    config_json: str
+
+
+@runtime_checkable
+class ConfigInitializer(Protocol):
+    """Abstraction for detecting profiles and generating project configuration."""
+
+    def generate_config(
+        self,
+        project_root: Path,
+        profile_name: str | None = None,
+        model: str | None = None,
+    ) -> ProfileInitConfig:
+        """Generate project configuration JSON and gitignore entries from profile."""
         ...

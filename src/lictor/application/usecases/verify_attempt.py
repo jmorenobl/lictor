@@ -4,7 +4,6 @@ Includes ADR-0001 integrity snapshot for state protection.
 """
 
 import contextlib
-import hashlib
 import json
 import shlex
 from collections.abc import Mapping, Sequence
@@ -13,7 +12,8 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from lictor.application.ports import CommandRunner, ResultReader, Vcs
-from lictor.domain.errors import DriverError
+from lictor.application.seal import collect_monitored_files
+from lictor.domain.errors import DriverError, SpecError
 from lictor.domain.model import ControlResult, ScenarioId, VerifyResult
 from lictor.domain.rules import condense_error, map_test_cases_to_scenarios
 
@@ -260,56 +260,26 @@ class VerifyAttempt:
         if not sealed_files:
             return "El archivo de sello .lictor/seal.json no contiene archivos sellados"
 
-        err = self._check_sealed_hashes(sealed_files)
-        if err:
-            return err
+        try:
+            current_files = collect_monitored_files(self.project_root, req.paths_driver)
+        except SpecError as exc:
+            return str(exc)
 
-        err = self._check_unsealed_features(sealed_files)
-        if err:
-            return err
-
-        return self._check_unsealed_drivers(sealed_files, req.paths_driver)
-
-    def _check_sealed_hashes(self, sealed_files: dict[str, str]) -> str | None:
-        for rel_path, expected_hash in sealed_files.items():
-            target = self.project_root / rel_path
-            if not target.is_file():
+        for rel_path in sorted(sealed_files):
+            if rel_path not in current_files:
                 return f"Falta archivo sellado: {rel_path}"
-
-            actual_sha = hashlib.sha256(target.read_bytes()).hexdigest()
-            expected_sha = expected_hash.removeprefix("sha256:")
-            if actual_sha != expected_sha:
+            if current_files[rel_path] != sealed_files[rel_path]:
                 return f"El sello no coincide para {rel_path}"
-        return None
 
-    def _check_unsealed_features(self, sealed_files: dict[str, str]) -> str | None:
-        features_dir = self.project_root / "features"
-        if not features_dir.is_dir():
-            return None
-        for feat in sorted(features_dir.rglob("*")):
-            if feat.is_file():
-                rel = feat.relative_to(self.project_root).as_posix()
-                if rel not in sealed_files:
-                    return f"Archivo de características no sellado: {rel}"
-        return None
+        for rel_path in sorted(current_files):
+            if rel_path not in sealed_files:
+                prefix = (
+                    "Archivo de características no sellado"
+                    if rel_path.startswith("features/")
+                    else "Archivo de driver no sellado"
+                )
+                return f"{prefix}: {rel_path}"
 
-    def _check_unsealed_drivers(
-        self,
-        sealed_files: dict[str, str],
-        paths_driver: Sequence[str],
-    ) -> str | None:
-        for drv_pattern in paths_driver:
-            drv_target = self.project_root / drv_pattern.rstrip("/")
-            if drv_target.is_file():
-                rel = drv_target.relative_to(self.project_root).as_posix()
-                if rel not in sealed_files:
-                    return f"Archivo de driver no sellado: {rel}"
-            elif drv_target.is_dir():
-                for df in sorted(drv_target.rglob("*")):
-                    if df.is_file():
-                        rel = df.relative_to(self.project_root).as_posix()
-                        if rel not in sealed_files:
-                            return f"Archivo de driver no sellado: {rel}"
         return None
 
     def _check_suppressions(self, req: VerifyAttemptRequest) -> VerifyResult:

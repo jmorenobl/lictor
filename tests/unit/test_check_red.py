@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lictor.application.ports import Clock, CommandRunner, EventLog, ResultReader, SpecSource, Vcs
-from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
+from lictor.application.usecases.check_red import AuditSink, CheckRed, CheckRedRequest
 from lictor.domain.errors import DriverError
 from lictor.domain.model import (
     CommandOutput,
@@ -47,8 +47,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
 
     req = CheckRedRequest(
@@ -69,7 +68,10 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.scenario_status == {"IVA-001": "green", "IVA-002": "pending"}
     spec_source.write_seal.assert_called_once()
-    vcs.commit.assert_called_once_with(message="chore(lictor): driver de aceptación")
+    vcs.commit.assert_called_once_with(
+        message="chore(lictor): driver de aceptación",
+        trailers={"Lictor-Run": "20261030-140000-abcd"},
+    )
 
     event_log.append.assert_called_once()
     event = event_log.append.call_args[0][0]
@@ -99,8 +101,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
 
     req = CheckRedRequest(
@@ -140,8 +141,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
 
     req = CheckRedRequest(
@@ -169,7 +169,13 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     reader.read.return_value = ControlResult(ok=False, test_cases=(tc,))
 
     vcs = MagicMock(spec=Vcs)
-    vcs.get_trailers.return_value = []
+
+    def mock_get_trailers(key: str, commit_ref: str | None = None) -> list[str]:
+        if key == "Lictor-Run" and commit_ref == "HEAD":
+            return ["run123"]
+        return []
+
+    vcs.get_trailers.side_effect = mock_get_trailers
     vcs.status.return_value = []
     vcs.get_head_message.return_value = "chore(lictor): driver de aceptación"
     vcs.get_head_sha.return_value = "sha_already_committed"
@@ -185,8 +191,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
 
     req = CheckRedRequest(
@@ -235,8 +240,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
 
     req = CheckRedRequest(

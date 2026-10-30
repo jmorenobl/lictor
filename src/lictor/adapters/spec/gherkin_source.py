@@ -1,6 +1,5 @@
 """Gherkin specification source adapter and seal management."""
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -8,9 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from gherkin.dialect import DIALECTS
+from gherkin.errors import ParserError
 from gherkin.parser import Parser
 
 from lictor.application.ports import SpecSource
+from lictor.application.seal import collect_monitored_files, hash_file
 from lictor.domain.errors import SpecError
 from lictor.domain.model import Scenario, ScenarioId
 
@@ -66,17 +67,33 @@ class GherkinSource(SpecSource):
             rel_file = feature_path.as_posix()
 
         content = feature_path.read_text(encoding="utf-8")
-
         try:
             ast = parser.parse(content)
-        except Exception as exc:
+        except ParserError as exc:
             raise SpecError(f"Error al analizar {rel_file}: {exc}") from exc
 
         feature = ast.get("feature")
         if not feature:
             return
 
-        for tag in feature.get("tags", []):
+        self._forbid_scenario_id_tags(feature.get("tags", []), "Feature", rel_file)
+
+        for child in feature.get("children", []):
+            rule = child.get("rule")
+            if isinstance(rule, Mapping):
+                self._parse_rule(rule, rel_file, seen_ids, scenarios)
+            else:
+                scenario = self._parse_child(child, rel_file, seen_ids)
+                if scenario is not None:
+                    scenarios.append(scenario)
+
+    def _forbid_scenario_id_tags(
+        self,
+        tags: Sequence[Mapping[str, Any]],
+        level_name: str,
+        rel_file: str,
+    ) -> None:
+        for tag in tags:
             tag_name = str(tag.get("name", ""))
             try:
                 ScenarioId.from_tag(tag_name)
@@ -87,11 +104,20 @@ class GherkinSource(SpecSource):
             if is_scenario_id:
                 tag_line = int(tag.get("location", {}).get("line", 1))
                 raise SpecError(
-                    f"Tag ID '{tag_name}' no permitido en nivel Feature en {rel_file}:{tag_line}"
+                    f"Tag ID '{tag_name}' no permitido en nivel {level_name} "
+                    f"en {rel_file}:{tag_line}"
                 )
 
-        for child in feature.get("children", []):
-            scenario = self._parse_child(child, rel_file, seen_ids)
+    def _parse_rule(
+        self,
+        rule: Mapping[str, Any],
+        rel_file: str,
+        seen_ids: dict[str, tuple[str, int]],
+        scenarios: list[Scenario],
+    ) -> None:
+        self._forbid_scenario_id_tags(rule.get("tags", []), "Rule", rel_file)
+        for rule_child in rule.get("children", []):
+            scenario = self._parse_child(rule_child, rel_file, seen_ids)
             if scenario is not None:
                 scenarios.append(scenario)
 
@@ -155,33 +181,8 @@ class GherkinSource(SpecSource):
         return Scenario(id=scenario_id, name=name, file=rel_file, line=line)
 
 
-def _hash_file(file_path: Path) -> str:
-    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
-    return f"sha256:{digest}"
-
-
-def _collect_monitored_files(project_root: Path, driver_paths: Sequence[str]) -> dict[str, str]:
-    files_map: dict[str, str] = {}
-
-    features_dir = project_root / "features"
-    if features_dir.is_dir():
-        for feat in sorted(features_dir.rglob("*")):
-            if feat.is_file():
-                rel_path = feat.relative_to(project_root).as_posix()
-                files_map[rel_path] = _hash_file(feat)
-
-    for drv_pattern in driver_paths:
-        drv_target = project_root / drv_pattern.rstrip("/")
-        if drv_target.is_file():
-            rel_path = drv_target.relative_to(project_root).as_posix()
-            files_map[rel_path] = _hash_file(drv_target)
-        elif drv_target.is_dir():
-            for df in sorted(drv_target.rglob("*")):
-                if df.is_file():
-                    rel_path = df.relative_to(project_root).as_posix()
-                    files_map[rel_path] = _hash_file(df)
-
-    return {k: files_map[k] for k in sorted(files_map)}
+_hash_file = hash_file
+_collect_monitored_files = collect_monitored_files
 
 
 def compute_seal(

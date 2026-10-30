@@ -9,6 +9,7 @@ from lictor.adapters.config.models import (
     LimitsConfig,
     Profile,
 )
+from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.domain.errors import ConfigError
 
 CONFIG_FILENAME = "lictor.json"
@@ -129,6 +130,32 @@ def init_config_file(
         msg = f"No se pudo escribir '{target}': {exc}"
         raise ConfigError(msg) from exc
     return config
+
+
+class ProfileConfigInitializer(ConfigInitializer):
+    """Adapter implementing ConfigInitializer using package profiles."""
+
+    def __init__(self, profiles_dir: Path | None = None) -> None:
+        self.profiles_dir = profiles_dir
+
+    def generate_config(
+        self,
+        project_root: Path,
+        profile_name: str | None = None,
+        model: str | None = None,
+    ) -> ProfileInitConfig:
+        profile = (
+            load_profile(profile_name, self.profiles_dir)
+            if profile_name is not None
+            else detect_profile(project_root, self.profiles_dir)
+        )
+        config = build_config_from_profile(profile, model=model)
+        payload = json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+        return ProfileInitConfig(
+            profile_name=config.profile,
+            gitignore_entries=list(config.gitignore),
+            config_json=payload,
+        )
 
 
 def _merge_profile_defaults(

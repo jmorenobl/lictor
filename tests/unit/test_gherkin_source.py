@@ -350,3 +350,82 @@ def test_scenario_file_is_relative_posix(tmp_path: Path) -> None:
     assert not Path(scenarios[0].file).is_absolute()
     assert "\\" not in scenarios[0].file
     assert scenarios[0].file.endswith("features/iva.feature")
+
+
+def test_load_scenarios_inside_rule(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "rule.feature").write_text(
+        """# language: es
+Característica: Con reglas
+  Regla: Regla de cálculo
+    Antecedentes:
+      Dado un contexto previo
+
+    @RUL-001
+    Escenario: Escenario dentro de regla
+      Dado un paso
+      Entonces resultado
+""",
+        encoding="utf-8",
+    )
+    source = GherkinSource()
+    scenarios = source.load(features_dir)
+    assert len(scenarios) == 1
+    assert scenarios[0].id == ScenarioId("RUL-001")
+    assert scenarios[0].name == "Escenario dentro de regla"
+
+
+def test_reject_rule_level_scenario_id_tag(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "rule.feature").write_text(
+        """Feature: Con reglas
+  @RUL-001
+  Rule: Regla con tag ID
+    @RUL-002
+    Scenario: Escenario
+      Given step
+""",
+        encoding="utf-8",
+    )
+    source = GherkinSource()
+    with pytest.raises(SpecError) as exc_info:
+        source.load(features_dir)
+    assert "Tag ID '@RUL-001' no permitido en nivel Rule" in str(exc_info.value)
+
+
+def test_reject_scenario_outline_inside_rule(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "rule.feature").write_text(
+        """Feature: Con reglas
+  Rule: Regla
+    @RUL-001
+    Scenario Outline: Esquema en regla
+      Given <val>
+      Examples:
+        | val |
+        | 1   |
+""",
+        encoding="utf-8",
+    )
+    source = GherkinSource()
+    with pytest.raises(SpecError) as exc_info:
+        source.load(features_dir)
+    assert "Scenario Outline no admitido" in str(exc_info.value)
+
+
+def test_reject_symlink_pointing_outside_repo(tmp_path: Path) -> None:
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("outside content\n", encoding="utf-8")
+
+    project_root = tmp_path / "project"
+    features_dir = project_root / "features"
+    features_dir.mkdir(parents=True)
+    symlink_feat = features_dir / "external.feature"
+    symlink_feat.symlink_to(outside_file)
+
+    with pytest.raises(SpecError) as exc_info:
+        compute_seal(project_root, "run-1", [])
+    assert "Enlace simbólico fuera del repositorio no permitido" in str(exc_info.value)

@@ -14,6 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
 from lictor.application.usecases.implement_scenario import (
@@ -23,7 +24,7 @@ from lictor.application.usecases.implement_scenario import (
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
 from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
-from lictor.domain.errors import DriverError, SealTamperedError
+from lictor.domain.errors import DriverError, SealTamperedError, SpecError
 from lictor.domain.model import Event, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_implement,
@@ -121,6 +122,8 @@ class GraphContext:
     executor: Executor
     event_log: EventLog
     clock: Clock
+    profile_name: str = ""
+    build_report: BuildReport | None = None
 
 
 class _GraphNodes:
@@ -134,15 +137,31 @@ class _GraphNodes:
             return {}
         if self.ctx.vcs.status():
             return {"exit_code": 10}
-        if not self.ctx.executor.health().ok:
+        health = self.ctx.executor.health()
+        if not health.ok:
             return {"exit_code": 10}
+
+        event = Event(
+            id=uuid.uuid4().hex,
+            type="lictor.run.started.v1",
+            source="lictor/0.1.0",
+            time=self.ctx.clock.now_iso(),
+            runid=state["run_id"],
+            data={
+                "lictor_version": "0.1.0",
+                "cli_version": health.cli_version,
+                "profile": self.ctx.profile_name,
+                "config_hash": state.get("config_hash", ""),
+            },
+        )
+        self.ctx.event_log.append(event)
         return {}
 
     def load_spec(self, state: GraphState) -> dict[str, Any]:
         features_dir = self.ctx.project_root / "features"
         try:
             scenarios = self.ctx.spec_source.load(features_dir)
-        except Exception:
+        except SpecError:
             return {"exit_code": 10, "seal_ok": False}
 
         if not scenarios:
@@ -158,7 +177,10 @@ class _GraphNodes:
             runid=state["run_id"],
             data={
                 "scenario_count": len(scenarios),
-                "scenarios": [s.id.value for s in scenarios],
+                "scenarios": [
+                    {"id": s.id.value, "name": s.name, "file": s.file, "line": s.line}
+                    for s in scenarios
+                ],
             },
         )
         self.ctx.event_log.append(event)
@@ -355,6 +377,23 @@ class _GraphNodes:
         )
 
         verify_duration = sum(cr.duration_ms for cr in res.control_results.values())
+        control_durations = {k: v.duration_ms for k, v in res.control_results.items()}
+        event = Event(
+            id=uuid.uuid4().hex,
+            type="lictor.verify.finished.v1",
+            source="lictor/0.1.0",
+            time=self.ctx.clock.now_iso(),
+            runid=state["run_id"],
+            scenarioid=current_id,
+            data={
+                "attempt": state.get("attempt", 0),
+                "ok": res.ok,
+                "failed_at": res.failed_at,
+                "control_durations": control_durations,
+                "reverted_files": list(res.reverted_files),
+            },
+        )
+        self.ctx.event_log.append(event)
         return {
             "last_verify": {
                 "ok": res.ok,
@@ -443,6 +482,10 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
+        if self.ctx.build_report is not None:
+            self.ctx.build_report.execute(
+                BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
+            )
         return {"exit_code": code}
 
 

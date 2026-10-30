@@ -20,3 +20,6 @@ dev = [
     "pytest-bdd>=9.0.0",
     "ruff>=0.17.3",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

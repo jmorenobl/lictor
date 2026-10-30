@@ -1,4 +1,6 @@
+import dataclasses
 import subprocess
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,13 +15,14 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import FixedClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
-from lictor.application.usecases.check_red import CheckRed
+from lictor.application.ports import SpecSource
+from lictor.application.usecases.check_red import AuditSink, CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
-from lictor.domain.model import CommandOutput
+from lictor.domain.model import CommandOutput, Scenario
 from lictor.orchestration.graph import (
     GraphContext,
     create_graph,
@@ -167,8 +170,7 @@ Característica: IVA de facturas
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
-        event_log=event_log,
-        clock=clock,
+        audit=AuditSink(event_log=event_log, clock=clock),
     )
     implement_scenario = ImplementScenario(
         vcs=vcs,
@@ -521,20 +523,31 @@ def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path:
 
     config = {"configurable": {"thread_id": "20261030-150000-0007"}}
 
-    # Tamper with spec right before implement: we can use a mock/wrapper on spec_source
-    orig_verify_seal = context.spec_source.verify_seal
-    calls = 0
+    # Tamper with spec right before implement: use a wrapper on spec_source
+    class _TamperSpecSource(SpecSource):
+        def __init__(self, inner: SpecSource) -> None:
+            self._inner = inner
+            self._calls = 0
 
-    def mock_verify_seal(root: Path, drv: Any) -> bool:
-        nonlocal calls
-        calls += 1
-        # load_spec: calls=1 (returns False because no seal yet)
-        # implement: calls=2 -> tamper detected!
-        if calls > 1:
-            return False
-        return orig_verify_seal(root, drv)
+        def load(self, features_dir: Path) -> list[Scenario]:
+            return self._inner.load(features_dir)
 
-    context.spec_source.verify_seal = mock_verify_seal  # type: ignore[method-assign]
+        def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:
+            self._calls += 1
+            if self._calls > 1:
+                return False
+            return self._inner.verify_seal(project_root, driver_paths)
+
+        def write_seal(
+            self,
+            project_root: Path,
+            run_id: str,
+            driver_paths: Sequence[str],
+        ) -> dict[str, Any]:
+            return self._inner.write_seal(project_root, run_id, driver_paths)
+
+    context = dataclasses.replace(context, spec_source=_TamperSpecSource(context.spec_source))
+    graph = create_graph(context, checkpointer=saver)
 
     final_state = graph.invoke(initial_state, config=config)
     assert final_state.get("exit_code") == 10

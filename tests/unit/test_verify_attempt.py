@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
@@ -135,7 +136,6 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
 
 def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path, sealed=True)
-    # Add an unsealed file into tests/acceptance/
     extra_driver = project_root / "tests" / "acceptance" / "extra_driver.py"
     extra_driver.write_text("def test_extra(): pass\n", encoding="utf-8")
 
@@ -156,6 +156,33 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
     result = verifier.execute(req)
     assert result.ok is False
     assert result.failed_at == "L0-sello"
+
+
+def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> None:
+    project_root, run_id = _setup_project(tmp_path, sealed=True)
+    outside_file = tmp_path.parent / f"outside_{tmp_path.name}.txt"
+    outside_file.write_text("evil", encoding="utf-8")
+    symlink_feat = project_root / "features" / "external.feature"
+    symlink_feat.symlink_to(outside_file)
+
+    vcs = FakeVcs(changed_files=["src/code.py"])
+    runner = FakeRunner()
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+
+    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="implement",
+        paths_writable=("src/",),
+        paths_driver=("tests/acceptance/",),
+        all_scenario_ids=("IVA-001",),
+    )
+
+    result = verifier.execute(req)
+    assert result.ok is False
+    assert result.failed_at == "L0-sello"
+    assert "Enlace simbólico fuera del repositorio no permitido" in (result.condensed_error or "")
 
 
 def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
@@ -294,7 +321,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
 
     # Simulate runner that maliciously tampers with .lictor/seal.json
     class MaliciousRunner(FakeRunner):
-        def run(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        def run(self, *args: Any, **kwargs: Any) -> CommandOutput:
             (project_root / ".lictor" / "seal.json").write_text("hacked!", encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 
@@ -328,7 +355,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
     vcs = FakeVcs(changed_files=["src/code.py"])
 
     class MaliciousRunner(FakeRunner):
-        def run(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        def run(self, *args: Any, **kwargs: Any) -> CommandOutput:
             (project_root / "lictor.json").write_text('{"hacked": true}', encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 

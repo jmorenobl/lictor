@@ -21,6 +21,14 @@ from lictor.domain.rules import check_red_rule, condense_error, map_test_cases_t
 
 
 @dataclass(frozen=True)
+class AuditSink:
+    """Audit sink grouping EventLog and Clock dependencies."""
+
+    event_log: EventLog
+    clock: Clock
+
+
+@dataclass(frozen=True)
 class CheckRedRequest:
     """Request payload for CheckRed use case."""
 
@@ -56,16 +64,14 @@ class CheckRed:
         reader: ResultReader,
         vcs: Vcs,
         spec_source: SpecSource,
-        *,
-        event_log: EventLog,
-        clock: Clock,
+        audit: AuditSink,
     ) -> None:
         self.runner = runner
         self.reader = reader
         self.vcs = vcs
         self.spec_source = spec_source
-        self.event_log = event_log
-        self.clock = clock
+        self.event_log = audit.event_log
+        self.clock = audit.clock
 
     def execute(self, request: CheckRedRequest) -> CheckRedResult:
         """Run acceptance tests, check red rule, and seal driver if fresh and valid."""
@@ -172,13 +178,20 @@ class CheckRed:
             driver_paths=request.driver_paths,
         )
 
+        trailers = {"Lictor-Run": request.run_id}
+        head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
         if (
             not self.vcs.status()
+            and head_runs
+            and head_runs[0] == request.run_id
             and self.vcs.get_head_message() == "chore(lictor): driver de aceptación"
         ):
             commit_sha = self.vcs.get_head_sha()
         else:
-            commit_sha = self.vcs.commit(message="chore(lictor): driver de aceptación")
+            commit_sha = self.vcs.commit(
+                message="chore(lictor): driver de aceptación",
+                trailers=trailers,
+            )
 
         event = Event(
             id=uuid.uuid4().hex,
