@@ -57,6 +57,15 @@ gitleaks detect --no-banner
 uv run mutmut run
 ```
 
+### Running a Subset
+```bash
+uv run pytest tests/unit/test_routing.py::test_route_load_spec_seal_ok -q   # Single test
+uv run pytest tests/unit/test_routing.py -k verify -q                       # By keyword
+uv run lictor check --level L1,L2                                           # Gates from lictor.json
+```
+
+`lictor check` runs the controls in `lictor.json` plus the acceptance suite. The `coverage-domain` control reads the `.coverage` file left by the `coverage` control, so it depends on that one running first.
+
 ---
 
 ## Architectural Boundaries (.importlinter)
@@ -88,6 +97,39 @@ Lictor strictly enforces hexagonal architecture layers. Dependencies only point 
 4. **Adapter Independence (`lictor.adapters.*`):**
    - Adapters (`agents`, `vcs`, `runner`, `readers`, `spec`, `store`, `config`) implement application ports.
    - Adapters must never import from each other.
+
+---
+
+## How a Run Works
+
+`lictor run` drives an 11-node LangGraph graph (`orchestration/graph.py`), and each scenario moves through `pick_next → implement → verify → commit | quarantine`. The pieces that interact:
+
+- **Routing is split.** Most conditional edges are pure functions in `domain/routing.py`, tested without a graph. A few trivial ones are closures in `create_graph`. Graph state is a flat serializable `TypedDict`; nodes convert to and from domain types at the boundary (ADR-0003).
+- **Git is the source of truth for green scenarios.** `CheckRed` derives them from `Scenario:` commit trailers, not from the checkpoint. `CommitGreen` and the driver seal commit check HEAD trailers (`Scenario`, `Lictor-Run`) so that re-running a node after a crash doesn't commit twice. Changing commit messages or trailers can break resume.
+- **Every implement attempt starts from HEAD.** `ImplementScenario` verifies the seal, then calls `vcs.reset_to_head()`, so a retry never inherits the previous attempt's edits; only the condensed error carries over. The order matters: a tampered seal must abort without wiping the tree.
+- **`reset_to_head` must not remove ignored files** (`git clean -fd`, never `-x`), because `.lictor/` is git-ignored and holds the run's state (ADR-0001).
+- **The seal changes who may write what.** `features/` and `paths.driver` are hashed into `.lictor/seal.json` after the red check passes on a fresh driver. Before sealing, the driver role may write them. After, any change fails `L0-sello`. On resume, a changed `lictor.json` or seal exits with code 10.
+- **Untrusted commands are wrapped in `IntegritySnapshot`** (`verify_attempt.py`). Agent calls and every control or acceptance command run between `take` and `verify_and_restore`, which restores `.lictor/` state files and `lictor.json` on tampering. New code that runs agent or project commands needs the same wrapper.
+- **L0 gates are not controls.** `L0-rutas`, `L0-sello`, `L0-supresiones` and `L0-estado` are hardcoded in `VerifyAttempt`. Levels L1–L5 are data in `lictor.json`, merged over the profile defaults in `adapters/config/profiles/`. `mode: measure` records a failure without blocking.
+- **Scenarios map to tests by name.** `map_test_cases_to_scenarios` normalizes `IVA-001` to `iva_001` and requires exactly one match per scenario in the JUnit test name or classname. Otherwise it raises `DriverError`.
+- **Pausing is an interrupt.** On a rate limit, `pause` calls LangGraph `interrupt()` and `resume_to` records the node to return to. That attempt isn't counted. The CLI exits 50, and the next `lictor run` resumes from `.lictor/current_run` via `Command(resume=True)`. Exit codes are stable public API (`ExitCode` in `domain/errors.py`).
+
+---
+
+## Constraints Enforced by Tests
+
+These are easy to trip:
+
+- **No profile tool names in `src/lictor` outside `adapters/config/profiles/`.** `test_no_profile_tool_names_outside_profiles_dir` fails on any standalone `ruff`, `mypy`, `pytest`, `pytest-bdd` or `uv` in source, including docstrings, comments and prompt templates. Toolchain specifics belong in profiles.
+- **The domain can't import I/O modules** (`subprocess`, `sqlite3`, `shutil`, `os`, `socket`). `test_domain_has_no_io_imports` checks this separately from `.importlinter`.
+- **`schema/lictor.schema.json` must equal `LictorConfig.model_json_schema()`.** After changing `adapters/config/models.py`, regenerate it with `export_config_schema` (`adapters/config/loader.py`).
+- **Mutation testing only covers the domain, using three test files** (`test_rules.py`, `test_routing.py`, `test_model.py`, listed in `[tool.mutmut]`). Tests for new domain modules must be added there to count.
+
+---
+
+## Testing Without an LLM
+
+Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters/agents/fake.py`). Its modes are `good`, `fail`, `cheat`, `conflict`, `rate_limit` and `crash`, and they can be set per scenario. `bootstrap_runtime` reads its options from `.lictor/fake_executor.json`, or accepts `executor=` directly. `tests/integration/test_e2e_demo_iva.py` runs full cycles against a copy of `examples/demo-iva/`, which is the model for new end-to-end tests.
 
 ---
 
@@ -129,6 +171,7 @@ Lictor strictly enforces hexagonal architecture layers. Dependencies only point 
 - **Suppressions:** Avoid `# noqa`, `# type: ignore`, or `# pragma: no cover`. If an external library has missing stubs, use targeted overrides in `pyproject.toml` rather than inline ignores.
 - **Domain Errors:** Raise domain-specific exceptions from `lictor.domain.errors` rather than generic `ValueError` or `RuntimeError`.
 - **Event-Driven Auditability:** Significant domain actions must emit typed `Event` objects adhering to CloudEvents specification.
+- **Language:** User-facing strings, error messages, event data, commit subjects and ADRs are in Spanish; identifiers and docstrings are mostly in English. Commits use Conventional Commits with Spanish descriptions. Design documents are in `references/` and `docs/adr/`.
 
 ---
 
