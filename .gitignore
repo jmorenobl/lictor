@@ -1,0 +1,8 @@
+.lictor/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+mutants/
+examples/demo-iva/.venv/

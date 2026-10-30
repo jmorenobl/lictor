@@ -1,0 +1,52 @@
+[importlinter]
+root_package = lictor
+include_external_packages = True
+
+[importlinter:contract:capas]
+name = Las dependencias apuntan hacia dentro
+type = layers
+layers =
+    lictor.cli | lictor.bootstrap
+    lictor.orchestration
+    lictor.application
+    lictor.domain
+
+[importlinter:contract:dominio-puro]
+name = El dominio no conoce frameworks
+type = forbidden
+source_modules = lictor.domain
+forbidden_modules =
+    lictor.adapters
+    langgraph
+    typer
+    pydantic
+    defusedxml
+    gherkin
+
+[importlinter:contract:aplicacion]
+name = La aplicación solo ve dominio y puertos
+type = forbidden
+source_modules = lictor.application
+forbidden_modules =
+    lictor.adapters
+    langgraph
+    typer
+    pydantic
+
+[importlinter:contract:grafo]
+name = El grafo recibe los adaptadores ya construidos
+type = forbidden
+source_modules = lictor.orchestration
+forbidden_modules = lictor.adapters
+
+[importlinter:contract:adaptadores]
+name = Los adaptadores no se conocen entre sí
+type = independence
+modules =
+    lictor.adapters.agents
+    lictor.adapters.vcs
+    lictor.adapters.runner
+    lictor.adapters.readers
+    lictor.adapters.spec
+    lictor.adapters.store
+    lictor.adapters.config

@@ -1,0 +1,72 @@
+[project]
+name = "lictor"
+version = "0.1.0"
+description = "Implementa escenarios Gherkin con un agente y los verifica de forma determinista."
+readme = "README.md"
+authors = [
+    { name = "Jorge MB", email = "jmorenobl@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "defusedxml>=0.7.1",
+    "gherkin-official>=42.0.1",
+    "langgraph>=1.2.18",
+    "langgraph-checkpoint-sqlite>=3.1.2",
+    "pydantic>=2",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+lictor = "lictor.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "mutmut>=3.8.1",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.3",
+    "types-defusedxml>=0.7.0.20260504",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["examples"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "N", "PT", "PL", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src"
+packages = ["lictor"]
+
+[[tool.mypy.overrides]]
+module = ["gherkin.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["lictor"]
+
+[tool.mutmut]
+paths_to_mutate = ["src/lictor/domain/"]
+tests_dir = ["tests/unit/"]
