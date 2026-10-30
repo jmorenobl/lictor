@@ -59,6 +59,14 @@ class TestClaudeCLIHealth:
         assert health.auth_status == "none"
         assert "not found" in (health.message or "").lower()
 
+    def test_health_subprocess_error(self) -> None:
+        cli = ClaudeCLI()
+        with patch("subprocess.run", side_effect=subprocess.SubprocessError("exec error")):
+            health = cli.health()
+            assert health.ok is False
+            assert health.auth_status == "error"
+            assert "exec error" in (health.message or "")
+
 
 class TestClaudeCLIRun:
     def test_command_line_and_env_construction(self, tmp_path: Path) -> None:
@@ -149,7 +157,11 @@ class TestClaudeCLIRun:
         # error_max_turns
         with patch("subprocess.Popen") as mock_popen:
             mock_proc = MagicMock()
-            data = {"subtype": "error_max_turns", "is_error": True}
+            data = {
+                "subtype": "error_max_turns",
+                "is_error": True,
+                "result": "Calculando quota de disco",
+            }
             mock_proc.communicate.return_value = (json.dumps(data), "")
             mock_popen.return_value = mock_proc
             assert cli.run(task).status == "max_turns"

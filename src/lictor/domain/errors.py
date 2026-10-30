@@ -38,7 +38,7 @@ class ConfigError(PreconditionError):
     """Configuración o perfil inválidos (código 10)."""
 
 
-class SpecError(PreconditionError):
+class SpecError(PreconditionError, ValueError):
     """Especificación Gherkin inválida (código 10)."""
 
 

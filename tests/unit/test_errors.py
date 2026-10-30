@@ -55,3 +55,4 @@ def test_precondition_subclasses() -> None:
         err = cls("detalle de precondición")
         assert isinstance(err, PreconditionError)
         assert err.exit_code == ExitCode.PRECONDITION
+    assert issubclass(SpecError, ValueError)

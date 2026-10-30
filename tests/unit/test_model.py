@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from lictor.domain.errors import ExitCode, PreconditionError, SpecError
 from lictor.domain.model import (
     AgentResult,
     AgentTask,
@@ -14,6 +15,10 @@ from lictor.domain.model import (
     Tokens,
     Totals,
 )
+
+
+def _set_attr(obj: object, name: str, val: object) -> None:
+    setattr(obj, name, val)
 
 
 class TestScenarioId:
@@ -49,10 +54,16 @@ class TestScenarioId:
             "@IVA-001-extra",
         ]
         for item in invalid_ids:
-            with pytest.raises(ValueError, match="Invalid scenario ID or tag"):
+            with pytest.raises(SpecError) as exc_info:
                 ScenarioId(item)
-            with pytest.raises(ValueError, match="Invalid scenario ID or tag"):
+            assert exc_info.value.exit_code == ExitCode.PRECONDITION
+            assert isinstance(exc_info.value, (PreconditionError, ValueError))
+
+            with pytest.raises(SpecError):
                 ScenarioId.from_tag(item)
+
+        with pytest.raises(SpecError, match="must be a string"):
+            ScenarioId(123)  # type check violation in runtime
 
     def test_scenario_id_immutability_and_equality(self) -> None:
         sid1 = ScenarioId("IVA-001")
@@ -63,7 +74,7 @@ class TestScenarioId:
         assert hash(sid1) == hash(sid2)
 
         with pytest.raises((AttributeError, TypeError)):
-            sid1.value = "IVA-002"  # type: ignore[misc]
+            _set_attr(sid1, "value", "IVA-002")
 
 
 class TestScenario:
@@ -88,7 +99,7 @@ class TestScenario:
             line=3,
         )
         with pytest.raises((AttributeError, TypeError)):
-            sc.name = "Other"  # type: ignore[misc]
+            _set_attr(sc, "name", "Other")
 
 
 class TestTokens:
@@ -111,7 +122,7 @@ class TestTokens:
     def test_tokens_immutability(self) -> None:
         t = Tokens(input=5)
         with pytest.raises((AttributeError, TypeError)):
-            t.input = 10  # type: ignore[misc]
+            _set_attr(t, "input", 10)
 
 
 class TestTotals:

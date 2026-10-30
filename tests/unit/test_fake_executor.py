@@ -127,3 +127,56 @@ class TestFakeExecutor:
         assert fake.run(task1).status == "ok"
         assert fake.run(task2).spec_conflict is not None
         assert fake.run(task3).status == "rate_limited"
+
+    def test_fixtures_dir_copy(self, tmp_path: Path) -> None:
+        fixtures_dir = tmp_path / "fixtures"
+        good_dir = fixtures_dir / "good" / "src"
+        good_dir.mkdir(parents=True, exist_ok=True)
+        (good_dir / "calc.py").write_text("def mul(a, b): return a * b\n", encoding="utf-8")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir(parents=True, exist_ok=True)
+
+        fake = FakeExecutor(mode="good", fixtures_dir=fixtures_dir)
+        task = _sample_task(project_dir, project_dir / "raw.json")
+        res = fake.run(task)
+
+        assert res.status == "ok"
+        copied_file = project_dir / "src" / "calc.py"
+        assert copied_file.is_file()
+        assert copied_file.read_text(encoding="utf-8") == "def mul(a, b): return a * b\n"
+
+    def test_crash_on_role(self, tmp_path: Path) -> None:
+        fake = FakeExecutor(mode="good", crash_on_role="driver")
+        task_driver = AgentTask(
+            role="driver",
+            prompt="Genera driver para IVA-001",
+            prompt_sha="sha256:abc",
+            cwd=tmp_path,
+            model="fake",
+            allowed_tools=["Read", "Write"],
+            max_turns=5,
+            timeout_s=30,
+            raw_path=tmp_path / "raw_driver.json",
+        )
+        with pytest.raises(RuntimeError, match="crash on role driver"):
+            fake.run(task_driver)
+
+        task_impl = _sample_task(tmp_path, tmp_path / "raw_impl.json")
+        res = fake.run(task_impl)
+        assert res.status == "ok"
+
+    def test_crash_on_scenario(self, tmp_path: Path) -> None:
+        fake = FakeExecutor(mode="good", crash_on_scenario="IVA-002")
+        task_iva1 = _sample_task(
+            tmp_path, tmp_path / "raw1.json", prompt="Objetivo: que pase IVA-001"
+        )
+        task_iva2 = _sample_task(
+            tmp_path, tmp_path / "raw2.json", prompt="Objetivo: que pase IVA-002"
+        )
+
+        res1 = fake.run(task_iva1)
+        assert res1.status == "ok"
+
+        with pytest.raises(RuntimeError, match="crash on scenario IVA-002"):
+            fake.run(task_iva2)

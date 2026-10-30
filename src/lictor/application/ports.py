@@ -111,4 +111,3 @@ class SpecSource(Protocol):
     def load(self, features_dir: Path) -> list[Scenario]:
         """Load and validate all scenarios from the given directory."""
         ...
-

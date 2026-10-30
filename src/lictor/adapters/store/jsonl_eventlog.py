@@ -35,4 +35,3 @@ class JsonlEventLog:
                 if run_id is None or event.runid == run_id:
                     result.append(event)
         return result
-

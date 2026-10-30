@@ -21,7 +21,7 @@ _SCENARIO_TAG_RE = re.compile(r"([A-Z][A-Z0-9]*-[0-9]+)")
 class FakeExecutor:
     """Deterministic agent test double simulating LLM runs with configured scripts and modes."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         mode: FakeMode = "good",
         *,

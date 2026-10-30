@@ -4,7 +4,9 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
+
+from lictor.domain.errors import SpecError
 
 _TAG_PATTERN = re.compile(r"^@[A-Z][A-Z0-9]*-[0-9]+$")
 _ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-[0-9]+$")
@@ -22,15 +24,15 @@ class ScenarioId:
 
     def __init__(self, value: str) -> None:
         if not isinstance(value, str):
-            raise ValueError(f"Scenario ID must be a string, got {type(value).__name__}")
+            raise SpecError(f"Scenario ID must be a string, got {type(value).__name__}")
 
         raw = value.strip()
         if raw.startswith("@"):
             if not _TAG_PATTERN.match(raw):
-                raise ValueError(f"Invalid scenario ID or tag: {value!r}")
+                raise SpecError(f"Invalid scenario ID or tag: {value!r}")
             raw = raw[1:]
         elif not _ID_PATTERN.match(raw):
-            raise ValueError(f"Invalid scenario ID or tag: {value!r}")
+            raise SpecError(f"Invalid scenario ID or tag: {value!r}")
 
         object.__setattr__(self, "value", raw)
 
@@ -38,7 +40,7 @@ class ScenarioId:
     def from_tag(cls, tag: str) -> "ScenarioId":
         """Instantiate ScenarioId from a Gherkin tag like '@IVA-001'."""
         if not isinstance(tag, str) or not _TAG_PATTERN.match(tag.strip()):
-            raise ValueError(f"Invalid scenario ID or tag: {tag!r}")
+            raise SpecError(f"Invalid scenario ID or tag: {tag!r}")
         return cls(tag.strip())
 
     @property
@@ -240,14 +242,14 @@ class Event:
     type: str
     source: str
     time: str
-    data: dict[str, Any]
+    data: dict[str, object]
     specversion: str = "1.0"
     runid: str | None = None
     scenarioid: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         """Convert to a CloudEvents JSON-serializable dictionary."""
-        res: dict[str, Any] = {
+        res: dict[str, object] = {
             "specversion": self.specversion,
             "id": self.id,
             "source": self.source,
@@ -262,15 +264,19 @@ class Event:
         return res
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Event":
+    def from_dict(cls, d: dict[str, object]) -> "Event":
         """Reconstruct an Event from a dictionary."""
+        data_raw = d.get("data")
+        data_dict: dict[str, object] = data_raw if isinstance(data_raw, dict) else {}
+        runid_raw = d.get("runid")
+        scenarioid_raw = d.get("scenarioid")
         return cls(
-            specversion=d.get("specversion", "1.0"),
-            id=d["id"],
-            source=d["source"],
-            type=d["type"],
-            time=d["time"],
-            runid=d.get("runid"),
-            scenarioid=d.get("scenarioid"),
-            data=d.get("data", {}),
+            specversion=str(d.get("specversion", "1.0")),
+            id=str(d["id"]),
+            source=str(d["source"]),
+            type=str(d["type"]),
+            time=str(d["time"]),
+            runid=str(runid_raw) if runid_raw is not None else None,
+            scenarioid=str(scenarioid_raw) if scenarioid_raw is not None else None,
+            data=data_dict,
         )

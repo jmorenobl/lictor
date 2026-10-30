@@ -42,7 +42,7 @@ class ClaudeCLI:
     def health(self) -> Health:
         """Verify CLI availability and authentication configuration."""
         try:
-            res = subprocess.run(  # noqa: S603
+            res = subprocess.run(
                 [self.cli_binary, "--version"],
                 capture_output=True,
                 text=True,
@@ -64,7 +64,7 @@ class ClaudeCLI:
                 auth_status="none",
                 message=f"CLI executable '{self.cli_binary}' not found",
             )
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             return Health(
                 ok=False,
                 cli_version="",
@@ -138,20 +138,21 @@ class ClaudeCLI:
         api_error_status: Any,
         combined_err_text: str,
     ) -> AgentStatus:
-        is_rate_limited = (
-            is_error
-            and (
-                api_error_status == _HTTP_TOO_MANY_REQUESTS
-                or "rate limit" in combined_err_text
-                or "usage limit" in combined_err_text
-                or "quota" in combined_err_text
-            )
-        ) or subtype == "rate_limited"
+        if subtype == "error_max_turns":
+            return "max_turns"
+        if subtype == "rate_limited":
+            return "rate_limited"
+
+        is_rate_limited = is_error and (
+            api_error_status == _HTTP_TOO_MANY_REQUESTS
+            or "rate limit" in combined_err_text
+            or "usage limit" in combined_err_text
+            or "quota exceeded" in combined_err_text
+            or "exceeded your quota" in combined_err_text
+        )
 
         if is_rate_limited:
             return "rate_limited"
-        if subtype == "error_max_turns":
-            return "max_turns"
         if subtype == "error_during_execution":
             return "error"
         if subtype == "success" and not is_error:
@@ -167,7 +168,7 @@ class ClaudeCLI:
     ) -> tuple[str, str, int, bool]:
         start_time = time.monotonic()
         try:
-            proc = subprocess.Popen(  # noqa: S603
+            proc = subprocess.Popen(
                 cmd,
                 cwd=str(cwd),
                 env=env,
