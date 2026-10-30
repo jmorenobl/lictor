@@ -72,7 +72,12 @@ class Vcs(Protocol):
         """Discard all uncommitted changes and clean untracked files."""
         ...
 
-    def commit(self, message: str, trailers: dict[str, str] | None = None) -> str:
+    def commit(
+        self,
+        message: str,
+        trailers: dict[str, str] | None = None,
+        paths: Sequence[str] | None = None,
+    ) -> str:
         """Create a commit with optional git trailers and return commit sha."""
         ...
 

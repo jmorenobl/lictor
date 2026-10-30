@@ -420,6 +420,7 @@ class _GraphNodes:
                 scenario_id=current_id,
                 run_id=state["run_id"],
                 attempt=state.get("attempt", 1),
+                paths_writable=self.ctx.paths_writable,
             )
         )
         return {"status": {current_id: "green"}}

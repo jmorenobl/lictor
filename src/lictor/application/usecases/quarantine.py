@@ -56,6 +56,7 @@ class Quarantine:
             data={
                 "reason": request.reason,
                 "details": request.details or "",
+                "last_error": request.details or "",
             },
         )
         self.event_log.append(event)

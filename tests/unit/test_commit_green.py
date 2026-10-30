@@ -32,6 +32,7 @@ def test_commit_green_emits_event_and_calls_vcs() -> None:
     assert call_args.scenarioid == "IVA-001"
     assert call_args.data["commit"] == "c0ffee123456"
     assert call_args.data["attempt"] == 2
+    assert call_args.data["attempts"] == 2
 
 
 def test_commit_green_idempotent_when_already_committed() -> None:

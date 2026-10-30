@@ -2,6 +2,9 @@
 
 import hashlib
 import json
+import os
+import shlex
+import shutil
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -141,9 +144,24 @@ def doctor(
 
         # 4. Comandos de controles
         for ctrl in runtime.config.controls:
-            if not ctrl.run.strip():
+            cmd_str = ctrl.run.strip()
+            if not cmd_str:
                 typer.echo(f"✗ El control '{ctrl.id}' tiene un comando vacío", err=True)
                 return 10
+            parts = shlex.split(cmd_str)
+            if parts:
+                cmd_bin = parts[0]
+                bin_path = resolved_cwd / cmd_bin
+                is_available = bool(
+                    shutil.which(cmd_bin) or (bin_path.is_file() and os.access(bin_path, os.X_OK))
+                )
+                if not is_available:
+                    typer.echo(
+                        f"✗ El comando del control '{ctrl.id}' ('{cmd_bin}') no está "
+                        "disponible o no es ejecutable",
+                        err=True,
+                    )
+                    return 10
         typer.echo(f"✓ {len(runtime.config.controls)} controles configurados correctamente")
 
         typer.echo("Doctor: todas las comprobaciones pasaron con éxito.")

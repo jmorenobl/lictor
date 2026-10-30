@@ -55,12 +55,21 @@ class GitCli(Vcs):
 
     def reset_to_head(self) -> None:
         """Discard uncommitted changes and clean untracked files while preserving ignored files."""
+        self._run_git(["restore", "--staged", "--worktree", "."], check=False)
         self._run_git(["checkout", "--", "."], check=False)
         self._run_git(["clean", "-fd"])
 
-    def commit(self, message: str, trailers: dict[str, str] | None = None) -> str:
+    def commit(
+        self,
+        message: str,
+        trailers: dict[str, str] | None = None,
+        paths: Sequence[str] | None = None,
+    ) -> str:
         """Create a commit with author Lictor, disabled hooks, and trailers."""
-        self._run_git(["add", "-A"])
+        if paths:
+            self._run_git(["add", "--"] + [p for p in paths if (self.repo_dir / p).exists()])
+        else:
+            self._run_git(["add", "-A"])
 
         cmd = [
             "-c",
@@ -112,9 +121,9 @@ class GitCli(Vcs):
 
             # Try checkout from HEAD if tracked
             checkout_res = self._run_git(["checkout", "HEAD", "--", path_str], check=False)
-            if checkout_res.returncode != 0 and target.exists():
-                # Untracked file or directory
-                if target.is_dir():
+            if checkout_res.returncode != 0 and (target.is_symlink() or target.exists()):
+                # Untracked file, directory, or symlink (including broken symlinks)
+                if target.is_dir() and not target.is_symlink():
                     shutil.rmtree(target, ignore_errors=True)
                 else:
                     target.unlink(missing_ok=True)

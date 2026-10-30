@@ -180,12 +180,7 @@ class CheckRed:
 
         trailers = {"Lictor-Run": request.run_id}
         head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
-        if (
-            not self.vcs.status()
-            and head_runs
-            and head_runs[0] == request.run_id
-            and self.vcs.get_head_message() == "chore(lictor): driver de aceptación"
-        ):
+        if not self.vcs.status() and head_runs and head_runs[0] == request.run_id:
             commit_sha = self.vcs.get_head_sha()
         else:
             commit_sha = self.vcs.commit(

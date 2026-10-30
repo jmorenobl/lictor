@@ -152,3 +152,51 @@ def test_diff_shows_changes(git_repo: Path) -> None:
     (git_repo / "README.md").write_text("# Test Repo\n+ new line\n", encoding="utf-8")
     diff = cli.diff()
     assert "+ new line" in diff
+
+
+def test_revert_paths_removes_broken_symlinks(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    broken_symlink = git_repo / "features" / "broken.feature"
+    broken_symlink.parent.mkdir(parents=True, exist_ok=True)
+    broken_symlink.symlink_to(git_repo / "nonexistent_target_file")
+    assert broken_symlink.is_symlink()
+    assert not broken_symlink.exists()
+
+    cli.revert_paths(["features/broken.feature"])
+    assert not broken_symlink.is_symlink()
+    assert not broken_symlink.exists()
+
+
+def test_commit_with_specific_paths_does_not_stage_other_files(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    src_file = git_repo / "src" / "code.py"
+    src_file.parent.mkdir(parents=True, exist_ok=True)
+    src_file.write_text("print(1)\n", encoding="utf-8")
+
+    untracked_leak = git_repo / "leak.txt"
+    untracked_leak.write_text("untracked leak\n", encoding="utf-8")
+
+    sha = cli.commit(message="feat: only src", paths=["src/"])
+    assert len(sha) >= 7
+
+    head_files = subprocess.run(
+        [GIT_BIN, "show", "--name-only", "--format=", "HEAD"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    assert "src/code.py" in head_files
+    assert "leak.txt" not in head_files
+    assert "leak.txt" in cli.status()
+
+
+def test_reset_to_head_clears_staged_changes(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "README.md").write_text("# Modified and staged\n", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "README.md"], cwd=git_repo, check=True)
+
+    cli.reset_to_head()
+    assert cli.status() == []
+    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"

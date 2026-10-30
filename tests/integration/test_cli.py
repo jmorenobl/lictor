@@ -124,3 +124,37 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
     res_rep = runner.invoke(app, ["report", "--cwd", str(tmp_path)])
     assert res_rep.exit_code == 0
     assert (lictor_dir / "report.md").is_file()
+
+
+def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    lictor_json = {
+        "profile": "python-uv@0.1",
+        "backend": {"kind": "fake", "model": "fake-model-1"},
+        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
+        "acceptance": {"run": "echo test {out}", "report": "exit-code"},
+        "controls": [
+            {
+                "id": "missing_tool",
+                "level": "L4",
+                "run": "nonexistent_cli_tool_binary_xyz --check",
+                "report": "exit-code",
+            },
+        ],
+        "suppressions": [],
+        "agent_tools": [],
+        "hints": "",
+        "gitignore": [],
+    }
+    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "chore: setup"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
+    assert doc_res.exit_code == 10
+    assert "no está disponible o no es ejecutable" in doc_res.output

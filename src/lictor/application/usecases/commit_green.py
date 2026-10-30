@@ -1,6 +1,7 @@
 """CommitGreen use case for recording green scenarios to version control."""
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lictor.application.ports import Clock, EventLog, Vcs
@@ -14,6 +15,7 @@ class CommitGreenRequest:
     scenario_id: str | ScenarioId
     run_id: str
     attempt: int
+    paths_writable: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class CommitGreen:
             commit_sha = self.vcs.commit(
                 message=f"feat({sid_str}): implementar escenario",
                 trailers=trailers,
+                paths=request.paths_writable,
             )
 
         event = Event(
@@ -71,6 +74,7 @@ class CommitGreen:
             data={
                 "commit": commit_sha,
                 "attempt": request.attempt,
+                "attempts": request.attempt,
             },
         )
         self.event_log.append(event)

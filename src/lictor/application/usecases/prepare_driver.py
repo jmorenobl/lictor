@@ -57,6 +57,23 @@ def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
     return False
 
 
+def _extract_cli_version(executor: Executor) -> str:
+    health_fn = getattr(executor, "health", None)
+    if callable(health_fn):
+        with contextlib.suppress(Exception):
+            return str(health_fn().cli_version)
+    return ""
+
+
+def _collect_features_text(features_dir: Path) -> str:
+    if not features_dir.is_dir():
+        return ""
+    feature_texts: list[str] = []
+    for feat_file in sorted(features_dir.rglob("*.feature")):
+        feature_texts.append(feat_file.read_text(encoding="utf-8").strip())
+    return "\n\n".join(feature_texts)
+
+
 class PrepareDriver:
     """Use case to call agent for building or extending acceptance driver."""
 
@@ -85,12 +102,7 @@ class PrepareDriver:
         )
         prompt_sha = f"sha256:{hashlib.sha256(raw_template.encode('utf-8')).hexdigest()}"
 
-        features_dir = request.project_root / "features"
-        feature_texts: list[str] = []
-        if features_dir.is_dir():
-            for feat_file in sorted(features_dir.rglob("*.feature")):
-                feature_texts.append(feat_file.read_text(encoding="utf-8").strip())
-        all_features = "\n\n".join(feature_texts)
+        all_features = _collect_features_text(request.project_root / "features")
 
         # protected without driver paths
         driver_set = set(request.paths_driver)
@@ -172,6 +184,8 @@ class PrepareDriver:
         with contextlib.suppress(ValueError):
             rel_raw = raw_path.relative_to(request.project_root).as_posix()
 
+        cli_version = _extract_cli_version(self.executor)
+
         event = Event(
             id=uuid.uuid4().hex,
             type="lictor.agent.finished.v1",
@@ -184,6 +198,7 @@ class PrepareDriver:
                 "attempt": new_attempts,
                 "status": agent_result.status,
                 "model": request.model,
+                "cli_version": cli_version,
                 "tokens": {
                     "input": agent_result.tokens.input,
                     "output": agent_result.tokens.output,

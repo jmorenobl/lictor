@@ -3,10 +3,26 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.domain.model import Event
+
+_MS_PER_SECOND: Final[int] = 1000
+
+
+def _calculate_total_duration(info: dict[str, Any]) -> str:
+    total_ms = 0
+    if info.get("totals") and isinstance(info["totals"], dict):
+        t_agent = int(info["totals"].get("agent_duration_ms", 0) or 0)
+        t_verify = int(info["totals"].get("verify_duration_ms", 0) or 0)
+        total_ms = t_agent + t_verify
+    if total_ms == 0:
+        total_ms = sum(
+            int(s.get("agent_ms", 0) or 0) + int(s.get("verify_ms", 0) or 0)
+            for s in info["scenarios"].values()
+        )
+    return f"{total_ms}ms" if total_ms < _MS_PER_SECOND else f"{total_ms / _MS_PER_SECOND:.2f}s"
 
 
 @dataclass(frozen=True)
@@ -120,9 +136,11 @@ class BuildReport:
         if sid and sid in info["scenarios"]:
             info["scenarios"][sid]["status"] = "green"
             info["scenarios"][sid]["commit"] = str(ev.data.get("commit", "-"))
-            raw_attempts = ev.data.get("attempts", 1)
+            raw_attempts = ev.data.get("attempt") or ev.data.get("attempts", 1)
             if isinstance(raw_attempts, (int, str)):
-                info["scenarios"][sid]["attempts"] = int(raw_attempts)
+                info["scenarios"][sid]["attempts"] = max(
+                    info["scenarios"][sid]["attempts"], int(raw_attempts)
+                )
 
     def _on_scenario_quarantined(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
@@ -131,7 +149,7 @@ class BuildReport:
                 info["scenarios"][sid]["status"] = "quarantined"
             info["quarantines"][sid] = {
                 "reason": str(ev.data.get("reason", "cuarentena")),
-                "last_error": str(ev.data.get("last_error", "")),
+                "last_error": str(ev.data.get("last_error") or ev.data.get("details") or ""),
             }
 
     def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
@@ -188,6 +206,7 @@ class BuildReport:
         greens = sum(1 for s in info["scenarios"].values() if s["status"] == "green")
         quarantined = len(info["quarantines"])
         pending = len(info["scenarios"]) - greens - quarantined
+        duration_str = _calculate_total_duration(info)
 
         lines = [
             "# Informe de ejecución de Lictor",
@@ -197,6 +216,7 @@ class BuildReport:
             f"- **Escenarios en cuarentena**: {quarantined}",
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
+            f"- **Duración total**: {duration_str}",
             "",
             "## Escenarios",
             (

@@ -72,5 +72,10 @@ branch = true
 source = ["lictor"]
 
 [tool.mutmut]
-paths_to_mutate = ["src/lictor/domain/"]
-tests_dir = ["tests/unit/"]
+source_paths = ["src/lictor/domain/"]
+also_copy = ["src/"]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/test_rules.py",
+    "tests/unit/test_routing.py",
+    "tests/unit/test_model.py",
+]

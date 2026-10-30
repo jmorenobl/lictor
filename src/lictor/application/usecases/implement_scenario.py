@@ -130,6 +130,14 @@ def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
     return "\n".join(lines)
 
 
+def _extract_cli_version(executor: Executor) -> str:
+    health_fn = getattr(executor, "health", None)
+    if callable(health_fn):
+        with contextlib.suppress(Exception):
+            return str(health_fn().cli_version)
+    return ""
+
+
 class ImplementScenario:
     """Use case to execute an implementation attempt on a single scenario."""
 
@@ -247,6 +255,8 @@ class ImplementScenario:
         with contextlib.suppress(ValueError):
             rel_raw = raw_path.relative_to(request.project_root).as_posix()
 
+        cli_version = _extract_cli_version(self.executor)
+
         event = Event(
             id=uuid.uuid4().hex,
             type="lictor.agent.finished.v1",
@@ -259,6 +269,7 @@ class ImplementScenario:
                 "attempt": new_attempt,
                 "status": agent_result.status,
                 "model": request.model,
+                "cli_version": cli_version,
                 "tokens": {
                     "input": agent_result.tokens.input,
                     "output": agent_result.tokens.output,

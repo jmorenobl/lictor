@@ -31,3 +31,4 @@ def test_quarantine_resets_head_and_emits_event() -> None:
     assert event.scenarioid == "IVA-002"
     assert event.data["reason"] == "intentos agotados"
     assert event.data["details"] == "3 failed verification attempts"
+    assert event.data["last_error"] == "3 failed verification attempts"

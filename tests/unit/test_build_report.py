@@ -101,7 +101,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
             time="2026-10-30T10:00:20Z",
             runid="run-1",
             scenarioid="IVA-001",
-            data={"commit": "abc1234", "attempts": 1},
+            data={"commit": "abc1234", "attempt": 2},
         ),
         # IVA-002 failed and quarantined
         Event(
@@ -144,7 +144,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
             time="2026-10-30T10:00:35Z",
             runid="run-1",
             scenarioid="IVA-002",
-            data={"reason": "intentos agotados", "last_error": "SyntaxError in test"},
+            data={"reason": "intentos agotados", "details": "SyntaxError in test"},
         ),
         Event(
             id="9",
@@ -175,9 +175,11 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
     md = res.report_path.read_text(encoding="utf-8")
     assert "IVA-001" in md
     assert "IVA-002" in md
+    assert "| 2 |" in md
     assert "30" in md
     assert "abc1234" in md
     assert "intentos agotados" in md
     assert "SyntaxError in test" in md
+    assert "Duración total" in md
     assert "claude-code 1.0.0" in md
     assert "sha_imp_1" in md
