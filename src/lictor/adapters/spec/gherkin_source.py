@@ -7,11 +7,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from gherkin.dialect import DIALECTS
 from gherkin.parser import Parser
 
 from lictor.application.ports import SpecSource
 from lictor.domain.errors import SpecError
 from lictor.domain.model import Scenario, ScenarioId
+
+ALL_OUTLINE_KEYWORDS: frozenset[str] = frozenset(
+    kw.strip().lower() for dialect in DIALECTS.values() for kw in dialect.get("scenarioOutline", [])
+)
 
 
 class GherkinSource(SpecSource):
@@ -25,9 +30,10 @@ class GherkinSource(SpecSource):
         parser = Parser()
         scenarios: list[Scenario] = []
         seen_ids: dict[str, tuple[str, int]] = {}
+        root = features_dir.resolve().parent
 
         for feature_path in sorted(features_dir.rglob("*.feature")):
-            self._load_file(feature_path, parser, seen_ids, scenarios)
+            self._load_file(feature_path, parser, seen_ids, scenarios, root)
 
         return scenarios
 
@@ -52,8 +58,13 @@ class GherkinSource(SpecSource):
         parser: Parser,
         seen_ids: dict[str, tuple[str, int]],
         scenarios: list[Scenario],
+        root: Path,
     ) -> None:
-        rel_file = str(feature_path)
+        try:
+            rel_file = feature_path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            rel_file = feature_path.as_posix()
+
         content = feature_path.read_text(encoding="utf-8")
 
         try:
@@ -64,6 +75,20 @@ class GherkinSource(SpecSource):
         feature = ast.get("feature")
         if not feature:
             return
+
+        for tag in feature.get("tags", []):
+            tag_name = str(tag.get("name", ""))
+            try:
+                ScenarioId.from_tag(tag_name)
+                is_scenario_id = True
+            except SpecError:
+                is_scenario_id = False
+
+            if is_scenario_id:
+                tag_line = int(tag.get("location", {}).get("line", 1))
+                raise SpecError(
+                    f"Tag ID '{tag_name}' no permitido en nivel Feature en {rel_file}:{tag_line}"
+                )
 
         for child in feature.get("children", []):
             scenario = self._parse_child(child, rel_file, seen_ids)
@@ -88,7 +113,12 @@ class GherkinSource(SpecSource):
 
         examples = scenario_dict.get("examples", [])
         keyword = str(scenario_dict.get("keyword", "")).strip().lower()
-        if examples or "outline" in keyword or "esquema" in keyword:
+        if (
+            examples
+            or keyword in ALL_OUTLINE_KEYWORDS
+            or "outline" in keyword
+            or "esquema" in keyword
+        ):
             raise SpecError(f"Scenario Outline no admitido en v0.1: {rel_file}:{line}")
 
         tags = scenario_dict.get("tags", [])

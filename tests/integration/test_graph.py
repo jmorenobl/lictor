@@ -435,6 +435,7 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
     resumed_state = graph.invoke(Command(resume=True), config=config)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
+    assert resumed_state.get("driver_attempts") == 1
 
 
 def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
@@ -488,3 +489,54 @@ def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
     resumed_state = graph.invoke(None, config=config)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
+
+
+def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        mode="good",
+        files_to_write={
+            "driver": {
+                "tests/acceptance/test_iva.py": DRIVER_TEST_CODE,
+            },
+            "IVA-001": {
+                "src/iva.py": "# IVA-001: OK\n",
+            },
+        },
+    )
+
+    context = _setup_test_environment(tmp_path, executor)
+    saver = get_sqlite_saver(tmp_path / ".lictor" / "checkpoints.sqlite")
+    graph = create_graph(context, checkpointer=saver)
+
+    initial_state = {
+        "run_id": "20261030-150000-0007",
+        "config_hash": "dummy_config_hash",
+        "driver_fresh": True,
+        "driver_attempts": 0,
+        "attempt": 0,
+        "status": {},
+        "reasons": {},
+        "totals": {},
+    }
+
+    config = {"configurable": {"thread_id": "20261030-150000-0007"}}
+
+    # Tamper with spec right before implement: we can use a mock/wrapper on spec_source
+    orig_verify_seal = context.spec_source.verify_seal
+    calls = 0
+
+    def mock_verify_seal(root: Path, drv: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        # load_spec: calls=1 (returns False because no seal yet)
+        # implement: calls=2 -> tamper detected!
+        if calls > 1:
+            return False
+        return orig_verify_seal(root, drv)
+
+    context.spec_source.verify_seal = mock_verify_seal  # type: ignore[method-assign]
+
+    final_state = graph.invoke(initial_state, config=config)
+    assert final_state.get("exit_code") == 10
+    # verify must NOT have run or set last_verify
+    assert final_state.get("last_verify") == {"ok": True}

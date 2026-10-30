@@ -124,3 +124,93 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
     vcs.revert_paths.assert_called_once_with(["pyproject.toml"])
     assert result.reverted_files == ("pyproject.toml",)
 
+
+def test_prepare_driver_does_not_increment_attempts_on_rate_limit(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "test.feature").write_text("Feature: Test\n", encoding="utf-8")
+
+    vcs = MagicMock(spec=Vcs)
+    vcs.status.return_value = []
+
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="rate_limited")
+
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:30:00Z"
+
+    use_case = PrepareDriver(
+        vcs=vcs,
+        executor=executor,
+        event_log=event_log,
+        clock=clock,
+    )
+
+    req = PrepareDriverRequest(
+        project_root=tmp_path,
+        run_id="run1",
+        model="fake",
+        allowed_tools=[],
+        max_turns=1,
+        timeout_s=1,
+        paths_writable=["src/"],
+        paths_driver=["tests/acceptance/"],
+        paths_protected=[],
+        driver_hints="",
+        hints="",
+        green_ids=[],
+        driver_attempts=0,
+    )
+
+    result = use_case.execute(req)
+    # Rate limit should NOT burn an attempt!
+    assert result.driver_attempts == 0
+    assert result.agent_result.status == "rate_limited"
+
+
+def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "test.feature").write_text("Feature: Test\n", encoding="utf-8")
+
+    vcs = MagicMock(spec=Vcs)
+    vcs.status.return_value = []
+
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:30:00Z"
+
+    use_case = PrepareDriver(
+        vcs=vcs,
+        executor=executor,
+        event_log=event_log,
+        clock=clock,
+    )
+
+    req = PrepareDriverRequest(
+        project_root=tmp_path,
+        run_id="run1",
+        model="fake",
+        allowed_tools=[],
+        max_turns=1,
+        timeout_s=1,
+        paths_writable=["src/"],
+        paths_driver=["tests/acceptance/"],
+        paths_protected=[],
+        driver_hints="JSON snippet: {'key': 'val'}",
+        hints="Regex pattern: {foo}",
+        green_ids=[],
+        driver_attempts=0,
+        last_error="Crash in dict {'a': 1}",
+        prompt_template=(
+            "{repo} {features} {driver_paths} {writable} {protected_sin_driver} "
+            "{green_ids} {driver_hints} {hints} {bloque_de_error} literal {'x': 1}"
+        ),
+    )
+
+    result = use_case.execute(req)
+    assert result.agent_result.status == "ok"

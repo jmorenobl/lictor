@@ -245,17 +245,32 @@ class VerifyAttempt:
             condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
             return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
 
-        validation_err = self._validate_sealed_files(sealed_files)
+        validation_err = self._validate_sealed_files(sealed_files, req)
         if validation_err:
             condensed = condense_error("L0-sello", validation_err, max_chars=req.error_max_chars)
             return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
 
         return VerifyResult(ok=True)
 
-    def _validate_sealed_files(self, sealed_files: dict[str, str]) -> str | None:
+    def _validate_sealed_files(
+        self,
+        sealed_files: dict[str, str],
+        req: VerifyAttemptRequest,
+    ) -> str | None:
         if not sealed_files:
             return "El archivo de sello .lictor/seal.json no contiene archivos sellados"
 
+        err = self._check_sealed_hashes(sealed_files)
+        if err:
+            return err
+
+        err = self._check_unsealed_features(sealed_files)
+        if err:
+            return err
+
+        return self._check_unsealed_drivers(sealed_files, req.paths_driver)
+
+    def _check_sealed_hashes(self, sealed_files: dict[str, str]) -> str | None:
         for rel_path, expected_hash in sealed_files.items():
             target = self.project_root / rel_path
             if not target.is_file():
@@ -265,14 +280,36 @@ class VerifyAttempt:
             expected_sha = expected_hash.removeprefix("sha256:")
             if actual_sha != expected_sha:
                 return f"El sello no coincide para {rel_path}"
+        return None
 
+    def _check_unsealed_features(self, sealed_files: dict[str, str]) -> str | None:
         features_dir = self.project_root / "features"
-        if features_dir.is_dir():
-            for feature_file in features_dir.rglob("*.feature"):
-                rel = str(feature_file.relative_to(self.project_root))
+        if not features_dir.is_dir():
+            return None
+        for feat in sorted(features_dir.rglob("*")):
+            if feat.is_file():
+                rel = feat.relative_to(self.project_root).as_posix()
                 if rel not in sealed_files:
                     return f"Archivo de características no sellado: {rel}"
+        return None
 
+    def _check_unsealed_drivers(
+        self,
+        sealed_files: dict[str, str],
+        paths_driver: Sequence[str],
+    ) -> str | None:
+        for drv_pattern in paths_driver:
+            drv_target = self.project_root / drv_pattern.rstrip("/")
+            if drv_target.is_file():
+                rel = drv_target.relative_to(self.project_root).as_posix()
+                if rel not in sealed_files:
+                    return f"Archivo de driver no sellado: {rel}"
+            elif drv_target.is_dir():
+                for df in sorted(drv_target.rglob("*")):
+                    if df.is_file():
+                        rel = df.relative_to(self.project_root).as_posix()
+                        if rel not in sealed_files:
+                            return f"Archivo de driver no sellado: {rel}"
         return None
 
     def _check_suppressions(self, req: VerifyAttemptRequest) -> VerifyResult:

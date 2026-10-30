@@ -61,4 +61,3 @@ class Quarantine:
         self.event_log.append(event)
 
         return QuarantineResult(scenario_id=sid_str, reason=request.reason)
-

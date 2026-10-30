@@ -14,8 +14,9 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.errors import DriverError
-from lictor.domain.model import Event, ScenarioId
+from lictor.domain.model import CommandOutput, ControlResult, Event, ScenarioId
 from lictor.domain.rules import check_red_rule, condense_error, map_test_cases_to_scenarios
 
 
@@ -73,16 +74,18 @@ class CheckRed:
         runs_dir.mkdir(parents=True, exist_ok=True)
         out_file = runs_dir / "acceptance.xml"
 
-        # Prepare command args without shell
-        raw_cmd = request.acceptance_run
-        parsed_tokens = shlex.split(raw_cmd)
-        cmd_args = [tok.replace("{out}", str(out_file)) for tok in parsed_tokens]
-
-        output = self.runner.run(
-            cmd=cmd_args,
-            cwd=request.project_root,
-            timeout_s=request.acceptance_timeout_s,
-        )
+        output, integrity_ok = self._run_acceptance_suite(request, out_file, lictor_dir)
+        if not integrity_ok:
+            if not request.driver_fresh:
+                raise DriverError(
+                    "El estado en .lictor/ fue modificado indebidamente durante la aceptación"
+                )
+            condensed = condense_error(
+                failed_at="L0-estado",
+                raw_error="El estado en .lictor/ fue modificado indebidamente",
+                max_chars=request.error_max_chars,
+            )
+            return CheckRedResult(ok=False, last_error=condensed)
 
         content = ""
         if request.acceptance_report == "junit" and out_file.is_file():
@@ -116,8 +119,6 @@ class CheckRed:
             return CheckRedResult(ok=False, last_error=condensed)
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
-
-        # Scenarios that were previously green are those with a prior git commit trailer
         trailers = set(self.vcs.get_trailers("Scenario"))
         green_ids = [
             str(sid.value if isinstance(sid, ScenarioId) else sid)
@@ -125,48 +126,81 @@ class CheckRed:
             if str(sid.value if isinstance(sid, ScenarioId) else sid) in trailers
         ]
 
-        is_red_ok = check_red_rule(scenario_results, green_ids)
+        if not check_red_rule(scenario_results, green_ids):
+            return self._handle_red_rule_failure(request, output, control_res)
 
-        if is_red_ok:
-            commit_sha: str | None = None
-            if request.driver_fresh:
-                seal_data = self.spec_source.write_seal(
-                    project_root=request.project_root,
-                    run_id=request.run_id,
-                    driver_paths=request.driver_paths,
-                )
+        commit_sha: str | None = None
+        if request.driver_fresh:
+            commit_sha = self._seal_and_commit(request)
 
-                commit_sha = self.vcs.commit(message="chore(lictor): driver de aceptación")
-
-                event = Event(
-                    id=uuid.uuid4().hex,
-                    type="lictor.driver.sealed.v1",
-                    source="lictor/0.1.0",
-                    time=self.clock.now_iso(),
-                    runid=request.run_id,
-                    scenarioid=None,
-                    data={
-                        "commit": commit_sha,
-                        "files": seal_data.get("files", {}),
-                    },
-                )
-                self.event_log.append(event)
-
-            scenario_status = {
-                str(sid.value if isinstance(sid, ScenarioId) else sid): (
-                    "green"
-                    if str(sid.value if isinstance(sid, ScenarioId) else sid) in green_ids
-                    else "pending"
-                )
-                for sid in request.all_scenario_ids
-            }
-            return CheckRedResult(
-                ok=True,
-                scenario_status=scenario_status,
-                commit_sha=commit_sha,
+        scenario_status = {
+            str(sid.value if isinstance(sid, ScenarioId) else sid): (
+                "green"
+                if str(sid.value if isinstance(sid, ScenarioId) else sid) in green_ids
+                else "pending"
             )
+            for sid in request.all_scenario_ids
+        }
+        return CheckRedResult(
+            ok=True,
+            scenario_status=scenario_status,
+            commit_sha=commit_sha,
+        )
 
-        # Red rule failed
+    def _run_acceptance_suite(
+        self,
+        request: CheckRedRequest,
+        out_file: Path,
+        lictor_dir: Path,
+    ) -> tuple[CommandOutput, bool]:
+        raw_cmd = request.acceptance_run
+        parsed_tokens = shlex.split(raw_cmd)
+        cmd_args = [tok.replace("{out}", str(out_file)) for tok in parsed_tokens]
+
+        snapshot = IntegritySnapshot(lictor_dir, request.project_root)
+        output = self.runner.run(
+            cmd=cmd_args,
+            cwd=request.project_root,
+            timeout_s=request.acceptance_timeout_s,
+        )
+        return output, snapshot.verify_and_restore()
+
+    def _seal_and_commit(self, request: CheckRedRequest) -> str:
+        seal_data = self.spec_source.write_seal(
+            project_root=request.project_root,
+            run_id=request.run_id,
+            driver_paths=request.driver_paths,
+        )
+
+        if (
+            not self.vcs.status()
+            and self.vcs.get_head_message() == "chore(lictor): driver de aceptación"
+        ):
+            commit_sha = self.vcs.get_head_sha()
+        else:
+            commit_sha = self.vcs.commit(message="chore(lictor): driver de aceptación")
+
+        event = Event(
+            id=uuid.uuid4().hex,
+            type="lictor.driver.sealed.v1",
+            source="lictor/0.1.0",
+            time=self.clock.now_iso(),
+            runid=request.run_id,
+            scenarioid=None,
+            data={
+                "commit": commit_sha,
+                "files": seal_data.get("files", {}),
+            },
+        )
+        self.event_log.append(event)
+        return commit_sha
+
+    def _handle_red_rule_failure(
+        self,
+        request: CheckRedRequest,
+        output: CommandOutput,
+        control_res: ControlResult,
+    ) -> CheckRedResult:
         if not request.driver_fresh:
             raise DriverError("El driver sellado falló la comprobación de línea base")
 

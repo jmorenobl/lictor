@@ -51,6 +51,61 @@ class ImplementScenarioResult:
     prompt_sha: str
 
 
+def _extract_background(lines: Sequence[str]) -> str:
+    bg_lines: list[str] = []
+    in_bg = False
+    for line in lines:
+        stripped = line.strip().lower()
+        if (
+            stripped.startswith("background:")
+            or stripped.startswith("antecedentes:")
+            or stripped in {"background", "antecedentes"}
+        ):
+            in_bg = True
+            bg_lines.append(line)
+        elif in_bg:
+            if (
+                stripped.startswith("@")
+                or stripped.startswith("scenario:")
+                or stripped.startswith("escenario:")
+            ):
+                break
+            bg_lines.append(line)
+    return "\n".join(bg_lines).strip()
+
+
+def _find_tag_start_index(lines: Sequence[str], target_tag: str, scen_line_idx: int) -> int:
+    for idx in range(scen_line_idx, -1, -1):
+        line_str = lines[idx].strip()
+        if target_tag in line_str:
+            return idx
+        is_scen = line_str.startswith("Scenario:") or line_str.startswith("Escenario:")
+        if is_scen and idx != scen_line_idx:
+            break
+    return scen_line_idx
+
+
+def _extract_scenario_body(lines: Sequence[str], target_tag: str, start_idx: int) -> str:
+    scen_lines: list[str] = []
+    started = False
+    seen_header = False
+    for line in lines[start_idx:]:
+        stripped = line.strip()
+        if target_tag in stripped:
+            started = True
+        elif started:
+            is_header = stripped.startswith("Scenario:") or stripped.startswith("Escenario:")
+            if is_header and seen_header:
+                break
+            if is_header:
+                seen_header = True
+            elif stripped.startswith("@") and not stripped.startswith(target_tag):
+                break
+        if started:
+            scen_lines.append(line)
+    return "\n".join(scen_lines).strip()
+
+
 def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
     path = Path(scenario.file)
     if not path.is_absolute():
@@ -59,32 +114,20 @@ def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
         return f"Scenario: {scenario.name} (@{scenario.id.value})"
 
     lines = path.read_text(encoding="utf-8").splitlines()
-    if scenario.line <= 0 or scenario.line > len(lines):
-        return "\n".join(lines)
+    if not lines:
+        return ""
 
-    # Grab lines from scenario line until next Scenario/Feature or end of file
-    start_idx = max(0, scenario.line - 2)
-    selected_lines: list[str] = []
-    started = False
-    for line in lines[start_idx:]:
-        stripped = line.strip()
-        is_scenario_header = (
-            stripped.startswith(f"@{scenario.id.value}")
-            or stripped.startswith("Scenario")
-            or stripped.startswith("Escenario")
-        )
-        if is_scenario_header:
-            started = True
-        elif started and (
-            stripped.startswith("@")
-            or stripped.startswith("Scenario:")
-            or stripped.startswith("Escenario:")
-        ):
-            break
-        if started:
-            selected_lines.append(line)
+    bg_text = _extract_background(lines)
+    target_tag = f"@{scenario.id.value}"
+    scen_line_idx = scenario.line - 1 if 0 < scenario.line <= len(lines) else 0
+    start_idx = _find_tag_start_index(lines, target_tag, scen_line_idx)
+    scen_text = _extract_scenario_body(lines, target_tag, start_idx)
 
-    return "\n".join(selected_lines) if selected_lines else "\n".join(lines)
+    if bg_text and scen_text:
+        return f"{bg_text}\n\n{scen_text}"
+    if scen_text:
+        return scen_text
+    return "\n".join(lines)
 
 
 class ImplementScenario:
@@ -134,18 +177,21 @@ class ImplementScenario:
         else:
             error_block = ""
 
-        prompt = raw_template.format(
-            repo=request.project_root.name,
-            id=request.scenario.id.value,
-            gherkin_del_escenario=gherkin_text,
-            writable=", ".join(request.paths_writable),
-            protected=", ".join(request.paths_protected),
-            suppressions=", ".join(request.suppressions),
-            green_ids=", ".join(request.green_ids) if request.green_ids else "ninguno",
-            check_commands=", ".join(request.check_commands),
-            hints=request.hints,
-            bloque_de_error=error_block,
-        )
+        replacements = {
+            "{repo}": request.project_root.name,
+            "{id}": request.scenario.id.value,
+            "{gherkin_del_escenario}": gherkin_text,
+            "{writable}": ", ".join(request.paths_writable),
+            "{protected}": ", ".join(request.paths_protected),
+            "{suppressions}": ", ".join(request.suppressions),
+            "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{check_commands}": ", ".join(request.check_commands),
+            "{hints}": request.hints,
+            "{bloque_de_error}": error_block,
+        }
+        prompt = raw_template
+        for k, v in replacements.items():
+            prompt = prompt.replace(k, v)
 
         lictor_dir = request.project_root / ".lictor"
         runs_dir = lictor_dir / "runs" / request.run_id

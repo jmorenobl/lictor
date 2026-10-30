@@ -37,6 +37,9 @@ def route_red_check(state: Mapping[str, Any], max_attempts: int | None = None) -
 
 def route_implement(state: Mapping[str, Any]) -> str:
     """Route after implement node."""
+    if state.get("exit_code") is not None:
+        return END
+
     signal = state.get("agent_signal")
     if signal == "rate_limited":
         return "pause"
@@ -73,4 +76,3 @@ def route_pause(state: Mapping[str, Any]) -> str:
     if isinstance(resume_target, str) and resume_target:
         return resume_target
     return "implement"
-

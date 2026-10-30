@@ -78,16 +78,30 @@ class GitCli(Vcs):
         sha_res = self._run_git(["rev-parse", "HEAD"])
         return sha_res.stdout.strip()
 
-    def get_trailers(self, key: str) -> list[str]:
-        """Extract trailer values from git log for the given key."""
+    def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
+        """Extract trailer values from git log for the given key, optionally for a commit."""
         format_arg = f"--format=%(trailers:key={key},valueonly)"
-        res = self._run_git(["log", format_arg])
+        cmd = ["log"]
+        if commit_ref is not None:
+            cmd.extend(["-1", commit_ref])
+        cmd.append(format_arg)
+        res = self._run_git(cmd)
         values: list[str] = []
         for line in res.stdout.splitlines():
             stripped = line.strip()
             if stripped:
                 values.append(stripped)
         return values
+
+    def get_head_sha(self) -> str:
+        """Return the commit sha of HEAD."""
+        res = self._run_git(["rev-parse", "HEAD"])
+        return res.stdout.strip()
+
+    def get_head_message(self) -> str:
+        """Return the subject line of the HEAD commit."""
+        res = self._run_git(["log", "-1", "--format=%s"])
+        return res.stdout.strip()
 
     def revert_paths(self, paths: Sequence[str]) -> None:
         """Selectively revert specific modified or untracked file paths."""

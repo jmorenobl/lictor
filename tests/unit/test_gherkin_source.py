@@ -214,6 +214,69 @@ Característica: Esquema
     assert "Scenario Outline no admitido" in str(exc_info.value)
 
 
+def test_reject_scenario_template_without_examples(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "template.feature").write_text(
+        """
+Feature: Template without examples
+  @IVA-001
+  Scenario Template: Template test
+    Given something
+""",
+        encoding="utf-8",
+    )
+
+    source = GherkinSource()
+    with pytest.raises(SpecError) as exc_info:
+        source.load(features_dir)
+    assert exc_info.value.exit_code == 10
+    assert "Scenario Outline no admitido" in str(exc_info.value)
+
+
+def test_reject_scenario_outline_french(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "french.feature").write_text(
+        """# language: fr
+Fonctionnalité: Plan
+  @IVA-001
+  Plan du scénario: Test plan
+    Soit <val>
+    Exemples:
+      | val |
+      | 1   |
+""",
+        encoding="utf-8",
+    )
+
+    source = GherkinSource()
+    with pytest.raises(SpecError) as exc_info:
+        source.load(features_dir)
+    assert exc_info.value.exit_code == 10
+    assert "Scenario Outline no admitido" in str(exc_info.value)
+
+
+def test_reject_tag_id_on_feature_level(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "feature_tag.feature").write_text(
+        """
+@IVA-001
+Feature: Feature with scenario id tag
+  Scenario: Scenario without tag
+    Given something
+""",
+        encoding="utf-8",
+    )
+
+    source = GherkinSource()
+    with pytest.raises(SpecError) as exc_info:
+        source.load(features_dir)
+    assert exc_info.value.exit_code == 10
+    assert "Feature" in str(exc_info.value) or "nivel Feature" in str(exc_info.value)
+
+
 def test_seal_computation_write_and_verification(tmp_path: Path) -> None:
     features_dir = tmp_path / "features"
     features_dir.mkdir()
@@ -254,3 +317,36 @@ def test_seal_computation_write_and_verification(tmp_path: Path) -> None:
     assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
     driver_file.write_text("def test_modified(): pass\n", encoding="utf-8")
     assert verify_seal(tmp_path, ["tests/acceptance/"]) is False
+
+    # Restore driver file -> seal passes
+    driver_file.write_text("def test_something(): pass\n", encoding="utf-8")
+    assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
+
+    # Untracked/new file in driver path -> seal fails
+    extra_driver = driver_dir / "extra_driver.py"
+    extra_driver.write_text("def test_extra(): pass\n", encoding="utf-8")
+    assert verify_seal(tmp_path, ["tests/acceptance/"]) is False
+    extra_driver.unlink()
+
+    # Deleted file from seal -> seal fails
+    driver_file.unlink()
+    assert verify_seal(tmp_path, ["tests/acceptance/"]) is False
+
+
+def test_scenario_file_is_relative_posix(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "iva.feature").write_text(
+        """Feature: Test
+  @IVA-001
+  Scenario: General
+    Given step
+""",
+        encoding="utf-8",
+    )
+    source = GherkinSource()
+    scenarios = source.load(features_dir.resolve())
+    assert len(scenarios) == 1
+    assert not Path(scenarios[0].file).is_absolute()
+    assert "\\" not in scenarios[0].file
+    assert scenarios[0].file.endswith("features/iva.feature")

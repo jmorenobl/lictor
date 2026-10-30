@@ -102,17 +102,20 @@ class PrepareDriver:
         else:
             error_block = ""
 
-        prompt = raw_template.format(
-            repo=request.project_root.name,
-            features=all_features,
-            driver_paths=", ".join(request.paths_driver),
-            writable=", ".join(request.paths_writable),
-            protected_sin_driver=", ".join(protected_without_driver),
-            green_ids=", ".join(request.green_ids) if request.green_ids else "ninguno",
-            driver_hints=request.driver_hints,
-            hints=request.hints,
-            bloque_de_error=error_block,
-        )
+        replacements = {
+            "{repo}": request.project_root.name,
+            "{features}": all_features,
+            "{driver_paths}": ", ".join(request.paths_driver),
+            "{writable}": ", ".join(request.paths_writable),
+            "{protected_sin_driver}": ", ".join(protected_without_driver),
+            "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{driver_hints}": request.driver_hints,
+            "{hints}": request.hints,
+            "{bloque_de_error}": error_block,
+        }
+        prompt = raw_template
+        for k, v in replacements.items():
+            prompt = prompt.replace(k, v)
 
         lictor_dir = request.project_root / ".lictor"
         runs_dir = lictor_dir / "runs" / request.run_id
@@ -160,7 +163,10 @@ class PrepareDriver:
                 raw_path=agent_result.raw_path,
             )
 
-        new_attempts = request.driver_attempts + 1
+        if agent_result.status == "rate_limited":
+            new_attempts = request.driver_attempts
+        else:
+            new_attempts = request.driver_attempts + 1
 
         rel_raw = str(raw_path)
         with contextlib.suppress(ValueError):

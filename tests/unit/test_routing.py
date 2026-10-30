@@ -40,6 +40,11 @@ def test_route_red_check_passed() -> None:
     assert route_red_check({"exit_code": None, "last_verify": None}) == "pick_next"
 
 
+def test_route_implement_exit_code() -> None:
+    assert route_implement({"exit_code": 10}) == END
+    assert route_implement({"exit_code": 10, "agent_signal": "ok"}) == END
+
+
 def test_route_implement_rate_limited() -> None:
     assert route_implement({"agent_signal": "rate_limited"}) == "pause"
 

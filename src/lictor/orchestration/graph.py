@@ -525,7 +525,7 @@ def create_graph(
     builder.add_conditional_edges(
         "implement",
         route_implement,
-        {"pause": "pause", "quarantine": "quarantine", "verify": "verify"},
+        {"pause": "pause", "quarantine": "quarantine", "verify": "verify", END: END},
     )
     builder.add_conditional_edges(
         "verify",

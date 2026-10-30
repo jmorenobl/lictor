@@ -7,6 +7,7 @@ from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
+    _extract_scenario_gherkin,
 )
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, Event, Scenario, ScenarioId, Tokens
@@ -231,3 +232,100 @@ def test_implement_scenario_rate_limited_does_not_increment_attempt(tmp_path: Pa
     result = use_case.execute(req)
     assert result.attempt == 1  # Not incremented on rate_limited!
     assert result.agent_signal == "rate_limited"
+
+
+def test_extract_scenario_gherkin_includes_background_and_handles_comments(tmp_path: Path) -> None:
+    feature_file = tmp_path / "features" / "iva.feature"
+    feature_file.parent.mkdir(parents=True)
+    feature_file.write_text(
+        """# language: es
+Característica: Facturación
+  Antecedentes:
+    Dado una tasa de IVA del 21%
+    Y un emisor registrado
+
+  # Comentario importante 1
+  # Comentario importante 2
+  @IVA-001
+  # Comentario entre tag y escenario
+  Escenario: IVA general
+    Dado una factura con importe 100
+    Cuando calculo el total
+    Entonces el total es 121
+
+  @IVA-002
+  Escenario: IVA reducido
+    Dado una factura con importe 100
+""",
+        encoding="utf-8",
+    )
+
+    scenario = Scenario(
+        id=ScenarioId("IVA-001"),
+        name="IVA general",
+        file=str(feature_file),
+        line=11,  # Line of Escenario: IVA general
+    )
+
+    extracted = _extract_scenario_gherkin(tmp_path, scenario)
+    assert "Antecedentes:" in extracted
+    assert "Dado una tasa de IVA del 21%" in extracted
+    assert "@IVA-001" in extracted
+    assert "Escenario: IVA general" in extracted
+    assert "Entonces el total es 121" in extracted
+    assert "@IVA-002" not in extracted
+    assert "Escenario: IVA reducido" not in extracted
+
+
+def test_implement_scenario_handles_curly_braces_in_hints_and_errors(tmp_path: Path) -> None:
+    feature_file = tmp_path / "features" / "iva.feature"
+    feature_file.parent.mkdir(parents=True)
+    feature_file.write_text("Feature: IVA\n  @IVA-001\n  Scenario: Foo\n", encoding="utf-8")
+
+    vcs = MagicMock(spec=Vcs)
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+
+    spec_source = MagicMock(spec=SpecSource)
+    spec_source.verify_seal.return_value = True
+
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:35:00Z"
+
+    use_case = ImplementScenario(
+        vcs=vcs,
+        executor=executor,
+        spec_source=spec_source,
+        event_log=event_log,
+        clock=clock,
+    )
+
+    template = (
+        "{repo} {id} {gherkin_del_escenario} {writable} {protected} "
+        "{suppressions} {green_ids} {check_commands} {hints} "
+        "{bloque_de_error} literal {'literal_token': 1}"
+    )
+
+    req = ImplementScenarioRequest(
+        project_root=tmp_path,
+        run_id="run1",
+        scenario=Scenario(id=ScenarioId("IVA-001"), name="Foo", file=str(feature_file), line=3),
+        attempt=1,
+        model="fake",
+        allowed_tools=[],
+        max_turns=1,
+        timeout_s=1,
+        paths_writable=["src/"],
+        paths_protected=[],
+        paths_driver=[],
+        suppressions=[],
+        green_ids=[],
+        check_commands=[],
+        hints="Check this dict: {'a': 1, 'b': 2}",
+        last_error="Crash in format {bad_key}: 404",
+        prompt_template=template,
+    )
+
+    result = use_case.execute(req)
+    assert result.agent_signal == "ok"

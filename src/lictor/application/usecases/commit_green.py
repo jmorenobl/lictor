@@ -46,15 +46,15 @@ class CommitGreen:
         }
 
         # Check idempotency: if HEAD already has matching Scenario and Lictor-Run
-        head_scenarios = self.vcs.get_trailers("Scenario")
-        head_runs = self.vcs.get_trailers("Lictor-Run")
+        head_scenarios = self.vcs.get_trailers("Scenario", commit_ref="HEAD")
+        head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
         if (
             head_scenarios
             and head_scenarios[0] == sid_str
             and head_runs
             and head_runs[0] == request.run_id
         ):
-            commit_sha = "HEAD"
+            commit_sha = self.vcs.get_head_sha()
         else:
             commit_sha = self.vcs.commit(
                 message=f"feat({sid_str}): implementar escenario",
@@ -76,4 +76,3 @@ class CommitGreen:
         self.event_log.append(event)
 
         return CommitGreenResult(commit_sha=commit_sha)
-

@@ -35,8 +35,14 @@ class FakeVcs(Vcs):
     def commit(self, message: str, trailers: dict[str, str] | None = None) -> str:
         return "fake-sha-12345"
 
-    def get_trailers(self, key: str) -> list[str]:
+    def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
         return []
+
+    def get_head_sha(self) -> str:
+        return "fake-sha-head"
+
+    def get_head_message(self) -> str:
+        return "fake head commit message"
 
     def revert_paths(self, paths: list[str] | tuple[str, ...]) -> None:
         for p in paths:
@@ -119,6 +125,31 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
+        all_scenario_ids=("IVA-001",),
+    )
+
+    result = verifier.execute(req)
+    assert result.ok is False
+    assert result.failed_at == "L0-sello"
+
+
+def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: Path) -> None:
+    project_root, run_id = _setup_project(tmp_path, sealed=True)
+    # Add an unsealed file into tests/acceptance/
+    extra_driver = project_root / "tests" / "acceptance" / "extra_driver.py"
+    extra_driver.write_text("def test_extra(): pass\n", encoding="utf-8")
+
+    vcs = FakeVcs(changed_files=["src/code.py"])
+    runner = FakeRunner()
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+
+    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="implement",
+        paths_writable=("src/",),
+        paths_driver=("tests/acceptance/",),
         all_scenario_ids=("IVA-001",),
     )
 

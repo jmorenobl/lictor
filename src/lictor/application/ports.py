@@ -75,8 +75,16 @@ class Vcs(Protocol):
         """Create a commit with optional git trailers and return commit sha."""
         ...
 
-    def get_trailers(self, key: str) -> list[str]:
-        """Get trailer values for the given key from git log."""
+    def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
+        """Get trailer values for the given key from git log, optionally limited to a commit."""
+        ...
+
+    def get_head_sha(self) -> str:
+        """Return the commit sha of HEAD."""
+        ...
+
+    def get_head_message(self) -> str:
+        """Return the subject line of HEAD commit."""
         ...
 
     def revert_paths(self, paths: Sequence[str]) -> None:
