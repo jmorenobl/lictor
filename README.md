@@ -1,86 +1,100 @@
-# Lictor
+<div align="center">
 
-[![Python >= 3.12](https://img.shields.io/badge/python-%3E%3D3.12-blue.svg)](https://www.python.org/)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Typed: mypy strict](https://img.shields.io/badge/typing-mypy%20--strict-blue.svg)](https://mypy-lang.org/)
-[![Architecture: Hexagonal](https://img.shields.io/badge/architecture-hexagonal-success.svg)](docs/adr/ADR-0002-arquitectura-hexagonal.md)
+<img src="docs/assets/banner.svg" alt="Lictor — Factoría Agéntica de Software" width="100%" />
 
-**Lictor** es un arnés determinista y entorno de ejecución agéntico que implementa escenarios de aceptación escritos en **Gherkin** mediante un agente autónomo de programación, verificando sistemáticamente cada entrega a través de puertas de calidad multinivel (`L0`–`L5`).
+<br/>
+
+[![Python >= 3.12](https://img.shields.io/badge/Python-3.12%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![uv](https://img.shields.io/badge/uv-Astral-DE5FE9?style=for-the-badge&logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
+[![LangGraph](https://img.shields.io/badge/Orquestaci%C3%B3n-LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
+[![Ruff](https://img.shields.io/badge/Linter-Ruff-D7FF64?style=for-the-badge&logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
+[![Mypy Strict](https://img.shields.io/badge/Typing-mypy%20--strict-2A6DB2?style=for-the-badge&logo=python&logoColor=white)](https://mypy-lang.org/)
+[![Hexagonal](https://img.shields.io/badge/Arquitectura-Hexagonal-10B981?style=for-the-badge)](docs/adr/ADR-0002-arquitectura-hexagonal.md)
+
+<p align="center">
+  <strong>Implementa escenarios Gherkin con un agente autónomo y los verifica de forma 100 % determinista.</strong><br/>
+  <sub>Ciclo TDD Rojo → Verde · Sellado criptográfico SHA-256 · Puertas de calidad L0–L5 · Auditoría CloudEvents 1.0</sub>
+</p>
+
+<p align="center">
+  <a href="#-por-qué-lictor">¿Por qué Lictor?</a> •
+  <a href="#-ciclo-de-ejecución">Ciclo de Ejecución</a> •
+  <a href="#-guía-de-inicio-rápido">Inicio Rápido</a> •
+  <a href="#️-referencia-de-la-cli">CLI y Códigos</a> •
+  <a href="#️-puertas-de-calidad-l0l5">Puertas L0–L5</a> •
+  <a href="#️-arquitectura-del-proyecto">Arquitectura</a>
+</p>
+
+</div>
 
 ---
 
-## Tabla de Contenidos
-
-- [Visión General](#-visión-general)
-- [Características Principales](#-características-principales)
-- [Ciclo de Ejecución](#-ciclo-de-ejecución)
-- [Requisitos e Instalación](#-requisitos-e-instalación)
-- [Guía de Inicio Rápido](#-guía-de-inicio-rápido)
-- [Referencia de la CLI](#-referencia-de-la-cli)
-  - [Comandos Disponibles](#comandos-disponibles)
-  - [Códigos de Salida](#códigos-de-salida)
-- [Configuración (`lictor.json`)](#-configuración-lictorjson)
-- [Puertas de Calidad (`L0`–`L5`)](#-puertas-de-calidad-l0l5)
-- [Arquitectura del Proyecto](#-arquitectura-del-proyecto)
-- [Desarrollo y Contribución](#-desarrollo-y-contribución)
+> **🏛️ ¿Por qué el nombre *Lictor*?**
+> En la antigua Roma, los *lictores* escoltaban a los magistrados portando las *fasces*: un haz de varas atadas que simbolizaba el orden, la disciplina y la ejecución determinista de la ley. **Lictor** actúa como el escolta determinista de los agentes de IA: les permite escribir código con autonomía, pero los somete estrictamente a la ley de tu especificación y de tus puertas de calidad.
 
 ---
 
-## 🎯 Visión General
+## ⚡ ¿Por qué Lictor?
 
-Los agentes de codificación autónomos son potentes pero propensos a modificar archivos fuera de alcance, introducir supresiones de linter para ocultar errores, alterar los propios tests de aceptación para forzar que pasen o degradar la arquitectura del proyecto.
+Dejar a un agente de codificación suelto sobre un repositorio suele derivar en atajos indeseados. **Lictor** invierte el control: el agente propone el código, pero **un arnés inmutable decide qué entra al repositorio**.
 
-**Lictor** invierte el control: el agente propone cambios en el código de producción y pruebas unitarias, pero **un arnés determinista gobierna el flujo completo**:
-
-1. **Valida y sella** las especificaciones Gherkin (`features/*.feature`) y el *driver* de aceptación (`SHA-256`).
-2. **Exige la Regla del Rojo (TDD):** verifica que los escenarios pendientes tengan un test ejecutable que falle antes de permitir su implementación.
-3. **Acota el radio de acción del agente:** revierte cualquier modificación en rutas protegidas, bloquea supresiones (`# noqa`, `# type: ignore`, `# pragma: no cover`) y vigila la integridad del estado interno.
-4. **Verifica en cascada (`L0` → `L5`):** ejecuta linters, chequeo estricto de tipos, tests unitarios, controles de arquitectura y la suite de aceptación comprobando la **no regresión** de los escenarios previos.
-5. **Consolida o aísla:** realiza un `git commit` atómico por cada escenario en verde, o revierte el árbol y pone el escenario en **cuarentena** si agota sus intentos o presenta un conflicto de especificación.
+| Problema habitual con agentes autónomos ❌ | Cómo lo gobierna Lictor 🛡️ |
+| :--- | :--- |
+| **Modifican los tests** para forzar que pasen en lugar de arreglar el código. | **Sellado SHA-256 (`L0-sello`):** las features Gherkin y el *driver* de aceptación quedan sellados en `.lictor/seal.json`. Cualquier alteración aborta o revierte el intento. |
+| **Escriben tests que ya pasaban** sin probar realmente la nueva funcionalidad. | **Regla del Rojo (`red_check`):** antes de implementar un escenario pendiente, su test de aceptación está obligado a **fallar en rojo**. |
+| **Silencian errores** añadiendo `# noqa`, `# type: ignore` o `# pragma: no cover`. | **Escáner de supresiones (`L0-supresiones`):** inspecciona cada línea añadida en el diff y rechaza el intento si detecta directivas prohibidas. |
+| **Tocan archivos prohibidos** (`pyproject.toml`, configuración o estado interno). | **Fronteras de rutas (`L0-rutas` y `L0-estado`):** revierte automáticamente archivos fuera de `paths.writable` y protege `.lictor/` con instantáneas en memoria. |
+| **Rompen escenarios anteriores** al intentar arreglar el escenario actual. | **Verificación de no regresión (`L3`):** exige que pase el escenario actual **y** todos los escenarios que ya estaban en verde. |
+| **Se quedan a medias** si se agota la cuota de suscripción o API. | **Checkpoints SQLite + Pausa limpia (`exit 50`):** guarda el estado exacto del grafo LangGraph y reanuda donde quedó al volver a ejecutar `lictor run`. |
 
 ---
 
 ## ✨ Características Principales
 
-- **Ciclo Rojo → Verde Determinista:** Generación asistida del *driver* de aceptación (`pytest-bdd`), comprobación automática de la regla del rojo y sellado criptográfico en `.lictor/seal.json`.
-- **Protección de Fronteras (`L0`):** Control estricto de rutas escribibles vs. protegidas, detección de supresiones en las líneas añadidas del diff e instantánea de integridad en memoria ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)).
-- **Orquestación Resiliente con Checkpoints:** Grafo de estados gestionado con **LangGraph** y persistido en SQLite (`.lictor/checkpoints.sqlite`). Si la suscripción o API alcanza un límite de cuota (`rate_limited`), la ejecución se pausa de forma limpia y se reanuda exactamente en el nodo pendiente al volver a invocar `lictor run`.
-- **Detección de Conflictos de Especificación:** Si un escenario es contradictorio o imposible de satisfacer sin romper garantías previas, el agente puede emitir la señal `LICTOR: SPEC_CONFLICT <motivo>`, aislando el escenario inmediatamente sin consumir reintentos inútiles.
-- **Auditoría CloudEvents 1.0 e Informes Markdown:** Bitácora estructurada en `.lictor/journal.jsonl` y generación de reportes ejecutivos en `.lictor/report.md` con desglose de intentos, tokens (entrada/salida/caché), coste en USD, tiempos de agente/verificación y hash de commit por escenario.
-- **Arquitectura Hexagonal Estricta:** Dominio 100 % puro sin dependencias de frameworks ni E/S, con contratos de capas verificados automáticamente mediante `import-linter` ([ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md), [ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md)).
+- 🔴🟢 **Ciclo Rojo → Verde Determinista:** Generación asistida del *driver* de aceptación (`pytest-bdd`), comprobación automática de la regla del rojo y sellado criptográfico en `.lictor/seal.json`.
+- 🛡️ **Defensa en Profundidad (`L0`–`L5`):** Tubería secuencial desde integridad del arnés (`L0`), análisis estático y tipos estrictos (`L1`), tests unitarios (`L2`), aceptación sin regresiones (`L3`), arquitectura y seguridad (`L4`), hasta pruebas de mutación (`L5`).
+- 🧬 **Aislamiento, Commits Atómicos y Cuarentena:** Cada escenario verificado produce un `git commit` limpio. Si un escenario agota sus intentos o el agente declara conflicto de especificación (`LICTOR: SPEC_CONFLICT`), Lictor hace `git reset` al último estado verde, pone el escenario en **cuarentena** y continúa con el resto.
+- 📊 **Trazabilidad CloudEvents 1.0 e Informes Ejecutivos:** Bitácora append-only en `.lictor/journal.jsonl` y generación automática de `.lictor/report.md` con métricas de tokens, coste en USD, duración de agente vs. verificación y commits por escenario.
+- 🏛️ **Arquitectura Hexagonal Pura:** Dominio 100 % libre de frameworks (`langgraph`, `pydantic`, `typer` prohibidos en el núcleo), blindado con contratos de `import-linter`.
 
 ---
 
 ## 🔄 Ciclo de Ejecución
 
-El motor de orquestación recorre un grafo de 11 nodos con persistencia transaccional en cada transición:
+El motor de orquestación ejecuta un grafo de estados de **11 nodos** con persistencia transaccional en SQLite (`PRAGMA synchronous = FULL`):
 
 ```mermaid
 flowchart TD
-    Start(["lictor run"]) --> preflight["preflight<br/>(Verifica git limpio y salud del ejecutor)"]
-    preflight -->|Error precondición| End(["END"])
-    preflight -->|OK| load_spec["load_spec<br/>(Carga features/*.feature y verifica sello)"]
+    classDef entry fill:#1E293B,stroke:#38BDF8,stroke-width:2px,color:#F8FAFC
+    classDef gate fill:#0F172A,stroke:#64748B,stroke-width:1.5px,color:#E2E8F0
+    classDef agent fill:#2E1065,stroke:#A855F7,stroke-width:2px,color:#F3E8FF
+    classDef red fill:#450A0A,stroke:#EF4444,stroke-width:2px,color:#FECACA
+    classDef green fill:#064E3B,stroke:#10B981,stroke-width:2px,color:#ECFDF5
+    classDef warn fill:#451A03,stroke:#F59E0B,stroke-width:2px,color:#FEF3C7
+
+    Start(["🚀 lictor run"]):::entry --> preflight["🔍 preflight<br/>Verifica git limpio y salud del agente"]:::gate
+    preflight -->|Fallo precondición| End(["🏁 END"]):::entry
+    preflight -->|OK| load_spec["📜 load_spec<br/>Carga features/*.feature y verifica sello"]:::gate
     load_spec -->|Spec inválida| End
-    load_spec -->|Sin sello válido| build_driver["build_driver<br/>(Agente genera/actualiza driver de aceptación)"]
-    load_spec -->|Sello intacto| red_check["red_check<br/>(Verifica Regla del Rojo y sella spec + driver)"]
-    build_driver -->|Cuota agotada| pause["pause<br/>(Interrupción en SQLite checkpoint)"]
+    load_spec -->|Sin sello válido| build_driver["🤖 build_driver<br/>Agente genera driver de aceptación"]:::agent
+    load_spec -->|Sello intacto| red_check["🩸 red_check<br/>Verifica Regla del Rojo y sella SHA-256"]:::red
+    build_driver -->|Cuota agotada| pause["⏸️ pause<br/>Checkpoint SQLite (Exit 50)"]:::warn
     build_driver -->|OK| red_check
     red_check -->|Fallo reintentable| build_driver
     red_check -->|Driver inválido| End
-    red_check -->|Rojo verificado y sellado| pick_next["pick_next<br/>(Selecciona siguiente escenario pendiente)"]
-    pick_next -->|Sin pendientes| report["report<br/>(Genera .lictor/report.md)"]
-    pick_next -->|Escenario actual| implement["implement<br/>(Agente implementa el escenario)"]
+    red_check -->|Rojo verificado| pick_next["🎯 pick_next<br/>Selecciona siguiente escenario pendiente"]:::gate
+    pick_next -->|Sin pendientes| report["📊 report<br/>Genera .lictor/report.md"]:::green
+    pick_next -->|Escenario actual| implement["🤖 implement<br/>Agente implementa el escenario"]:::agent
     implement -->|Cuota agotada| pause
-    implement -->|SPEC_CONFLICT| quarantine["quarantine<br/>(git reset + registra cuarentena)"]
-    implement -->|Cambios listos| verify["verify<br/>(Ejecuta puertas L0 -> Controles -> Aceptación)"]
-    verify -->|Todo en verde| commit["commit<br/>(git commit atómico del escenario)"]
+    implement -->|SPEC_CONFLICT| quarantine["☣️ quarantine<br/>git reset + aísla escenario"]:::warn
+    implement -->|Cambios listos| verify["🛡️ verify<br/>Puertas L0 → L1..L5 → Aceptación"]:::gate
+    verify -->|Todo en verde| commit["✅ commit<br/>git commit atómico del escenario"]:::green
     verify -->|Fallo y quedan intentos| implement
     verify -->|Intentos agotados| quarantine
     commit --> pick_next
     quarantine --> pick_next
-    pause -.->|Reanudación| implement
-    pause -.->|Reanudación| build_driver
+    pause -.->|Reanudar lictor run| implement
+    pause -.->|Reanudar lictor run| build_driver
     report --> End
 ```
 
@@ -91,37 +105,37 @@ flowchart TD
 ### Requisitos Previos
 
 - **Python** `>= 3.12`
-- **[uv](https://docs.astral.sh/uv/)** (gestor de paquetes y entornos virtuales)
-- **Git** instalado y disponible en el `PATH`
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview)** (`claude`) instalado y autenticado (cuando se utiliza el backend `claude-cli` por defecto)
+- **[uv](https://docs.astral.sh/uv/)** (gestor de paquetes y entornos de Astral)
+- **Git** instalado y disponible en `PATH`
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview)** (`claude`) autenticado *(para el backend por defecto `claude-cli`)*
 
-### Instalación desde el repositorio
+### Instalación
 
 ```bash
-# Clonar el repositorio
+# 1. Clonar el repositorio
 git clone <url-del-repositorio>
 cd lictor
 
-# Sincronizar el entorno e instalar todas las dependencias (incluyendo grupo dev)
+# 2. Instalar dependencias de producción y desarrollo
 uv sync --all-groups
 
-# Verificar que la CLI responde correctamente
+# 3. Comprobar la CLI
 uv run lictor --help
 ```
 
-Opcionalmente, para instalar `lictor` como herramienta global en tu usuario:
-
-```bash
-uv tool install --editable .
-```
+> [!TIP]
+> También puedes instalar `lictor` como herramienta global en tu entorno de usuario con:
+> ```bash
+> uv tool install --editable .
+> ```
 
 ---
 
 ## 🚀 Guía de Inicio Rápido
 
-### 1. Definir escenarios Gherkin
+### 1️⃣ Escribe tus escenarios Gherkin en `features/`
 
-En el directorio `features/` de tu proyecto, crea un archivo `.feature` donde cada escenario tenga una etiqueta única con el formato `@<PREFIJO>-<NÚMERO>` (por ejemplo, `@IVA-001`):
+Cada escenario debe ir etiquetado con un identificador único `@<PREFIJO>-<NÚMERO>` (por ejemplo, `@IVA-001`):
 
 ```gherkin
 # features/iva.feature
@@ -139,45 +153,75 @@ Característica: IVA de una factura
     Dado una factura con importe 100
     Cuando calculo el IVA reducido
     Entonces el total es 110
+
+  @IVA-003
+  Escenario: Importe negativo
+    Dado una factura con importe -5
+    Cuando calculo el IVA general
+    Entonces se rechaza por importe no válido
 ```
 
-> [!TIP]
-> El repositorio incluye un proyecto de ejemplo listo para explorar en `examples/demo-iva/`.
+> 💡 *Puedes explorar este proyecto de ejemplo directamente en el directorio [`examples/demo-iva/`](examples/demo-iva/).*
 
-### 2. Inicializar la configuración de Lictor
-
-Detecta automáticamente el perfil del proyecto (por ejemplo `python-uv@0.1`) y genera `lictor.json`:
+### 2️⃣ Inicializa y diagnostica el proyecto
 
 ```bash
+# Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
 uv run lictor init
-```
 
-### 3. Comprobar precondiciones con `doctor`
-
-Verifica que `lictor.json` sea válido, el árbol de trabajo de `git` esté limpio, el ejecutor del agente esté disponible y los binarios de todos los controles existan:
-
-```bash
+# Verifica que el entorno, git, ejecutor y herramientas de control estén listos
 uv run lictor doctor
 ```
 
-### 4. Ejecutar la implementación y verificación autónoma
-
-```bash
-uv run lictor run
+```text
+✓ Configuración válida: perfil 'python-uv@0.1'
+✓ Árbol git limpio sin cambios pendientes
+✓ Ejecutor disponible: claude 2.x.x (subscription)
+✓ 3 controles configurados correctamente
+Doctor: todas las comprobaciones pasaron con éxito.
 ```
 
-Si la ejecución se interrumpe o se pausa por límite de cuota (código `50`), basta con volver a ejecutar `uv run lictor run` para reanudarla desde el último checkpoint. Para descartar el estado previo y forzar una ejecución desde cero, usa `uv run lictor run --new`.
-
-### 5. Consultar el estado y el informe
+### 3️⃣ Ejecuta el ciclo autónomo y consulta el informe
 
 ```bash
-# Ver el estado actual en consola o en formato JSON
-uv run lictor status
-uv run lictor status --json
+# Implementa y verifica todos los escenarios de forma determinista
+uv run lictor run
 
-# Regenerar y obtener la ruta del informe en Markdown (.lictor/report.md)
+# Consulta el estado actual de la ejecución
+uv run lictor status
+
+# Regenera y muestra la ruta del informe en Markdown (.lictor/report.md)
 uv run lictor report
 ```
+
+<details>
+<summary>📄 <strong>Ver ejemplo de informe generado en <code>.lictor/report.md</code></strong></summary>
+
+```markdown
+# Informe de ejecución de Lictor
+
+## Resumen
+- **Escenarios en verde**: 3
+- **Escenarios en cuarentena**: 0
+- **Escenarios pendientes**: 0
+- **Código de salida**: 0
+- **Duración total**: 18.42s
+
+## Escenarios
+| ID | Nombre | Estado | Intentos | Tokens (In/Out) | Coste | Tiempo Agente | Tiempo Verif | Commit |
+|---|---|---|---|---|---|---|---|---|
+| IVA-001 | IVA general | green | 1 | 4120 / 890 | $0.0257 | 5400ms | 620ms | a1b2c3d |
+| IVA-002 | IVA reducido | green | 1 | 3850 / 640 | $0.0212 | 4800ms | 590ms | e4f5g6h |
+| IVA-003 | Importe negativo | green | 1 | 4010 / 710 | $0.0227 | 6100ms | 910ms | i7j8k9l |
+
+## Cuarentenas
+- *Ningún escenario en cuarentena.*
+
+## Intentos fallidos por nivel
+- *Sin fallos registrados.*
+```
+
+</details>
 
 ---
 
@@ -185,37 +229,61 @@ uv run lictor report
 
 ### Comandos Disponibles
 
-| Comando | Opciones Principales | Descripción |
+| Comando | Opciones | Descripción |
 | :--- | :--- | :--- |
-| `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f` | Inicializa `lictor.json` en el repositorio detectando el perfil o aplicando el indicado, y actualiza `.gitignore`. |
-| `lictor doctor` | — | Comprueba las precondiciones del entorno (configuración, árbol git limpio, salud del agente y binarios de controles) sin ejecutar el grafo. |
-| `lictor check` | `--level, -l <niveles>` | Ejecuta los controles deterministas (filtrables por coma, ej. `--level L1,L2`) y la suite de aceptación sobre el árbol actual. |
-| `lictor run` | `--new` | Ejecuta o reanuda el grafo determinista para implementar y verificar todos los escenarios Gherkin. |
-| `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora. |
+| `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado) y actualiza `.gitignore`. |
+| `lictor doctor` | — | Verifica las precondiciones del entorno (validez de `lictor.json`, árbol `git` limpio, salud del agente y binarios de controles) sin ejecutar el grafo. |
+| `lictor check` | `--level, -l <niveles>` | Ejecuta los controles deterministas (filtrables por coma, p. ej. `--level L1,L2`) y la suite de aceptación sobre el árbol actual. |
+| `lictor run` | `--new` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. |
+| `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos. |
 | `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl` y muestra su ruta. |
 
-### Códigos de Salida
+### Códigos de Salida Estables
 
-Lictor garantiza códigos de salida estables para su integración en pipelines de CI/CD y scripts de automatización:
+Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts de automatización:
 
-| Código | Nombre | Significado |
+| Código | Constante (`ExitCode`) | Significado |
 | :---: | :--- | :--- |
-| `0` | `OK` | Ejecución completada con éxito; todos los escenarios o controles pasaron en verde. |
-| `1` | `INTERNAL_ERROR` | Error interno inesperado del runtime. |
-| `10` | `PRECONDITION` | Precondición incumplida: árbol `git` sucio, configuración/perfil inválido, spec o driver inválido, o sello alterado (`SealTamperedError`). |
-| `11` | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró conflicto o imposibilidad en la especificación (`LICTOR: SPEC_CONFLICT`). |
-| `30` | `QUARANTINED` | Al menos un escenario quedó en cuarentena por agotar el número máximo de intentos (`max_attempts`). |
-| `50` | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
+| **`0`** | `OK` | Todos los escenarios (o controles en `lictor check`) pasaron en verde. |
+| **`1`** | `INTERNAL_ERROR` | Error interno inesperado del runtime. |
+| **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
+| **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
+| **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. |
+| **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
+
+---
+
+## 🛡️ Puertas de Calidad (`L0`–`L5`)
+
+Cada intento del agente atraviesa una tubería de verificación secuencial que **corta en el primer fallo bloqueante** y condensa el error para alimentar el siguiente intento:
+
+| Nivel | Puerta | Qué verifica | Modo |
+| :---: | :--- | :--- | :---: |
+| **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas se revierte automáticamente y falla el intento. | `block` |
+| **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
+| **L0** | `L0-supresiones` | Analiza las líneas añadidas en el diff y archivos nuevos bloqueando directivas como `# noqa`, `# type: ignore` o `# pragma: no cover`. | `block` |
+| **L0** | `L0-estado` | Toma una instantánea en memoria de `.lictor/` y `lictor.json` antes y después de cada comando; si detecta manipulación, restaura y aborta ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
+| **L1** | Análisis estático | Linter (`ruff check`), formato (`ruff format --check`) y chequeo estricto de tipos (`mypy --strict`). | `block` |
+| **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
+| **L3** | Aceptación y no regresión | Mapea cada test del reporte JUnit a su `@ID-NNN`: exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. | `block` |
+| **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. | `measure` / `block` |
 
 ---
 
 ## ⚙️ Configuración (`lictor.json`)
 
-El archivo `lictor.json` en la raíz del proyecto define el perfil base, el backend del agente, los límites de intentos, las fronteras de archivos y los controles de verificación. Su esquema formal JSON Schema se encuentra en [`schema/lictor.schema.json`](schema/lictor.schema.json).
+El archivo `lictor.json` define el perfil del proyecto, el backend del agente, los límites de intentos, las fronteras de rutas y los controles. Puedes consultar su esquema formal en [`schema/lictor.schema.json`](schema/lictor.schema.json).
 
-Cuando se especifica un `"profile"` (como `"python-uv@0.1"`), Lictor hereda automáticamente los valores por defecto del perfil para cualquier sección omitida.
+> [!IMPORTANT]
+> - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-4-5-20250929`) y rechaza alias mutables como `sonnet` o `latest`.
+> - **Fronteras disjuntas:** `paths.writable` nunca puede solaparse con `paths.protected` ni con `paths.driver`.
+> - **Marcador JUnit:** Todo control o suite de aceptación con `"report": "junit"` debe incluir `{out}` en su comando `run`.
 
-### Ejemplo completo de `lictor.json`
+<details>
+<summary>⚙️ <strong>Ver ejemplo completo de <code>lictor.json</code> y estructura de <code>.lictor/</code></strong></summary>
+
+### Ejemplo de `lictor.json`
 
 ```json
 {
@@ -253,53 +321,38 @@ Cuando se especifica un `"profile"` (como `"python-uv@0.1"`), Lictor hereda auto
 }
 ```
 
-> [!IMPORTANT]
-> - `backend.model` exige el identificador completo del modelo con versión (p. ej. `claude-sonnet-4-5-20250929`) para garantizar la reproducibilidad; no se permiten alias cortos como `sonnet` o `latest`.
-> - `paths.writable` no puede solaparse nunca con `paths.protected` ni con `paths.driver`.
-> - Todo control o suite de aceptación con `"report": "junit"` debe incluir el marcador `{out}` en su comando `run`.
+### Artefactos internos en `.lictor/` (ignorados por git)
 
-### Artefactos de estado en `.lictor/`
+| Ruta | Propósito |
+| :--- | :--- |
+| `.lictor/current_run` | Identificador de la ejecución activa para reanudación automática. |
+| `.lictor/checkpoints.sqlite` | Estado transaccional del grafo LangGraph. |
+| `.lictor/seal.json` | Hashes `SHA-256` de `features/*.feature` y de los archivos del *driver*. |
+| `.lictor/journal.jsonl` | Bitácora inmutable de eventos en formato CloudEvents 1.0. |
+| `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
+| `.lictor/runs/<run_id>/` | Salidas crudas del agente y reportes XML generados por cada control. |
 
-Durante su ejecución, Lictor gestiona su estado interno dentro del directorio `.lictor/` (ignorado por `git`):
-
-- `current_run`: identificador de la ejecución activa.
-- `checkpoints.sqlite`: estado persistido del grafo LangGraph (`PRAGMA synchronous = FULL`).
-- `seal.json`: hashes `SHA-256` de los archivos `.feature` y del *driver* de aceptación.
-- `journal.jsonl`: bitácora append-only de eventos en formato CloudEvents 1.0.
-- `report.md`: informe ejecutivo en Markdown de la última ejecución.
-- `runs/<run_id>/`: salidas crudas del agente y reportes JUnit XML de cada control.
-
----
-
-## 🛡️ Puertas de Calidad (`L0`–`L5`)
-
-Cada intento de implementación supera una tubería secuencial determinista:
-
-| Nivel | Puerta | Verificación | Modo habitual |
-| :---: | :--- | :--- | :---: |
-| **L0** | `L0-rutas` | Comprueba que el agente solo haya tocado `paths.writable`. Si modificó rutas protegidas, las revierte automáticamente y falla el intento. | `block` |
-| **L0** | `L0-sello` | Verifica que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a `.lictor/seal.json`. | `block` |
-| **L0** | `L0-supresiones` | Inspecciona las líneas añadidas en el diff y archivos nuevos buscando directivas prohibidas (`# noqa`, `# type: ignore`, `# pragma: no cover`). | `block` |
-| **L0** | `L0-estado` | Instantánea en memoria de `.lictor/` y `lictor.json` antes y después de ejecutar comandos de terceros; restaura y falla si detecta manipulación. | `block` |
-| **L1** | Análisis estático | Linters (`ruff check`), formato (`ruff format --check`) y tipado estático estricto (`mypy --strict`). | `block` |
-| **L2** | Tests unitarios | Suite de pruebas unitarias aisladas (`pytest tests/unit`). | `block` |
-| **L3** | Aceptación | Ejecuta la suite de aceptación, mapea los casos de prueba a los IDs de escenario y exige que el escenario actual pase **y todos los escenarios previamente en verde sigan pasando**. | `block` |
-| **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` en dominio), auditoría de vulnerabilidades (`pip-audit`) y detección de secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación sobre el dominio (`mutmut`) para medir la efectividad real de los tests unitarios. | `measure` / `block` |
+</details>
 
 ---
 
 ## 🏗️ Arquitectura del Proyecto
 
-Lictor está construido siguiendo **Arquitectura Hexagonal (Puertos y Adaptadores)**. Las dependencias apuntan estrictamente hacia el interior y se validan mediante `.importlinter`:
+Lictor sigue una **Arquitectura Hexagonal (Puertos y Adaptadores)** estricta. Todas las dependencias apuntan hacia el interior y se verifican mediante [`.importlinter`](.importlinter):
 
 ```mermaid
 flowchart TB
-    CLI["CLI & Bootstrap<br/>(lictor.cli | lictor.bootstrap)"]
-    ORCH["Orquestación<br/>(lictor.orchestration — LangGraph)"]
-    APP["Aplicación: Casos de Uso y Puertos<br/>(lictor.application)"]
-    DOM["Dominio Puro: Modelos, Reglas y Enrutado<br/>(lictor.domain)"]
-    ADAPT["Adaptadores Independientes<br/>(agents, vcs, runner, readers, spec, store, config)"]
+    classDef outer fill:#1E293B,stroke:#38BDF8,stroke-width:2px,color:#F8FAFC
+    classDef orch fill:#1E1B4B,stroke:#818CF8,stroke-width:2px,color:#E0E7FF
+    classDef app fill:#064E3B,stroke:#10B981,stroke-width:2px,color:#ECFDF5
+    classDef dom fill:#451A03,stroke:#F59E0B,stroke-width:2px,color:#FEF3C7
+    classDef adapt fill:#0F172A,stroke:#64748B,stroke-width:1.5px,stroke-dasharray: 4 4,color:#CBD5E1
+
+    CLI["🖥️ CLI & Bootstrap<br/>(lictor.cli | lictor.bootstrap)"]:::outer
+    ORCH["🔄 Orquestación<br/>(lictor.orchestration — LangGraph)"]:::orch
+    APP["⚙️ Aplicación: Casos de Uso y Puertos<br/>(lictor.application)"]:::app
+    DOM["💎 Dominio Puro: Modelos, Reglas y Enrutado<br/>(lictor.domain — Cero dependencias externas)"]:::dom
+    ADAPT["🔌 Adaptadores Independientes<br/>(agents · vcs · runner · readers · spec · store · config)"]:::adapt
 
     CLI --> ORCH
     CLI --> ADAPT
@@ -308,64 +361,64 @@ flowchart TB
     APP --> DOM
 ```
 
-### Estructura del Repositorio
+### Estructura de Directorios
 
 ```text
-├── pyproject.toml              # Configuración del paquete y herramientas (ruff, mypy, pytest, mutmut)
-├── lictor.json                 # Configuración de puertas de calidad del propio repositorio Lictor
+├── pyproject.toml              # Configuración de paquete, ruff, mypy, pytest y mutmut
+├── lictor.json                 # Puertas de calidad L1–L5 aplicadas al propio Lictor
 ├── .importlinter               # Contratos de arquitectura hexagonal
 ├── schema/
 │   └── lictor.schema.json      # JSON Schema formal de lictor.json
 ├── docs/
+│   ├── assets/banner.svg       # Banner vectorial del repositorio
 │   └── adr/                    # Architecture Decision Records (ADR-0001 a ADR-0003)
 ├── examples/
-│   └── demo-iva/               # Proyecto de ejemplo con escenarios Gherkin en español
+│   └── demo-iva/               # Proyecto de demostración con escenarios Gherkin
 ├── src/lictor/
 │   ├── domain/                 # Dominio puro: model.py, rules.py, routing.py, errors.py
 │   ├── application/
-│   │   ├── ports.py            # Puertos (Protocolos: Executor, Vcs, CommandRunner, EventLog, etc.)
-│   │   ├── seal.py             # Cálculo y validación del sello SHA-256
-│   │   └── usecases/           # Interactors de casos de uso (prepare_driver, check_red, verify_attempt...)
+│   │   ├── ports.py            # Puertos (Protocolos: Executor, Vcs, CommandRunner, EventLog...)
+│   │   ├── seal.py             # Sellado y verificación criptográfica SHA-256
+│   │   └── usecases/           # Casos de uso (prepare_driver, check_red, verify_attempt...)
 │   ├── adapters/
 │   │   ├── agents/             # Ejecutores de agente (ClaudeCLI, FakeExecutor)
-│   │   ├── vcs/                # Adaptador de control de versiones (GitCli)
+│   │   ├── vcs/                # Control de versiones (GitCli)
 │   │   ├── runner/             # Ejecución de subprocesos (SubprocessRunner, FakeRunner)
-│   │   ├── readers/            # Lectores de resultados (ExitCodeReader, JUnitReader con defusedxml)
+│   │   ├── readers/            # Parsers de reportes (ExitCodeReader, JUnitReader con defusedxml)
 │   │   ├── spec/               # Parser oficial de Gherkin (GherkinSource)
 │   │   ├── store/              # Bitácora CloudEvents JSONL y reloj del sistema
-│   │   └── config/             # Modelos Pydantic, cargador de configuración y perfiles
-│   ├── orchestration/          # Grafo de estados LangGraph y checkpointer SQLite
+│   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.1)
+│   ├── orchestration/          # Grafo de estados LangGraph y SqliteSaver
 │   ├── prompts/                # Plantillas de prompts del sistema (driver.md, implement.md)
 │   ├── bootstrap.py            # Raíz de composición e inyección de dependencias
 │   └── cli.py                  # Punto de entrada CLI con Typer
 └── tests/
-    ├── unit/                   # Pruebas unitarias rápidas de dominio, casos de uso y adaptadores
-    └── integration/            # Pruebas de integración extremo a extremo y contratos de arquitectura
+    ├── unit/                   # Pruebas unitarias aisladas en milisegundos
+    └── integration/            # Pruebas de integración extremo a extremo y arquitectura
 ```
 
-### Decisiones de Arquitectura (ADRs)
+### Registros de Decisiones de Arquitectura (ADRs)
 
-- **[ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md):** El estado vive en `.lictor/`, dentro del repositorio e ignorado por git.
-- **[ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
-- **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
+- 📌 **[ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md):** El estado vive en `.lictor/`, dentro del repositorio e ignorado por git.
+- 📌 **[ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
+- 📌 **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
 
 ---
 
-## 🧪 Desarrollo y Contribución
+## 🧪 Desarrollo y Verificación
 
-Lictor se verifica a sí mismo utilizando sus propias puertas de calidad configuradas en `lictor.json`. Todos los comandos deben ejecutarse desde la raíz del repositorio con `uv`:
-
-### Verificación con un solo comando
+Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` definido en [`lictor.json`](lictor.json):
 
 ```bash
-# Ejecutar controles de niveles L1 y L2
-uv run lictor check --level L1,L2
-
-# Ejecutar todos los controles (L1, L2, L4, L5) y la suite de aceptación
+# Ejecutar todos los controles de calidad con el propio Lictor
 uv run lictor check
+
+# O filtrar por niveles específicos (por ejemplo, L1 y L2)
+uv run lictor check --level L1,L2
 ```
 
-### Comandos individuales de calidad
+<details>
+<summary>🔬 <strong>Ver comandos individuales de cada puerta de calidad (L1 a L5)</strong></summary>
 
 ```bash
 # L1: Estilo, formato y tipado estricto
@@ -373,7 +426,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy --strict src
 
-# L2: Pruebas unitarias
+# L2: Pruebas unitarias rápidas
 uv run pytest tests/unit -q
 
 # L3: Pruebas de integración y aceptación
@@ -384,7 +437,7 @@ uv run lint-imports
 uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q
 uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 
-# L4: Auditoría de seguridad y detección de secretos
+# L4: Auditoría de dependencias y detección de secretos
 uvx pip-audit
 gitleaks detect --no-banner
 
@@ -392,10 +445,4 @@ gitleaks detect --no-banner
 uv run mutmut run
 ```
 
-### Convenciones del código
-
-- **Python `>= 3.12`:** uso de sintaxis moderna de tipos (`X | Y`, `list[T]`, `dict[K, V]`).
-- **Tipado estricto:** todas las funciones y métodos deben incluir anotaciones explícitas de parámetros y retorno (`mypy --strict`).
-- **Cero supresiones:** evita comentarios `# noqa`, `# type: ignore` o `# pragma: no cover`.
-- **Pureza de capas:** `lictor.domain` y `lictor.application` nunca deben importar `pydantic`, `typer`, `langgraph` ni adaptadores concretos.
-
+</details>

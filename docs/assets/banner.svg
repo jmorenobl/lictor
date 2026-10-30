@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="100%" height="100%">
+  <defs>
+    <!-- Main Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#07090E" />
+      <stop offset="50%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#090D16" />
+    </linearGradient>
+
+    <!-- Ambient Glows -->
+    <radialGradient id="glowAmber" cx="18%" cy="50%" r="45%">
+      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.16" />
+      <stop offset="60%" stop-color="#EF4444" stop-opacity="0.05" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="glowEmerald" cx="82%" cy="50%" r="45%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.18" />
+      <stop offset="55%" stop-color="#3B82F6" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Metallic Gold / Amber Gradient for Emblem -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A" />
+      <stop offset="45%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#B45309" />
+    </linearGradient>
+
+    <!-- Emerald Gradient -->
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+
+    <!-- Title Metallic Gradient -->
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="65%" stop-color="#F1F5F9" />
+      <stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+
+    <!-- Card Border Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.45" />
+      <stop offset="50%" stop-color="#334155" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0.55" />
+    </linearGradient>
+
+    <!-- Technical Grid Pattern -->
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#1E293B" stroke-width="0.75" stroke-opacity="0.65" />
+      <circle cx="32" cy="32" r="1" fill="#334155" fill-opacity="0.6" />
+    </pattern>
+
+    <!-- Drop Shadow Filter -->
+    <filter id="shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Base Canvas -->
+  <rect width="1200" height="380" rx="20" fill="url(#bgGrad)" />
+  <rect width="1200" height="380" rx="20" fill="url(#grid)" />
+  <rect width="1200" height="380" rx="20" fill="url(#glowAmber)" />
+  <rect width="1200" height="380" rx="20" fill="url(#glowEmerald)" />
+  <rect x="1.5" y="1.5" width="1197" height="377" rx="18.5" fill="none" stroke="url(#borderGrad)" stroke-width="2" />
+
+  <!-- Decorative Top & Bottom Accent Lines -->
+  <line x1="60" y1="2" x2="340" y2="2" stroke="url(#goldGrad)" stroke-width="3" stroke-linecap="round" />
+  <line x1="780" y1="378" x2="1140" y2="378" stroke="url(#emeraldGrad)" stroke-width="3" stroke-linecap="round" />
+
+  <!-- ===================================================================== -->
+  <!-- LEFT EMBLEM: Hexagonal Shield + Stylized Roman Fasces & Checkmark     -->
+  <!-- ===================================================================== -->
+  <g transform="translate(38, 86) scale(0.95)" filter="url(#shadow)">
+    <!-- Outer Hexagon Shield -->
+    <polygon points="85,0 165,46 165,148 85,194 5,148 5,46" fill="#0B1120" stroke="url(#goldGrad)" stroke-width="3" />
+    <!-- Inner Hexagon Ring -->
+    <polygon points="85,12 154,52 154,142 85,182 16,142 16,52" fill="#0F172A" stroke="#1E293B" stroke-width="1.5" />
+
+    <!-- Stylized Fasces Rods (Deterministic Pillars) -->
+    <rect x="57" y="46" width="8" height="104" rx="4" fill="url(#goldGrad)" opacity="0.85" />
+    <rect x="71" y="38" width="8" height="120" rx="4" fill="url(#goldGrad)" opacity="0.95" />
+    <rect x="85" y="30" width="9" height="134" rx="4.5" fill="url(#goldGrad)" />
+    <rect x="100" y="38" width="8" height="120" rx="4" fill="url(#goldGrad)" opacity="0.95" />
+    <rect x="114" y="46" width="8" height="104" rx="4" fill="url(#goldGrad)" opacity="0.85" />
+
+    <!-- Stylized Axe Blade (Left Wing) -->
+    <path d="M 55 58 C 28 62, 24 98, 55 106 L 55 92 C 39 88, 39 74, 55 70 Z" fill="url(#goldGrad)" />
+
+    <!-- Binding Ribbons (Lictor Straps) -->
+    <rect x="52" y="68" width="75" height="7" rx="3.5" fill="#FEF3C7" />
+    <rect x="52" y="120" width="75" height="7" rx="3.5" fill="#FEF3C7" />
+    <line x1="56" y1="72" x2="123" y2="122" stroke="#D97706" stroke-width="3.5" />
+    <line x1="123" y1="72" x2="56" y2="122" stroke="#D97706" stroke-width="3.5" />
+
+    <!-- Verification Emerald Badge Overlay (Bottom Right of Shield) -->
+    <circle cx="136" cy="148" r="26" fill="#064E3B" stroke="url(#emeraldGrad)" stroke-width="3" />
+    <path d="M 124 148 L 133 157 L 150 139" fill="none" stroke="#34D399" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- CENTER-LEFT TYPOGRAPHY & VALUE PROPOSITION                            -->
+  <!-- ===================================================================== -->
+  <g transform="translate(226, 66)">
+    <!-- Pill Eyebrow -->
+    <rect x="0" y="0" width="356" height="28" rx="14" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <circle cx="16" cy="14" r="4.5" fill="#10B981" />
+    <text x="30" y="18.5" font-family="'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" font-size="11.5" font-weight="700" fill="#E2E8F0" letter-spacing="1.1">
+      FACTORÍA AGÉNTICA DE SOFTWARE · v0.1
+    </text>
+
+    <!-- Main Title -->
+    <text x="0" y="96" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="66" font-weight="900" fill="url(#titleGrad)" letter-spacing="5">
+      LICTOR
+    </text>
+
+    <!-- Tagline (sized to fit comfortably with ample margin before right card) -->
+    <text x="2" y="134" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="17.5" font-weight="600" fill="#F8FAFC">
+      De especificaciones <tspan fill="#FBBF24">Gherkin</tspan> a código verificado en <tspan fill="#34D399">verde</tspan>.
+    </text>
+
+    <!-- Sub-description -->
+    <text x="2" y="164" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" fill="#94A3B8">
+      Gobierna agentes autónomos de IA con ciclo TDD Rojo → Verde,
+    </text>
+    <text x="2" y="185" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" fill="#94A3B8">
+      sellado criptográfico SHA-256 y puertas de calidad multinivel.
+    </text>
+
+    <!-- Feature Mini-Pills Row -->
+    <g transform="translate(0, 212)">
+      <!-- Pill 1: Red -> Green -->
+      <rect x="0" y="0" width="124" height="30" rx="8" fill="#1E1B4B" fill-opacity="0.7" stroke="#EF4444" stroke-width="1" stroke-opacity="0.6" />
+      <circle cx="14" cy="15" r="4" fill="#EF4444" />
+      <circle cx="25" cy="15" r="4" fill="#10B981" />
+      <text x="76" y="19.5" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', monospace" font-size="11" font-weight="600" fill="#F1F5F9">TDD Red/Green</text>
+
+      <!-- Pill 2: Gates L0-L5 -->
+      <rect x="132" y="0" width="116" height="30" rx="8" fill="#064E3B" fill-opacity="0.55" stroke="#10B981" stroke-width="1" stroke-opacity="0.6" />
+      <text x="190" y="19.5" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', monospace" font-size="11" font-weight="600" fill="#6EE7B7">Puertas L0–L5</text>
+
+      <!-- Pill 3: LangGraph -->
+      <rect x="256" y="0" width="104" height="30" rx="8" fill="#1E293B" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.5" />
+      <text x="308" y="19.5" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', monospace" font-size="11" font-weight="600" fill="#BAE6FD">LangGraph</text>
+
+      <!-- Pill 4: Hexagonal -->
+      <rect x="368" y="0" width="104" height="30" rx="8" fill="#1E293B" stroke="#F59E0B" stroke-width="1" stroke-opacity="0.5" />
+      <text x="420" y="19.5" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', monospace" font-size="11" font-weight="600" fill="#FDE68A">Hexagonal</text>
+    </g>
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- RIGHT CARD: Live Deterministic Pipeline Terminal                      -->
+  <!-- ===================================================================== -->
+  <g transform="translate(774, 44)" filter="url(#shadow)">
+    <!-- Terminal Window Frame -->
+    <rect width="388" height="292" rx="14" fill="#0B0F19" stroke="#334155" stroke-width="1.5" />
+    <!-- Terminal Header Bar -->
+    <path d="M 0 14 Q 0 0 14 0 L 374 0 Q 388 0 388 14 L 388 38 L 0 38 Z" fill="#161F33" />
+    <line x1="0" y1="38" x2="388" y2="38" stroke="#334155" stroke-width="1" />
+
+    <!-- macOS Window Dots -->
+    <circle cx="20" cy="19" r="5.5" fill="#EF4444" />
+    <circle cx="38" cy="19" r="5.5" fill="#F59E0B" />
+    <circle cx="56" cy="19" r="5.5" fill="#10B981" />
+
+    <!-- Terminal Title -->
+    <text x="194" y="23.5" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', monospace" font-size="11.5" font-weight="600" fill="#94A3B8">
+      lictor run · @IVA-001
+    </text>
+
+    <!-- Pipeline Row 1: Spec & Seal -->
+    <g transform="translate(16, 54)">
+      <rect width="56" height="22" rx="5" fill="#1E293B" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.5" />
+      <text x="28" y="15" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="10.5" font-weight="700" fill="#38BDF8">SEAL</text>
+      <text x="66" y="15" font-family="'JetBrains Mono', monospace" font-size="11.5" fill="#E2E8F0">features/iva.feature</text>
+      <text x="356" y="15" text-anchor="end" font-family="'JetBrains Mono', monospace" font-size="10.5" fill="#64748B">sha256 ✓</text>
+    </g>
+
+    <!-- Pipeline Row 2: Red Check -->
+    <g transform="translate(16, 88)">
+      <rect width="56" height="22" rx="5" fill="#450A0A" stroke="#EF4444" stroke-width="1" stroke-opacity="0.7" />
+      <text x="28" y="15" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="10.5" font-weight="700" fill="#FCA5A5">RED</text>
+      <text x="66" y="15" font-family="'JetBrains Mono', monospace" font-size="11.5" fill="#E2E8F0">test_iva_001 (driver)</text>
+      <text x="356" y="15" text-anchor="end" font-family="'JetBrains Mono', monospace" font-size="10.5" font-weight="600" fill="#F87171">FAIL (OK)</text>
+    </g>
+
+    <!-- Pipeline Row 3: Agent Implement -->
+    <g transform="translate(16, 122)">
+      <rect width="56" height="22" rx="5" fill="#2E1065" stroke="#A855F7" stroke-width="1" stroke-opacity="0.7" />
+      <text x="28" y="15" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="10.5" font-weight="700" fill="#D8B4FE">AGENT</text>
+      <text x="66" y="15" font-family="'JetBrains Mono', monospace" font-size="11.5" fill="#E2E8F0">implement → src/iva/</text>
+      <text x="356" y="15" text-anchor="end" font-family="'JetBrains Mono', monospace" font-size="10.5" fill="#C084FC">attempt 1/3</text>
+    </g>
+
+    <!-- Divider -->
+    <line x1="16" y1="158" x2="372" y2="158" stroke="#1E293B" stroke-width="1" stroke-dasharray="4 4" />
+
+    <!-- Pipeline Row 4: Multi-level Quality Gates Grid -->
+    <g transform="translate(16, 170)">
+      <text x="0" y="12" font-family="'JetBrains Mono', monospace" font-size="10.5" font-weight="700" fill="#94A3B8" letter-spacing="0.8">
+        PUERTAS DETERMINISTAS DE CALIDAD:
+      </text>
+
+      <!-- Gate Badges L0 to L5 -->
+      <g transform="translate(0, 22)">
+        <rect x="0" y="0" width="53" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="26.5" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L0 ✓</text>
+
+        <rect x="60" y="0" width="53" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="86.5" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L1 ✓</text>
+
+        <rect x="120" y="0" width="53" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="146.5" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L2 ✓</text>
+
+        <rect x="180" y="0" width="53" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="206.5" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L3 ✓</text>
+
+        <rect x="240" y="0" width="53" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="266.5" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L4 ✓</text>
+
+        <rect x="300" y="0" width="56" height="24" rx="5" fill="#064E3B" stroke="#10B981" stroke-width="1" />
+        <text x="328" y="16" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#6EE7B7">L5 ✓</text>
+      </g>
+    </g>
+
+    <!-- Pipeline Row 5: Final Green Commit Banner -->
+    <g transform="translate(16, 234)">
+      <rect width="356" height="38" rx="8" fill="#065F46" fill-opacity="0.45" stroke="#10B981" stroke-width="1.5" />
+      <circle cx="20" cy="19" r="6" fill="#10B981" />
+      <path d="M 17 19 L 19.5 21.5 L 24 16.5" fill="none" stroke="#064E3B" stroke-width="2" stroke-linecap="round" />
+      <text x="36" y="23.5" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="700" fill="#ECFDF5">
+        COMMIT GREEN
+      </text>
+      <text x="342" y="23.5" text-anchor="end" font-family="'JetBrains Mono', monospace" font-size="11" fill="#6EE7B7">
+        exit 0 · report.md ✓
+      </text>
+    </g>
+  </g>
+</svg>
