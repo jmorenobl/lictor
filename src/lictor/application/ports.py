@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from lictor.domain.model import (
     AgentResult,
@@ -120,8 +120,21 @@ class ResultReader(Protocol):
 
 @runtime_checkable
 class SpecSource(Protocol):
-    """Abstraction for discovering and parsing Gherkin specification scenarios."""
+    """Abstraction for discovering, parsing, and sealing Gherkin specification scenarios."""
 
     def load(self, features_dir: Path) -> list[Scenario]:
         """Load and validate all scenarios from the given directory."""
+        ...
+
+    def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:
+        """Verify that current features and driver files match .lictor/seal.json."""
+        ...
+
+    def write_seal(
+        self,
+        project_root: Path,
+        run_id: str,
+        driver_paths: Sequence[str],
+    ) -> dict[str, Any]:
+        """Compute and write seal to .lictor/seal.json."""
         ...

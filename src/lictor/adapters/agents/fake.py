@@ -59,12 +59,27 @@ class FakeExecutor:
         match = _SCENARIO_TAG_RE.search(prompt)
         return match.group(1) if match else None
 
-    def _apply_filesystem_effects(self, mode: FakeMode, cwd: Path) -> None:
-        mode_files = self.files_to_write.get(mode, {})
-        for rel_path, content in mode_files.items():
-            dest = cwd / rel_path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
+    def _apply_filesystem_effects(
+        self,
+        mode: FakeMode,
+        cwd: Path,
+        role: str | None = None,
+        scenario_id: str | None = None,
+    ) -> None:
+        keys_to_apply: list[str] = [mode]
+        if role:
+            keys_to_apply.append(f"{mode}:{role}")
+            keys_to_apply.append(role)
+        if scenario_id:
+            keys_to_apply.append(f"{mode}:{scenario_id}")
+            keys_to_apply.append(scenario_id)
+
+        for key in keys_to_apply:
+            mode_files = self.files_to_write.get(key, {})
+            for rel_path, content in mode_files.items():
+                dest = cwd / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
 
         if self.fixtures_dir:
             src_mode_dir = self.fixtures_dir / mode
@@ -86,7 +101,7 @@ class FakeExecutor:
 
     def run(self, task: AgentTask) -> AgentResult:
         """Execute a deterministic fake agent run according to active mode."""
-        scenario_id = self._detect_scenario_id(task.prompt)
+        scenario_id = self._detect_scenario_id(task.prompt) if task.role == "implement" else None
         mode: FakeMode = self.default_mode
         if scenario_id and scenario_id in self.scenario_modes:
             mode = self.scenario_modes[scenario_id]
@@ -100,7 +115,7 @@ class FakeExecutor:
         if mode == "crash":
             raise RuntimeError("Simulated FakeExecutor crash")
 
-        self._apply_filesystem_effects(mode, task.cwd)
+        self._apply_filesystem_effects(mode, task.cwd, role=task.role, scenario_id=scenario_id)
         status, spec_conflict, result_text = self._build_mode_outcome(mode)
 
         tokens = self.tokens_per_call if status != "rate_limited" else Tokens()
