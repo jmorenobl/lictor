@@ -333,6 +333,32 @@ def test_seal_computation_write_and_verification(tmp_path: Path) -> None:
     assert verify_seal(tmp_path, ["tests/acceptance/"]) is False
 
 
+def test_seal_ignores_pycache_and_pyc(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    driver_dir = tmp_path / "tests" / "acceptance"
+    features_dir.mkdir(parents=True)
+    driver_dir.mkdir(parents=True)
+    (features_dir / "iva.feature").write_text("Feature: IVA\n", encoding="utf-8")
+    (driver_dir / "test_driver.py").write_text("def test_iva_001(): pass\n", encoding="utf-8")
+
+    # Add pycache and pyc file
+    pycache_dir = driver_dir / "__pycache__"
+    pycache_dir.mkdir()
+    (pycache_dir / "test_driver.cpython-312.pyc").write_bytes(b"bytecode")
+
+    seal = compute_seal(tmp_path, "run-1", ["tests/acceptance/"])
+    # pycache and pyc should not be in seal
+    assert "tests/acceptance/__pycache__/test_driver.cpython-312.pyc" not in seal["files"]
+    assert "tests/acceptance/test_driver.py" in seal["files"]
+
+    write_seal(tmp_path, seal)
+    assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
+
+    # Mutating pyc does not break seal
+    (pycache_dir / "test_driver.cpython-312.pyc").write_bytes(b"modified-bytecode")
+    assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
+
+
 def test_scenario_file_is_relative_posix(tmp_path: Path) -> None:
     features_dir = tmp_path / "features"
     features_dir.mkdir()

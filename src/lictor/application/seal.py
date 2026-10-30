@@ -19,6 +19,8 @@ def _verify_symlink_and_hash(
     resolved_root: Path,
     files_map: dict[str, str],
 ) -> None:
+    if any(part == "__pycache__" for part in path.parts) or path.suffix == ".pyc":
+        return
     if path.is_symlink():
         try:
             resolved_p = path.resolve()

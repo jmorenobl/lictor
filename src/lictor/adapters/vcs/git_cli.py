@@ -75,6 +75,7 @@ class GitCli(Vcs):
             "-c",
             "core.hooksPath=/dev/null",
             "commit",
+            "--allow-empty",
             "--author=Lictor <lictor@localhost>",
             "-m",
             message,

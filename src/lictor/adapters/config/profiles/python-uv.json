@@ -11,7 +11,7 @@
   "acceptance": {
     "run": "uv run pytest tests/acceptance -q --junitxml {out}",
     "report": "junit",
-    "driver_hints": "Usa pytest-bdd. Un test por escenario, enlazado con @scenario y llamado test_<id> (por ejemplo test_iva_001). Crea en src/ la interfaz pública mínima que necesiten los pasos, con funciones que lancen NotImplementedError."
+    "driver_hints": "Usa pytest-bdd. Escribe los tests y todas las definiciones de pasos (@given, @when, @then) juntos en tests/acceptance/test_<nombre>.py (o en tests/acceptance/conftest.py) para que pytest los encuentre. Un test por escenario, enlazado con @scenario('../../features/<archivo>.feature', '<nombre>') y llamado test_<id> (por ejemplo test_iva_001). Los pasos @given que devuelvan una entidad deben usar target_fixture='<nombre_fixture>'. Los pasos deben llamar a la interfaz pública en src/ para que fallen por NotImplementedError al ejecutarse con pytest. Crea en src/ la interfaz pública mínima requerida por los pasos, con funciones que lancen NotImplementedError y código limpio que pase lint (por ejemplo, en clases con docstring no agregues 'pass' innecesario)."
   },
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},

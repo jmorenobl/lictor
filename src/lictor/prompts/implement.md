@@ -10,7 +10,7 @@ Reglas:
 - No uses git ni hagas commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}.
 - Estos escenarios ya funcionan y deben seguir funcionando: {green_ids}.
-- Puedes comprobar tu trabajo con: {check_commands}.
+- Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
 
 Contexto del proyecto: {hints}
 

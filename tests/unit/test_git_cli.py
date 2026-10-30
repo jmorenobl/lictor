@@ -200,3 +200,14 @@ def test_reset_to_head_clears_staged_changes(git_repo: Path) -> None:
     cli.reset_to_head()
     assert cli.status() == []
     assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
+
+
+def test_commit_allows_empty_changes(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    sha = cli.commit(
+        message="feat: empty scenario commit",
+        trailers={"Scenario": "IVA-003"},
+    )
+    assert len(sha) >= 7
+    scenarios = cli.get_trailers("Scenario", commit_ref="HEAD")
+    assert scenarios == ["IVA-003"]
