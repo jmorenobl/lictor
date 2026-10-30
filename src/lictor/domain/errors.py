@@ -66,4 +66,3 @@ class RateLimitError(LictorError):
     """Límite de uso de la suscripción alcanzado (código 50)."""
 
     exit_code: int = int(ExitCode.RATE_LIMITED)
-

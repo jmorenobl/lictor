@@ -190,4 +190,3 @@ def export_config_schema(output_path: Path | None = None) -> dict[str, object]:
         payload = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
         output_path.write_text(payload, encoding="utf-8")
     return schema
-

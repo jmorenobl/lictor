@@ -198,4 +198,3 @@ class LictorConfig(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
-

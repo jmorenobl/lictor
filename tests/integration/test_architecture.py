@@ -84,4 +84,3 @@ def test_no_profile_tool_names_outside_profiles_dir() -> None:
         "Nombres de herramientas de perfiles encontrados fuera de adapters/config/profiles/: "
         + ", ".join(violations)
     )
-
