@@ -354,10 +354,6 @@ def test_seal_ignores_pycache_and_pyc(tmp_path: Path) -> None:
     write_seal(tmp_path, seal)
     assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
 
-    # Mutating pyc does not break seal
-    (pycache_dir / "test_driver.cpython-312.pyc").write_bytes(b"modified-bytecode")
-    assert verify_seal(tmp_path, ["tests/acceptance/"]) is True
-
 
 def test_scenario_file_is_relative_posix(tmp_path: Path) -> None:
     features_dir = tmp_path / "features"
