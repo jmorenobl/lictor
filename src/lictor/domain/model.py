@@ -189,6 +189,7 @@ class AgentResult:
     raw_path: Path | None = None
     permission_denials: tuple[PermissionDenial, ...] = ()
     exit_code: int | None = None
+    stderr_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,9 @@ class ControlResult:
     duration_ms: int = 0
     error: str | None = None
     test_cases: tuple[TestCaseResult, ...] = field(default_factory=tuple)
+    exit_code: int | None = None
+    mode: str = "block"
+    output_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +246,7 @@ class VerifyResult:
     control_results: dict[str, ControlResult] = field(default_factory=dict)
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = field(default_factory=tuple)
+    error_path: str | None = None
 
 
 @dataclass(frozen=True)
