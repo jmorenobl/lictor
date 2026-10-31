@@ -45,15 +45,20 @@
       "PYTHONNOUSERSITE": "1",
       "UV_NO_ENV_FILE": "1",
       "PYTEST_ADDOPTS": "-o pythonpath=",
-      "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-      "PYTEST_PLUGINS": "pytest_bdd.plugin,lictor_project_path"
+      "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
     },
+    "plugin_variable": "PYTEST_PLUGINS",
+    "plugins": ["lictor_project_path"],
     "inherit": [
       "PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME",
       "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR",
       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
       "http_proxy", "https_proxy", "all_proxy", "no_proxy",
       "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_SYSTEM_CERTS", "REQUESTS_CA_BUNDLE"
+    ],
+    "reserved": [
+      "PYTHON*", "PYTEST*", "UV_*", "VIRTUAL_ENV", "COV_CORE_*", "COVERAGE_*", "MYPY*", "RUFF_*",
+      "LD_*", "DYLD_*", "BASH_ENV", "ENV"
     ],
     "files": {
       "lib/python*/site-packages/lictor_project_path.py": "\"\"\"Adds the project sources to the end of the path, once the tool has started.\"\"\"\nimport sys\n\n\ndef pytest_load_initial_conftests(early_config):\n    sys.path.append(str(early_config.invocation_params.dir / \"src\"))\n"
@@ -62,5 +67,6 @@
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],
   "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/.",
+  "init_note": "pytest corre sin autoload de plugins: declara los del proyecto en verification.plugins de lictor.json, por ejemplo pytest_bdd.plugin si el driver usa pytest-bdd.",
   "gitignore": ["__pycache__/", "*.pyc", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/"]
 }

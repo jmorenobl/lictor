@@ -341,21 +341,21 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
   ],
-  "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
-  "banned_patterns": ["#\\s*noqa", "#\\s*mypy:\\s*ignore-errors", "pytest\\.(skip|xfail)\\("],
-  "forbidden_paths": ["*.dist-info", "*.pth", ".gitignore", "conftest.py", "ruff.toml"],
-  "verification": {
-    "prepare": "uv sync --frozen --no-install-project",
-    "env": {"UV_PROJECT_ENVIRONMENT": "{env_dir}", "UV_NO_SYNC": "1", "PYTHONDONTWRITEBYTECODE": "1"},
-    "inherit": ["PATH", "HOME", "TMPDIR", "SSL_CERT_FILE"],
-    "files": {"lib/python*/site-packages/lictor_project_path.py": "..."}
-  },
+  "verification": {"plugins": ["pytest_bdd.plugin"], "env": {}, "inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }
 ```
 
-En `verification`, el entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana. Lo que nadie enumeró no entra. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo. Si un proyecto declara su propio bloque `verification`, sustituye al completo del perfil.
+**Qué manda cada lado.** Lo que garantiza la verificación lo declara solo el perfil y se lee de él en cada carga: un `lictor.json` no lo contiene, así que no puede quedar obsoleto. Declarar en `lictor.json` cualquiera de estos campos es un error de configuración.
+
+| Lado | Campos | Regla |
+| :--- | :--- | :--- |
+| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
+| Proyecto | `verification.plugins`, `verification.env`, `verification.inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
+| Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
+
+El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, de modo que cada proyecto declara los suyos en `verification.plugins` (nombres de módulo importables desde el entorno de verificación); `demo-iva` declara `pytest_bdd.plugin`. Sin esa declaración, un driver con pytest-bdd no encuentra sus fixtures y falla. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 

@@ -40,7 +40,6 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
   "controls": [
     {"id": "c1", "level": "L1", "run": "echo c1", "report": "exit-code"}
   ],
-  "suppressions": ["# noqa"],
   "agent_tools": ["Bash(test:*)"],
   "hints": "project hints",
   "gitignore": [".venv/"]
@@ -73,7 +72,6 @@ def test_bootstrap_hands_the_acceptance_failure_codes_to_the_graph(tmp_path: Pat
         "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
         "acceptance": {"run": "suite {out}", "report": "junit", "failure_exit_codes": [1, 2]},
         "controls": [],
-        "suppressions": [],
         "agent_tools": [],
         "hints": "",
         "gitignore": [],

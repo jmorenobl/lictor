@@ -7,9 +7,11 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from lictor.domain.errors import ConfigError
 from lictor.domain.model import AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
@@ -170,6 +172,13 @@ SABOTAGE_AFTER_CHECKS = (
     '    _s.run(["git", "add", "pyproject.toml"], check=False)\n\n\n'
     'if any("acceptance" in x for x in _y.argv):\n    _a.register(_fin)\n'
 )
+
+
+def _exit_code(root: Path, agent: Agent) -> int | None:
+    outcome = run_lictor(root, agent)
+    if isinstance(outcome.exception, ConfigError):
+        return outcome.exception.exit_code
+    return outcome.exit_code
 
 
 def _assert_no_false_green(project: Callable[[], Path], agent: Agent) -> None:
@@ -352,6 +361,50 @@ def test_verification_keeps_what_the_tools_need(
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert f"PATH={os.environ['PATH']}" in seen
     assert "SSL_CERT_DIR=/ruta/de/prueba" in seen
+
+
+def test_project_needs_reach_the_commands(
+    make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = tmp_path / "sonda"
+    verification = {
+        "plugins": ["pytest_bdd.plugin"],
+        "env": {"MI_FIJA": "1"},
+        "inherit": ["MI_HEREDADA"],
+    }
+    root = make_project(
+        extra_controls=[_probe_control(probe)], config_changes={"verification": verification}
+    )
+    monkeypatch.setenv("MI_HEREDADA", "2")
+
+    assert run_lictor(root, Agent()) == Outcome(0)
+
+    seen = probe.read_text(encoding="utf-8").splitlines()
+    assert {"MI_FIJA=1", "MI_HEREDADA=2"} <= set(seen)
+    assert "PYTEST_PLUGINS=lictor_project_path,pytest_bdd.plugin" in seen
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"verification": {"env": {"PYTEST_ADDOPTS": "-p lab_cheat"}}},
+        {"verification": {"env": {"PYTHONPATH": "src"}}},
+        {"verification": {"inherit": ["PYTHONPATH"]}},
+        {"verification": {"prepare": "true"}},
+        {"forbidden_paths": []},
+        {"banned_patterns": []},
+    ],
+    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones"],
+)
+def test_lictor_json_cannot_weaken_the_profile(
+    make_project: ProjectFactory, changes: dict[str, Any]
+) -> None:
+    """`lictor.json` doesn't get to choose: the run refuses to start and no agent is called."""
+    agent = Agent()
+    root = make_project(config_changes=changes)
+
+    assert _exit_code(root, agent) == 10
+    assert agent.calls == []
 
 
 def test_verification_venv_shares_nothing_and_has_no_bytecode(

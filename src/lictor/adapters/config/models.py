@@ -13,6 +13,8 @@ BackendAuth = Literal["subscription", "api_key"]
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
+_MODULE_NAME = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")
+
 _SHORT_MODEL_ALIASES = frozenset(
     {
         "opus",
@@ -113,15 +115,37 @@ class AcceptanceConfig(BaseModel):
         return self
 
 
-class VerificationConfig(BaseModel):
-    """Entorno de verificación: parte de vacío, inherit deja pasar nombres y env fija valores."""
+class ProfileVerification(BaseModel):
+    """Lo que garantiza la verificación: solo lo declara el perfil y ningún proyecto lo cambia."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     prepare: str = ""
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
+    reserved: list[str] = Field(default_factory=list)
+    plugin_variable: str = ""
+    plugins: list[str] = Field(default_factory=list)
     files: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectVerification(BaseModel):
+    """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plugins: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    inherit: list[str] = Field(default_factory=list)
+
+    @field_validator("plugins")
+    @classmethod
+    def _check_plugin_names(cls, plugins: list[str]) -> list[str]:
+        for plugin in plugins:
+            if not _MODULE_NAME.fullmatch(plugin):
+                msg = f"verification.plugins admite nombres de módulo, no '{plugin}'"
+                raise ValueError(msg)
+        return plugins
 
 
 class ControlConfig(BaseModel):
@@ -198,11 +222,12 @@ class Profile(BaseModel):
     suppressions: list[str] = Field(default_factory=list)
     banned_patterns: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
-    verification: VerificationConfig = Field(default_factory=VerificationConfig)
+    verification: ProfileVerification = Field(default_factory=ProfileVerification)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
+    init_note: str = ""
 
     @field_validator("controls")
     @classmethod
@@ -216,7 +241,7 @@ class Profile(BaseModel):
 
 
 class LictorConfig(BaseModel):
-    """Configuración completa de un proyecto (lictor.json)."""
+    """Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -227,10 +252,7 @@ class LictorConfig(BaseModel):
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
-    suppressions: list[str] = Field(default_factory=list)
-    banned_patterns: list[str] = Field(default_factory=list)
-    forbidden_paths: list[str] = Field(default_factory=list)
-    verification: VerificationConfig = Field(default_factory=VerificationConfig)
+    verification: ProjectVerification = Field(default_factory=ProjectVerification)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
@@ -240,8 +262,3 @@ class LictorConfig(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
-
-    @field_validator("banned_patterns")
-    @classmethod
-    def _check_regexes(cls, patterns: list[str]) -> list[str]:
-        return _validate_regexes(patterns)

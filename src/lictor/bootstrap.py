@@ -6,7 +6,11 @@ from pathlib import Path
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
-from lictor.adapters.config.loader import ProfileConfigInitializer, load_config
+from lictor.adapters.config.loader import (
+    ProfileConfigInitializer,
+    load_config,
+    resolve_defences,
+)
 from lictor.adapters.config.models import LictorConfig
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
@@ -34,7 +38,7 @@ from lictor.application.usecases.init_project import InitProject
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
-from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import ConfigError
 from lictor.orchestration.graph import GraphContext
 
@@ -80,6 +84,7 @@ def bootstrap_runtime(
     """Assemble all adapters, use cases, and graph context from lictor.json."""
     resolved_root = project_root.resolve()
     active_config = config if config is not None else load_config(resolved_root)
+    defences = resolve_defences(active_config)
 
     active_clock = clock if clock is not None else SystemClock()
     lictor_dir = resolved_root / ".lictor"
@@ -130,12 +135,7 @@ def bootstrap_runtime(
         runner=runner,
         audit=audit_sink,
         project_root=resolved_root,
-        spec=VerificationEnvSpec(
-            prepare=active_config.verification.prepare,
-            env=active_config.verification.env,
-            inherit=active_config.verification.inherit,
-            files=active_config.verification.files,
-        ),
+        spec=defences.verification,
     )
 
     acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
@@ -180,7 +180,7 @@ def bootstrap_runtime(
         paths_writable=active_config.paths.writable,
         paths_protected=active_config.paths.protected,
         paths_driver=active_config.paths.driver,
-        suppressions=active_config.suppressions,
+        suppressions=defences.suppressions,
         driver_hints=active_config.acceptance.driver_hints,
         hints=active_config.hints,
         check_commands=active_config.agent_commands,
@@ -209,8 +209,8 @@ def bootstrap_runtime(
         profile_name=active_config.profile,
         build_report=report_uc,
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
-        forbidden_paths=active_config.forbidden_paths,
-        banned_patterns=active_config.banned_patterns,
+        forbidden_paths=defences.forbidden_paths,
+        banned_patterns=defences.banned_patterns,
     )
 
     return BootstrapResult(

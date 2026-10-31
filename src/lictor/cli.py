@@ -97,6 +97,8 @@ def init(
             )
         )
         typer.echo(f"Configuración inicializada en '{res.config_path}'.")
+        if res.note:
+            typer.echo(res.note)
         return 0
 
     _safe_run(_execute)

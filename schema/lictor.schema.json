@@ -215,14 +215,16 @@
       "title": "PathsConfig",
       "type": "object"
     },
-    "VerificationConfig": {
+    "ProjectVerification": {
       "additionalProperties": false,
-      "description": "Entorno de verificación: parte de vacío, inherit deja pasar nombres y env fija valores.",
+      "description": "Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.",
       "properties": {
-        "prepare": {
-          "default": "",
-          "title": "Prepare",
-          "type": "string"
+        "plugins": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Plugins",
+          "type": "array"
         },
         "env": {
           "additionalProperties": {
@@ -237,21 +239,14 @@
           },
           "title": "Inherit",
           "type": "array"
-        },
-        "files": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Files",
-          "type": "object"
         }
       },
-      "title": "VerificationConfig",
+      "title": "ProjectVerification",
       "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "Configuración completa de un proyecto (lictor.json).",
+  "description": "Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil.",
   "properties": {
     "version": {
       "default": "0.1",
@@ -282,29 +277,8 @@
       "title": "Controls",
       "type": "array"
     },
-    "suppressions": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Suppressions",
-      "type": "array"
-    },
-    "banned_patterns": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Banned Patterns",
-      "type": "array"
-    },
-    "forbidden_paths": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Forbidden Paths",
-      "type": "array"
-    },
     "verification": {
-      "$ref": "#/$defs/VerificationConfig"
+      "$ref": "#/$defs/ProjectVerification"
     },
     "agent_tools": {
       "items": {

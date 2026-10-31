@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from lictor.adapters.config import loader
 from lictor.cli import app
 from tests.integration.repro.harness import (
     copy_project,
@@ -64,6 +65,8 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         config_path = root / "lictor.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config["backend"]["kind"] = "fake"
+        demo = json.loads((DEMO_IVA_DIR / "lictor.json").read_text(encoding="utf-8"))
+        config["verification"] = demo["verification"]
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "chore: initial commit")
@@ -73,8 +76,18 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         yield root
 
 
+def _profiles_without(forbidden: tuple[str, ...], dest: Path) -> Path:
+    """Copy the profiles, dropping heuristics a case must prove it doesn't depend on."""
+    shutil.copytree(loader.DEFAULT_PROFILES_DIR, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    path = dest / "python-uv.json"
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    profile["forbidden_paths"] = [p for p in profile["forbidden_paths"] if p not in forbidden]
+    path.write_text(json.dumps(profile), encoding="utf-8")
+    return dest
+
+
 @pytest.fixture
-def make_project(tmp_path: Path, template: Path) -> ProjectFactory:
+def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch) -> ProjectFactory:
     """Return a factory of per-case projects, with optional `lictor.json` overrides."""
 
     def factory(
@@ -82,16 +95,18 @@ def make_project(tmp_path: Path, template: Path) -> ProjectFactory:
         sync: bool = True,
         extra_controls: list[dict[str, Any]] | None = None,
         allowed_paths: tuple[str, ...] = (),
+        config_changes: dict[str, Any] | None = None,
     ) -> Path:
         root = tmp_path / "demo-iva"
         copy_project(template, root)
-        if extra_controls or allowed_paths:
+        if allowed_paths:
+            profiles = _profiles_without(allowed_paths, tmp_path / "perfiles")
+            monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
+        if extra_controls or config_changes:
             config_path = root / "lictor.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))
             config["controls"].extend(extra_controls or [])
-            config["forbidden_paths"] = [
-                path for path in config["forbidden_paths"] if path not in allowed_paths
-            ]
+            config.update(config_changes or {})
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             git(root, "add", "-A")
             git(root, "commit", "-q", "--allow-empty", "-m", "chore: controles del caso")

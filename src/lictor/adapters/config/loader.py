@@ -1,4 +1,7 @@
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -8,8 +11,11 @@ from lictor.adapters.config.models import (
     LictorConfig,
     LimitsConfig,
     Profile,
+    ProfileVerification,
+    ProjectVerification,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
+from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.errors import ConfigError
 
 CONFIG_FILENAME = "lictor.json"
@@ -19,15 +25,21 @@ _PROFILE_FALLBACK_KEYS = (
     "paths",
     "acceptance",
     "controls",
-    "suppressions",
-    "banned_patterns",
-    "forbidden_paths",
-    "verification",
     "agent_tools",
     "agent_commands",
     "hints",
     "gitignore",
 )
+
+
+@dataclass(frozen=True)
+class Defences:
+    """What the profile guarantees, read from it on every load and so never out of date."""
+
+    verification: VerificationEnvSpec
+    suppressions: Sequence[str]
+    banned_patterns: Sequence[str]
+    forbidden_paths: Sequence[str]
 
 
 def _resolve_profiles_dir(profiles_dir: Path | None) -> Path:
@@ -97,10 +109,6 @@ def build_config_from_profile(
             paths=profile.paths,
             acceptance=profile.acceptance,
             controls=list(profile.controls),
-            suppressions=list(profile.suppressions),
-            banned_patterns=list(profile.banned_patterns),
-            forbidden_paths=list(profile.forbidden_paths),
-            verification=profile.verification,
             agent_tools=list(profile.agent_tools),
             agent_commands=list(profile.agent_commands),
             hints=profile.hints,
@@ -163,6 +171,7 @@ class ProfileConfigInitializer(ConfigInitializer):
             profile_name=config.profile,
             gitignore_entries=list(config.gitignore),
             config_json=payload,
+            note=profile.init_note,
         )
 
 
@@ -218,6 +227,43 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     except ValidationError as exc:
         msg = f"Configuración inválida en '{config_path}': {exc}"
         raise ConfigError(msg) from exc
+
+
+def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerification) -> None:
+    fixed_by_profile = {*profile.env, *profile.inherit, profile.plugin_variable}
+    for name in (*project.env, *project.inherit):
+        if name in fixed_by_profile or any(fnmatchcase(name, p) for p in profile.reserved):
+            msg = f"verification no puede declarar '{name}': esa variable la gobierna el perfil"
+            raise ConfigError(msg)
+
+
+def _plugin_env(project: ProjectVerification, profile: ProfileVerification) -> dict[str, str]:
+    plugins = [*profile.plugins, *project.plugins]
+    if plugins and not profile.plugin_variable:
+        raise ConfigError("verification.plugins: el perfil no admite plugins")
+    return {profile.plugin_variable: ",".join(plugins)} if plugins else {}
+
+
+def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> Defences:
+    """Combine the project's needs with its profile: the profile wins, the project only adds."""
+    profile = load_profile(config.profile, profiles_dir)
+    project = config.verification
+    _reject_reserved_names(project, profile.verification)
+    return Defences(
+        verification=VerificationEnvSpec(
+            prepare=profile.verification.prepare,
+            inherit=[*profile.verification.inherit, *project.inherit],
+            env={
+                **project.env,
+                **profile.verification.env,
+                **_plugin_env(project, profile.verification),
+            },
+            files=profile.verification.files,
+        ),
+        suppressions=profile.suppressions,
+        banned_patterns=profile.banned_patterns,
+        forbidden_paths=profile.forbidden_paths,
+    )
 
 
 def export_config_schema(output_path: Path | None = None) -> dict[str, object]:

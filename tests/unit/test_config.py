@@ -1,10 +1,12 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
+    ProfileConfigInitializer,
     build_config_from_profile,
     detect_profile,
     export_config_schema,
@@ -12,6 +14,7 @@ from lictor.adapters.config.loader import (
     list_profiles,
     load_config,
     load_profile,
+    resolve_defences,
 )
 from lictor.adapters.config.models import (
     AcceptanceConfig,
@@ -323,7 +326,7 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
     assert env["PYTHONNOUSERSITE"] == "1"
     assert env["UV_NO_ENV_FILE"] == "1"
     assert env["PYTEST_ADDOPTS"] == "-o pythonpath="
-    assert env["PYTEST_PLUGINS"] == "pytest_bdd.plugin,lictor_project_path"
+    assert profile.verification.plugin_variable == "PYTEST_PLUGINS"
     assert "PYTHONPATH" not in env
 
 
@@ -400,10 +403,178 @@ def test_invalid_banned_pattern_is_rejected() -> None:
         Profile.model_validate(data)
 
 
-def test_old_project_config_inherits_the_verification_of_its_profile(tmp_path: Path) -> None:
-    config = load_config(REPO_ROOT)
-    assert config.verification == load_profile("python-uv").verification
-    assert config.forbidden_paths == load_profile("python-uv").forbidden_paths
+def _project(tmp_path: Path, **fields: object) -> Path:
+    path = tmp_path / "lictor.json"
+    path.write_text(json.dumps({"profile": "python-uv@0.1", **fields}), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"suppressions": []},
+        {"banned_patterns": []},
+        {"forbidden_paths": []},
+        {"verification": {"prepare": "uv sync"}},
+        {"verification": {"files": {}}},
+        {"verification": {"unset": []}},
+        {"verification": {"reserved": []}},
+        {"verification": {"plugin_variable": "OTRA"}},
+    ],
+    ids=lambda fields: next(iter(fields.get("verification", fields))),
+)
+def test_a_project_cannot_declare_a_defence_of_the_profile(
+    tmp_path: Path, fields: dict[str, object]
+) -> None:
+    with pytest.raises(ConfigError, match="Extra inputs"):
+        load_config(_project(tmp_path, **fields))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_NO_SYNC",
+        "UV_FROZEN",
+        "UV_CONFIG_FILE",
+        "VIRTUAL_ENV",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "BASH_ENV",
+        "ENV",
+        "COVERAGE_PROCESS_START",
+        "COV_CORE_SOURCE",
+        "MYPYPATH",
+        "RUFF_CONFIG",
+        "PATH",
+        "HOME",
+    ],
+)
+@pytest.mark.parametrize(
+    "declare",
+    [lambda name: {"env": {name: "x"}}, lambda name: {"inherit": [name]}],
+    ids=["env", "inherit"],
+)
+def test_a_project_cannot_touch_a_reserved_variable(
+    tmp_path: Path, name: str, declare: Callable[[str], dict[str, object]]
+) -> None:
+    config = load_config(_project(tmp_path, verification=declare(name)))
+
+    with pytest.raises(ConfigError, match=name):
+        resolve_defences(config)
+
+
+def test_a_project_adds_what_it_needs_on_top_of_the_profile(tmp_path: Path) -> None:
+    config = load_config(
+        _project(
+            tmp_path,
+            verification={
+                "plugins": ["pytest_bdd.plugin", "xdist.plugin"],
+                "env": {"MI_BASE": "sqlite://"},
+                "inherit": ["MI_TOKEN"],
+            },
+        )
+    )
+    profile = load_profile("python-uv").verification
+
+    spec = resolve_defences(config).verification
+
+    assert spec.env == profile.env | {
+        "MI_BASE": "sqlite://",
+        "PYTEST_PLUGINS": "lictor_project_path,pytest_bdd.plugin,xdist.plugin",
+    }
+    assert list(spec.inherit) == [*profile.inherit, "MI_TOKEN"]
+    assert spec.prepare == profile.prepare
+
+
+def test_a_project_without_plugins_keeps_only_the_profiles(tmp_path: Path) -> None:
+    spec = resolve_defences(load_config(_project(tmp_path))).verification
+
+    assert spec.env["PYTEST_PLUGINS"] == "lictor_project_path"
+
+
+@pytest.mark.parametrize("plugin", ["a,b", "a b", "", "../a", "-p"])
+def test_a_plugin_is_a_module_name(tmp_path: Path, plugin: str) -> None:
+    with pytest.raises(ConfigError, match="plugins"):
+        load_config(_project(tmp_path, verification={"plugins": [plugin]}))
+
+
+def test_plugins_need_a_profile_that_can_load_them(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["verification"]["plugin_variable"] = ""
+    (profiles / "python-uv.json").write_text(json.dumps(data), encoding="utf-8")
+    config = load_config(
+        _project(tmp_path, verification={"plugins": ["otro"]}), profiles_dir=profiles
+    )
+
+    with pytest.raises(ConfigError, match="plugins"):
+        resolve_defences(config, profiles)
+
+
+def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -> None:
+    """Nothing is frozen in `lictor.json`: this is what a copy of the block used to break."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    profile_data = load_profile("python-uv").model_dump(mode="json")
+    init_config_file(tmp_path)
+    profile_data["verification"]["env"]["DEFENSA_NUEVA"] = "1"
+    profile_data["forbidden_paths"].append("nuevo.py")
+    profile_data["banned_patterns"].append("nuevo")
+    profile_data["suppressions"].append("# nuevo")
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    (profiles / "python-uv.json").write_text(json.dumps(profile_data), encoding="utf-8")
+
+    defences = resolve_defences(load_config(tmp_path, profiles), profiles)
+
+    assert defences.verification.env["DEFENSA_NUEVA"] == "1"
+    assert "nuevo.py" in defences.forbidden_paths
+    assert "nuevo" in defences.banned_patterns
+    assert "# nuevo" in defences.suppressions
+
+
+def test_unknown_profile_cannot_skip_the_defences(tmp_path: Path) -> None:
+    config = load_config(_project(tmp_path)).model_copy(update={"profile": "otro@0.1"})
+
+    with pytest.raises(ConfigError, match="otro"):
+        resolve_defences(config)
+
+
+def test_init_copies_no_defence(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    assert written["verification"] == {"plugins": [], "env": {}, "inherit": []}
+    assert not {"suppressions", "banned_patterns", "forbidden_paths"} & set(written)
+
+
+def test_demo_declares_what_is_its_own() -> None:
+    config = load_config(REPO_ROOT / "examples" / "demo-iva" / "lictor.json")
+
+    assert config.verification.plugins == ["pytest_bdd.plugin"]
+    assert resolve_defences(config).verification.env["PYTEST_PLUGINS"].endswith("pytest_bdd.plugin")
+
+
+def test_profile_no_longer_assumes_a_project_dependency() -> None:
+    verification = load_profile("python-uv").verification
+
+    assert verification.plugins == ["lictor_project_path"]
+    assert "PYTEST_PLUGINS" not in verification.env
+
+
+def test_generated_config_tells_how_to_declare_plugins() -> None:
+    note = ProfileConfigInitializer().generate_config(REPO_ROOT, "python-uv").note
+
+    assert "verification.plugins" in note
+    assert "pytest_bdd.plugin" in note
 
 
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
