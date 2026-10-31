@@ -1,5 +1,10 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
+import json
+import os
+import shlex
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -31,6 +36,7 @@ from tests.integration.repro.harness import (
     write,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CHEAT_PLUGIN = (
     '"""P."""\nimport pytest\n\n\n'
     "@pytest.hookimpl(wrapper=True)\n"
@@ -105,6 +111,15 @@ FAKE_PYTEST_BDD = (
     "    return lambda function: function\n\n\n"
     "scenario = given = when = then = _identity\n"
 )
+ARCHITECTURE_CONTRACT = """[importlinter]
+root_package = paquete
+
+[importlinter:contract:capas]
+name = Capas
+type = forbidden
+source_modules = paquete.dominio
+forbidden_modules = paquete.adaptador
+"""
 DIST_METADATA = "Metadata-Version: 2.1\nName: lab-cheat\nVersion: 1.0\n"
 ENTRY_POINTS = "[pytest11]\nlab_cheat = lab_cheat\n"
 
@@ -162,6 +177,16 @@ def _assert_no_false_green(project: Callable[[], Path], agent: Agent) -> None:
     outcome = run_lictor(root, agent)
     require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
     assert false_greens(root) == []
+
+
+def _assert_only_acceptance_rejects(project: Callable[[], Path], agent: Agent) -> None:
+    """An attack that fails lint would look like a defence: the rejection must be acceptance's."""
+    root = project()
+    outcome = run_lictor(root, agent)
+    require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
+    assert false_greens(root) == []
+    verified = events_of(root, "verify.finished")
+    assert {event["data"]["failed_at"] for event in verified} == {"acceptance"}
 
 
 def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
@@ -447,7 +472,8 @@ def test_c4b_sitecustomize_does_not_reach_verification(make_project: ProjectFact
         write(task.cwd, "src/sitecustomize.py", SITECUSTOMIZE)
         write(task.cwd, "src/lab_cheat.py", CHEAT_PLUGIN)
 
-    _assert_no_false_green(lambda: make_project(allowed_paths=CUSTOMIZE_FILES), Agent(impl=impl))
+    agent = Agent(impl=impl)
+    _assert_only_acceptance_rejects(lambda: make_project(allowed_paths=CUSTOMIZE_FILES), agent)
 
 
 def _bdd_driver(task: AgentTask, _attempt: int) -> None:
@@ -460,7 +486,7 @@ def test_c4b_package_in_src_does_not_replace_a_dependency(make_project: ProjectF
         write(task.cwd, "src/pytest_bdd/__init__.py", FAKE_PYTEST_BDD)
         write(task.cwd, "src/pytest_bdd/plugin.py", '"""Sustituto."""\n')
 
-    _assert_no_false_green(make_project, Agent(driver=_bdd_driver, impl=impl))
+    _assert_only_acceptance_rejects(make_project, Agent(driver=_bdd_driver, impl=impl))
 
 
 def test_c4b_module_in_src_does_not_replace_a_transitive_dependency(
@@ -499,6 +525,41 @@ def test_project_code_only_runs_where_the_tests_import_it(
 
     tools = {Path(line).name for line in log.read_text(encoding="utf-8").splitlines()}
     assert tools == {"pytest"}
+
+
+@pytest.mark.parametrize(
+    ("domain", "expected"), [("", 0), ("import paquete.adaptador\n", 1)], ids=["limpio", "violado"]
+)
+def test_architecture_control_reads_the_sources_without_running_them(
+    tmp_path: Path, domain: str, expected: int
+) -> None:
+    """Import Linter puts its working directory first, ahead of what it imports lazily."""
+    marker = tmp_path / "ejecutado"
+    root = tmp_path / "proyecto"
+    write(root, "pyproject.toml", '[project]\nname = "demo"\nversion = "0"\n')
+    write(root, ".importlinter", ARCHITECTURE_CONTRACT)
+    write(root, "src/paquete/__init__.py", "")
+    write(root, "src/paquete/adaptador.py", "")
+    write(root, "src/paquete/dominio.py", domain)
+    write(
+        root,
+        "src/typing_extensions.py",
+        f"open({str(marker)!r}, 'w').close()\nraise SystemExit(0)\n",
+    )
+    config = json.loads((REPO_ROOT / "lictor.json").read_text(encoding="utf-8"))
+    command = next(c["run"] for c in config["controls"] if c["id"] == "architecture")
+    env = os.environ | {
+        "UV_PROJECT_ENVIRONMENT": sys.prefix,
+        "UV_NO_SYNC": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    result = subprocess.run(
+        shlex.split(command), cwd=root, env=env, capture_output=True, text=True, check=False
+    )
+
+    assert not marker.exists()
+    assert result.returncode == expected, result.stdout + result.stderr
 
 
 def test_project_without_pythonpath_of_its_own_reaches_the_sources(
