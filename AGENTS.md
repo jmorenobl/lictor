@@ -31,10 +31,10 @@ uv run ruff format --check .
 uv run ruff format .       # Automatically format code
 
 # Strict typechecking (L1)
-uv run mypy --strict src
+uv run mypy --strict src scripts
 
 # Architectural boundaries check (L4)
-uv run lint-imports
+uv run python scripts/check_architecture.py
 ```
 
 ### Testing & Verification (L2, L4 & L5)
@@ -43,23 +43,26 @@ uv run lint-imports
 uv run pytest tests/unit -q
 
 # Integration & architecture acceptance tests
-uv run pytest tests/integration -q
+uv run pytest tests/integration -n auto -q
 
 # Same, without the slow audit reproduction cases
 uv run pytest tests/integration -q -m "not repro"
 
 # Full test suite with coverage enforcement (L4 - minimum 90% branch coverage)
-uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q
+uv run pytest tests -n auto --cov=lictor --cov-branch --cov-fail-under=90 -q
 
 # Domain purity test coverage (L4 - minimum 95% domain coverage)
 uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 
-# Security audits (L4)
-uvx pip-audit
+# Security audits (L4). `uvx pip-audit` alone would audit its own environment, not uv.lock
+uv run python scripts/audit_dependencies.py
 gitleaks detect --no-banner
 
 # Mutation testing (L5)
 uv run mutmut run
+
+# Every control of lictor.json in a clean clone of HEAD, in the real verification environment
+uv run python scripts/verify_self.py [control ...]
 ```
 
 ### Running a Subset
@@ -113,7 +116,7 @@ Lictor strictly enforces hexagonal architecture layers. Dependencies only point 
 - **Git is the source of truth for green scenarios.** `CheckRed` derives them from `Scenario:` commit trailers, not from the checkpoint. Changing commit messages or trailers can break resume.
 - **What's verified is what's committed.** After the L0 gates, `VerifyAttempt` builds a candidate commit outside the branch (`create_candidate`, with a throwaway index) and runs controls and acceptance in a clean clone of it (`verification_tree`). `CheckRed` does the same and seals from the clone. The branch only moves to that exact SHA with a conditional `update-ref` (`advance_head`), which adds nothing, so what the working tree holds afterwards can't get in. `Vcs` has no `commit` on purpose. Re-running `commit` after a crash compares HEAD with the candidate; `CheckRed` compares the `Lictor-Run` trailer.
 - **Verification runs in its own environment.** `VerificationEnvironment` builds `.lictor/verify-env` once per run from `verification.prepare` and hashes every file, bytecode included. `ensure` compares the hash before and after the commands: a mismatch fails `L0-entorno`, rebuilds and emits `env.tampered`. A failed `prepare` is exit 40. Commands run through `verification.env`, which in `python-uv` must stop the tool from syncing or creating an environment in the clone and from writing bytecode: dropping any of those variables changes the hash or the tree under test. The project isn't installed in that environment: an editable install would import the agent's tree instead of the clone's. Autoload is off, so plugins are explicit: the profile lists its own and each project declares the rest in `verification.plugins`, which `resolve_defences` joins into `plugin_variable`.
-- **Project code never enters the interpreter's startup.** `PYTHONPATH` must not name the tree under test: it would run `sitecustomize` in every Python tool, `mypy` included, and pytest's `pythonpath` isn't a substitute, because pytest applies it before importing `PYTEST_PLUGINS`, so `src` could replace a dependency. `python-uv` fixes `PYTEST_ADDOPTS="-o pythonpath="`, which also voids what the project's `pyproject.toml` declares, and `verification.files` copies a plugin (`profiles/python_uv/lictor_project_path.py`, a real module that imports nothing of Lictor) into the hashed environment, in the directory the environment's own interpreter reports (`files_dir_command`, with `-I` for isolation and `-B` because `-I` ignores `PYTHONDONTWRITEBYTECODE`; never `-S`, because `site` is what activates the venv). It appends `src` in `pytest_load_initial_conftests`: after startup, after the plugins, and behind `site-packages`. Tools that need the project on the path get it the same way, after starting and at the end: the `architecture` control appends `src` itself and then calls Import Linter. It must not run from `src`: Import Linter puts its working directory first, so a `src/typing_extensions.py` would run inside the control and could exit 0 over a broken contract.
+- **Project code never enters the interpreter's startup.** `PYTHONPATH` must not name the tree under test: it would run `sitecustomize` in every Python tool, `mypy` included, and pytest's `pythonpath` isn't a substitute, because pytest applies it before importing `PYTEST_PLUGINS`, so `src` could replace a dependency. `python-uv` fixes `PYTEST_ADDOPTS="-o pythonpath="`, which also voids what the project's `pyproject.toml` declares, and `verification.files` copies a plugin (`profiles/python_uv/lictor_project_path.py`, a real module that imports nothing of Lictor) into the hashed environment, in the directory the environment's own interpreter reports (`files_dir_command`, with `-I` for isolation and `-B` because `-I` ignores `PYTHONDONTWRITEBYTECODE`; never `-S`, because `site` is what activates the venv). It appends `src` in `pytest_load_initial_conftests`: after startup, after the plugins, and behind `site-packages`. Tools that need the project on the path get it the same way, after starting and at the end: `scripts/check_architecture.py` appends `src` and then calls Import Linter. It must not run from `src`: Import Linter puts its working directory first, so a `src/typing_extensions.py` would run inside the control and could exit 0 over a broken contract.
 - **Verification starts from an empty environment.** `verification.inherit` lists the exact names that pass, and `env` then fixes values, so `env` wins and whatever nobody listed stays out. `command_env` returns the whole environment and `CommandRunner.run` uses it as given: `env=None` inherits, anything else replaces. A missing variable breaks visibly (a tool that isn't found fails `prepare` with exit 40). This only covers verification: `lictor check` and the agent's commands keep the caller's environment.
 - **The profile owns what verification guarantees.** `prepare`, `env`, `inherit`, `reserved`, `plugins`, `files`, `suppressions`, `banned_patterns` and `forbidden_paths` live only in the profile; `resolve_defences` (`adapters/config/loader.py`) reads them on every load and `LictorConfig` has no such fields, so declaring one in `lictor.json` fails and a copy can't go stale. A project only adds, through `verification.plugins`, `env` and `inherit`, and naming a variable the profile fixes, inherits or reserves exits 10. A case that must prove it doesn't depend on a heuristic relaxes it in a copy of the profile (`allowed_paths` in `make_project`), never in `lictor.json`.
 - **Every implement attempt starts from HEAD.** `ImplementScenario` verifies the seal, then calls `vcs.reset_to_head()`, so a retry never inherits the previous attempt's edits; only the condensed error carries over. The order matters: a tampered seal must abort without wiping the tree.
@@ -153,9 +156,15 @@ Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters
 
 For behaviour the modes can't express, pass `FakeExecutor(effect=fn)`: `fn(task, scenario_id, attempt)` runs arbitrary code in the agent's turn (forged bytecode, git commands, killing the run) and may return a status. `effect` can't go in `fake_executor.json`, so it needs `executor=`.
 
+## Running in Parallel
+
+The suite runs under `pytest-xdist` (`-n auto`), which is not in `addopts` because `mutmut` runs pytest without it. Each worker builds its own `template` under its own `tmp_path_factory` base, every case works in its `tmp_path`, and no test opens a port; `test_each_worker_builds_its_own_template` holds the first. The only thing workers share is the `uv` cache, which locks itself.
+
+`tests/conftest.py` clears the variables of a verification that may be running the suite, test by test: left in place, a nested `uv sync` would rewrite the verification environment and a nested pytest would load its plugins. It can't happen at startup, because xdist workers inherit them. A test that launches an interpreter with an exact environment needs `-B`, or its bytecode lands in that environment and fails the hash.
+
 ## Audit Reproduction Cases
 
-`tests/integration/repro/` holds the cases from the v0.1 audit, one file per correction phase. Unlike the other e2e tests, they use the real `python-uv` profile and `uv`, with the configuration from `lictor init`, so they are the model for new end-to-end tests. They take about 3 minutes; add `-m "not repro"` to skip them while iterating.
+`tests/integration/repro/` holds the cases from the v0.1 audit, one file per correction phase. Unlike the other e2e tests, they use the real `python-uv` profile and `uv`, with the configuration from `lictor init`, so they are the model for new end-to-end tests. Add `-m "not repro"` to skip them while iterating.
 
 - A case asserts the desired behaviour and stays under `@pending(phase, finding)`, a strict `xfail` that only tolerates `AssertionError`. Closing a case means removing its marker.
 - Preconditions go through `require`, which raises `ReproSetupError`, so a broken set-up fails the test instead of counting as the expected failure.
@@ -213,7 +222,7 @@ The audit report, the original lab scripts and the phase tracking live in `.audi
 ## Agent Dos and Don'ts
 
 ### Do
-- Run `uv run ruff check .`, `uv run mypy --strict src`, and `uv run lint-imports` before completing any change.
+- Run `uv run ruff check .`, `uv run mypy --strict src scripts`, and `uv run python scripts/check_architecture.py` before completing any change.
 - Implement new capabilities starting from the Domain and Ports, then implement Use Cases, and finally attach Adapters.
 - Provide comprehensive unit tests in `tests/unit/` for all new domain and application logic.
 - Mock or fake external processes (`subprocess`, `git`, external CLI binaries) using corresponding ports in unit tests.

@@ -98,3 +98,8 @@ def test_repro_projects_use_the_real_profile(make_project: ProjectFactory) -> No
     assert "uv run ruff check src" in config
     assert "uv run mypy src" in config
     assert "uv run pytest tests/acceptance" in config
+
+
+def test_each_worker_builds_its_own_template(template: Path, worker_id: str) -> None:
+    """Cases run in parallel: a template shared between workers would mix their state."""
+    assert worker_id == "master" or worker_id in str(template)

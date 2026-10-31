@@ -30,6 +30,7 @@ dev = [
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.17.3",
     "types-defusedxml>=0.7.0.20260504",
 ]
@@ -64,6 +65,9 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
+# Each repro case holds a whole venv: keeping them all fills the disk, above all with -n auto.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "repro: audit reproduction cases run against a real uv project (slow)",
 ]

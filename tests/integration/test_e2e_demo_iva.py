@@ -79,7 +79,10 @@ def _profile_without_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "banned_patterns": [],
         "forbidden_paths": [],
         "suppressions": ["# noqa", "# type: ignore"],
-        "verification": {"inherit": ["PATH", "HOME", "VIRTUAL_ENV"]},
+        "verification": {
+            "inherit": ["PATH", "HOME", "VIRTUAL_ENV"],
+            "env": {"PYTHONDONTWRITEBYTECODE": "1"},
+        },
     }
     (profiles / "sin-entorno.json").write_text(json.dumps(profile), encoding="utf-8")
     monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)

@@ -38,6 +38,12 @@ def test_cli_init_and_doctor(tmp_path: Path) -> None:
     assert (tmp_path / "lictor.json").is_file()
     assert (tmp_path / ".lictor").is_dir()
 
+    # The fake backend keeps this from depending on the machine having a usable agent binary.
+    config_path = tmp_path / "lictor.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["backend"]["kind"] = "fake"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
     # Commit the generated config to have clean tree for doctor
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
@@ -45,8 +51,7 @@ def test_cli_init_and_doctor(tmp_path: Path) -> None:
     )
 
     doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
-    # Doctor exits with 0 or 10 depending on whether claude binary is installed in environment
-    assert doc_res.exit_code in (0, 10)
+    assert doc_res.exit_code == 0, doc_res.output
 
 
 def test_cli_init_existing_without_force_fails(tmp_path: Path) -> None:

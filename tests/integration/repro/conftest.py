@@ -38,8 +38,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def _host_independent_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in isolated_env().items():
         monkeypatch.setenv(name, value)
-    # c1 and c2 depend on the project writing and reading bytecode as it does in a real run.
-    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
 
 

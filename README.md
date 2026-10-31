@@ -110,6 +110,7 @@ flowchart TD
 
 ### Requisitos Previos
 
+- **Sistema operativo:** Linux o macOS. **Windows no está soportado:** el entorno de verificación, los grupos de procesos y las rutas del perfil son POSIX.
 - **Python** `>= 3.12`
 - **[uv](https://docs.astral.sh/uv/)** (gestor de paquetes y entornos de Astral)
 - **Git** instalado y disponible en `PATH`
@@ -462,25 +463,28 @@ uv run lictor check --level L1,L2
 # L1: Estilo, formato y tipado estricto
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy --strict src
+uv run mypy --strict src scripts
 
 # L2: Pruebas unitarias rápidas
 uv run pytest tests/unit -q
 
 # L3: Pruebas de integración y aceptación
-uv run pytest tests/integration -q
+uv run pytest tests/integration -n auto -q
 
 # L4: Contratos de arquitectura y cobertura de ramas (>= 90% global, >= 95% dominio)
-uv run lint-imports
-uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q
+uv run python scripts/check_architecture.py
+uv run pytest tests -n auto --cov=lictor --cov-branch --cov-fail-under=90 -q
 uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 
 # L4: Auditoría de dependencias y detección de secretos
-uvx pip-audit
+uv run python scripts/audit_dependencies.py
 gitleaks detect --no-banner
 
 # L5: Pruebas de mutación sobre el dominio
 uv run mutmut run
+
+# Todos los controles de lictor.json en un clon limpio de HEAD, en el entorno de verificación real
+uv run python scripts/verify_self.py
 ```
 
 </details>

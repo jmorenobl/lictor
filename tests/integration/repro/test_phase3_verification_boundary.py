@@ -1,11 +1,13 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
+import importlib.util
 import os
 import shlex
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -670,6 +672,49 @@ def test_architecture_control_is_out_of_the_agents_reach() -> None:
 
     assert command == ARCHITECTURE_COMMAND
     assert not any(path.startswith("scripts") for path in config.paths.writable)
+
+
+def _load_verify_self(root: Path) -> ModuleType:
+    path = REPO_ROOT / "scripts" / "verify_self.py"
+    spec = importlib.util.spec_from_file_location("verify_self", path)
+    require(spec and spec.loader, "el script debía cargarse")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.REPO_ROOT = root
+    return module
+
+
+def _exit_control(control_id: str, command: str, mode: str = "block") -> dict[str, str]:
+    return {"id": control_id, "level": "L2", "run": command, "report": "exit-code", "mode": mode}
+
+
+def test_verify_self_runs_the_controls_in_the_real_environment(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    probe = tmp_path / "sonda"
+    fails = _exit_control("falla", "false")
+    measured = _exit_control("mide", "false", "measure")
+    seen = _exit_control("sonda", f"sh -c 'pwd > {probe}; env >> {probe}'")
+    root = make_project(extra_controls=[fails, measured, seen])
+    verify_self = _load_verify_self(root)
+
+    assert verify_self.main(["sonda", "mide"]) == 0
+    assert verify_self.main(["falla"]) == 1
+
+    cwd, *variables = probe.read_text(encoding="utf-8").splitlines()
+    assert cwd != str(root.resolve())
+    assert f"UV_PROJECT_ENVIRONMENT={root.resolve() / VERIFY_ENV}" in variables
+
+
+def test_verify_self_fails_if_a_control_tampers_with_the_environment(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    venv = tmp_path / "demo-iva" / VERIFY_ENV / "pyvenv.cfg"
+    root = make_project(extra_controls=[_exit_control("toca", f"sh -c 'echo \\# >> {venv}'")])
+
+    assert _load_verify_self(root).main(["toca"]) == 1
 
 
 def test_project_without_pythonpath_of_its_own_reaches_the_sources(
