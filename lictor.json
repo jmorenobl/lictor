@@ -6,7 +6,7 @@
     {"id": "format",          "level": "L1", "run": "uv run ruff format --check .",       "report": "exit-code", "mode": "block"},
     {"id": "types",           "level": "L1", "run": "uv run mypy --strict src",           "report": "exit-code", "mode": "block"},
     {"id": "unit",            "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block"},
-    {"id": "architecture",    "level": "L4", "run": "uv run python -c \"import sys; sys.path.append('src'); from importlinter.cli import lint_imports; sys.exit(lint_imports())\"", "report": "exit-code", "mode": "block"},
+    {"id": "architecture",    "level": "L4", "run": "uv run python scripts/check_architecture.py", "report": "exit-code", "mode": "block"},
     {"id": "coverage",        "level": "L4", "run": "uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q", "report": "exit-code", "mode": "block", "timeout_s": 3000},
     {"id": "coverage-domain", "level": "L4", "run": "uv run coverage report --include=*/lictor/domain/* --fail-under=95", "report": "exit-code", "mode": "block"},
     {"id": "audit",           "level": "L4", "run": "uv run python scripts/audit_dependencies.py", "report": "exit-code", "mode": "block"},

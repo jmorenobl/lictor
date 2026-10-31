@@ -1,6 +1,5 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
-import json
 import os
 import shlex
 import subprocess
@@ -11,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from lictor.adapters.config.loader import load_config
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import AgentTask
 from tests.integration.repro.conftest import ProjectFactory
@@ -179,6 +179,9 @@ def _exit_code(root: Path, agent: Agent) -> int | None:
     if isinstance(outcome.exception, ConfigError):
         return outcome.exception.exit_code
     return outcome.exit_code
+
+
+ARCHITECTURE_COMMAND = "uv run python scripts/check_architecture.py"
 
 
 def _assert_no_false_green(project: Callable[[], Path], agent: Agent) -> None:
@@ -624,8 +627,8 @@ def test_architecture_control_reads_the_sources_without_running_them(
         "src/typing_extensions.py",
         f"open({str(marker)!r}, 'w').close()\nraise SystemExit(0)\n",
     )
-    config = json.loads((REPO_ROOT / "lictor.json").read_text(encoding="utf-8"))
-    command = next(c["run"] for c in config["controls"] if c["id"] == "architecture")
+    script = "scripts/check_architecture.py"
+    write(root, script, (REPO_ROOT / script).read_text(encoding="utf-8"))
     env = os.environ | {
         "UV_PROJECT_ENVIRONMENT": sys.prefix,
         "UV_NO_SYNC": "1",
@@ -633,11 +636,24 @@ def test_architecture_control_reads_the_sources_without_running_them(
     }
 
     result = subprocess.run(
-        shlex.split(command), cwd=root, env=env, capture_output=True, text=True, check=False
+        shlex.split(ARCHITECTURE_COMMAND),
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
     assert not marker.exists()
     assert result.returncode == expected, result.stdout + result.stderr
+
+
+def test_architecture_control_is_out_of_the_agents_reach() -> None:
+    config = load_config(REPO_ROOT)
+    command = next(control.run for control in config.controls if control.id == "architecture")
+
+    assert command == ARCHITECTURE_COMMAND
+    assert not any(path.startswith("scripts") for path in config.paths.writable)
 
 
 def test_project_without_pythonpath_of_its_own_reaches_the_sources(
