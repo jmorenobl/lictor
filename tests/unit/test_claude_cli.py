@@ -239,6 +239,33 @@ class TestClaudeCLIRun:
         data = _result(is_error=True, api_error_status=429)
         assert _run(tmp_path, _stream(data)).status == "rate_limited"
 
+    def test_status_429_on_a_successful_call_keeps_the_work(self, tmp_path: Path) -> None:
+        data = _result(api_error_status=429)
+        assert _run(tmp_path, _stream(data)).status == "ok"
+
+    def test_status_429_counts_when_only_the_exit_code_failed(self, tmp_path: Path) -> None:
+        data = _result(api_error_status=429)
+        assert _run(tmp_path, _stream(data), returncode=1).status == "rate_limited"
+
+    def test_rejected_counts_when_only_the_exit_code_failed(self, tmp_path: Path) -> None:
+        event = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}
+        stdout = _stream(event, _result())
+        assert _run(tmp_path, stdout, returncode=1).status == "rate_limited"
+
+    def test_rejected_without_a_result_event_is_a_rate_limit(self, tmp_path: Path) -> None:
+        event = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}
+
+        res = _run(tmp_path, _stream(event), returncode=1, stderr="sin cuota")
+
+        assert res.status == "rate_limited"
+        assert res.exit_code == 1
+        assert "rate_limit_event" in res.text
+        assert "sin cuota" in res.text
+
+    def test_allowed_without_a_result_event_stays_an_error(self, tmp_path: Path) -> None:
+        event = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning"}}
+        assert _run(tmp_path, _stream(event), returncode=1).status == "error"
+
     def test_rate_limit_is_not_read_from_the_text(self, tmp_path: Path) -> None:
         data = _result(is_error=True, result="You have exceeded your usage limit")
         assert _run(tmp_path, _stream(data)).status == "error"
@@ -360,7 +387,7 @@ class TestClaudeCLIRun:
             res = cli.run(task)
             assert res.status == "error"
             assert res.exit_code == 7
-            assert "JSON" in res.text
+            assert "No result event" in res.text
             assert "Not a JSON output" in res.text
             assert "Fatal error occurred" in res.text
             assert task.raw_path.exists()

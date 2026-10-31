@@ -185,18 +185,19 @@ class ClaudeCLI:
     ) -> AgentStatus:
         subtype = str(data.get("subtype", ""))
         is_error = bool(data.get("is_error", False))
+        failed = is_error or exit_code != 0 or subtype == "error_during_execution"
 
         if subtype == "error_max_turns":
             return "max_turns"
-        if subtype == "rate_limited" or data.get("api_error_status") == _HTTP_TOO_MANY_REQUESTS:
+        if subtype == "rate_limited":
             return "rate_limited"
-        if is_error and rate_limit_status == "rejected":
+        if failed and data.get("api_error_status") == _HTTP_TOO_MANY_REQUESTS:
+            return "rate_limited"
+        if failed and rate_limit_status == "rejected":
             return "rate_limited"
         if is_error and self._is_auth_failure(data):
             return "auth"
-        if is_error or exit_code != 0 or subtype == "error_during_execution":
-            return "error"
-        return "ok"
+        return "error" if failed else "ok"
 
     def _execute_subprocess(
         self,
@@ -343,9 +344,9 @@ class ClaudeCLI:
         data, rate_limit_status = self._read_events(stdout)
         if data is None:
             return AgentResult(
-                status="error",
+                status="rate_limited" if rate_limit_status == "rejected" else "error",
                 text=(
-                    f"Invalid JSON from claude CLI (exit code {exit_code}). "
+                    f"No result event from claude CLI (exit code {exit_code}). "
                     f"Stderr: {stderr}\nStdout: {stdout}"
                 ),
                 duration_ms=duration_ms,
