@@ -35,7 +35,7 @@
 ---
 
 > [!WARNING]
-> **El verde todavía no resiste a un agente adversario.** Hoy significa que el árbol de trabajo del agente pasó unos comandos que ese mismo código puede influir, y que después se commiteó lo que hubiera. Un agente que quiera engañar a Lictor puede lograr commits verdes sobre código sin implementar. La auditoría de la v0.1 lo reproduce y el aviso sigue vigente hasta cerrar la Fase 4 del plan de corrección. Tampoco hay sandbox: el agente corre con tus permisos.
+> **El verde todavía no resiste a un agente adversario.** Hoy significa que ese commit exacto pasó los controles y la aceptación en un clon limpio, con un entorno comprobado por hash. Pero `.git`, `.lictor/` y ese entorno están al alcance del agente, que corre con tus permisos, y el clon parte de un `.git` que aún puede alterar. Eso sigue así hasta cerrar la Fase 4 del plan de corrección. Además hay una limitación conocida de la v0.1 que ninguna fase de este plan cierra: el código bajo test corre en el mismo proceso que escribe el informe de aceptación, así que puede forjarlo. Se cerrará con el sandbox del incremento 4. Los patrones prohibidos son heurísticas y no lo evitan.
 
 ## ⚡ ¿Por qué Lictor?
 
@@ -47,6 +47,7 @@ Dejar a un agente de codificación suelto sobre un repositorio suele derivar en 
 | **Escriben tests que ya pasaban** sin probar realmente la nueva funcionalidad. | **Regla del Rojo (`red_check`):** antes de implementar un escenario pendiente, su test de aceptación está obligado a **fallar en rojo**. |
 | **Silencian errores** añadiendo `# noqa`, `# type: ignore` o `# pragma: no cover`. | **Escáner de supresiones (`L0-supresiones`):** inspecciona cada línea añadida en el diff y rechaza el intento si detecta directivas prohibidas. |
 | **Tocan archivos prohibidos** (`pyproject.toml`, configuración o estado interno). | **Fronteras de rutas (`L0-rutas` y `L0-estado`):** revierte automáticamente archivos fuera de `paths.writable` y protege `.lictor/` con instantáneas en memoria. |
+| **Dejan el verde en ficheros que nadie versiona** (`.pyc` forjados, ficheros ignorados, plugins). | **Commit candidato en clon limpio:** los controles y la aceptación corren sobre lo que se va a commitear, con un entorno comprobado por hash. |
 | **Rompen escenarios anteriores** al intentar arreglar el escenario actual. | **Verificación de no regresión (`L3`):** exige que pase el escenario actual **y** todos los escenarios que ya estaban en verde. |
 | **Se quedan a medias** si se agota la cuota de suscripción o API. | **Checkpoints SQLite + Pausa limpia (`exit 50`):** guarda el estado exacto del grafo LangGraph y reanuda donde quedó al volver a ejecutar `lictor run`. |
 
@@ -266,21 +267,24 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 | **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
 | **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
 | **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. |
-| **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
+| **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde, o no se pudo preparar el entorno de verificación. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
 | **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
 
 ---
 
 ## 🛡️ Puertas de Calidad (`L0`–`L5`)
 
+Las puertas L0 miran el árbol del agente. Los controles y la aceptación corren en un **clon limpio de un commit candidato**, fuera de la rama, y la rama avanza a ese SHA exacto solo si pasan: lo verificado es lo commiteado.
+
 Cada intento del agente atraviesa una tubería de verificación secuencial que **corta en el primer fallo bloqueante** y condensa el error para alimentar el siguiente intento. El mensaje queda acotado por `limits.error_max_chars` y siempre conserva el motivo; el error completo va a `.lictor/runs/`. Los controles `measure` no bloquean, pero su resultado y su salida quedan registrados en `.lictor/journal.jsonl` y `.lictor/report.md`:
 
 | Nivel | Puerta | Qué verifica | Modo |
 | :---: | :--- | :--- | :---: |
-| **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas se revierte automáticamente y falla el intento. | `block` |
+| **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas, en `forbidden_paths` o que sea un enlace simbólico se revierte automáticamente y falla el intento. | `block` |
 | **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
-| **L0** | `L0-supresiones` | Analiza las líneas añadidas en el diff y archivos nuevos bloqueando directivas como `# noqa`, `# type: ignore` o `# pragma: no cover`. | `block` |
+| **L0** | `L0-supresiones` | Analiza las líneas añadidas en el diff y archivos nuevos bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
 | **L0** | `L0-estado` | Toma una instantánea en memoria de `.lictor/` y `lictor.json` antes y después de cada comando; si detecta manipulación, restaura y aborta ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
+| **L0** | `L0-entorno` | Compara el hash del entorno de verificación, con todos sus ficheros, antes y después de ejecutar los comandos. Si no coincide, falla el intento, reconstruye el entorno y deja el evento `lictor.env.tampered.v1`. | `block` |
 | **L1** | Análisis estático | Linter (`ruff check`), formato (`ruff format --check`) y chequeo estricto de tipos (`mypy --strict`). | `block` |
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Mapea cada test del reporte JUnit a su `@ID-NNN`: exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. | `block` |
@@ -350,6 +354,8 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 | `.lictor/seal.json` | Hashes `SHA-256` de `features/*.feature` y de los archivos del *driver*. |
 | `.lictor/journal.jsonl` | Bitácora inmutable de eventos en formato CloudEvents 1.0. |
 | `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
+| `.lictor/verify-env/` | Entorno de verificación, construido una vez por ejecución fuera del clon. |
+| `.lictor/verify_env.json` | Hash esperado de ese entorno. |
 | `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente y su stderr (`NNN-implement.json`, `NNN-implement.stderr.log`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. |
 
 </details>
