@@ -251,6 +251,13 @@
       "title": "Agent Tools",
       "type": "array"
     },
+    "agent_commands": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Agent Commands",
+      "type": "array"
+    },
     "hints": {
       "default": "",
       "title": "Hints",

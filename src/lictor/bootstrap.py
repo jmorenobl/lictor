@@ -159,8 +159,6 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
-    check_commands = [ctrl.run for ctrl in active_config.controls]
-
     graph_context = GraphContext(
         project_root=resolved_root,
         paths_writable=active_config.paths.writable,
@@ -169,7 +167,7 @@ def bootstrap_runtime(
         suppressions=active_config.suppressions,
         driver_hints=active_config.acceptance.driver_hints,
         hints=active_config.hints,
-        check_commands=check_commands,
+        check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,
         max_turns=active_config.backend.max_turns,

@@ -21,6 +21,7 @@ _PROFILE_FALLBACK_KEYS = (
     "controls",
     "suppressions",
     "agent_tools",
+    "agent_commands",
     "hints",
     "gitignore",
 )
@@ -95,6 +96,7 @@ def build_config_from_profile(
             controls=list(profile.controls),
             suppressions=list(profile.suppressions),
             agent_tools=list(profile.agent_tools),
+            agent_commands=list(profile.agent_commands),
             hints=profile.hints,
             gitignore=list(profile.gitignore),
         )

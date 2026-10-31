@@ -282,3 +282,20 @@ def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
     repo_schema_path = REPO_ROOT / "schema" / "lictor.schema.json"
     assert repo_schema_path.is_file()
     assert json.loads(repo_schema_path.read_text(encoding="utf-8")) == schema
+
+
+def test_profile_agent_commands_are_runnable_by_the_agent() -> None:
+    profile = load_profile("python-uv")
+    prefixes = [tool[len("Bash(") : -len(":*)")] for tool in profile.agent_tools]
+
+    assert profile.agent_commands
+    for command in profile.agent_commands:
+        assert "{" not in command
+        assert any(command.startswith(prefix) for prefix in prefixes), command
+
+
+def test_profile_agent_commands_include_the_acceptance_suite() -> None:
+    profile = load_profile("python-uv")
+    target = profile.acceptance.run.split(" --")[0]
+
+    assert target in profile.agent_commands

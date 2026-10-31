@@ -168,6 +168,7 @@ class Profile(BaseModel):
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
     agent_tools: list[str] = Field(default_factory=list)
+    agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
 
@@ -191,6 +192,7 @@ class LictorConfig(BaseModel):
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
     agent_tools: list[str] = Field(default_factory=list)
+    agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
 
