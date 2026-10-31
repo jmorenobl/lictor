@@ -340,6 +340,12 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
   ],
   "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
+  "banned_patterns": ["#\\s*noqa", "#\\s*mypy:\\s*ignore-errors", "pytest\\.(skip|xfail)\\("],
+  "forbidden_paths": ["*.dist-info", "*.pth", ".gitignore", "conftest.py", "ruff.toml"],
+  "verification": {
+    "prepare": "uv sync --frozen --no-install-project",
+    "env": {"UV_PROJECT_ENVIRONMENT": "{env_dir}", "UV_NO_SYNC": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+  },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }

@@ -27,6 +27,7 @@ class _Builder(FakeRunner):
         super().__init__()
         self.returncode = returncode
         self.builds = 0
+        self.seed: dict[str, str] = {}
 
     def run(
         self,
@@ -44,6 +45,9 @@ class _Builder(FakeRunner):
         env_dir = Path(cmd[-1])
         env_dir.mkdir(parents=True)
         (env_dir / "paquete.py").write_text("x = 1\n", encoding="utf-8")
+        for rel_path, content in self.seed.items():
+            (env_dir / rel_path).parent.mkdir(exist_ok=True)
+            (env_dir / rel_path).write_text(content, encoding="utf-8")
         return CommandOutput(returncode=0, stdout="", stderr="")
 
 
@@ -129,6 +133,21 @@ def test_any_change_is_reported_and_rebuilt(tmp_path: Path, rel_path: str) -> No
     rebuilt = target.read_text(encoding="utf-8") if target.exists() else ""
     assert rebuilt != "forjado"
     assert environment.ensure("R") is None
+
+
+@pytest.mark.parametrize("name", ["a.cpython-312.pyc", "b.pyc"])
+def test_bytecode_counts_even_in_a_directory_that_already_existed(
+    tmp_path: Path, name: str
+) -> None:
+    """A new directory changes the hash by itself: this case only passes if the file counts."""
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner)
+    runner.seed = {"__pycache__/a.cpython-312.pyc": "original"}
+    environment.ensure("R")
+
+    (environment.env_dir / "__pycache__" / name).write_text("forjado", encoding="utf-8")
+
+    assert environment.ensure("R") is not None
 
 
 def test_a_removed_file_counts_as_a_change(tmp_path: Path) -> None:

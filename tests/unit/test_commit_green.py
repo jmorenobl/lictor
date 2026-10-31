@@ -70,3 +70,11 @@ def test_commit_green_refuses_a_tree_other_than_the_verified_one() -> None:
         use_case.execute(_request())
 
     vcs.advance_head.assert_not_called()
+
+
+def test_commit_green_expects_the_parent_it_verified_not_the_current_head() -> None:
+    use_case, vcs, _ = _use_case(head="otro")
+
+    use_case.execute(_request())
+
+    vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")

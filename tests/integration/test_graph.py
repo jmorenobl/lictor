@@ -584,3 +584,19 @@ def test_verify_files_its_evidence_under_the_attempt_of_the_call(
     request = verify_attempt.execute.call_args.args[0]
     assert request.attempt == expected
     assert request.acceptance_failure_exit_codes == (1, 2)
+
+
+def test_build_driver_hands_the_forbidden_paths_to_the_use_case() -> None:
+    context = MagicMock(forbidden_paths=("*.pth",))
+    context.prepare_driver.execute.return_value = MagicMock(
+        agent_result=MagicMock(
+            text="", duration_ms=0, cost_usd=0.0, tokens=MagicMock(input=0, output=0)
+        ),
+        driver_attempts=1,
+        agent_signal="ok",
+        agent_failures=0,
+    )
+
+    _GraphNodes(context).build_driver(cast(GraphState, {"run_id": "R"}))
+
+    assert context.prepare_driver.execute.call_args.args[0].forbidden_paths == ("*.pth",)

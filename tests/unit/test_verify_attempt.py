@@ -15,6 +15,7 @@ from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
 from lictor.application.usecases.verify_attempt import (
+    IntegritySnapshot,
     VerificationControl,
     VerifyAttempt,
     VerifyAttemptRequest,
@@ -946,9 +947,13 @@ def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, runner)
     verifier.environment = _spied_environment([None, None])
 
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    req = replace(req, controls=(control,))
+
     assert verifier.execute(req).ok is True
 
     assert verifier.environment.ensure.call_count == 2
+    assert [call["env"] for call in runner.calls] == [{"VAR": "1"}, {"VAR": "1"}]
 
 
 def test_verify_tree_dir_comes_from_execute(tmp_path: Path) -> None:
@@ -956,3 +961,16 @@ def test_verify_tree_dir_comes_from_execute(tmp_path: Path) -> None:
 
     with pytest.raises(InternalLictorError):
         verifier._tree_dir(req)
+
+
+def test_environment_manifest_is_protected_during_untrusted_windows(tmp_path: Path) -> None:
+    lictor_dir = tmp_path / ".lictor"
+    lictor_dir.mkdir()
+    manifest = lictor_dir / "verify_env.json"
+    manifest.write_text("original", encoding="utf-8")
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path)
+
+    manifest.write_text("forjado", encoding="utf-8")
+
+    assert snapshot.verify_and_restore() is False
+    assert manifest.read_text(encoding="utf-8") == "original"

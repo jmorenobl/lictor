@@ -10,6 +10,7 @@ from lictor.adapters.spec.gherkin_source import (
     verify_seal,
     write_seal,
 )
+from lictor.application.seal import hash_file
 from lictor.domain.errors import SpecError
 from lictor.domain.model import ScenarioId
 
@@ -451,3 +452,16 @@ def test_reject_symlink_pointing_outside_repo(tmp_path: Path) -> None:
     with pytest.raises(SpecError) as exc_info:
         compute_seal(project_root, "run-1", [])
     assert "Enlace simbólico fuera del repositorio no permitido" in str(exc_info.value)
+
+
+def test_write_seal_hashes_the_given_tree_but_stores_in_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "proyecto"
+    verified = tmp_path / "verificado"
+    for root, text in ((project, "cambiado después"), (verified, "lo verificado")):
+        (root / "features").mkdir(parents=True)
+        (root / "features" / "a.feature").write_text(text, encoding="utf-8")
+
+    data = GherkinSource().write_seal(project, "R", [], source_root=verified)
+
+    assert read_seal(project) == data
+    assert data["files"]["features/a.feature"] == hash_file(verified / "features" / "a.feature")

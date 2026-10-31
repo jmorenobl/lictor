@@ -594,7 +594,8 @@ def test_forbidden_paths_match_any_component(path: str) -> None:
 
 
 def test_forbidden_paths_do_not_match_substrings() -> None:
-    assert forbidden_paths(["src/conftest_helpers.py"], ["conftest.py"]) == []
+    assert forbidden_paths(["src/myconftest.py.txt"], ["conftest.py"]) == []
+    assert forbidden_paths(["src/x.pth.bak"], ["*.pth"]) == []
 
 
 def test_forbidden_paths_with_no_patterns() -> None:

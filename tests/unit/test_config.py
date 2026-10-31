@@ -320,6 +320,8 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
     assert env["UV_NO_SYNC"] == "1"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert env["PYTEST_PLUGINS"] == "pytest_bdd.plugin"
+    assert env["PYTHONPATH"] == "src"
 
 
 def test_invalid_banned_pattern_is_rejected() -> None:

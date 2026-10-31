@@ -117,6 +117,22 @@ def test_candidate_carries_author_and_trailers_without_moving_the_branch(git_rep
     assert author.stdout.strip() == "Lictor <lictor@localhost>"
 
 
+def test_candidate_does_not_touch_the_index(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "file_a.txt").write_text("content", encoding="utf-8")
+
+    cli.create_candidate(message="m")
+
+    staged = subprocess.run(
+        [GIT_BIN, "diff", "--cached", "--name-only"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert staged.stdout == ""
+
+
 def test_candidate_only_takes_the_given_paths(git_repo: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
     (git_repo / "src").mkdir()
@@ -191,6 +207,20 @@ def test_export_tree_ignores_the_hooks_of_the_template(git_repo: Path, tmp_path:
 
     assert not (dest / "delatado").exists()
     assert not (git_repo / "delatado").exists()
+
+
+def test_export_tree_ignores_the_git_template(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    template = tmp_path.parent / f"{tmp_path.name}-template"
+    (template / "info").mkdir(parents=True)
+    (template / "info" / "exclude").write_text("*\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
+    dest = tmp_path.parent / f"{tmp_path.name}-export"
+
+    GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
+
+    assert not (dest / ".git" / "info" / "exclude").exists()
 
 
 def test_advance_head_moves_the_branch_to_the_exact_commit(git_repo: Path) -> None:

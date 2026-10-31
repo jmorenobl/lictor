@@ -263,6 +263,23 @@ def test_driver_relying_on_an_ignored_file_is_not_sealed(make_project: ProjectFa
     assert events_of(root, "driver.rejected")
 
 
+def test_declared_plugin_loads_with_autoload_off(make_project: ProjectFactory) -> None:
+    root = make_project()
+    needs_plugin = DRIVER.replace(
+        "def test_iva_001():\n    assert iva.general(100) == 121",
+        "def test_iva_001(pytestconfig):\n"
+        '    assert pytestconfig.pluginmanager.get_plugin("pytest_bdd.plugin")\n'
+        "    assert iva.general(100) == 121",
+    )
+    require(needs_plugin != DRIVER, "el driver debía cambiar")
+
+    def driver(task: AgentTask, _attempt: int) -> None:
+        good_driver(task)
+        write(task.cwd, DRIVER_PATH, needs_plugin)
+
+    assert run_lictor(root, Agent(driver=driver)) == Outcome(0)
+
+
 def test_verification_venv_is_built_once_per_run(make_project: ProjectFactory) -> None:
     root = make_project()
 
