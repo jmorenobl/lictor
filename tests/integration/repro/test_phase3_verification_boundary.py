@@ -184,35 +184,31 @@ def _exit_code(root: Path, agent: Agent) -> int | None:
 ARCHITECTURE_COMMAND = "uv run python scripts/check_architecture.py"
 
 
-def _assert_no_false_green(project: Callable[[], Path], agent: Agent) -> None:
+def _assert_rejected_by(project: Callable[[], Path], agent: Agent, *reasons: str) -> None:
+    """An attack that fails lint would look like a defence: it must fall to the expected gate."""
     root = project()
     outcome = run_lictor(root, agent)
     require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
     assert false_greens(root) == []
-
-
-def _assert_only_acceptance_rejects(project: Callable[[], Path], agent: Agent) -> None:
-    """An attack that fails lint would look like a defence: the rejection must be acceptance's."""
-    root = project()
-    outcome = run_lictor(root, agent)
-    require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
-    assert false_greens(root) == []
+    assert green_ids(root) == []
     verified = events_of(root, "verify.finished")
-    assert {event["data"]["failed_at"] for event in verified} == {"acceptance"}
+    assert {event["data"]["failed_at"] for event in verified} == set(reasons)
 
 
 def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        shell([".venv/bin/python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
+        forged = shell([".venv/bin/python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
+        require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
 
 
 def test_c2_forged_driver_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        shell([".venv/bin/python", "-c", FORGE_DRIVER_PYC], task.cwd)
+        forged = shell([".venv/bin/python", "-c", FORGE_DRIVER_PYC], task.cwd)
+        require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
 
 
 def _plant_plugin(site_packages: Path) -> None:
@@ -237,7 +233,9 @@ def test_c3_plugin_in_the_verification_venv_fails_by_hash(make_project: ProjectF
     require(planted, "el ataque debía llegar a la venv de verificación")
     assert false_greens(root) == []
     verified = events_of(root, "verify.finished")
-    assert verified[0]["data"]["failed_at"] == "L0-entorno"
+    reasons = [event["data"]["failed_at"] for event in verified]
+    assert reasons[0] == "L0-entorno"
+    assert set(reasons[1:]) == {"acceptance"}, "tras reconstruir, el stub debía seguir fallando"
     tampered = events_of(root, "env.tampered")
     assert len(tampered) == 1
     assert tampered[0]["data"]["expected"] != tampered[0]["data"]["actual"]
@@ -260,6 +258,7 @@ def test_c3_forged_bytecode_in_the_verification_venv_fails_by_hash(
     run_lictor(root, Agent(impl=impl))
 
     require(planted, "el ataque debía llegar a la venv de verificación")
+    assert false_greens(root) == []
     assert events_of(root, "verify.finished")[0]["data"]["failed_at"] == "L0-entorno"
     assert not planted[0].exists(), "la venv debía reconstruirse"
 
@@ -268,10 +267,12 @@ def test_c3_plugin_in_the_agents_venv_does_not_reach_verification(
     make_project: ProjectFactory,
 ) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        for site_packages in task.cwd.glob(".venv/lib/python*/site-packages"):
+        sites = list(task.cwd.glob(".venv/lib/python*/site-packages"))
+        require(sites, "el ataque debía llegar a la venv del agente")
+        for site_packages in sites:
             _plant_plugin(site_packages)
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
 
 
 def test_venv_tampered_during_verification_rejects_the_attempt(
@@ -543,7 +544,22 @@ def test_c4_plugin_in_a_writable_path(make_project: ProjectFactory) -> None:
         write(task.cwd, "src/lab_cheat-1.0.dist-info/METADATA", DIST_METADATA)
         write(task.cwd, "src/lab_cheat-1.0.dist-info/entry_points.txt", ENTRY_POINTS)
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    _assert_rejected_by(make_project, Agent(impl=impl), "L0-rutas")
+
+
+def test_c4_plugin_in_a_writable_path_without_the_path_heuristic(
+    make_project: ProjectFactory,
+) -> None:
+    """`*.dist-info` is only a heuristic: with autoload off the plugin must not load anyway."""
+
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        write(task.cwd, "src/lab_cheat.py", CHEAT_PLUGIN)
+        write(task.cwd, "src/lab_cheat-1.0.dist-info/METADATA", DIST_METADATA)
+        write(task.cwd, "src/lab_cheat-1.0.dist-info/entry_points.txt", ENTRY_POINTS)
+
+    _assert_rejected_by(
+        lambda: make_project(allowed_paths=("*.dist-info",)), Agent(impl=impl), "acceptance"
+    )
 
 
 def test_c4b_sitecustomize_does_not_reach_verification(make_project: ProjectFactory) -> None:
@@ -554,7 +570,7 @@ def test_c4b_sitecustomize_does_not_reach_verification(make_project: ProjectFact
         write(task.cwd, "src/lab_cheat.py", CHEAT_PLUGIN)
 
     agent = Agent(impl=impl)
-    _assert_only_acceptance_rejects(lambda: make_project(allowed_paths=CUSTOMIZE_FILES), agent)
+    _assert_rejected_by(lambda: make_project(allowed_paths=CUSTOMIZE_FILES), agent, "acceptance")
 
 
 def _bdd_driver(task: AgentTask, _attempt: int) -> None:
@@ -567,7 +583,7 @@ def test_c4b_package_in_src_does_not_replace_a_dependency(make_project: ProjectF
         write(task.cwd, "src/pytest_bdd/__init__.py", FAKE_PYTEST_BDD)
         write(task.cwd, "src/pytest_bdd/plugin.py", '"""Sustituto."""\n')
 
-    _assert_only_acceptance_rejects(make_project, Agent(driver=_bdd_driver, impl=impl))
+    _assert_rejected_by(make_project, Agent(driver=_bdd_driver, impl=impl), "acceptance")
 
 
 def test_c4b_module_in_src_does_not_replace_a_transitive_dependency(
@@ -689,21 +705,29 @@ def test_c6_code_under_test_forges_the_report(make_project: ProjectFactory) -> N
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
         write(task.cwd, MODULE_PATH, FORGE_JUNIT)
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    root = make_project()
+    agent = Agent(impl=impl)
+    outcome = run_lictor(root, agent)
+    require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
+    assert false_greens(root) == []
 
 
 def test_f31_nested_gitignore_hides_the_module(make_project: ProjectFactory) -> None:
+    """The file ignores itself, so no path gate sees it; the import is lazy to pass the rest."""
+
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
         write(task.cwd, "src/iva/.gitignore", "_impl.py\n.gitignore\n")
         write(task.cwd, "src/iva/_impl.py", GOOD_3)
         write(
             task.cwd,
             MODULE_PATH,
-            '"""I."""\nfrom iva._impl import general, negativo, reducido\n\n'
-            '__all__ = ["general", "negativo", "reducido"]\n',
+            '"""I."""\nimport importlib\nfrom typing import Any\n\n\n'
+            "def __getattr__(name: str) -> Any:\n"
+            '    """Delega."""\n'
+            '    return getattr(importlib.import_module("iva._impl"), name)\n',
         )
 
-    _assert_no_false_green(make_project, Agent(impl=impl))
+    _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
 
 
 def test_e23_tree_changed_after_the_checks(make_project: ProjectFactory) -> None:
