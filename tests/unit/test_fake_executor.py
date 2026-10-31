@@ -1,5 +1,6 @@
 """Unit tests for FakeExecutor agent adapter."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -180,3 +181,39 @@ class TestFakeExecutor:
 
         with pytest.raises(RuntimeError, match="crash on scenario IVA-002"):
             fake.run(task_iva2)
+
+    def test_effect_runs_arbitrary_side_effects_with_attempt_number(self, tmp_path: Path) -> None:
+        seen: list[tuple[str | None, int]] = []
+
+        def effect(task: AgentTask, scenario_id: str | None, attempt: int) -> None:
+            seen.append((scenario_id, attempt))
+            (task.cwd / "binario.pyc").write_bytes(b"\xff\xfe")
+
+        fake = FakeExecutor(effect=effect)
+        fake.run(_sample_task(tmp_path, tmp_path / "raw1.json"))
+        fake.run(_sample_task(tmp_path, tmp_path / "raw2.json"))
+
+        assert seen == [("IVA-001", 1), ("IVA-001", 2)]
+        assert fake.calls == ["IVA-001", "IVA-001"]
+        assert (tmp_path / "binario.pyc").read_bytes() == b"\xff\xfe"
+
+    def test_effect_can_override_status(self, tmp_path: Path) -> None:
+        fake = FakeExecutor(effect=lambda _task, _scenario, _attempt: "rate_limited")
+        result = fake.run(_sample_task(tmp_path, tmp_path / "raw.json"))
+        assert result.status == "rate_limited"
+        assert result.tokens.input == 0
+
+    def test_effect_keys_driver_calls_by_role(self, tmp_path: Path) -> None:
+        attempts: list[int] = []
+
+        def effect(_task: AgentTask, scenario_id: str | None, attempt: int) -> None:
+            assert scenario_id is None
+            attempts.append(attempt)
+
+        task = replace(_sample_task(tmp_path, tmp_path / "raw.json"), role="driver")
+        fake = FakeExecutor(effect=effect)
+        fake.run(task)
+        fake.run(task)
+
+        assert attempts == [1, 2]
+        assert fake.calls == ["driver", "driver"]
