@@ -9,6 +9,7 @@ class ExitCode(IntEnum):
     PRECONDITION = 10
     SPEC_CONFLICT = 11
     QUARANTINED = 30
+    AGENT_UNAVAILABLE = 40
     RATE_LIMITED = 50
 
 

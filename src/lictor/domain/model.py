@@ -161,8 +161,16 @@ class AgentTask:
         object.__setattr__(self, "raw_path", Path(self.raw_path))
 
 
-AgentStatus = Literal["ok", "error", "max_turns", "rate_limited", "timeout"]
+AgentStatus = Literal["ok", "error", "auth", "max_turns", "rate_limited", "timeout"]
 CostKind = Literal["notional_subscription", "estimated"]
+
+
+@dataclass(frozen=True)
+class PermissionDenial:
+    """A tool call the agent attempted and the backend refused."""
+
+    tool: str
+    target: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,8 @@ class AgentResult:
     cost_usd: float | None = None
     cost_kind: CostKind = "notional_subscription"
     raw_path: Path | None = None
+    permission_denials: tuple[PermissionDenial, ...] = ()
+    exit_code: int | None = None
 
 
 @dataclass(frozen=True)
