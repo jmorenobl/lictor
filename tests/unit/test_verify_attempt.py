@@ -3,8 +3,11 @@
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
@@ -16,6 +19,7 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import CommandOutput
 
 
@@ -565,6 +569,30 @@ def test_verify_crashed_suite_cannot_hide_behind_a_passing_report(tmp_path: Path
 
     assert result.ok is False
     assert "código 3" in (result.condensed_error or "")
+
+
+def test_verify_unreadable_report_reason_survives_a_long_output(tmp_path: Path) -> None:
+    class Noisy(_PlantingRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            base = super().run(cmd, cwd, timeout_s, env)
+            return replace(base, stdout="\n".join(f"linea {i}" for i in range(500)))
+
+    verifier, req = _verify(tmp_path, Noisy({"suite": ("<roto", 1)}))
+
+    assert "Failed to parse JUnit XML" in (verifier.execute(req).condensed_error or "")
+
+
+def test_verify_gates_need_the_step_dir_from_execute(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, FakeRunner(), paths_writable=("otro/",))
+
+    with pytest.raises(InternalLictorError):
+        verifier._check_routes(req)
 
 
 def test_verify_failed_exit_without_failed_tests_is_not_green(tmp_path: Path) -> None:

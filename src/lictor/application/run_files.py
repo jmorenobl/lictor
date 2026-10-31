@@ -6,11 +6,10 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 """
 
 import contextlib
-import itertools
 import shlex
 from pathlib import Path
 
-from lictor.domain.model import CommandOutput
+from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
 
@@ -24,11 +23,12 @@ def unused_path(path: Path, start: int = 0) -> Path:
     """Return `path`, or its first `-rN` variant from `start` on that doesn't exist yet."""
     if start == 0 and not path.exists():
         return path
-    for retry in itertools.count(max(start, 1)):
+    retry = max(start, 1)
+    while True:
         candidate = path.with_name(f"{path.stem}-r{retry}{path.suffix}")
         if not candidate.exists():
             return candidate
-    raise AssertionError("unreachable")
+        retry += 1
 
 
 def new_step_dir(path: Path) -> Path:
@@ -61,6 +61,12 @@ def save_output(path: Path, output: CommandOutput) -> None:
         f"Código de salida: {output.returncode}\n\n"
         f"--- stdout ---\n{output.stdout}\n--- stderr ---\n{output.stderr}\n",
     )
+
+
+def describe_crash(crash: str, control: ControlResult, output: str) -> str:
+    """Put what the report itself says on the first line: it survives any condensing."""
+    first_line = crash if control.test_cases or not control.error else f"{crash}: {control.error}"
+    return f"{first_line}\n{output}".strip()
 
 
 def relative_to_project(path: Path, project_root: Path) -> str:

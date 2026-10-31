@@ -37,6 +37,7 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
+from lictor.domain.rules import run_outcome
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -92,6 +93,8 @@ class GraphState(TypedDict, total=False):
     agent_detail: str
     totals: Annotated[dict[str, Any], reduce_totals]
     exit_code: int | None
+    exit_reason: str
+    spec_conflict: str | None
     seal_ok: bool
     resume_to: str | None
 
@@ -141,16 +144,48 @@ class _GraphNodes:
     def __init__(self, ctx: GraphContext) -> None:
         self.ctx = ctx
 
+    def _finish(self, state: GraphState, code: int, reason: str) -> dict[str, Any]:
+        """End the run leaving its reason in the journal, the report and the state."""
+        event = Event(
+            id=uuid.uuid4().hex,
+            type="lictor.run.finished.v1",
+            source="lictor/0.1.0",
+            time=self.ctx.clock.now_iso(),
+            runid=state["run_id"],
+            data={
+                "exit_code": code,
+                "reason": reason,
+                "totals": state.get("totals", {}),
+            },
+        )
+        self.ctx.event_log.append(event)
+        if self.ctx.build_report is not None:
+            self.ctx.build_report.execute(
+                BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
+            )
+        return {"exit_code": code, "exit_reason": reason}
+
     def preflight(self, state: GraphState) -> dict[str, Any]:
         if state.get("exit_code") is not None:
             return {}
-        if self.ctx.vcs.status():
-            return {"exit_code": 10}
+        changed = self.ctx.vcs.status()
+        if changed:
+            return self._finish(
+                state,
+                int(ExitCode.PRECONDITION),
+                "El árbol de trabajo tiene cambios sin confirmar: "
+                f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
+            )
         health = self.ctx.executor.health()
         if not health.ok:
+            detail = health.message or health.auth_status
             return {
-                "exit_code": int(ExitCode.ENVIRONMENT_UNAVAILABLE),
-                "agent_detail": health.message or health.auth_status,
+                **self._finish(
+                    state,
+                    int(ExitCode.ENVIRONMENT_UNAVAILABLE),
+                    f"el ejecutor no está disponible: {detail}",
+                ),
+                "agent_detail": detail,
             }
 
         event = Event(
@@ -173,11 +208,15 @@ class _GraphNodes:
         features_dir = self.ctx.project_root / "features"
         try:
             scenarios = self.ctx.spec_source.load(features_dir)
-        except SpecError:
-            return {"exit_code": 10, "seal_ok": False}
+        except SpecError as exc:
+            return {
+                **self._finish(state, int(ExitCode.PRECONDITION), f"Spec inválida: {exc}"),
+                "seal_ok": False,
+            }
 
         if not scenarios:
-            return {"exit_code": 10, "seal_ok": False}
+            reason = f"No hay escenarios en {features_dir}"
+            return {**self._finish(state, int(ExitCode.PRECONDITION), reason), "seal_ok": False}
 
         seal_ok = self.ctx.spec_source.verify_seal(self.ctx.project_root, self.ctx.paths_driver)
 
@@ -266,8 +305,11 @@ class _GraphNodes:
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                 )
             )
-        except DriverError:
-            return {"exit_code": 10, "last_verify": {"ok": False}}
+        except DriverError as exc:
+            return {
+                **self._finish(state, int(ExitCode.PRECONDITION), str(exc)),
+                "last_verify": {"ok": False},
+            }
 
         if res.ok:
             return {
@@ -304,12 +346,17 @@ class _GraphNodes:
         if state.get("seal_ok") and not self.ctx.spec_source.verify_seal(
             self.ctx.project_root, self.ctx.paths_driver
         ):
-            return {"exit_code": 10}
+            return self._finish(
+                state,
+                int(ExitCode.PRECONDITION),
+                "La especificación o el driver cambiaron a mitad de ejecución.",
+            )
 
         scenarios = state.get("scenarios", [])
         scen_dict = next((s for s in scenarios if s["id"] == current_id), None)
         if not scen_dict:
-            return {"exit_code": 1}
+            reason = f"El escenario {current_id} no está en la spec cargada"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
 
         scenario = Scenario(
             id=ScenarioId(scen_dict["id"]),
@@ -343,8 +390,8 @@ class _GraphNodes:
                     last_agent_status=state.get("last_agent_status"),
                 )
             )
-        except SealTamperedError:
-            return {"exit_code": 10}
+        except SealTamperedError as exc:
+            return self._finish(state, int(ExitCode.PRECONDITION), str(exc))
 
         return {
             "attempt": res.attempt,
@@ -353,6 +400,7 @@ class _GraphNodes:
             "agent_failures": res.agent_failures,
             "agent_detail": res.agent_result.text,
             "last_agent_status": res.agent_result.status,
+            "spec_conflict": res.agent_result.spec_conflict,
             "totals": {
                 "tokens": {
                     "input": res.agent_result.tokens.input,
@@ -452,10 +500,11 @@ class _GraphNodes:
         if not current_id:
             return {}
 
+        conflict = state.get("agent_signal") == "spec_conflict"
         reason: Literal["intentos agotados", "spec_conflict"] = (
-            "spec_conflict" if state.get("agent_signal") == "spec_conflict" else "intentos agotados"
+            "spec_conflict" if conflict else "intentos agotados"
         )
-        details = state.get("last_error") or ""
+        details = (state.get("spec_conflict") if conflict else state.get("last_error")) or ""
 
         self.ctx.quarantine.execute(
             QuarantineRequest(
@@ -483,41 +532,10 @@ class _GraphNodes:
         return {"agent_failures": 0}
 
     def report(self, state: GraphState) -> dict[str, Any]:
-        status = state.get("status", {})
-        reasons = state.get("reasons", {})
-
-        code: int
         exit_val = state.get("exit_code")
         if exit_val is not None:
-            code = exit_val
-        elif any(r == "spec_conflict" for r in reasons.values()):
-            code = 11
-        elif any(r == "intentos agotados" for r in reasons.values()) or any(
-            s == "quarantined" for s in status.values()
-        ):
-            code = 30
-        elif all(s == "green" for s in status.values()) and status:
-            code = 0
-        else:
-            code = 0
-
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
-            data={
-                "exit_code": code,
-                "totals": state.get("totals", {}),
-            },
-        )
-        self.ctx.event_log.append(event)
-        if self.ctx.build_report is not None:
-            self.ctx.build_report.execute(
-                BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
-            )
-        return {"exit_code": code}
+            return self._finish(state, exit_val, state.get("exit_reason", ""))
+        return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
 
 
 def get_sqlite_saver(db_path: Path) -> SqliteSaver:

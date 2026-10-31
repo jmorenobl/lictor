@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -315,6 +316,14 @@ class ClaudeCLI:
             exit_code=exit_code,
         )
 
+    def _save_stderr(self, raw_path: Path, stderr: str) -> Path | None:
+        """Keep stderr beside the raw stdout, which each call already has for itself."""
+        if not stderr:
+            return None
+        stderr_path = raw_path.with_suffix(".stderr.log")
+        stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+        return stderr_path
+
     def run(self, task: AgentTask) -> AgentResult:
         """Run claude -p for the given task and map the output to AgentResult."""
         cmd = self._build_command(task)
@@ -329,6 +338,7 @@ class ClaudeCLI:
         )
 
         task.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path = self._save_stderr(task.raw_path, stderr)
         if timed_out:
             task.raw_path.write_text(stderr or "TimeoutExpired", encoding="utf-8")
             return AgentResult(
@@ -337,6 +347,7 @@ class ClaudeCLI:
                 duration_ms=duration_ms,
                 cost_kind=cost_kind,
                 raw_path=task.raw_path,
+                stderr_path=stderr_path,
             )
 
         task.raw_path.write_text(stdout, encoding="utf-8")
@@ -353,12 +364,16 @@ class ClaudeCLI:
                 cost_kind=cost_kind,
                 raw_path=task.raw_path,
                 exit_code=exit_code,
+                stderr_path=stderr_path,
             )
 
-        return self._parse_agent_data(
-            data=data,
-            rate_limit_status=rate_limit_status,
-            exit_code=exit_code or 0,
-            duration_ms=duration_ms,
-            raw_path=task.raw_path,
+        return replace(
+            self._parse_agent_data(
+                data=data,
+                rate_limit_status=rate_limit_status,
+                exit_code=exit_code or 0,
+                duration_ms=duration_ms,
+                raw_path=task.raw_path,
+            ),
+            stderr_path=stderr_path,
         )

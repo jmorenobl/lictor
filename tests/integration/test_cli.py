@@ -97,6 +97,35 @@ def test_cli_check_success_and_filter(tmp_path: Path) -> None:
     assert "ctrl1" in res_l1.output
 
 
+def test_cli_check_shows_where_a_failed_control_left_its_output(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    lictor_json = {
+        "profile": "python-uv@0.1",
+        "backend": {"kind": "fake", "model": "fake-model-1"},
+        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
+        "acceptance": {"run": "true {out}", "report": "junit"},
+        "controls": [
+            {
+                "id": "medida",
+                "level": "L5",
+                "run": "false",
+                "report": "exit-code",
+                "mode": "measure",
+            }
+        ],
+        "suppressions": [],
+        "agent_tools": [],
+        "hints": "",
+        "gitignore": [],
+    }
+    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
+
+    res = runner.invoke(app, ["check", "--level", "L5", "--cwd", str(tmp_path)])
+
+    assert res.exit_code == 0
+    assert ".lictor/runs/check/medida.log" in res.output
+
+
 def test_cli_status_and_report(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     lictor_dir = tmp_path / ".lictor"

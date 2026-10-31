@@ -13,6 +13,7 @@ from typing import Literal, Protocol
 from lictor.application.ports import CommandRunner, ResultReader, Vcs
 from lictor.application.run_files import (
     attempt_prefix,
+    describe_crash,
     fill_report_path,
     format_output,
     new_step_dir,
@@ -21,7 +22,7 @@ from lictor.application.run_files import (
     write_text,
 )
 from lictor.application.seal import collect_monitored_files
-from lictor.domain.errors import DriverError, SpecError
+from lictor.domain.errors import DriverError, InternalLictorError, SpecError
 from lictor.domain.model import (
     CommandOutput,
     ControlResult,
@@ -311,7 +312,7 @@ class VerifyAttempt:
 
     def _step_dir(self, req: VerifyAttemptRequest) -> Path:
         if req.step_dir is None:
-            raise ValueError("step_dir is set by execute")
+            raise InternalLictorError("step_dir lo asigna execute")
         return req.step_dir
 
     def _check_routes(self, req: VerifyAttemptRequest) -> VerifyResult:
@@ -491,12 +492,11 @@ class VerifyAttempt:
             cmd_out.returncode, req.acceptance_failure_exit_codes, acc_res.test_cases
         )
         if crash is not None:
-            parse_error = "" if acc_res.test_cases else (acc_res.error or "")
             return self._fail(
                 req,
                 _Failure(
                     "acceptance",
-                    "\n".join(filter(None, [crash, parse_error, output])),
+                    describe_crash(crash, acc_res, output),
                     cases=acc_res.test_cases,
                     output=output,
                     control_results=control_results,

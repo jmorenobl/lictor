@@ -99,3 +99,24 @@ class TestJsonlEventLog:
 
         empty_events = log.events(run_id="nonexistent")
         assert empty_events == []
+
+
+class TestJournalTolerance:
+    def _log_with(self, tmp_path: Path, text: str) -> JsonlEventLog:
+        path = tmp_path / "journal.jsonl"
+        good = JsonlEventLog(path)
+        good.append(Event(id="1", type="t", source="s", time="now", data={}))
+        with open(path, "a", encoding="utf-8") as journal:
+            journal.write(text)
+        good.append(Event(id="2", type="t", source="s", time="now", data={}))
+        return good
+
+    def test_invalid_lines_do_not_lose_the_rest(self, tmp_path: Path) -> None:
+        log = self._log_with(tmp_path, 'no es json\n{"forjado":true}\n[1, 2]\n')
+        assert [event.id for event in log.events()] == ["1", "2"]
+
+    def test_undecodable_bytes_do_not_lose_the_rest(self, tmp_path: Path) -> None:
+        log = self._log_with(tmp_path, "")
+        with open(tmp_path / "journal.jsonl", "ab") as journal:
+            journal.write(b"\xff\xfe\n")
+        assert [event.id for event in log.events()] == ["1", "2"]

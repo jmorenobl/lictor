@@ -371,6 +371,54 @@ class TestClaudeCLIRun:
                 assert res.status == "timeout"
                 assert task.raw_path.exists()
 
+    def test_stderr_is_kept_beside_the_raw_output_without_a_result_event(
+        self, tmp_path: Path
+    ) -> None:
+        res = _run(tmp_path, "salida cruda", returncode=7, stderr="Fatal: se cayó")
+
+        assert res.stderr_path == tmp_path / "raw.stderr.log"
+        assert res.stderr_path.read_text(encoding="utf-8") == "Fatal: se cayó"
+        assert (tmp_path / "raw.json").read_text(encoding="utf-8") == "salida cruda"
+
+    def test_stderr_is_kept_with_a_result_event(self, tmp_path: Path) -> None:
+        res = _run(tmp_path, _stream(_result()), stderr="aviso")
+
+        assert res.stderr_path == tmp_path / "raw.stderr.log"
+
+    def test_no_stderr_leaves_no_file(self, tmp_path: Path) -> None:
+        res = _run(tmp_path, _stream(_result()))
+
+        assert res.stderr_path is None
+        assert not (tmp_path / "raw.stderr.log").exists()
+
+    def test_each_call_keeps_its_own_stderr(self, tmp_path: Path) -> None:
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.communicate.side_effect = [("", "primero"), ("", "segundo")]
+            mock_proc.returncode = 1
+            mock_popen.return_value = mock_proc
+            first = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "001-implement.json"))
+            second = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "001-implement-r1.json"))
+
+        assert first.stderr_path is not None
+        assert second.stderr_path is not None
+        assert first.stderr_path.read_text(encoding="utf-8") == "primero"
+        assert second.stderr_path.read_text(encoding="utf-8") == "segundo"
+
+    def test_timeout_keeps_stderr_too(self, tmp_path: Path) -> None:
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            mock_proc.communicate.side_effect = [
+                subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
+                ("", "muerto"),
+            ]
+            mock_popen.return_value = mock_proc
+            with patch("os.killpg"), patch("os.getpgid", return_value=12345):
+                res = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "raw.json"))
+
+        assert res.stderr_path == tmp_path / "raw.stderr.log"
+
     def test_invalid_json_output(self, tmp_path: Path) -> None:
         cli = ClaudeCLI()
         task = _sample_task(tmp_path, tmp_path / "raw.json")

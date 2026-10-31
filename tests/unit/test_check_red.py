@@ -283,6 +283,7 @@ class _SuiteRunner(FakeRunner):
         self.code = code
         self.paths: list[Path] = []
         self.on_run: Callable[[], object] | None = None
+        self.stdout = "salida"
 
     def run(
         self,
@@ -297,7 +298,7 @@ class _SuiteRunner(FakeRunner):
         self.paths.append(out)
         if self.report:
             out.write_text(self.report, encoding="utf-8")
-        return CommandOutput(returncode=self.code, stdout="salida", stderr="stderr crudo")
+        return CommandOutput(returncode=self.code, stdout=self.stdout, stderr="stderr crudo")
 
 
 def _real_check(
@@ -463,3 +464,16 @@ def test_check_red_passing_keeps_its_output(tmp_path: Path) -> None:
     assert use_case.execute(request).ok is True
     log = runner.paths[0].parent / "acceptance.log"
     assert "stderr crudo" in log.read_text(encoding="utf-8")
+
+
+def test_check_red_stop_message_stays_bounded(tmp_path: Path) -> None:
+    use_case, request, _, _, runner = _real_check(
+        tmp_path, "", 3, driver_fresh=False, driver_attempts=0, error_max_chars=500
+    )
+    runner.stdout = "x" * 100_000
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    assert "código 3" in str(raised.value)
+    assert len(str(raised.value)) < 600

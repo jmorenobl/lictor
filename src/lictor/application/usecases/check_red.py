@@ -17,6 +17,7 @@ from lictor.application.ports import (
 from lictor.application.run_files import (
     DRIVER_OWNER,
     attempt_prefix,
+    describe_crash,
     fill_report_path,
     format_output,
     new_step_dir,
@@ -140,10 +141,9 @@ class CheckRed:
             output.returncode, request.acceptance_failure_exit_codes, control_res.test_cases
         )
         if crash is not None:
-            parse_error = "" if control_res.test_cases else (control_res.error or "")
             rejection = _Rejection(
                 "suite_caida",
-                "\n".join(filter(None, [crash, parse_error, raw_output])),
+                describe_crash(crash, control_res, raw_output),
                 control_res.test_cases,
                 output=raw_output,
             )
@@ -217,15 +217,16 @@ class CheckRed:
         rejection: _Rejection,
     ) -> CheckRedResult:
         """Give a fresh driver another try, or stop: nobody can fix a sealed or exhausted one."""
+        exhausted = request.driver_attempts >= request.max_driver_attempts
+        final = not request.driver_fresh or exhausted
+        result = self._reject(request, step_dir, rejection, final=final)
         if not request.driver_fresh:
-            self._reject(request, step_dir, rejection, final=True)
-            raise DriverError(f"El driver sellado no es válido: {rejection.reason}")
-        if request.driver_attempts >= request.max_driver_attempts:
-            self._reject(request, step_dir, rejection, final=True)
+            raise DriverError(f"El driver sellado no es válido.\n{result.last_error}")
+        if exhausted:
             raise DriverError(
-                f"Driver rechazado tras {request.driver_attempts} intentos: {rejection.reason}"
+                f"Driver rechazado tras {request.driver_attempts} intentos.\n{result.last_error}"
             )
-        return self._reject(request, step_dir, rejection)
+        return result
 
     def _reject(
         self,

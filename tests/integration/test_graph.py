@@ -3,7 +3,8 @@ import subprocess
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from langgraph.types import Command
@@ -22,9 +23,11 @@ from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
-from lictor.domain.model import CommandOutput, Scenario
+from lictor.domain.model import CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
     GraphContext,
+    GraphState,
+    _GraphNodes,
     create_graph,
     get_sqlite_saver,
 )
@@ -553,3 +556,28 @@ def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path:
     assert final_state.get("exit_code") == 10
     # verify must NOT have run or set last_verify
     assert final_state.get("last_verify") == {"ok": True}
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({"attempt": 2, "attempt_slot": 3}, 3),  # a failed call didn't use up the attempt
+        ({"attempt": 2}, 2),  # checkpoint from before attempt_slot existed
+        ({"attempt": 0}, 1),
+        ({}, 1),
+    ],
+)
+def test_verify_files_its_evidence_under_the_attempt_of_the_call(
+    state: dict[str, Any], expected: int
+) -> None:
+    verify_attempt = MagicMock()
+    verify_attempt.execute.return_value = VerifyResult(ok=True)
+    context = MagicMock(acceptance_failure_exit_codes=(1, 2), controls=())
+    context.verify_attempt = verify_attempt
+    context.clock.now_iso.return_value = "2026-10-31T10:00:00Z"
+
+    _GraphNodes(context).verify(cast(GraphState, {"run_id": "R", "current": "IVA-001", **state}))
+
+    request = verify_attempt.execute.call_args.args[0]
+    assert request.attempt == expected
+    assert request.acceptance_failure_exit_codes == (1, 2)
