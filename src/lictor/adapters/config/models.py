@@ -126,7 +126,14 @@ class ProfileVerification(BaseModel):
     reserved: list[str] = Field(default_factory=list)
     plugin_variable: str = ""
     plugins: list[str] = Field(default_factory=list)
-    files: dict[str, str] = Field(default_factory=dict)
+    files_dir_command: str = ""
+    files: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_files_have_a_destination(self) -> Self:
+        if self.files and not self.files_dir_command:
+            raise ValueError("verification.files necesita files_dir_command")
+        return self
 
 
 class ProjectVerification(BaseModel):

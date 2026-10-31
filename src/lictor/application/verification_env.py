@@ -5,9 +5,9 @@ compared around every verification. Everything counts, bytecode included: a stal
 `.pyc` runs like any other file, and verifying generates none, as the profile's env must ensure.
 
 The commands start from an empty environment: only the names in `inherit` pass, and `env` then
-fixes what must hold, so whatever nobody listed stays out. `files` are written into the environment
-before hashing it, so the tool can reach the project after starting rather than through its
-startup path.
+fixes what must hold, so whatever nobody listed stays out. `files` are copied into the environment
+before hashing it, to the directory `files_dir_command` prints, so the tool can reach the project
+after starting rather than through its startup path.
 """
 
 import json
@@ -18,7 +18,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import NoReturn
 
 from lictor.application.ports import AuditSink, CommandRunner, Vcs
@@ -29,6 +29,7 @@ from lictor.domain.model import CommandOutput, Event
 
 ENV_DIR_PLACEHOLDER = "{env_dir}"
 _PREPARE_TIMEOUT_S = 1800
+_FILES_DIR_TIMEOUT_S = 60
 _MAX_ERROR_LINES = 20
 
 
@@ -39,7 +40,8 @@ class VerificationEnvSpec:
     prepare: str = ""
     env: Mapping[str, str] = field(default_factory=dict)
     inherit: Sequence[str] = ()
-    files: Mapping[str, str] = field(default_factory=dict)
+    files_dir_command: str = ""
+    files: Sequence[Path] = ()
 
 
 class VerificationEnvironment:
@@ -107,7 +109,7 @@ class VerificationEnvironment:
         self.manifest.unlink(missing_ok=True)
         shutil.rmtree(self.env_dir, ignore_errors=True)
 
-        tokens = shlex.split(self.spec.prepare.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir)))
+        tokens = self._tokens(self.spec.prepare)
         with verification_tree(self.vcs, "HEAD") as tree:
             output = self.runner.run(
                 tokens, cwd=tree, timeout_s=_PREPARE_TIMEOUT_S, env=self.command_env()
@@ -129,17 +131,35 @@ class VerificationEnvironment:
             run_id, "env.built", {"hash": env_hash, "reason": reason, "duration_ms": duration_ms}
         )
 
+    def _tokens(self, command: str) -> list[str]:
+        return shlex.split(command.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir)))
+
     def _install_files(self, run_id: str) -> None:
-        for pattern, content in self.spec.files.items():
-            target = PurePath(pattern)
-            parents = sorted(self.env_dir.glob(str(target.parent)))
-            if len(parents) != 1:
-                self._fail(
-                    run_id,
-                    f"El entorno de verificación no tiene un único destino para '{pattern}': "
-                    f"hay {len(parents)}",
-                )
-            (parents[0] / target.name).write_text(content, encoding="utf-8")
+        if not self.spec.files:
+            return
+        target = self._files_dir(run_id)
+        for source in self.spec.files:
+            shutil.copyfile(source, target / source.name)
+
+    def _files_dir(self, run_id: str) -> Path:
+        """Ask the environment where its files go: its layout depends on what built it."""
+        output = self.runner.run(
+            self._tokens(self.spec.files_dir_command),
+            cwd=self.env_dir,
+            timeout_s=_FILES_DIR_TIMEOUT_S,
+            env=self.command_env(),
+        )
+        if output.returncode != 0:
+            self._fail(
+                run_id,
+                f"El entorno de verificación no dice dónde instalar sus ficheros: {output.stderr}",
+                output.returncode,
+            )
+        answer = output.stdout.strip()
+        target = Path(answer).resolve()
+        if not answer or not target.is_dir() or not target.is_relative_to(self.env_dir.resolve()):
+            self._fail(run_id, f"'{answer}' no es un directorio del entorno de verificación")
+        return target
 
     def _fail(self, run_id: str, message: str, exit_code: int | None = None) -> NoReturn:
         self._emit(run_id, "env.failed", {"exit_code": exit_code, "error": message})

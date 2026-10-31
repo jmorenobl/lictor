@@ -1,6 +1,10 @@
+import ast
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -23,6 +27,10 @@ from lictor.adapters.config.models import (
     LictorConfig,
     PathsConfig,
     Profile,
+)
+from lictor.adapters.config.profiles.python_uv import lictor_project_path
+from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
+    pytest_load_initial_conftests,
 )
 from lictor.domain.errors import ConfigError, ExitCode
 
@@ -331,12 +339,60 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
 
 
 def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
-    files = load_profile("python-uv").verification.files
+    spec = resolve_defences(load_config(REPO_ROOT)).verification
 
-    plugin = files["lib/python*/site-packages/lictor_project_path.py"]
-    assert "def pytest_load_initial_conftests(early_config):" in plugin
-    assert 'sys.path.append(str(early_config.invocation_params.dir / "src"))' in plugin
-    assert len(files) == 1
+    assert [path.name for path in spec.files] == ["lictor_project_path.py"]
+    assert all(path.is_file() for path in spec.files)
+    assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
+    assert "get_path" in spec.files_dir_command
+
+
+def test_the_path_plugin_appends_the_sources_of_the_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "path", ["primero"])
+    config = SimpleNamespace(invocation_params=SimpleNamespace(dir=tmp_path))
+
+    pytest_load_initial_conftests(cast(pytest.Config, config))
+
+    assert sys.path == ["primero", str(tmp_path / "src")]
+
+
+def test_the_path_plugin_stands_alone() -> None:
+    """It is installed on its own in an environment where Lictor doesn't exist."""
+    tree = ast.parse(Path(lictor_project_path.__file__).read_text(encoding="utf-8"))
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported |= {
+        node.module.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+
+    assert imported == {"pytest", "sys", "typing"}
+
+
+def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    data = load_profile("python-uv").model_dump(mode="json")
+    (profiles / "python-uv.json").write_text(json.dumps(data), encoding="utf-8")
+    config = load_config(_project(tmp_path), profiles_dir=profiles)
+
+    with pytest.raises(ConfigError, match=r"lictor_project_path\.py"):
+        resolve_defences(config, profiles)
+
+
+def test_profile_files_need_a_command_that_says_where_they_go() -> None:
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["verification"]["files_dir_command"] = ""
+
+    with pytest.raises(ValidationError, match="files_dir_command"):
+        Profile.model_validate(data)
 
 
 # Each entry holds because of something measured with an exact environment: a variable the tools
@@ -530,6 +586,9 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
     profiles = tmp_path / "profiles"
     profiles.mkdir()
     (profiles / "python-uv.json").write_text(json.dumps(profile_data), encoding="utf-8")
+    plugin = Path(lictor_project_path.__file__)
+    (profiles / "python_uv").mkdir()
+    (profiles / "python_uv" / plugin.name).write_text("", encoding="utf-8")
 
     defences = resolve_defences(load_config(tmp_path, profiles), profiles)
 

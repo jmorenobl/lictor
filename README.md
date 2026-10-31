@@ -351,11 +351,11 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.plugins`, `verification.env`, `verification.inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
 
-El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, de modo que cada proyecto declara los suyos en `verification.plugins` (nombres de módulo importables desde el entorno de verificación); `demo-iva` declara `pytest_bdd.plugin`. Sin esa declaración, un driver con pytest-bdd no encuentra sus fixtures y falla. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo.
+El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, de modo que cada proyecto declara los suyos en `verification.plugins` (nombres de módulo importables desde el entorno de verificación); `demo-iva` declara `pytest_bdd.plugin`. Sin esa declaración, un driver con pytest-bdd no encuentra sus fixtures y falla. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 

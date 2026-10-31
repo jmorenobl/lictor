@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock
@@ -30,6 +31,8 @@ class _Builder(FakeRunner):
         self.returncode = returncode
         self.builds = 0
         self.seed: dict[str, str] = {}
+        self.answer = ""
+        self.answer_returncode = 0
 
     def run(
         self,
@@ -39,6 +42,9 @@ class _Builder(FakeRunner):
         env: dict[str, str] | None = None,
     ) -> CommandOutput:
         super().run(cmd, cwd, timeout_s, env)
+        if cmd[0] == "donde":
+            stdout = self.answer.replace("{env_dir}", cmd[1])
+            return CommandOutput(self.answer_returncode, stdout=stdout, stderr="sin respuesta")
         if cmd[0] != "build":
             return CommandOutput(returncode=0, stdout="", stderr="")
         self.builds += 1
@@ -210,11 +216,20 @@ def test_forgetting_a_variable_a_tool_needs_stops_visibly(tmp_path: Path) -> Non
     assert event_log.append.call_args.args[0].type == "lictor.env.failed.v1"
 
 
-def test_files_are_written_before_hashing(tmp_path: Path) -> None:
+def _with_file(tmp_path: Path) -> VerificationEnvSpec:
+    source = tmp_path / "fuente" / "plugin.py"
+    source.parent.mkdir()
+    source.write_text("x = 2\n", encoding="utf-8")
+    return VerificationEnvSpec(
+        prepare=SPEC.prepare, files_dir_command="donde {env_dir}", files=(source,)
+    )
+
+
+def test_files_are_installed_where_the_environment_says_before_hashing(tmp_path: Path) -> None:
     runner = _Builder()
     runner.seed = {"lib/x.txt": ""}
-    spec = VerificationEnvSpec(prepare=SPEC.prepare, files={"l*/plugin.py": "x = 2\n"})
-    environment, _ = _environment(tmp_path, runner, spec)
+    runner.answer = "{env_dir}/lib\n"
+    environment, _ = _environment(tmp_path, runner, _with_file(tmp_path))
 
     environment.ensure("R")
 
@@ -226,23 +241,57 @@ def test_files_are_written_before_hashing(tmp_path: Path) -> None:
     assert plugin.read_text(encoding="utf-8") == "x = 2\n"
 
 
-@pytest.mark.parametrize(
-    ("seed", "found"), [({}, 0), ({"lib1/a": "", "lib2/a": ""}, 2)], ids=["ninguno", "dos"]
-)
-def test_a_file_without_a_single_destination_is_an_environment_failure(
-    tmp_path: Path, seed: dict[str, str], found: int
-) -> None:
+def test_the_destination_is_asked_with_the_environment_of_the_commands(tmp_path: Path) -> None:
     runner = _Builder()
-    runner.seed = seed
-    spec = VerificationEnvSpec(prepare=SPEC.prepare, files={"lib*/plugin.py": "x"})
-    environment, event_log = _environment(tmp_path, runner, spec)
+    runner.seed = {"lib/x.txt": ""}
+    runner.answer = "{env_dir}/lib"
+    spec = replace(_with_file(tmp_path), env={"FIJA": "1"})
+    environment, _ = _environment(tmp_path, runner, spec)
 
-    with pytest.raises(EnvironmentUnavailableError, match=rf"'lib\*/plugin.py': hay {found}$"):
+    environment.ensure("R")
+
+    asked = runner.calls[1]
+    assert asked["cmd"] == ["donde", str(environment.env_dir)]
+    assert asked["env"] == {"FIJA": "1"}
+    assert asked["cwd"] == environment.env_dir
+
+
+def test_a_failed_question_is_an_environment_failure(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.answer_returncode = 3
+    environment, event_log = _environment(tmp_path, runner, _with_file(tmp_path))
+
+    with pytest.raises(EnvironmentUnavailableError, match="sin respuesta"):
         environment.ensure("R")
 
     assert _events(event_log) == ["lictor.env.failed.v1"]
-    assert event_log.append.call_args.args[0].data["exit_code"] is None
+    assert event_log.append.call_args.args[0].data["exit_code"] == 3
     assert not environment.manifest.exists()
+
+
+@pytest.mark.parametrize("answer", ["/etc", "{env_dir}/no-existe", "", "{env_dir}/../fuera"])
+def test_a_destination_outside_the_environment_is_refused(tmp_path: Path, answer: str) -> None:
+    (tmp_path / ".lictor" / "fuera").mkdir(parents=True)
+    runner = _Builder()
+    runner.answer = answer
+    environment, event_log = _environment(tmp_path, runner, _with_file(tmp_path))
+
+    with pytest.raises(EnvironmentUnavailableError, match="no es un directorio del entorno"):
+        environment.ensure("R")
+
+    assert _events(event_log) == ["lictor.env.failed.v1"]
+    assert not environment.manifest.exists()
+
+
+def test_without_files_nothing_is_asked(tmp_path: Path) -> None:
+    runner = _Builder()
+    environment, _ = _environment(
+        tmp_path, runner, replace(SPEC, files_dir_command="donde {env_dir}")
+    )
+
+    environment.ensure("R")
+
+    assert len(runner.calls) == 1
 
 
 def test_failed_prepare_is_an_environment_failure(tmp_path: Path) -> None:

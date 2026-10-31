@@ -244,6 +244,14 @@ def _plugin_env(project: ProjectVerification, profile: ProfileVerification) -> d
     return {profile.plugin_variable: ",".join(plugins)} if plugins else {}
 
 
+def _profile_files(profile: ProfileVerification, profiles_dir: Path | None) -> list[Path]:
+    sources = [_resolve_profiles_dir(profiles_dir) / file for file in profile.files]
+    for source in sources:
+        if not source.is_file():
+            raise ConfigError(f"Falta el fichero del perfil: '{source}'")
+    return sources
+
+
 def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> Defences:
     """Combine the project's needs with its profile: the profile wins, the project only adds."""
     profile = load_profile(config.profile, profiles_dir)
@@ -258,7 +266,8 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
                 **profile.verification.env,
                 **_plugin_env(project, profile.verification),
             },
-            files=profile.verification.files,
+            files_dir_command=profile.verification.files_dir_command,
+            files=_profile_files(profile.verification, profiles_dir),
         ),
         suppressions=profile.suppressions,
         banned_patterns=profile.banned_patterns,
