@@ -8,7 +8,7 @@ import pytest
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.domain.errors import ExitCode
-from lictor.domain.model import AgentResult, AgentStatus, AgentTask
+from lictor.domain.model import AgentResult, AgentStatus, AgentTask, Health
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
@@ -183,7 +183,7 @@ def test_d18_backend_down_quarantines_nothing(make_project: ProjectFactory) -> N
     require("IVA-001" in agent.calls, "el agente debía llegar a implementar")
     assert quarantined(root) == [], f"exit {outcome.exit_code}, llamadas {agent.calls}"
     assert agent.calls.count("IVA-001") < 3
-    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert outcome.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
 
 
 def test_auth_failure_stops_at_the_first_call(make_project: ProjectFactory) -> None:
@@ -193,7 +193,7 @@ def test_auth_failure_stops_at_the_first_call(make_project: ProjectFactory) -> N
     outcome = run_lictor(root, agent)
 
     require("IVA-001" in agent.calls, "el agente debía llegar a implementar")
-    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert outcome.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
     assert agent.calls.count("IVA-001") == 1
     assert quarantined(root) == []
 
@@ -208,7 +208,7 @@ def test_d18_run_resumes_without_lost_attempts_once_the_backend_is_back(
 
     outcome = run_lictor(root, Agent())
 
-    assert stopped.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert stopped.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
     assert outcome.exit_code == 0
     assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
     finished = events_of(root, "agent.finished")
@@ -221,7 +221,7 @@ def test_d18_a_resumed_run_tolerates_a_single_failure_again(
     root = make_project()
     require(
         run_lictor(root, Agent(impl=lambda _t, _s, _a: "error")).exit_code
-        == ExitCode.AGENT_UNAVAILABLE,
+        == ExitCode.ENVIRONMENT_UNAVAILABLE,
         "la ejecución debía detenerse",
     )
     failures = ["error"]
@@ -243,8 +243,41 @@ def test_backend_down_during_the_driver_stops_the_run(make_project: ProjectFacto
 
     outcome = run_lictor(root, agent)
 
-    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert outcome.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
     assert agent.calls == ["driver", "driver"]
+
+
+def _broken_environment() -> Health:
+    return Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
+
+
+def test_environment_down_at_start_exits_40_with_the_reason(
+    make_project: ProjectFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = make_project()
+    agent = Agent()
+    agent.executor.health = _broken_environment
+
+    outcome = run_lictor(root, agent)
+
+    assert outcome.exit_code == 40
+    assert agent.calls == []
+    assert "sin sesión" in capsys.readouterr().err
+
+
+def test_environment_down_on_resume_exits_40_with_the_reason(
+    make_project: ProjectFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = make_project()
+    run_lictor(root, Agent(impl=lambda _task, _sid, _attempt: "auth"))
+    agent = Agent()
+    agent.executor.health = _broken_environment
+
+    outcome = run_lictor(root, agent)
+
+    assert outcome.exit_code == 40
+    assert agent.calls == []
+    assert "sin sesión" in capsys.readouterr().err
 
 
 def test_d26_agent_gets_runnable_commands_including_acceptance(

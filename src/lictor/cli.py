@@ -139,7 +139,7 @@ def doctor(
                 f"✗ El ejecutor no está listo: {health.message or health.auth_status}",
                 err=True,
             )
-            return 10
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         typer.echo(f"✓ Ejecutor disponible: {health.cli_version} ({health.auth_status})")
 
         # 4. Comandos de controles
@@ -297,9 +297,14 @@ def _check_resume_guard(
         )
         return 10
 
-    if not runtime.executor.health().ok:
-        typer.echo("Error: el ejecutor no está disponible para reanudar", err=True)
-        return 10
+    health = runtime.executor.health()
+    if not health.ok:
+        typer.echo(
+            "Error: el ejecutor no está disponible para reanudar: "
+            f"{health.message or health.auth_status}",
+            err=True,
+        )
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
 
     return None
 
@@ -315,7 +320,7 @@ def _paused_exit_code(state_snapshot: Any) -> int | None:
             f"Corrige el problema y vuelve a lanzar `lictor run`.\n{detail}",
             err=True,
         )
-        return int(ExitCode.AGENT_UNAVAILABLE)
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
     typer.echo("Ejecución pausada por límite de cuota.", err=True)
     return int(ExitCode.RATE_LIMITED)
 
@@ -392,7 +397,11 @@ def _start_new_run(
     if paused_code is not None:
         return paused_code
 
-    return int(final_state.values.get("exit_code", 0) or 0)
+    exit_code = int(final_state.values.get("exit_code", 0) or 0)
+    if exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE:
+        detail = final_state.values.get("agent_detail", "")
+        typer.echo(f"Error: el ejecutor no está disponible: {detail}", err=True)
+    return exit_code
 
 
 def _execute_run(cwd: Path, force_new: bool) -> int:

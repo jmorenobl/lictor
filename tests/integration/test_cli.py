@@ -2,9 +2,12 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from lictor.adapters.agents.fake import FakeExecutor
 from lictor.cli import app
+from lictor.domain.model import Health
 
 runner = CliRunner()
 
@@ -124,6 +127,25 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
     res_rep = runner.invoke(app, ["report", "--cwd", str(tmp_path)])
     assert res_rep.exit_code == 0
     assert (lictor_dir / "report.md").is_file()
+
+
+def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert runner.invoke(app, ["init", "--cwd", str(tmp_path)]).exit_code == 0
+    config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    config["backend"]["kind"] = "fake"
+    (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
+    broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
+    monkeypatch.setattr(FakeExecutor, "health", lambda _self: broken)
+
+    result = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 40
 
 
 def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:

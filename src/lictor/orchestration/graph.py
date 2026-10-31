@@ -24,7 +24,7 @@ from lictor.application.usecases.implement_scenario import (
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
 from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
-from lictor.domain.errors import DriverError, SealTamperedError, SpecError
+from lictor.domain.errors import DriverError, ExitCode, SealTamperedError, SpecError
 from lictor.domain.model import AgentStatus, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_implement,
@@ -142,7 +142,10 @@ class _GraphNodes:
             return {"exit_code": 10}
         health = self.ctx.executor.health()
         if not health.ok:
-            return {"exit_code": 10}
+            return {
+                "exit_code": int(ExitCode.ENVIRONMENT_UNAVAILABLE),
+                "agent_detail": health.message or health.auth_status,
+            }
 
         event = Event(
             id=uuid.uuid4().hex,

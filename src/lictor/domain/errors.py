@@ -9,7 +9,7 @@ class ExitCode(IntEnum):
     PRECONDITION = 10
     SPEC_CONFLICT = 11
     QUARANTINED = 30
-    AGENT_UNAVAILABLE = 40
+    ENVIRONMENT_UNAVAILABLE = 40  # Could not run: fix the environment; no scenario is to blame
     RATE_LIMITED = 50
 
 

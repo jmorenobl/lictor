@@ -252,7 +252,7 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 | **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
 | **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
 | **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. |
-| **`40`** | `AGENT_UNAVAILABLE` | Ejecución detenida en checkpoint porque el agente no está disponible: sin sesión iniciada, o dos errores seguidos del CLI. No gasta intentos ni pone escenarios en cuarentena. Reanudable ejecutando `lictor run`. |
+| **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
 | **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
 
 ---
