@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.domain.model import CommandOutput
@@ -18,6 +20,22 @@ def test_subprocess_runner_success(tmp_path: Path) -> None:
     assert out.stdout == "hello"
     assert out.stderr == "world"
     assert out.duration_ms >= 0
+
+
+def test_subprocess_runner_applies_env_over_what_it_inherits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QUITADA", "x")
+    monkeypatch.setenv("CAMBIADA", "antes")
+    monkeypatch.setenv("INTACTA", "y")
+    monkeypatch.delenv("AUSENTE", raising=False)
+    show = "import os; print(sorted((k, v) for k, v in os.environ.items() if k in {})); "
+    names = "('QUITADA', 'CAMBIADA', 'INTACTA', 'NUEVA', 'AUSENTE')"
+    env = {"QUITADA": None, "AUSENTE": None, "CAMBIADA": "despues", "NUEVA": "z"}
+
+    out = SubprocessRunner().run([sys.executable, "-c", show.format(names)], cwd=tmp_path, env=env)
+
+    assert out.stdout.strip() == str([("CAMBIADA", "despues"), ("INTACTA", "y"), ("NUEVA", "z")])
 
 
 def test_subprocess_runner_nonzero_exit(tmp_path: Path) -> None:

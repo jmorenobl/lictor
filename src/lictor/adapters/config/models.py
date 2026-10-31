@@ -120,6 +120,8 @@ class VerificationConfig(BaseModel):
 
     prepare: str = ""
     env: dict[str, str] = Field(default_factory=dict)
+    unset: list[str] = Field(default_factory=list)
+    files: dict[str, str] = Field(default_factory=dict)
 
 
 class ControlConfig(BaseModel):

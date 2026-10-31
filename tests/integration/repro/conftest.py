@@ -77,16 +77,24 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 def make_project(tmp_path: Path, template: Path) -> ProjectFactory:
     """Return a factory of per-case projects, with optional `lictor.json` overrides."""
 
-    def factory(*, sync: bool = True, extra_controls: list[dict[str, Any]] | None = None) -> Path:
+    def factory(
+        *,
+        sync: bool = True,
+        extra_controls: list[dict[str, Any]] | None = None,
+        allowed_paths: tuple[str, ...] = (),
+    ) -> Path:
         root = tmp_path / "demo-iva"
         copy_project(template, root)
-        if extra_controls:
+        if extra_controls or allowed_paths:
             config_path = root / "lictor.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            config["controls"].extend(extra_controls)
+            config["controls"].extend(extra_controls or [])
+            config["forbidden_paths"] = [
+                path for path in config["forbidden_paths"] if path not in allowed_paths
+            ]
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             git(root, "add", "-A")
-            git(root, "commit", "-q", "-m", "chore: controles del caso")
+            git(root, "commit", "-q", "--allow-empty", "-m", "chore: controles del caso")
         if sync:
             uv_sync(root)
         require(not git(root, "status", "--short"), "la plantilla no está limpia")

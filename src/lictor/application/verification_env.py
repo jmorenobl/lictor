@@ -3,16 +3,23 @@
 Project code runs with the user's permissions and can reach this directory, so its hash is
 compared around every verification. Everything counts, bytecode included: a stale or planted
 `.pyc` runs like any other file, and verifying generates none, as the profile's env must ensure.
+
+The commands inherit nothing that could load code: `unset` removes it from what this process
+received and `env` then fixes what must hold. `files` are written into the environment before
+hashing it, so the tool can reach the project after starting rather than through its startup path.
 """
 
 import json
+import os
 import shlex
 import shutil
 import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePath
+from typing import NoReturn
 
 from lictor.application.ports import AuditSink, CommandRunner, Vcs
 from lictor.application.run_files import save_output, unused_path, verification_tree
@@ -31,6 +38,8 @@ class VerificationEnvSpec:
 
     prepare: str = ""
     env: Mapping[str, str] = field(default_factory=dict)
+    unset: Sequence[str] = ()
+    files: Mapping[str, str] = field(default_factory=dict)
 
 
 class VerificationEnvironment:
@@ -52,12 +61,18 @@ class VerificationEnvironment:
         self.env_dir = project_root / ".lictor" / "verify-env"
         self.manifest = project_root / ".lictor" / "verify_env.json"
 
-    def command_env(self) -> dict[str, str]:
-        """Return the variables every verification command runs with."""
-        return {
+    def command_env(self) -> dict[str, str | None]:
+        """Return the variables every verification command runs with; `None` removes one."""
+        removed: dict[str, str | None] = {
+            name: None
+            for name in os.environ
+            if any(fnmatchcase(name, pattern) for pattern in self.spec.unset)
+        }
+        fixed = {
             name: value.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir))
             for name, value in self.spec.env.items()
         }
+        return removed | fixed
 
     def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int) -> CommandOutput:
         """Run a verification command inside this environment."""
@@ -106,16 +121,33 @@ class VerificationEnvironment:
         save_output(log, output)
         if output.returncode != 0:
             tail = "\n".join(output.stderr.strip().splitlines()[-_MAX_ERROR_LINES:])
-            message = f"No se pudo preparar el entorno de verificación: {tail}"
-            self._emit(run_id, "env.failed", {"exit_code": output.returncode, "error": message})
-            raise EnvironmentUnavailableError(message)
+            self._fail(
+                run_id, f"No se pudo preparar el entorno de verificación: {tail}", output.returncode
+            )
 
+        self._install_files(run_id)
         env_hash = hash_tree(self.env_dir)
         self.manifest.write_text(json.dumps({"run_id": run_id, "hash": env_hash}), encoding="utf-8")
         duration_ms = int((time.monotonic() - started) * 1000)
         self._emit(
             run_id, "env.built", {"hash": env_hash, "reason": reason, "duration_ms": duration_ms}
         )
+
+    def _install_files(self, run_id: str) -> None:
+        for pattern, content in self.spec.files.items():
+            target = PurePath(pattern)
+            parents = sorted(self.env_dir.glob(str(target.parent)))
+            if len(parents) != 1:
+                self._fail(
+                    run_id,
+                    f"El entorno de verificación no tiene un único destino para '{pattern}': "
+                    f"hay {len(parents)}",
+                )
+            (parents[0] / target.name).write_text(content, encoding="utf-8")
+
+    def _fail(self, run_id: str, message: str, exit_code: int | None = None) -> NoReturn:
+        self._emit(run_id, "env.failed", {"exit_code": exit_code, "error": message})
+        raise EnvironmentUnavailableError(message)
 
     def _emit(self, run_id: str, name: str, data: dict[str, object]) -> None:
         self.audit.event_log.append(

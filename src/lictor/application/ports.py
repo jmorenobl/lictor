@@ -1,6 +1,6 @@
 """Ports (Protocols) of the application layer in hexagonal architecture."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -124,9 +124,9 @@ class CommandRunner(Protocol):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str | None] | None = None,
     ) -> CommandOutput:
-        """Execute a command synchronously."""
+        """Execute a command synchronously; a `None` in `env` removes an inherited variable."""
         ...
 
 

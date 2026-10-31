@@ -35,7 +35,9 @@
 ---
 
 > [!WARNING]
-> **El verde todavía no resiste a un agente adversario.** Hoy significa que ese commit exacto pasó los controles y la aceptación en un clon limpio, con un entorno comprobado por hash. Pero `.git`, `.lictor/` y ese entorno están al alcance del agente, que corre con tus permisos, y el clon parte de un `.git` que aún puede alterar. Eso sigue así hasta cerrar la Fase 4 del plan de corrección. Además hay una limitación conocida de la v0.1 que ninguna fase de este plan cierra: el código bajo test corre en el mismo proceso que escribe el informe de aceptación, así que puede forjarlo. Se cerrará con el sandbox del incremento 4. Los patrones prohibidos son heurísticas y no lo evitan.
+> **El verde todavía no resiste a un agente adversario.** Hoy significa que ese commit exacto pasó los controles y la aceptación en un clon limpio, con un entorno comprobado por hash. Pero `.git`, `.lictor/` y ese entorno están al alcance del agente, que corre con tus permisos, y el clon parte de un `.git` que aún puede alterar. Eso sigue así hasta cerrar la Fase 4 del plan de corrección. Además hay una limitación conocida de la v0.1 que ninguna fase de este plan cierra: cualquier código del proyecto que se importe durante los tests corre en el mismo proceso que el runner, así que puede alterar el runner o forjar el informe de aceptación. Basta con que `src/` registre un plugin al importarse. Se cerrará con el sandbox del incremento 4. Hasta entonces el verde no resiste a un adversario, y `forbidden_paths` y `banned_patterns` son heurísticas: encarecen la trampa, no la impiden.
+>
+> Lo que sí está cerrado son vías concretas de carga antes de los tests: `src/` no entra en el arranque de Python, de modo que un `sitecustomize.py` no se ejecuta ni en `mypy` ni en `pytest`; un paquete en `src/` no sustituye a una dependencia, porque `src` va al final de la ruta; y las variables heredadas que cargan código (`PYTHONPATH`, `PYTHONSTARTUP`, `PYTEST_ADDOPTS` y similares) se limpian.
 
 ## ⚡ ¿Por qué Lictor?
 
@@ -344,12 +346,16 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "forbidden_paths": ["*.dist-info", "*.pth", ".gitignore", "conftest.py", "ruff.toml"],
   "verification": {
     "prepare": "uv sync --frozen --no-install-project",
-    "env": {"UV_PROJECT_ENVIRONMENT": "{env_dir}", "UV_NO_SYNC": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    "env": {"UV_PROJECT_ENVIRONMENT": "{env_dir}", "UV_NO_SYNC": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+    "unset": ["PYTHON*", "PYTEST*", "LD_*", "DYLD_*"],
+    "files": {"lib/python*/site-packages/lictor_project_path.py": "..."}
   },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }
 ```
+
+En `verification`, `unset` son patrones de variables heredadas que se eliminan y `env` fija después lo que debe valer, así que `env` gana. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo. Si un proyecto declara su propio bloque `verification`, sustituye al completo del perfil.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 

@@ -158,6 +158,73 @@ def test_a_removed_file_counts_as_a_change(tmp_path: Path) -> None:
     assert environment.ensure("R") is not None
 
 
+def test_inherited_variables_are_removed_and_fixed_ones_win(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HEREDADA_A", "x")
+    monkeypatch.setenv("FIJADA", "heredada")
+    monkeypatch.setenv("heredada_b", "x")
+    monkeypatch.setenv("OTRA_EXACTA", "x")
+    monkeypatch.setenv("LIBRE", "x")
+    spec = VerificationEnvSpec(env={"FIJADA": "1"}, unset=("HEREDADA_*", "FIJADA", "OTRA_EXACTA"))
+    environment, _ = _environment(tmp_path, FakeRunner(), spec)
+
+    env = environment.command_env()
+
+    assert env["HEREDADA_A"] is None
+    assert env["OTRA_EXACTA"] is None
+    assert env["FIJADA"] == "1"
+    assert "heredada_b" not in env
+    assert "LIBRE" not in env
+
+
+def test_commands_run_with_the_removals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HEREDADA", "x")
+    runner = _Builder()
+    spec = VerificationEnvSpec(prepare=SPEC.prepare, unset=("HEREDADA",))
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+    environment.run(["control"], tmp_path, 1)
+
+    assert [call["env"] for call in runner.calls] == [{"HEREDADA": None}] * 2
+
+
+def test_files_are_written_before_hashing(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.seed = {"lib/x.txt": ""}
+    spec = VerificationEnvSpec(prepare=SPEC.prepare, files={"l*/plugin.py": "x = 2\n"})
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    plugin = environment.env_dir / "lib" / "plugin.py"
+    assert plugin.read_text(encoding="utf-8") == "x = 2\n"
+    assert environment.ensure("R") is None
+    plugin.write_text("x = 3\n", encoding="utf-8")
+    assert environment.ensure("R") is not None
+    assert plugin.read_text(encoding="utf-8") == "x = 2\n"
+
+
+@pytest.mark.parametrize(
+    ("seed", "found"), [({}, 0), ({"lib1/a": "", "lib2/a": ""}, 2)], ids=["ninguno", "dos"]
+)
+def test_a_file_without_a_single_destination_is_an_environment_failure(
+    tmp_path: Path, seed: dict[str, str], found: int
+) -> None:
+    runner = _Builder()
+    runner.seed = seed
+    spec = VerificationEnvSpec(prepare=SPEC.prepare, files={"lib*/plugin.py": "x"})
+    environment, event_log = _environment(tmp_path, runner, spec)
+
+    with pytest.raises(EnvironmentUnavailableError, match=rf"'lib\*/plugin.py': hay {found}$"):
+        environment.ensure("R")
+
+    assert _events(event_log) == ["lictor.env.failed.v1"]
+    assert event_log.append.call_args.args[0].data["exit_code"] is None
+    assert not environment.manifest.exists()
+
+
 def test_failed_prepare_is_an_environment_failure(tmp_path: Path) -> None:
     environment, event_log = _environment(tmp_path, _Builder(returncode=2))
 

@@ -230,6 +230,20 @@
           },
           "title": "Env",
           "type": "object"
+        },
+        "unset": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unset",
+          "type": "array"
+        },
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "object"
         }
       },
       "title": "VerificationConfig",

@@ -1,4 +1,5 @@
 import json
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -320,8 +321,61 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
     assert env["UV_NO_SYNC"] == "1"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
-    assert env["PYTEST_PLUGINS"] == "pytest_bdd.plugin"
-    assert env["PYTHONPATH"] == "src"
+    assert env["PYTHONNOUSERSITE"] == "1"
+    assert env["UV_NO_ENV_FILE"] == "1"
+    assert env["PYTEST_ADDOPTS"] == "-o pythonpath="
+    assert env["PYTEST_PLUGINS"] == "pytest_bdd.plugin,lictor_project_path"
+    assert "PYTHONPATH" not in env
+
+
+def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
+    files = load_profile("python-uv").verification.files
+
+    plugin = files["lib/python*/site-packages/lictor_project_path.py"]
+    assert "def pytest_load_initial_conftests(early_config):" in plugin
+    assert 'sys.path.append(str(early_config.invocation_params.dir / "src"))' in plugin
+    assert len(files) == 1
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PYTHONOPTIMIZE",
+        "PYTHONWARNINGS",
+        "PYTHONPYCACHEPREFIX",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "COV_CORE_SOURCE",
+        "COVERAGE_PROCESS_START",
+        "MYPYPATH",
+        "MYPY_CONFIG_FILE_DIR",
+        "RUFF_CONFIG",
+        "UV_CONFIG_FILE",
+        "UV_ENV_FILE",
+        "UV_PROJECT",
+        "UV_PYTHON",
+        "UV_WORKING_DIR",
+        "VIRTUAL_ENV",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "BASH_ENV",
+        "ENV",
+    ],
+)
+def test_profile_inherits_nothing_that_loads_code(name: str) -> None:
+    patterns = load_profile("python-uv").verification.unset
+
+    assert any(fnmatchcase(name, pattern) for pattern in patterns)
+
+
+@pytest.mark.parametrize("name", ["PATH", "HOME", "UV_CACHE_DIR", "UV_INDEX_URL", "SSL_CERT_FILE"])
+def test_profile_keeps_what_the_tools_need(name: str) -> None:
+    patterns = load_profile("python-uv").verification.unset
+
+    assert not any(fnmatchcase(name, pattern) for pattern in patterns)
 
 
 def test_invalid_banned_pattern_is_rejected() -> None:

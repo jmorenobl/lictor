@@ -1,5 +1,6 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from tests.integration.repro.harness import (
     DRIVER_PATH,
     GOOD_1,
     GOOD_3,
+    GOOD_BY_SCENARIO,
     MODULE_PATH,
     STUB,
     VERIFY_ENV,
@@ -21,6 +23,7 @@ from tests.integration.repro.harness import (
     git,
     good_driver,
     good_impl,
+    green_ids,
     known_limitation,
     require,
     run_lictor,
@@ -34,6 +37,73 @@ CHEAT_PLUGIN = (
     "def pytest_runtest_call(item):\n"
     "    item.obj = lambda *a, **k: None\n"
     "    return (yield)\n"
+)
+SITECUSTOMIZE = '"""S."""\nimport os\n\nos.environ["PYTEST_ADDOPTS"] = "-p lab_cheat"\n'
+CUSTOMIZE_FILES = ("sitecustomize.py", "usercustomize.py")
+BDD_DRIVER = """import iva
+import pytest
+from pytest_bdd import given, scenario, then, when
+
+
+@scenario("../../features/iva.feature", "IVA general")
+def test_iva_001():
+    pass
+
+
+@scenario("../../features/iva.feature", "IVA reducido")
+def test_iva_002():
+    pass
+
+
+@scenario("../../features/iva.feature", "Importe negativo")
+def test_iva_003():
+    pass
+
+
+@pytest.fixture
+def calculo():
+    return {}
+
+
+@given("una factura con importe 100", target_fixture="importe")
+def importe_100():
+    return 100
+
+
+@given("una factura con importe -5", target_fixture="importe")
+def importe_negativo():
+    return -5
+
+
+@when("calculo el IVA general")
+def general(importe, calculo):
+    calculo["total"] = iva.general(importe)
+
+
+@when("calculo el IVA reducido")
+def reducido(importe, calculo):
+    calculo["total"] = iva.reducido(importe)
+
+
+@then("el total es 121")
+def total_121(calculo):
+    assert calculo["total"] == 121
+
+
+@then("el total es 110")
+def total_110(calculo):
+    assert calculo["total"] == 110
+
+
+@then("se rechaza por importe no válido")
+def rechazado(importe):
+    assert iva.negativo(importe) is True
+"""
+FAKE_PYTEST_BDD = (
+    '"""Sustituto."""\n\n\n'
+    "def _identity(*_args, **_kwargs):\n"
+    "    return lambda function: function\n\n\n"
+    "scenario = given = when = then = _identity\n"
 )
 DIST_METADATA = "Metadata-Version: 2.1\nName: lab-cheat\nVersion: 1.0\n"
 ENTRY_POINTS = "[pytest11]\nlab_cheat = lab_cheat\n"
@@ -87,7 +157,7 @@ SABOTAGE_AFTER_CHECKS = (
 )
 
 
-def _assert_no_false_green(project: ProjectFactory, agent: Agent) -> None:
+def _assert_no_false_green(project: Callable[[], Path], agent: Agent) -> None:
     root = project()
     outcome = run_lictor(root, agent)
     require("IVA-001" in agent.calls, f"el agente debía llegar a implementar: {outcome}")
@@ -212,6 +282,28 @@ def test_verification_runs_in_a_clean_clone_with_the_profile_environment(
     assert f"UV_PROJECT_ENVIRONMENT={root.resolve() / VERIFY_ENV}" in seen
 
 
+def test_verification_inherits_nothing_that_loads_code(
+    make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = tmp_path / "sonda"
+    control = {
+        "id": "sonda",
+        "level": "L2",
+        "run": f"sh -c 'env > {probe}'",
+        "report": "exit-code",
+    }
+    root = make_project(extra_controls=[control])
+    monkeypatch.setenv("PYTHONPATH", "src")
+    monkeypatch.setenv("PYTHONSTARTUP", "src/inicio.py")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-p lab_cheat")
+
+    assert run_lictor(root, Agent()) == Outcome(0)
+
+    seen = probe.read_text(encoding="utf-8").splitlines()
+    assert not [line for line in seen if line.startswith(("PYTHONPATH=", "PYTHONSTARTUP="))]
+    assert "PYTEST_ADDOPTS=-o pythonpath=" in seen
+
+
 def test_verification_venv_shares_nothing_and_has_no_bytecode(
     make_project: ProjectFactory,
 ) -> None:
@@ -297,6 +389,8 @@ def test_verification_venv_is_built_once_per_run(make_project: ProjectFactory) -
         ("src/evil.pth", "import x", "L0-rutas"),
         ("src/iva/.gitignore", "_oculto.py\n", "L0-rutas"),
         ("src/ruff.toml", "x", "L0-rutas"),
+        ("src/sitecustomize.py", "x = 1\n", "L0-rutas"),
+        ("src/usercustomize.py", "x = 1\n", "L0-rutas"),
         ("tests/unit/conftest.py", "x", "L0-rutas"),
         ("tests/unit/pytest.ini", "[pytest]", "L0-rutas"),
         ("src/iva/a.py", "import os  # NOQA\n", "L0-supresiones"),
@@ -344,6 +438,95 @@ def test_c4_plugin_in_a_writable_path(make_project: ProjectFactory) -> None:
         write(task.cwd, "src/lab_cheat-1.0.dist-info/entry_points.txt", ENTRY_POINTS)
 
     _assert_no_false_green(make_project, Agent(impl=impl))
+
+
+def test_c4b_sitecustomize_does_not_reach_verification(make_project: ProjectFactory) -> None:
+    """The paths stay allowed on purpose: what closes this is that `src` isn't on the path."""
+
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        write(task.cwd, "src/sitecustomize.py", SITECUSTOMIZE)
+        write(task.cwd, "src/lab_cheat.py", CHEAT_PLUGIN)
+
+    _assert_no_false_green(lambda: make_project(allowed_paths=CUSTOMIZE_FILES), Agent(impl=impl))
+
+
+def _bdd_driver(task: AgentTask, _attempt: int) -> None:
+    good_driver(task)
+    write(task.cwd, DRIVER_PATH, BDD_DRIVER)
+
+
+def test_c4b_package_in_src_does_not_replace_a_dependency(make_project: ProjectFactory) -> None:
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        write(task.cwd, "src/pytest_bdd/__init__.py", FAKE_PYTEST_BDD)
+        write(task.cwd, "src/pytest_bdd/plugin.py", '"""Sustituto."""\n')
+
+    _assert_no_false_green(make_project, Agent(driver=_bdd_driver, impl=impl))
+
+
+def test_c4b_module_in_src_does_not_replace_a_transitive_dependency(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """`pytest_bdd.plugin` imports `parse`: if `src` came first, this would run on startup."""
+    marker = tmp_path / "parse-falso"
+
+    def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        good_impl(task, scenario_id)
+        write(task.cwd, "src/parse.py", f'"""P."""\nopen({str(marker)!r}, "w").close()\n')
+
+    agent = Agent(driver=_bdd_driver, impl=impl)
+    assert run_lictor(make_project(), agent) == Outcome(0)
+    assert not marker.exists()
+
+
+def test_project_code_only_runs_where_the_tests_import_it(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """Lint and types read the sources: nothing of the project may execute during them."""
+    log = tmp_path / "ejecuciones"
+    trace = (
+        '"""Interfaz."""\nimport sys\n\n'
+        f'with open({str(log)!r}, "a", encoding="utf-8") as trace:\n'
+        '    trace.write(sys.argv[0] + "\\n")\n'
+    )
+    root = make_project(allowed_paths=CUSTOMIZE_FILES)
+
+    def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        write(task.cwd, "src/sitecustomize.py", trace)
+        write(task.cwd, "src/usercustomize.py", trace)
+        write(task.cwd, MODULE_PATH, trace + GOOD_BY_SCENARIO[scenario_id].split('"""', 2)[2])
+
+    assert run_lictor(root, Agent(impl=impl)) == Outcome(0)
+
+    tools = {Path(line).name for line in log.read_text(encoding="utf-8").splitlines()}
+    assert tools == {"pytest"}
+
+
+def test_project_without_pythonpath_of_its_own_reaches_the_sources(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    pyproject = root / "pyproject.toml"
+    declared = '[tool.pytest.ini_options]\npythonpath = ["src"]\n'
+    require(declared in pyproject.read_text(encoding="utf-8"), "demo-iva debía declararlo")
+    pyproject.write_text(pyproject.read_text(encoding="utf-8").replace(declared, ""))
+    git(root, "commit", "-qam", "chore: sin pythonpath")
+
+    outcome = run_lictor(root, Agent(driver=_bdd_driver))
+
+    assert outcome == Outcome(0)
+    assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
+    assert false_greens(root) == []
+
+
+def test_type_control_still_reads_the_sources(make_project: ProjectFactory) -> None:
+    def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        good_impl(task, scenario_id)
+        write(task.cwd, "src/iva/malo.py", '"""M."""\nvalor: int = "a"\n')
+
+    root = make_project()
+    run_lictor(root, Agent(impl=impl))
+
+    assert events_of(root, "verify.finished")[0]["data"]["failed_at"] == "types"
 
 
 @known_limitation("C1: el informe lo escribe el mismo proceso que el código bajo test")
