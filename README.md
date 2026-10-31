@@ -34,6 +34,9 @@
 
 ---
 
+> [!WARNING]
+> **El verde todavía no resiste a un agente adversario.** Hoy significa que el árbol de trabajo del agente pasó unos comandos que ese mismo código puede influir, y que después se commiteó lo que hubiera. Un agente que quiera engañar a Lictor puede lograr commits verdes sobre código sin implementar. La auditoría de la v0.1 lo reproduce y el aviso sigue vigente hasta cerrar la Fase 4 del plan de corrección (`.audits/analisis-base/informe.md`). Tampoco hay sandbox: el agente corre con tus permisos.
+
 ## ⚡ ¿Por qué Lictor?
 
 Dejar a un agente de codificación suelto sobre un repositorio suele derivar en atajos indeseados. **Lictor** invierte el control: el agente propone el código, pero **un arnés inmutable decide qué entra al repositorio**.

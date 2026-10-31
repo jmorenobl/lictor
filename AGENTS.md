@@ -10,6 +10,8 @@ Lictor is a deterministic harness and agentic runtime that implements Gherkin ac
 - **Core Architecture:** Hexagonal Architecture (Ports and Adapters) enforced with `import-linter`
 - **Primary Dependencies:** LangGraph, Pydantic v2, Typer, `gherkin-official`, `defusedxml`
 
+> **Known limitation:** a green commit doesn't yet withstand an adversarial agent. The verified tree, the commit and the state share the agent's working tree, process and environment. This stays true until phase 4 of the correction plan closes (`.audits/analisis-base/informe.md`).
+
 ---
 
 ## Essential Commands
@@ -42,6 +44,9 @@ uv run pytest tests/unit -q
 
 # Integration & architecture acceptance tests
 uv run pytest tests/integration -q
+
+# Same, without the slow audit reproduction cases
+uv run pytest tests/integration -q -m "not repro"
 
 # Full test suite with coverage enforcement (L4 - minimum 90% branch coverage)
 uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q
@@ -129,7 +134,20 @@ These are easy to trip:
 
 ## Testing Without an LLM
 
-Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters/agents/fake.py`). Its modes are `good`, `fail`, `cheat`, `conflict`, `rate_limit` and `crash`, and they can be set per scenario. `bootstrap_runtime` reads its options from `.lictor/fake_executor.json`, or accepts `executor=` directly. `tests/integration/test_e2e_demo_iva.py` runs full cycles against a copy of `examples/demo-iva/`, which is the model for new end-to-end tests.
+Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters/agents/fake.py`). Its modes are `good`, `fail`, `cheat`, `conflict`, `rate_limit` and `crash`, and they can be set per scenario. `bootstrap_runtime` reads its options from `.lictor/fake_executor.json`, or accepts `executor=` directly. `tests/integration/test_e2e_demo_iva.py` runs full cycles against a copy of `examples/demo-iva/`.
+
+For behaviour the modes can't express, pass `FakeExecutor(effect=fn)`: `fn(task, scenario_id, attempt)` runs arbitrary code in the agent's turn (forged bytecode, git commands, killing the run) and may return a status. `effect` can't go in `fake_executor.json`, so it needs `executor=`.
+
+## Audit Reproduction Cases
+
+`tests/integration/repro/` holds the cases from `.audits/analisis-base/informe.md`, one file per correction phase. Unlike the other e2e tests, they use the real `python-uv` profile and `uv`, with the configuration from `lictor init`, so they are the model for new end-to-end tests. They take about 3 minutes; add `-m "not repro"` to skip them while iterating.
+
+- A case asserts the desired behaviour and stays under `@pending(phase, finding)`, a strict `xfail` that only tolerates `AssertionError`. Closing a case means removing its marker.
+- Preconditions go through `require`, which raises `ReproSetupError`, so a broken set-up fails the test instead of counting as the expected failure.
+- `false_greens` re-checks every `Scenario:` commit in a clean clone with an oracle that uses neither pytest nor the project venv. Keep it that way: cases `c3`, `c4` and `c6` fool anything that runs inside the suite.
+- Agent effects must tolerate a missing `.git` or `.lictor/`, which phases 3 and 4 take away from the agent.
+
+`.audits/analisis-base/repro/` keeps the original lab scripts and `.audits/analisis-base/seguimiento.md` tracks each phase.
 
 ---
 
