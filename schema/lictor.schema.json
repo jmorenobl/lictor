@@ -28,6 +28,17 @@
           "exclusiveMinimum": 0,
           "title": "Timeout S",
           "type": "integer"
+        },
+        "failure_exit_codes": {
+          "default": [
+            1
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Failure Exit Codes",
+          "type": "array"
         }
       },
       "required": [

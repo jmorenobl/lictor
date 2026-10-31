@@ -86,6 +86,13 @@ class AcceptanceConfig(BaseModel):
     report: ReportFormat = "junit"
     driver_hints: str = ""
     timeout_s: int = Field(default=600, gt=0)
+    failure_exit_codes: list[int] = Field(default=[1], min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_failure_exit_codes(self) -> Self:
+        if 0 in self.failure_exit_codes:
+            raise ValueError("acceptance.failure_exit_codes no puede incluir 0")
+        return self
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:

@@ -273,6 +273,20 @@ def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:
         load_config(invalid_cfg)
 
 
+def test_acceptance_failure_exit_codes_default_to_one() -> None:
+    assert AcceptanceConfig(run="suite {out}").failure_exit_codes == [1]
+
+
+def test_acceptance_failure_exit_codes_come_from_the_profile() -> None:
+    assert load_profile("python-uv").acceptance.failure_exit_codes == [1]
+
+
+@pytest.mark.parametrize("codes", [[], [0], [1, 0]])
+def test_acceptance_failure_exit_codes_reject_invalid_values(codes: list[int]) -> None:
+    with pytest.raises(ValidationError):
+        AcceptanceConfig(run="suite {out}", failure_exit_codes=codes)
+
+
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
     out_file = tmp_path / "lictor.schema.json"
     schema = export_config_schema(out_file)

@@ -192,6 +192,7 @@ def bootstrap_runtime(
         clock=active_clock,
         profile_name=active_config.profile,
         build_report=report_uc,
+        acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
     )
 
     return BootstrapResult(

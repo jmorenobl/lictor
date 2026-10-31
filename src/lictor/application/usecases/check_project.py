@@ -1,11 +1,16 @@
 """CheckProject use case for verifying project controls and acceptance."""
 
-import shlex
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from lictor.application.ports import CommandRunner, ResultReader
+from lictor.application.run_files import (
+    fill_report_path,
+    format_output,
+    relative_to_project,
+    save_output,
+)
 from lictor.domain.model import ControlResult
 from lictor.domain.rules import condense_error
 
@@ -61,6 +66,7 @@ class _RunStepParams:
     timeout_s: int
     allow_empty: bool
     step_id: str
+    mode: str = "block"
 
 
 class CheckProject:
@@ -96,6 +102,7 @@ class CheckProject:
                     timeout_s=ctrl.timeout_s,
                     allow_empty=ctrl.allow_empty,
                     step_id=ctrl.id,
+                    mode=ctrl.mode,
                 )
             )
             control_results[ctrl.id] = c_res
@@ -149,11 +156,12 @@ class CheckProject:
         runs_dir = params.project_root / ".lictor" / "runs" / "check"
         runs_dir.mkdir(parents=True, exist_ok=True)
         out_file = runs_dir / f"{params.step_id}.xml"
+        log_file = runs_dir / f"{params.step_id}.log"
 
-        tokens = shlex.split(params.command_template)
-        cmd_args = [tok.replace("{out}", str(out_file)) for tok in tokens]
+        cmd_args = fill_report_path(params.command_template, out_file)
 
         cmd_out = self.runner.run(cmd=cmd_args, cwd=params.project_root, timeout_s=params.timeout_s)
+        save_output(log_file, cmd_out)
 
         reader = self.readers.get(params.report_format)
         if reader is None:
@@ -162,11 +170,16 @@ class CheckProject:
         if params.report_format == "junit":
             content = str(out_file) if "{out}" in params.command_template else cmd_out.stdout
         else:
-            content = f"{cmd_out.stdout}\n{cmd_out.stderr}".strip()
+            content = format_output(cmd_out)
 
-        return reader.read(
-            output=content,
+        return replace(
+            reader.read(
+                output=content,
+                exit_code=cmd_out.returncode,
+                duration_ms=cmd_out.duration_ms,
+                allow_empty=params.allow_empty,
+            ),
             exit_code=cmd_out.returncode,
-            duration_ms=cmd_out.duration_ms,
-            allow_empty=params.allow_empty,
+            mode=params.mode,
+            output_path=relative_to_project(log_file, params.project_root),
         )

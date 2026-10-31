@@ -10,6 +10,12 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
+from lictor.application.run_files import (
+    DRIVER_OWNER,
+    attempt_prefix,
+    relative_to_project,
+    unused_path,
+)
 from lictor.application.usecases.agent_events import denial_event, denial_targets
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.model import AgentResult, AgentTask, Event
@@ -138,10 +144,13 @@ class PrepareDriver:
             prompt = prompt.replace(k, v)
 
         lictor_dir = request.project_root / ".lictor"
-        runs_dir = lictor_dir / "runs" / request.run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        retry = f"-r{request.agent_failures}" if request.agent_failures else ""
-        raw_path = runs_dir / f"{request.driver_attempts:03d}-driver{retry}.json"
+        prefix = attempt_prefix(
+            request.project_root, request.run_id, DRIVER_OWNER, request.driver_attempts + 1
+        )
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        raw_path = unused_path(
+            prefix.with_name(f"{prefix.name}-driver.json"), request.agent_failures
+        )
 
         task = AgentTask(
             role="driver",
@@ -184,9 +193,8 @@ class PrepareDriver:
             agent_signal = "ok" if agent_result.status == "ok" else "error"
             new_attempts = request.driver_attempts + 1
 
-        rel_raw = str(raw_path)
-        with contextlib.suppress(ValueError):
-            rel_raw = raw_path.relative_to(request.project_root).as_posix()
+        rel_raw = relative_to_project(raw_path, request.project_root)
+        stderr_path = agent_result.stderr_path
 
         cli_version = _extract_cli_version(self.executor)
 
@@ -218,6 +226,10 @@ class PrepareDriver:
                 "duration_ms": agent_result.duration_ms,
                 "prompt_sha": prompt_sha,
                 "raw": rel_raw,
+                "stderr": (
+                    relative_to_project(stderr_path, request.project_root) if stderr_path else None
+                ),
+                "reverted_files": reverted,
             },
         )
         self.event_log.append(event)

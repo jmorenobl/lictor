@@ -277,7 +277,9 @@ def test_prepare_driver_signal(
 def test_prepare_driver_retry_keeps_the_previous_raw_output(tmp_path: Path) -> None:
     _, executor, _ = _execute_driver(tmp_path, AgentResult(status="error"), 1)
 
-    assert executor.run.call_args.args[0].raw_path.name == "001-driver-r1.json"
+    raw_path = executor.run.call_args.args[0].raw_path
+    assert raw_path.name == "002-driver-r1.json"
+    assert raw_path.parent.name == "driver"
 
 
 def test_prepare_driver_records_denials(tmp_path: Path) -> None:

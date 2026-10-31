@@ -5,19 +5,41 @@ Includes ADR-0001 integrity snapshot for state protection.
 
 import contextlib
 import json
-import shlex
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from lictor.application.ports import CommandRunner, ResultReader, Vcs
+from lictor.application.run_files import (
+    attempt_prefix,
+    fill_report_path,
+    format_output,
+    new_step_dir,
+    relative_to_project,
+    save_output,
+    write_text,
+)
 from lictor.application.seal import collect_monitored_files
 from lictor.domain.errors import DriverError, SpecError
-from lictor.domain.model import ControlResult, ScenarioId, VerifyResult
-from lictor.domain.rules import condense_error, map_test_cases_to_scenarios
+from lictor.domain.model import (
+    CommandOutput,
+    ControlResult,
+    ScenarioId,
+    TestCaseResult,
+    VerifyResult,
+)
+from lictor.domain.rules import (
+    acceptance_failure,
+    condense_error,
+    map_test_cases_to_scenarios,
+    render_full_error,
+    suite_crash_reason,
+)
 
 RoleKind = Literal["implement", "driver"]
+
+_STATE_TAMPERED = "El estado en .lictor/ fue modificado indebidamente"
 
 
 class VerificationControlProtocol(Protocol):
@@ -75,6 +97,47 @@ class VerifyAttemptRequest:
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
     all_scenario_ids: Sequence[str | ScenarioId] = field(default_factory=tuple)
     error_max_chars: int = 4000
+    attempt: int = 1
+    acceptance_failure_exit_codes: Sequence[int] = (1,)
+    step_dir: Path | None = None  # filled in by VerifyAttempt.execute
+
+
+@dataclass(frozen=True)
+class _Failure:
+    """A failed gate: what the agent reads next is condensed, the rest goes to `runs/`."""
+
+    failed_at: str
+    reason: str
+    label: str | None = None
+    cases: Sequence[TestCaseResult] = ()
+    all_cases: Sequence[TestCaseResult] | None = None
+    output: str = ""
+    control_results: dict[str, ControlResult] = field(default_factory=dict)
+    scenario_results: dict[str, str] = field(default_factory=dict)
+    reverted_files: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ControlRun:
+    """A control after running, with the output its failure may need."""
+
+    result: ControlResult
+    tampered: bool = False
+    output: CommandOutput | None = None
+
+
+def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
+    """Serialize result and output of each control for the journal."""
+    return {
+        control_id: {
+            "ok": control.ok,
+            "mode": control.mode,
+            "exit_code": control.exit_code,
+            "duration_ms": control.duration_ms,
+            "output": control.output_path,
+        }
+        for control_id, control in result.control_results.items()
+    }
 
 
 class IntegritySnapshot:
@@ -149,6 +212,10 @@ def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
     return False
 
 
+def _scenario_str(scenario_id: str | ScenarioId) -> str:
+    return str(scenario_id.value if isinstance(scenario_id, ScenarioId) else scenario_id).strip()
+
+
 class VerifyAttempt:
     """Deterministic multi-gate verification pipeline for an agent attempt."""
 
@@ -166,6 +233,11 @@ class VerifyAttempt:
 
     def execute(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run verification steps L0 to Acceptance sequentially."""
+        scenario = _scenario_str(req.scenario_id)
+        prefix = attempt_prefix(self.project_root, req.run_id, scenario, req.attempt)
+        step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-verify"))
+        req = replace(req, step_dir=step_dir)
+
         # Step 1: L0-rutas
         routes_res = self._check_routes(req)
         if not routes_res.ok:
@@ -185,30 +257,62 @@ class VerifyAttempt:
         # Step 4: Controles
         control_results: dict[str, ControlResult] = {}
         for ctrl in req.controls:
-            ctrl_ok, ctrl_res, failed_step = self._run_single_control(ctrl, req)
-            if failed_step == "L0-estado":
-                err = "El estado en .lictor/ fue modificado indebidamente"
-                condensed = condense_error("L0-estado", err, max_chars=req.error_max_chars)
-                return VerifyResult(ok=False, failed_at="L0-estado", condensed_error=condensed)
-
-            control_results[ctrl.id] = ctrl_res
-            if not ctrl_ok and ctrl.mode == "block":
-                failed_label = f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id
-                condensed = condense_error(
-                    failed_label,
-                    ctrl_res.error or "",
-                    ctrl_res.test_cases,
-                    max_chars=req.error_max_chars,
+            ctrl_run = self._run_single_control(ctrl, req)
+            control_results[ctrl.id] = ctrl_run.result
+            if ctrl_run.tampered:
+                return self._fail(
+                    req,
+                    _Failure("L0-estado", _STATE_TAMPERED, control_results=control_results),
                 )
-                return VerifyResult(
-                    ok=False,
-                    failed_at=ctrl.id,
-                    condensed_error=condensed,
-                    control_results=control_results,
+
+            ctrl_res = ctrl_run.result
+            if not ctrl_res.ok and ctrl.mode == "block":
+                failed_label = f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id
+                output = format_output(ctrl_run.output) if ctrl_run.output else ""
+                reason = ctrl_res.error or ""
+                # With test cases they explain themselves; without them, only the output does.
+                if ctrl.report == "junit" and not ctrl_res.test_cases:
+                    reason = f"{reason}\n{output}".strip()
+                return self._fail(
+                    req,
+                    _Failure(
+                        ctrl.id,
+                        reason,
+                        label=failed_label,
+                        cases=ctrl_res.test_cases,
+                        output=output,
+                        control_results=control_results,
+                    ),
                 )
 
         # Step 5: Aceptación
         return self._run_acceptance(req, control_results)
+
+    def _fail(self, req: VerifyAttemptRequest, failure: _Failure) -> VerifyResult:
+        """Condense the failure for the agent and keep it whole in the attempt's directory."""
+        label = failure.label or failure.failed_at
+        all_cases = failure.cases if failure.all_cases is None else failure.all_cases
+        error_path = self._step_dir(req) / "error.txt"
+        write_text(
+            error_path,
+            render_full_error(label, failure.reason, all_cases, failure.output),
+        )
+        return VerifyResult(
+            ok=False,
+            failed_at=failure.failed_at,
+            condensed_error=condense_error(
+                label, failure.reason, failure.cases, max_chars=req.error_max_chars
+            ),
+            control_results=failure.control_results,
+            scenario_results=failure.scenario_results,
+            reverted_files=failure.reverted_files,
+            error_path=relative_to_project(error_path, self.project_root),
+        )
+
+    def _step_dir(self, req: VerifyAttemptRequest) -> Path:
+        if req.step_dir is None:
+            raise ValueError("step_dir is set by execute")
+        return req.step_dir
 
     def _check_routes(self, req: VerifyAttemptRequest) -> VerifyResult:
         allowed = list(req.paths_writable)
@@ -221,34 +325,25 @@ class VerifyAttempt:
         if forbidden:
             self.vcs.revert_paths(forbidden)
             err = f"Archivos modificados fuera de las rutas permitidas: {', '.join(forbidden)}"
-            condensed = condense_error("L0-rutas", err, max_chars=req.error_max_chars)
-            return VerifyResult(
-                ok=False,
-                failed_at="L0-rutas",
-                condensed_error=condensed,
-                reverted_files=tuple(forbidden),
-            )
+            return self._fail(req, _Failure("L0-rutas", err, reverted_files=tuple(forbidden)))
         return VerifyResult(ok=True)
 
     def _check_seal(self, req: VerifyAttemptRequest) -> VerifyResult:
         seal_path = self.project_root / ".lictor" / "seal.json"
         if not seal_path.is_file():
             err = "No se encontró el archivo de sello .lictor/seal.json"
-            condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
-            return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+            return self._fail(req, _Failure("L0-sello", err))
 
         try:
             seal_data = json.loads(seal_path.read_text(encoding="utf-8"))
             sealed_files: dict[str, str] = seal_data.get("files", {})
         except (json.JSONDecodeError, OSError):
             err = "El archivo de sello .lictor/seal.json es inválido o ilegible"
-            condensed = condense_error("L0-sello", err, max_chars=req.error_max_chars)
-            return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+            return self._fail(req, _Failure("L0-sello", err))
 
         validation_err = self._validate_sealed_files(sealed_files, req)
         if validation_err:
-            condensed = condense_error("L0-sello", validation_err, max_chars=req.error_max_chars)
-            return VerifyResult(ok=False, failed_at="L0-sello", condensed_error=condensed)
+            return self._fail(req, _Failure("L0-sello", validation_err))
 
         return VerifyResult(ok=True)
 
@@ -295,8 +390,7 @@ class VerifyAttempt:
 
         if detected:
             err = f"Se detectaron supresiones no permitidas: {', '.join(sorted(set(detected)))}"
-            condensed = condense_error("L0-supresiones", err, max_chars=req.error_max_chars)
-            return VerifyResult(ok=False, failed_at="L0-supresiones", condensed_error=condensed)
+            return self._fail(req, _Failure("L0-supresiones", err))
 
         return VerifyResult(ok=True)
 
@@ -304,12 +398,11 @@ class VerifyAttempt:
         self,
         ctrl: VerificationControlProtocol,
         req: VerifyAttemptRequest,
-    ) -> tuple[bool, ControlResult, str | None]:
-        runs_dir = self.project_root / ".lictor" / "runs" / req.run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        out_file = runs_dir / f"control_{ctrl.id}.xml"
-        split_cmd = shlex.split(ctrl.run)
-        cmd_tokens = [tok.replace("{out}", str(out_file)) for tok in split_cmd]
+    ) -> _ControlRun:
+        step_dir = self._step_dir(req)
+        out_file = step_dir / f"control_{ctrl.id}.xml"
+        log_file = step_dir / f"control_{ctrl.id}.log"
+        cmd_tokens = fill_report_path(ctrl.run, out_file)
 
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
@@ -317,43 +410,47 @@ class VerifyAttempt:
             cwd=self.project_root,
             timeout_s=ctrl.timeout_s,
         )
-        if not snapshot.verify_and_restore():
-            return False, ControlResult(ok=False), "L0-estado"
+        tampered = not snapshot.verify_and_restore()
+        save_output(log_file, cmd_out)
+
+        def recorded(result: ControlResult) -> ControlResult:
+            return replace(
+                result,
+                exit_code=cmd_out.returncode,
+                mode=ctrl.mode,
+                output_path=relative_to_project(log_file, self.project_root),
+            )
+
+        if tampered:
+            return _ControlRun(recorded(ControlResult(ok=False)), tampered=True)
 
         reader = self.readers.get(ctrl.report)
         if reader is None:
             err_msg = f"No reader available for format: {ctrl.report}"
-            return False, ControlResult(ok=False, error=err_msg), ctrl.id
+            return _ControlRun(recorded(ControlResult(ok=False, error=err_msg)), output=cmd_out)
 
         if ctrl.report == "junit":
             output_content = str(out_file) if "{out}" in ctrl.run else cmd_out.stdout
-            c_res = reader.read(
-                output=output_content,
-                exit_code=cmd_out.returncode,
-                duration_ms=cmd_out.duration_ms,
-                allow_empty=ctrl.allow_empty,
-            )
         else:
-            combined = f"{cmd_out.stdout}\n{cmd_out.stderr}".strip()
-            c_res = reader.read(
-                output=combined,
-                exit_code=cmd_out.returncode,
-                duration_ms=cmd_out.duration_ms,
-                allow_empty=ctrl.allow_empty,
-            )
+            output_content = format_output(cmd_out)
+        c_res = reader.read(
+            output=output_content,
+            exit_code=cmd_out.returncode,
+            duration_ms=cmd_out.duration_ms,
+            allow_empty=ctrl.allow_empty,
+        )
 
-        return c_res.ok, c_res, None
+        return _ControlRun(recorded(c_res), output=cmd_out)
 
     def _run_acceptance(
         self,
         req: VerifyAttemptRequest,
         control_results: dict[str, ControlResult],
     ) -> VerifyResult:
-        runs_dir = self.project_root / ".lictor" / "runs" / req.run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        out_file = runs_dir / "acceptance.xml"
-        split_cmd = shlex.split(req.acceptance_run)
-        cmd_tokens = [tok.replace("{out}", str(out_file)) for tok in split_cmd]
+        step_dir = self._step_dir(req)
+        out_file = step_dir / "acceptance.xml"
+        log_file = step_dir / "acceptance.log"
+        cmd_tokens = fill_report_path(req.acceptance_run, out_file)
 
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
@@ -361,86 +458,83 @@ class VerifyAttempt:
             cwd=self.project_root,
             timeout_s=req.acceptance_timeout_s,
         )
-        if not snapshot.verify_and_restore():
-            err = "El estado en .lictor/ fue modificado indebidamente"
-            condensed = condense_error("L0-estado", err, max_chars=req.error_max_chars)
-            return VerifyResult(ok=False, failed_at="L0-estado", condensed_error=condensed)
+        tampered = not snapshot.verify_and_restore()
+        save_output(log_file, cmd_out)
+        if tampered:
+            return self._fail(
+                req, _Failure("L0-estado", _STATE_TAMPERED, control_results=control_results)
+            )
 
+        output = format_output(cmd_out)
         reader = self.readers.get(req.acceptance_report)
         if reader is None:
             err = f"No reader available for format: {req.acceptance_report}"
-            condensed = condense_error("acceptance", err, max_chars=req.error_max_chars)
-            return VerifyResult(
-                ok=False,
-                failed_at="acceptance",
-                condensed_error=condensed,
-                control_results=control_results,
+            return self._fail(
+                req,
+                _Failure("acceptance", err, output=output, control_results=control_results),
             )
 
         output_content = str(out_file) if "{out}" in req.acceptance_run else cmd_out.stdout
-        acc_res = reader.read(
-            output=output_content,
+        acc_res = replace(
+            reader.read(
+                output=output_content,
+                exit_code=cmd_out.returncode,
+                duration_ms=cmd_out.duration_ms,
+                allow_empty=False,
+            ),
             exit_code=cmd_out.returncode,
-            duration_ms=cmd_out.duration_ms,
-            allow_empty=False,
+            output_path=relative_to_project(log_file, self.project_root),
         )
         control_results["acceptance"] = acc_res
+
+        crash = suite_crash_reason(
+            cmd_out.returncode, req.acceptance_failure_exit_codes, acc_res.test_cases
+        )
+        if crash is not None:
+            parse_error = "" if acc_res.test_cases else (acc_res.error or "")
+            return self._fail(
+                req,
+                _Failure(
+                    "acceptance",
+                    "\n".join(filter(None, [crash, parse_error, output])),
+                    cases=acc_res.test_cases,
+                    output=output,
+                    control_results=control_results,
+                ),
+            )
 
         # Map test cases to scenario IDs
         try:
             mapped = map_test_cases_to_scenarios(acc_res.test_cases, req.all_scenario_ids)
         except DriverError as exc:
-            condensed = condense_error(
-                "acceptance",
-                str(exc),
-                acc_res.test_cases,
-                max_chars=req.error_max_chars,
-            )
-            return VerifyResult(
-                ok=False,
-                failed_at="acceptance",
-                condensed_error=condensed,
-                control_results=control_results,
+            return self._fail(
+                req,
+                _Failure(
+                    "acceptance",
+                    str(exc),
+                    cases=acc_res.test_cases,
+                    output=output,
+                    control_results=control_results,
+                ),
             )
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
 
-        # Verify current scenario passed
-        cur_id_str = str(
-            req.scenario_id.value if isinstance(req.scenario_id, ScenarioId) else req.scenario_id
-        ).strip()
-        if scenario_results.get(cur_id_str) != "passed":
-            condensed = condense_error(
-                "acceptance",
-                acc_res.error or f"Escenario {cur_id_str} no pasó",
-                acc_res.test_cases,
-                max_chars=req.error_max_chars,
-            )
-            return VerifyResult(
-                ok=False,
-                failed_at="acceptance",
-                condensed_error=condensed,
-                control_results=control_results,
-                scenario_results=scenario_results,
-            )
-
-        # Verify regression on previously green scenarios
-        for green_id in req.green_scenario_ids:
-            if scenario_results.get(green_id) != "passed":
-                err = f"Regresión detectada en escenario verde previo: {green_id}"
-                condensed = condense_error(
+        failure = acceptance_failure(_scenario_str(req.scenario_id), req.green_scenario_ids, mapped)
+        if failure is not None:
+            reason, relevant_cases = failure
+            return self._fail(
+                req,
+                _Failure(
                     "acceptance",
-                    err,
-                    acc_res.test_cases,
-                    max_chars=req.error_max_chars,
-                )
-                return VerifyResult(
-                    ok=False,
-                    failed_at="acceptance",
-                    condensed_error=condensed,
+                    reason,
+                    cases=relevant_cases,
+                    all_cases=acc_res.test_cases,
+                    output=output,
                     control_results=control_results,
                     scenario_results=scenario_results,
-                )
+                ),
+            )
 
         return VerifyResult(
             ok=True,

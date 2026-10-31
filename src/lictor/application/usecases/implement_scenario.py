@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.run_files import attempt_prefix, relative_to_project, unused_path
 from lictor.application.usecases.agent_events import denial_event, denial_targets
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.errors import SealTamperedError
@@ -59,6 +60,7 @@ class ImplementScenarioResult:
     attempt: int
     prompt_sha: str
     agent_failures: int = 0
+    attempt_slot: int = 1
 
 
 def _extract_background(lines: Sequence[str]) -> str:
@@ -222,11 +224,14 @@ class ImplementScenario:
             prompt = prompt.replace(k, v)
 
         lictor_dir = request.project_root / ".lictor"
-        runs_dir = lictor_dir / "runs" / request.run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        # A failed call doesn't use up the attempt: the next one must not overwrite its evidence.
-        retry = f"-r{request.agent_failures}" if request.agent_failures else ""
-        raw_path = runs_dir / f"{request.attempt + 1:03d}-implement{retry}.json"
+        prefix = attempt_prefix(
+            request.project_root, request.run_id, request.scenario.id.value, request.attempt + 1
+        )
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        # A call that doesn't use up the attempt must not overwrite the evidence of the last one.
+        raw_path = unused_path(
+            prefix.with_name(f"{prefix.name}-implement.json"), request.agent_failures
+        )
 
         task = AgentTask(
             role="implement",
@@ -254,9 +259,8 @@ class ImplementScenario:
         )
         new_attempt = request.attempt if keeps_attempt else request.attempt + 1
 
-        rel_raw = str(raw_path)
-        with contextlib.suppress(ValueError):
-            rel_raw = raw_path.relative_to(request.project_root).as_posix()
+        rel_raw = relative_to_project(raw_path, request.project_root)
+        stderr_path = agent_result.stderr_path
 
         cli_version = _extract_cli_version(self.executor)
 
@@ -288,6 +292,9 @@ class ImplementScenario:
                 "duration_ms": agent_result.duration_ms,
                 "prompt_sha": prompt_sha,
                 "raw": rel_raw,
+                "stderr": (
+                    relative_to_project(stderr_path, request.project_root) if stderr_path else None
+                ),
             },
         )
         self.event_log.append(event)
@@ -300,4 +307,5 @@ class ImplementScenario:
             attempt=new_attempt,
             prompt_sha=prompt_sha,
             agent_failures=agent_failures,
+            attempt_slot=request.attempt + 1,
         )

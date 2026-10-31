@@ -143,6 +143,36 @@ def test_failed_call_does_not_overwrite_the_previous_raw_output(tmp_path: Path) 
     second_path = second.run.call_args.args[0].raw_path
     assert first_path.name == "002-implement.json"
     assert second_path.name == "002-implement-r1.json"
+    assert first_path.parent.name == "IVA-001"
+
+
+def test_a_paused_call_does_not_overwrite_the_previous_raw_output(tmp_path: Path) -> None:
+    """A rate limit keeps the attempt and resets the failure count: only the disk can tell."""
+
+    def write_raw(task: AgentTask) -> AgentResult:
+        task.raw_path.write_text("crudo", encoding="utf-8")
+        return AgentResult(status="rate_limited")
+
+    _, first, _ = _execute(tmp_path, MagicMock(side_effect=write_raw))
+    _, second, _ = _execute(tmp_path, MagicMock(side_effect=write_raw))
+
+    assert first.run.call_args.args[0].raw_path != second.run.call_args.args[0].raw_path
+
+
+def test_stderr_of_the_call_reaches_the_journal(tmp_path: Path) -> None:
+    path = tmp_path / ".lictor" / "runs" / "x.stderr.log"
+    agent = AgentResult(status="error", stderr_path=path)
+
+    _, _, event_log = _execute(tmp_path, agent)
+
+    event = event_log.append.call_args_list[0].args[0]
+    assert event.data["stderr"] == ".lictor/runs/x.stderr.log"
+
+
+def test_journal_has_no_stderr_when_the_call_left_none(tmp_path: Path) -> None:
+    _, _, event_log = _execute(tmp_path, AgentResult(status="ok"))
+
+    assert event_log.append.call_args_list[0].args[0].data["stderr"] is None
 
 
 def test_denials_and_exit_code_reach_the_journal(tmp_path: Path) -> None:

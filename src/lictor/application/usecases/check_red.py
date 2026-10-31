@@ -1,10 +1,10 @@
 """CheckRed use case for verifying acceptance test driver against red rule."""
 
-import shlex
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from lictor.application.ports import (
     Clock,
@@ -14,10 +14,31 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.run_files import (
+    DRIVER_OWNER,
+    attempt_prefix,
+    fill_report_path,
+    format_output,
+    new_step_dir,
+    relative_to_project,
+    save_output,
+    write_text,
+)
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.errors import DriverError
-from lictor.domain.model import CommandOutput, ControlResult, Event, ScenarioId
-from lictor.domain.rules import check_red_rule, condense_error, map_test_cases_to_scenarios
+from lictor.domain.model import CommandOutput, Event, ScenarioId, TestCaseResult
+from lictor.domain.rules import (
+    check_red_rule,
+    condense_error,
+    describe_red_violation,
+    map_test_cases_to_scenarios,
+    render_full_error,
+    suite_crash_reason,
+)
+
+_STATE_TAMPERED = "El estado en .lictor/ fue modificado indebidamente"
+
+RejectionKind = Literal["L0-estado", "suite_caida", "mapeo", "regla_del_rojo"]
 
 
 @dataclass(frozen=True)
@@ -43,6 +64,18 @@ class CheckRedRequest:
     acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     error_max_chars: int = 4000
+    acceptance_failure_exit_codes: Sequence[int] = (1,)
+
+
+@dataclass(frozen=True)
+class _Rejection:
+    """Why the driver can't be sealed: what the agent reads and what stays in `runs/`."""
+
+    kind: RejectionKind
+    reason: str
+    cases: Sequence[TestCaseResult] = ()
+    all_cases: Sequence[TestCaseResult] | None = None
+    output: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,23 +108,21 @@ class CheckRed:
 
     def execute(self, request: CheckRedRequest) -> CheckRedResult:
         """Run acceptance tests, check red rule, and seal driver if fresh and valid."""
-        lictor_dir = request.project_root / ".lictor"
-        runs_dir = lictor_dir / "runs" / request.run_id
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        out_file = runs_dir / "acceptance.xml"
+        prefix = attempt_prefix(
+            request.project_root, request.run_id, DRIVER_OWNER, request.driver_attempts
+        )
+        step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-red"))
+        out_file = step_dir / "acceptance.xml"
 
-        output, integrity_ok = self._run_acceptance_suite(request, out_file, lictor_dir)
+        output, integrity_ok = self._run_acceptance_suite(request, out_file)
+        save_output(step_dir / "acceptance.log", output)
         if not integrity_ok:
             if not request.driver_fresh:
-                raise DriverError(
-                    "El estado en .lictor/ fue modificado indebidamente durante la aceptación"
+                self._reject(
+                    request, step_dir, _Rejection("L0-estado", _STATE_TAMPERED), final=True
                 )
-            condensed = condense_error(
-                failed_at="L0-estado",
-                raw_error="El estado en .lictor/ fue modificado indebidamente",
-                max_chars=request.error_max_chars,
-            )
-            return CheckRedResult(ok=False, last_error=condensed)
+                raise DriverError(f"{_STATE_TAMPERED} durante la aceptación")
+            return self._reject(request, step_dir, _Rejection("L0-estado", _STATE_TAMPERED))
 
         content = ""
         if request.acceptance_report == "junit" and out_file.is_file():
@@ -104,25 +135,28 @@ class CheckRed:
             allow_empty=False,
         )
 
+        raw_output = format_output(output)
+        crash = suite_crash_reason(
+            output.returncode, request.acceptance_failure_exit_codes, control_res.test_cases
+        )
+        if crash is not None:
+            parse_error = "" if control_res.test_cases else (control_res.error or "")
+            rejection = _Rejection(
+                "suite_caida",
+                "\n".join(filter(None, [crash, parse_error, raw_output])),
+                control_res.test_cases,
+                output=raw_output,
+            )
+            return self._reject_or_raise(request, step_dir, rejection)
+
         try:
             mapped = map_test_cases_to_scenarios(
                 control_res.test_cases,
                 request.all_scenario_ids,
             )
         except DriverError as exc:
-            if not request.driver_fresh:
-                raise DriverError(f"Driver sellado inválido en línea base: {exc}") from exc
-            if request.driver_attempts >= request.max_driver_attempts:
-                raise DriverError(
-                    f"Driver inválido tras agotar {request.max_driver_attempts} intentos: {exc}"
-                ) from exc
-            condensed = condense_error(
-                failed_at="red_check",
-                raw_error=str(exc),
-                test_cases=control_res.test_cases,
-                max_chars=request.error_max_chars,
-            )
-            return CheckRedResult(ok=False, last_error=condensed)
+            rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
+            return self._reject_or_raise(request, step_dir, rejection)
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
         trailers = set(self.vcs.get_trailers("Scenario"))
@@ -133,7 +167,15 @@ class CheckRed:
         ]
 
         if not check_red_rule(scenario_results, green_ids):
-            return self._handle_red_rule_failure(request, output, control_res)
+            reason, offenders = describe_red_violation(mapped, green_ids)
+            rejection = _Rejection(
+                "regla_del_rojo",
+                reason,
+                offenders,
+                all_cases=control_res.test_cases,
+                output=raw_output,
+            )
+            return self._reject_or_raise(request, step_dir, rejection)
 
         commit_sha: str | None = None
         if request.driver_fresh:
@@ -157,19 +199,73 @@ class CheckRed:
         self,
         request: CheckRedRequest,
         out_file: Path,
-        lictor_dir: Path,
     ) -> tuple[CommandOutput, bool]:
-        raw_cmd = request.acceptance_run
-        parsed_tokens = shlex.split(raw_cmd)
-        cmd_args = [tok.replace("{out}", str(out_file)) for tok in parsed_tokens]
+        cmd_args = fill_report_path(request.acceptance_run, out_file)
 
-        snapshot = IntegritySnapshot(lictor_dir, request.project_root)
+        snapshot = IntegritySnapshot(request.project_root / ".lictor", request.project_root)
         output = self.runner.run(
             cmd=cmd_args,
             cwd=request.project_root,
             timeout_s=request.acceptance_timeout_s,
         )
         return output, snapshot.verify_and_restore()
+
+    def _reject_or_raise(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rejection: _Rejection,
+    ) -> CheckRedResult:
+        """Give a fresh driver another try, or stop: nobody can fix a sealed or exhausted one."""
+        if not request.driver_fresh:
+            self._reject(request, step_dir, rejection, final=True)
+            raise DriverError(f"El driver sellado no es válido: {rejection.reason}")
+        if request.driver_attempts >= request.max_driver_attempts:
+            self._reject(request, step_dir, rejection, final=True)
+            raise DriverError(
+                f"Driver rechazado tras {request.driver_attempts} intentos: {rejection.reason}"
+            )
+        return self._reject(request, step_dir, rejection)
+
+    def _reject(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rejection: _Rejection,
+        *,
+        final: bool = False,
+    ) -> CheckRedResult:
+        """Leave the reason for the next attempt, in the journal and in full in `runs/`."""
+        all_cases = rejection.cases if rejection.all_cases is None else rejection.all_cases
+        error_path = step_dir / "error.txt"
+        write_text(
+            error_path,
+            render_full_error("red_check", rejection.reason, all_cases, rejection.output),
+        )
+        condensed = condense_error(
+            failed_at=rejection.kind if rejection.kind == "L0-estado" else "red_check",
+            raw_error=rejection.reason,
+            test_cases=rejection.cases,
+            max_chars=request.error_max_chars,
+        )
+        self.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type="lictor.driver.rejected.v1",
+                source="lictor/0.1.0",
+                time=self.clock.now_iso(),
+                runid=request.run_id,
+                scenarioid=None,
+                data={
+                    "attempt": request.driver_attempts,
+                    "reason": rejection.kind,
+                    "final": final,
+                    "error": condensed,
+                    "error_path": relative_to_project(error_path, request.project_root),
+                },
+            )
+        )
+        return CheckRedResult(ok=False, last_error=condensed)
 
     def _seal_and_commit(self, request: CheckRedRequest) -> str:
         seal_data = self.spec_source.write_seal(
@@ -202,25 +298,3 @@ class CheckRed:
         )
         self.event_log.append(event)
         return commit_sha
-
-    def _handle_red_rule_failure(
-        self,
-        request: CheckRedRequest,
-        output: CommandOutput,
-        control_res: ControlResult,
-    ) -> CheckRedResult:
-        if not request.driver_fresh:
-            raise DriverError("El driver sellado falló la comprobación de línea base")
-
-        if request.driver_attempts >= request.max_driver_attempts:
-            raise DriverError(
-                f"Driver falló la regla del rojo tras {request.driver_attempts} intentos"
-            )
-
-        condensed = condense_error(
-            failed_at="red_check",
-            raw_error=output.stdout + "\n" + output.stderr,
-            test_cases=control_res.test_cases,
-            max_chars=request.error_max_chars,
-        )
-        return CheckRedResult(ok=False, last_error=condensed)

@@ -23,7 +23,11 @@ from lictor.application.usecases.implement_scenario import (
 )
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
-from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
+from lictor.application.usecases.verify_attempt import (
+    VerifyAttempt,
+    VerifyAttemptRequest,
+    control_summaries,
+)
 from lictor.domain.errors import DriverError, ExitCode, SealTamperedError, SpecError
 from lictor.domain.model import AgentStatus, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
@@ -78,6 +82,7 @@ class GraphState(TypedDict, total=False):
     driver_attempts: int
     current: str | None
     attempt: int
+    attempt_slot: int
     last_error: str | None
     last_failed_at: str | None
     last_verify: dict[str, Any] | None
@@ -127,6 +132,7 @@ class GraphContext:
     clock: Clock
     profile_name: str = ""
     build_report: BuildReport | None = None
+    acceptance_failure_exit_codes: Sequence[int] = (1,)
 
 
 class _GraphNodes:
@@ -257,6 +263,7 @@ class _GraphNodes:
                     acceptance_report=self.ctx.acceptance_report,
                     acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                     error_max_chars=self.ctx.error_max_chars,
+                    acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                 )
             )
         except DriverError:
@@ -341,6 +348,7 @@ class _GraphNodes:
 
         return {
             "attempt": res.attempt,
+            "attempt_slot": res.attempt_slot,
             "agent_signal": res.agent_signal,
             "agent_failures": res.agent_failures,
             "agent_detail": res.agent_result.text,
@@ -382,6 +390,8 @@ class _GraphNodes:
                 green_scenario_ids=green_ids,
                 all_scenario_ids=all_sids,
                 error_max_chars=self.ctx.error_max_chars,
+                attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
+                acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
             )
         )
 
@@ -399,7 +409,10 @@ class _GraphNodes:
                 "ok": res.ok,
                 "failed_at": res.failed_at,
                 "control_durations": control_durations,
+                "controls": control_summaries(res),
                 "reverted_files": list(res.reverted_files),
+                "error": res.condensed_error,
+                "error_path": res.error_path,
             },
         )
         self.ctx.event_log.append(event)

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from lictor.application.usecases.verify_attempt import (
     VerificationControl,
     VerifyAttempt,
     VerifyAttemptRequest,
+    control_summaries,
 )
 from lictor.domain.model import CommandOutput
 
@@ -459,3 +461,333 @@ index 1111..2222 100644
 
     result = verifier.execute(req)
     assert result.ok is True
+
+
+class _PlantingRunner(FakeRunner):
+    """Writes to the report path a command receives, as the command itself would."""
+
+    def __init__(self, reports: dict[str, tuple[str, int]]) -> None:
+        super().__init__()
+        self.reports = reports
+        self.paths: list[Path] = []
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandOutput:
+        report, code = self.reports.get(cmd[0], ("", 0))
+        out = Path(cmd[-1]) if cmd[-1].endswith(".xml") else None
+        if out is not None:
+            self.paths.append(out)
+            if report:
+                out.write_text(report, encoding="utf-8")
+        return CommandOutput(returncode=code, stdout=f"salida de {cmd[0]}", stderr="stderr crudo")
+
+
+_GREEN_REPORT = (
+    '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/></testsuite>'
+)
+_PENDING_REPORT = (
+    '<testsuite><testcase name="test_iva_001"/>'
+    '<testcase name="test_iva_002"><failure message="pendiente">traza</failure></testcase>'
+    "</testsuite>"
+)
+
+
+def _verify(
+    tmp_path: Path, runner: FakeRunner, **overrides: Any
+) -> tuple[VerifyAttempt, VerifyAttemptRequest]:
+    project_root, run_id = _setup_project(tmp_path)
+    vcs = FakeVcs(changed_files=["src/code.py"])
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    fields: dict[str, Any] = {
+        "scenario_id": "IVA-001",
+        "run_id": run_id,
+        "paths_writable": ("src/",),
+        "acceptance_run": "suite --junitxml {out}",
+        "all_scenario_ids": ("IVA-001", "IVA-002"),
+        "attempt": 2,
+    }
+    return (
+        VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root),
+        VerifyAttemptRequest(**{**fields, **overrides}),
+    )
+
+
+def test_verify_report_left_by_a_previous_step_does_not_hide_a_crash(tmp_path: Path) -> None:
+    """A control runs project code: it could leave a report at the acceptance path."""
+
+    class Planter(FakeRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == "suite":
+                return CommandOutput(returncode=3, stdout="", stderr="")
+            step = next(tmp_path.glob(".lictor/runs/*/IVA-001/*-verify"))
+            (step / "acceptance.xml").write_text(_GREEN_REPORT, encoding="utf-8")
+            return CommandOutput(returncode=0, stdout="", stderr="")
+
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    verifier, req = _verify(tmp_path, Planter(), controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "acceptance"
+    assert "código 3" in (result.condensed_error or "")
+
+
+def test_verify_suite_crash_without_report_says_so_and_keeps_its_output(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": ("", 3)}))
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "acceptance"
+    condensed = result.condensed_error or ""
+    assert "código 3" in condensed
+    assert "salida de suite" in condensed
+    assert "stderr crudo" in condensed
+    assert "No se encontró" not in condensed
+
+
+def test_verify_crashed_suite_cannot_hide_behind_a_passing_report(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 3)}))
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert "código 3" in (result.condensed_error or "")
+
+
+def test_verify_failed_exit_without_failed_tests_is_not_green(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 1)}))
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert "ningún test" in (result.condensed_error or "")
+
+
+def test_verify_pending_red_scenarios_are_not_a_crash(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_PENDING_REPORT, 1)}))
+
+    assert verifier.execute(req).ok is True
+
+
+def test_verify_failure_exit_codes_come_from_the_request(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_PENDING_REPORT, 2)})
+    verifier, req = _verify(tmp_path, runner, acceptance_failure_exit_codes=(2,))
+
+    assert verifier.execute(req).ok is True
+
+
+def test_verify_unparsable_report_explains_why(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": ("<roto", 1)}))
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert "Failed to parse JUnit XML" in (result.condensed_error or "")
+
+
+def test_verify_condensed_error_omits_pending_but_the_full_error_keeps_them(
+    tmp_path: Path,
+) -> None:
+    cases = "".join(
+        f'<testcase name="test_iva_{i:03d}"><failure message="pendiente-{i}">'
+        f"{'traza ' * 200}</failure></testcase>"
+        for i in range(1, 31)
+    )
+    report = f"<testsuite>{cases}</testsuite>"
+    ids = tuple(f"IVA-{i:03d}" for i in range(1, 31))
+    runner = _PlantingRunner({"suite": (report, 1)})
+    verifier, req = _verify(tmp_path, runner, scenario_id="IVA-030", all_scenario_ids=ids)
+
+    result = verifier.execute(req)
+
+    condensed = result.condensed_error or ""
+    assert result.failed_at == "acceptance"
+    assert "Escenario IVA-030 no pasó" in condensed
+    assert "pendiente-30" in condensed
+    assert "pendiente-1\n" not in condensed
+    assert result.error_path is not None
+    full = (tmp_path / result.error_path).read_text(encoding="utf-8")
+    assert "pendiente-1\n" in full
+    assert "salida de suite" in full
+
+
+def test_verify_regression_names_the_scenario_and_omits_the_rest(tmp_path: Path) -> None:
+    report = (
+        '<testsuite><testcase name="test_iva_001"><failure message="rota"/></testcase>'
+        '<testcase name="test_iva_002"/>'
+        '<testcase name="test_iva_003"><failure message="pendiente"/></testcase></testsuite>'
+    )
+    verifier, req = _verify(
+        tmp_path,
+        _PlantingRunner({"suite": (report, 1)}),
+        scenario_id="IVA-002",
+        green_scenario_ids=("IVA-001",),
+        all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+    )
+
+    condensed = verifier.execute(req).condensed_error or ""
+
+    assert "Regresión detectada en escenario verde previo: IVA-001" in condensed
+    assert "rota" in condensed
+    assert "pendiente" not in condensed
+
+
+def test_verify_reports_of_the_same_attempt_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner)
+
+    verifier.execute(req)
+    verifier.execute(req)
+
+    first, second = runner.paths
+    assert first.parent.name == "002-verify"
+    assert first.parent.parent.name == "IVA-001"
+    assert second.parent.name == "002-verify-r1"
+    assert first.is_file()
+
+
+def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
+    project_root, run_id = _setup_project(tmp_path)
+    verifier = VerifyAttempt(
+        vcs=FakeVcs(changed_files=["pyproject.toml"]),
+        runner=FakeRunner(),
+        readers={},
+        project_root=project_root,
+    )
+    req = VerifyAttemptRequest(scenario_id="IVA-001", run_id=run_id, paths_writable=("src/",))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-rutas"
+    assert result.error_path == f".lictor/runs/{run_id}/IVA-001/001-verify/error.txt"
+    assert "pyproject.toml" in (tmp_path / result.error_path).read_text(encoding="utf-8")
+
+
+def test_verify_green_attempt_writes_no_error(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 0)}))
+
+    result = verifier.execute(req)
+
+    assert result.error_path is None
+    assert not list(tmp_path.rglob("error.txt"))
+
+
+def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> None:
+    controls = (
+        VerificationControl(id="lint", level="L1", run="lint", report="exit-code"),
+        VerificationControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure"),
+    )
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
+    verifier, req = _verify(tmp_path, runner, controls=controls)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.condensed_error is None
+    measured = result.control_results["mut"]
+    assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
+    assert measured.output_path is not None
+    log = (tmp_path / measured.output_path).read_text(encoding="utf-8")
+    assert "salida de mut" in log
+    assert "stderr crudo" in log
+    assert "7" in log
+    passed = result.control_results["lint"]
+    assert (passed.ok, passed.exit_code, passed.mode) == (True, 0, "block")
+    assert passed.output_path is not None
+    assert "salida de lint" in (tmp_path / passed.output_path).read_text(encoding="utf-8")
+    accepted = result.control_results["acceptance"]
+    assert accepted.exit_code == 0
+    assert accepted.output_path is not None
+
+
+def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path: Path) -> None:
+    control = VerificationControl(
+        id="unit", level="L2", run="unit --junitxml {out}", report="junit"
+    )
+    runner = _PlantingRunner({"unit": ("", 4)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "unit"
+    assert "salida de unit" in (result.condensed_error or "")
+    assert result.control_results["unit"].ok is False
+
+
+def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Path) -> None:
+    class Tamperer(FakeRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == "second":
+                (tmp_path / ".lictor" / "seal.json").write_text("{}", encoding="utf-8")
+            return CommandOutput(returncode=0, stdout="", stderr="")
+
+    controls = (
+        VerificationControl(id="first", level="L1", run="first", report="exit-code"),
+        VerificationControl(id="second", level="L1", run="second", report="exit-code"),
+    )
+    verifier, req = _verify(tmp_path, Tamperer(), controls=controls)
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-estado"
+    assert result.control_results["first"].ok is True
+    assert result.error_path is not None
+
+
+def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -> None:
+    class Tamperer(FakeRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == "suite":
+                (tmp_path / ".lictor" / "seal.json").write_text("{}", encoding="utf-8")
+            return CommandOutput(returncode=0, stdout="", stderr="")
+
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    verifier, req = _verify(tmp_path, Tamperer(), controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-estado"
+    assert "lint" in result.control_results
+
+
+def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
+    control = VerificationControl(
+        id="mut", level="L5", run="mut", report="exit-code", mode="measure"
+    )
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    summaries = control_summaries(verifier.execute(req))
+
+    assert summaries["mut"]["ok"] is False
+    assert summaries["mut"]["exit_code"] == 7
+    assert summaries["mut"]["mode"] == "measure"
+    assert summaries["mut"]["output"] == (
+        f".lictor/runs/{req.run_id}/IVA-001/002-verify/control_mut.log"
+    )
+    json.dumps(summaries)
