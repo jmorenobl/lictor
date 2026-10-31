@@ -252,6 +252,7 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 | **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
 | **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
 | **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. |
+| **`40`** | `AGENT_UNAVAILABLE` | Ejecución detenida en checkpoint porque el agente no está disponible: sin sesión iniciada, o dos errores seguidos del CLI. No gasta intentos ni pone escenarios en cuarentena. Reanudable ejecutando `lictor run`. |
 | **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
 
 ---
@@ -320,7 +321,8 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
   ],
   "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
-  "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"]
+  "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
+  "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }
 ```
 

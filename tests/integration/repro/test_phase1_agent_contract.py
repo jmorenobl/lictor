@@ -8,11 +8,12 @@ import pytest
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.domain.errors import ExitCode
-from lictor.domain.model import AgentResult, AgentTask
+from lictor.domain.model import AgentResult, AgentStatus, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
     events_of,
+    good_impl,
     green_ids,
     quarantined,
     require,
@@ -212,6 +213,28 @@ def test_d18_run_resumes_without_lost_attempts_once_the_backend_is_back(
     assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
     finished = events_of(root, "agent.finished")
     assert [e["data"]["attempt"] for e in finished if e.get("scenarioid") == "IVA-001"][-1] == 1
+
+
+def test_d18_a_resumed_run_tolerates_a_single_failure_again(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    require(
+        run_lictor(root, Agent(impl=lambda _t, _s, _a: "error")).exit_code
+        == ExitCode.AGENT_UNAVAILABLE,
+        "la ejecución debía detenerse",
+    )
+    failures = ["error"]
+
+    def flaky(task: AgentTask, scenario_id: str, _attempt: int) -> AgentStatus | None:
+        if failures:
+            return "error" if failures.pop() else None
+        good_impl(task, scenario_id)
+        return None
+
+    outcome = run_lictor(root, Agent(impl=flaky))
+
+    assert outcome.exit_code == 0
 
 
 def test_backend_down_during_the_driver_stops_the_run(make_project: ProjectFactory) -> None:
