@@ -310,6 +310,31 @@ def test_project_acceptance_inherits_the_failure_codes_of_its_profile(tmp_path: 
     assert loaded.acceptance.failure_exit_codes == [1, 2]
 
 
+def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> None:
+    profile = load_profile("python-uv")
+    env = profile.verification.env
+    assert "--no-install-project" in profile.verification.prepare
+    assert "--frozen" in profile.verification.prepare
+    assert env["UV_PROJECT_ENVIRONMENT"] == "{env_dir}"
+    assert env["UV_LINK_MODE"] == "copy"
+    assert env["UV_NO_SYNC"] == "1"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+
+
+def test_invalid_banned_pattern_is_rejected() -> None:
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["banned_patterns"] = ["("]
+    with pytest.raises(ValidationError, match="expresión inválida"):
+        Profile.model_validate(data)
+
+
+def test_old_project_config_inherits_the_verification_of_its_profile(tmp_path: Path) -> None:
+    config = load_config(REPO_ROOT)
+    assert config.verification == load_profile("python-uv").verification
+    assert config.forbidden_paths == load_profile("python-uv").forbidden_paths
+
+
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
     out_file = tmp_path / "lictor.schema.json"
     schema = export_config_schema(out_file)

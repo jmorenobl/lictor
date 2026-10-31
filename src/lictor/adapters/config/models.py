@@ -1,3 +1,4 @@
+import re
 from pathlib import PurePosixPath
 from typing import Literal, Self
 
@@ -36,6 +37,16 @@ def _paths_overlap(path_a: str, path_b: str) -> bool:
     norm_a = _normalize_path(path_a)
     norm_b = _normalize_path(path_b)
     return norm_a == norm_b or norm_a.is_relative_to(norm_b) or norm_b.is_relative_to(norm_a)
+
+
+def _validate_regexes(patterns: list[str]) -> list[str]:
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            msg = f"banned_patterns contiene una expresión inválida '{pattern}': {exc}"
+            raise ValueError(msg) from exc
+    return patterns
 
 
 def _validate_unique_control_ids(controls: list["ControlConfig"]) -> list["ControlConfig"]:
@@ -100,6 +111,15 @@ class AcceptanceConfig(BaseModel):
             msg = "La sección acceptance con report='junit' debe incluir '{out}' en run"
             raise ValueError(msg)
         return self
+
+
+class VerificationConfig(BaseModel):
+    """Entorno de verificación: se construye con prepare y se usa con env."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prepare: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
 
 
 class ControlConfig(BaseModel):
@@ -174,6 +194,9 @@ class Profile(BaseModel):
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
+    banned_patterns: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    verification: VerificationConfig = Field(default_factory=VerificationConfig)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
@@ -183,6 +206,11 @@ class Profile(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
+
+    @field_validator("banned_patterns")
+    @classmethod
+    def _check_regexes(cls, patterns: list[str]) -> list[str]:
+        return _validate_regexes(patterns)
 
 
 class LictorConfig(BaseModel):
@@ -198,6 +226,9 @@ class LictorConfig(BaseModel):
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
+    banned_patterns: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    verification: VerificationConfig = Field(default_factory=VerificationConfig)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
@@ -207,3 +238,8 @@ class LictorConfig(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
+
+    @field_validator("banned_patterns")
+    @classmethod
+    def _check_regexes(cls, patterns: list[str]) -> list[str]:
+        return _validate_regexes(patterns)

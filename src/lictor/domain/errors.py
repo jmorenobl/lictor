@@ -51,6 +51,16 @@ class SealTamperedError(PreconditionError):
     """La especificación o el driver sellado cambiaron fuera de Lictor (código 10)."""
 
 
+class CandidateError(PreconditionError):
+    """El commit verificado ya no puede convertirse en verde (código 10)."""
+
+
+class EnvironmentUnavailableError(LictorError):
+    """No se pudo preparar el entorno de verificación (código 40)."""
+
+    exit_code: int = int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+
+
 class SpecConflictError(LictorError):
     """El agente declaró conflicto o imposibilidad en la especificación (código 11)."""
 

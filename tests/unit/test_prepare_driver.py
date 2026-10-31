@@ -295,3 +295,35 @@ def test_prepare_driver_records_denials(tmp_path: Path) -> None:
     assert denied.type == "lictor.agent.denied.v1"
     assert denied.scenarioid is None
     assert denied.data["role"] == "driver"
+
+
+def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    vcs = MagicMock(spec=Vcs)
+    vcs.status.return_value = ["src/evil.pth", "tests/acceptance/conftest.py", "src/iva.py"]
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+    use_case = PrepareDriver(
+        vcs=vcs, executor=executor, event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock)
+    )
+
+    result = use_case.execute(
+        PrepareDriverRequest(
+            project_root=tmp_path,
+            run_id="R",
+            model="m",
+            allowed_tools=[],
+            max_turns=1,
+            timeout_s=1,
+            paths_writable=["src/"],
+            paths_driver=["tests/acceptance/"],
+            paths_protected=[],
+            driver_hints="",
+            hints="",
+            green_ids=[],
+            driver_attempts=0,
+            forbidden_paths=["*.pth", "conftest.py"],
+        )
+    )
+
+    assert result.reverted_files == ("src/evil.pth",)

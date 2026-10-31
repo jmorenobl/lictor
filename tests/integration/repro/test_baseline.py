@@ -52,7 +52,7 @@ def test_d15a_crash_on_first_commit_resumes_without_duplicates(
     make_project: ProjectFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = make_project()
-    original = GitCli.commit
+    original = GitCli.advance_head
     armed = [True]
 
     def die_once(self: GitCli, *args: Any, **kwargs: Any) -> Any:
@@ -60,7 +60,7 @@ def test_d15a_crash_on_first_commit_resumes_without_duplicates(
             raise KeyboardInterrupt
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(GitCli, "commit", die_once)
+    monkeypatch.setattr(GitCli, "advance_head", die_once)
     agent = Agent()
 
     require(run_lictor(root, agent).killed, "el primer commit debía matar la ejecución")

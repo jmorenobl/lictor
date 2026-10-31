@@ -16,13 +16,14 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import FixedClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
-from lictor.application.ports import SpecSource
-from lictor.application.usecases.check_red import AuditSink, CheckRed
+from lictor.application.ports import AuditSink, SpecSource
+from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
+from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.model import CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
     GraphContext,
@@ -169,7 +170,9 @@ Característica: IVA de facturas
         clock=clock,
     )
     check_red = CheckRed(
-        runner=runner,
+        environment=VerificationEnvironment(
+            vcs, runner, AuditSink(event_log, clock), tmp_path, VerificationEnvSpec()
+        ),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,

@@ -19,7 +19,7 @@ from lictor.application.run_files import (
 from lictor.application.usecases.agent_events import denial_event, denial_targets
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.model import AgentResult, AgentTask, Event
-from lictor.domain.rules import count_agent_failures, is_agent_unavailable
+from lictor.domain.rules import count_agent_failures, forbidden_paths, is_agent_unavailable
 
 DriverSignal = Literal["ok", "rate_limited", "unavailable", "error"]
 
@@ -44,6 +44,7 @@ class PrepareDriverRequest:
     last_error: str | None = None
     prompt_template: str | None = None
     agent_failures: int = 0
+    forbidden_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -172,8 +173,11 @@ class PrepareDriver:
         allowed_paths = tuple(request.paths_driver) + tuple(request.paths_writable)
         reverted: list[str] = []
         status_files = self.vcs.status()
+        forbidden = set(forbidden_paths(status_files, request.forbidden_paths))
         for f in status_files:
-            if not _is_path_allowed(f, allowed_paths):
+            # The driver may need its own config; what it writes in project code may not.
+            in_project_code = f in forbidden and not _is_path_allowed(f, request.paths_driver)
+            if in_project_code or not _is_path_allowed(f, allowed_paths):
                 reverted.append(f)
 
         if reverted:

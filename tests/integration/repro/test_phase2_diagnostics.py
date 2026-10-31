@@ -341,13 +341,14 @@ def test_m4_refused_resume_is_recorded(
 
 
 def test_m4_seal_broken_mid_run_explains_itself(
-    make_project: ProjectFactory, capsys: pytest.CaptureFixture[str]
+    make_project: ProjectFactory, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     """A change after L0-rutas can't be the agent's, so it stops the run instead of reverting."""
+    feature = tmp_path / "demo-iva" / "features" / "iva.feature"
     edit = {
         "id": "edicion",
         "level": "L2",
-        "run": "sh -c 'echo \"# cambiado\" >> features/iva.feature'",
+        "run": f"sh -c 'echo \"# cambiado\" >> {feature}'",
         "report": "exit-code",
     }
     root = make_project(extra_controls=[edit])

@@ -1,90 +1,72 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from lictor.application.ports import Clock, EventLog, Vcs
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
-from lictor.domain.model import Event
+from lictor.domain.errors import CandidateError
+from lictor.domain.model import Candidate, Event
+
+CANDIDATE = Candidate(sha="c0ffee", tree="t1", parent="p0")
 
 
-def test_commit_green_emits_event_and_calls_vcs() -> None:
+def _use_case(head: str = "p0", tree: str = "t1") -> tuple[CommitGreen, MagicMock, MagicMock]:
     vcs = MagicMock(spec=Vcs)
-    vcs.commit.return_value = "c0ffee123456"
-    vcs.get_trailers.return_value = []
-
+    vcs.get_head_sha.return_value = head
+    vcs.get_tree.return_value = tree
     event_log = MagicMock(spec=EventLog)
     clock = MagicMock(spec=Clock)
     clock.now_iso.return_value = "2026-10-30T14:00:00Z"
+    return CommitGreen(vcs=vcs, event_log=event_log, clock=clock), vcs, event_log
 
-    use_case = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
-    req = CommitGreenRequest(
-        scenario_id="IVA-001",
-        run_id="20261030-140000-abcd",
-        attempt=2,
+
+def _request() -> CommitGreenRequest:
+    return CommitGreenRequest(
+        scenario_id="IVA-001", run_id="20261030-140000-abcd", attempt=2, candidate=CANDIDATE
     )
 
-    result = use_case.execute(req)
 
-    assert result.commit_sha == "c0ffee123456"
-    vcs.commit.assert_called_once()
+def test_commit_green_advances_to_the_candidate_and_emits_event() -> None:
+    use_case, vcs, event_log = _use_case()
+
+    result = use_case.execute(_request())
+
+    assert result.commit_sha == "c0ffee"
+    vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")
+    event = event_log.append.call_args[0][0]
+    assert isinstance(event, Event)
+    assert event.type == "lictor.scenario.green.v1"
+    assert event.scenarioid == "IVA-001"
+    assert event.data["commit"] == "c0ffee"
+    assert event.data["tree"] == "t1"
+    assert event.data["attempt"] == 2
+    assert event.data["attempts"] == 2
+
+
+def test_commit_green_is_idempotent_after_a_crash() -> None:
+    use_case, vcs, event_log = _use_case(head="c0ffee")
+
+    result = use_case.execute(_request())
+
+    assert result.commit_sha == "c0ffee"
+    vcs.advance_head.assert_not_called()
     event_log.append.assert_called_once()
-    call_args = event_log.append.call_args[0][0]
-    assert isinstance(call_args, Event)
-    assert call_args.type == "lictor.scenario.green.v1"
-    assert call_args.scenarioid == "IVA-001"
-    assert call_args.data["commit"] == "c0ffee123456"
-    assert call_args.data["attempt"] == 2
-    assert call_args.data["attempts"] == 2
 
 
-def test_commit_green_idempotent_when_already_committed() -> None:
-    vcs = MagicMock(spec=Vcs)
-    vcs.get_trailers.side_effect = lambda key, commit_ref=None: (
-        ["IVA-001"]
-        if key == "Scenario" and commit_ref == "HEAD"
-        else ["20261030-140000-abcd"]
-        if key == "Lictor-Run" and commit_ref == "HEAD"
-        else []
-    )
-    vcs.get_head_sha.return_value = "actual_head_sha_123"
+def test_commit_green_needs_a_candidate() -> None:
+    use_case, vcs, _ = _use_case()
+    request = CommitGreenRequest(scenario_id="IVA-001", run_id="r", attempt=1, candidate=None)
 
-    event_log = MagicMock(spec=EventLog)
-    clock = MagicMock(spec=Clock)
-    clock.now_iso.return_value = "2026-10-30T14:00:00Z"
+    with pytest.raises(CandidateError):
+        use_case.execute(request)
 
-    use_case = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
-    req = CommitGreenRequest(
-        scenario_id="IVA-001",
-        run_id="20261030-140000-abcd",
-        attempt=1,
-    )
-
-    result = use_case.execute(req)
-    assert result.commit_sha == "actual_head_sha_123"
-    vcs.commit.assert_not_called()
+    vcs.advance_head.assert_not_called()
 
 
-def test_commit_green_does_not_confuse_past_commit_with_head() -> None:
-    vcs = MagicMock(spec=Vcs)
-    # HEAD has no trailers, but history does
-    vcs.get_trailers.side_effect = lambda key, commit_ref=None: (
-        []
-        if commit_ref == "HEAD"
-        else ["IVA-001"]
-        if key == "Scenario"
-        else ["20261030-140000-abcd"]
-    )
-    vcs.commit.return_value = "new_commit_sha"
+def test_commit_green_refuses_a_tree_other_than_the_verified_one() -> None:
+    use_case, vcs, _ = _use_case(tree="otro")
 
-    event_log = MagicMock(spec=EventLog)
-    clock = MagicMock(spec=Clock)
-    clock.now_iso.return_value = "2026-10-30T14:00:00Z"
+    with pytest.raises(CandidateError):
+        use_case.execute(_request())
 
-    use_case = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
-    req = CommitGreenRequest(
-        scenario_id="IVA-001",
-        run_id="20261030-140000-abcd",
-        attempt=1,
-    )
-
-    result = use_case.execute(req)
-    assert result.commit_sha == "new_commit_sha"
-    vcs.commit.assert_called_once()
+    vcs.advance_head.assert_not_called()

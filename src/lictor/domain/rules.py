@@ -1,5 +1,6 @@
 """Pure domain rules for Lictor."""
 
+import fnmatch
 import re
 from collections.abc import Sequence
 
@@ -285,6 +286,26 @@ def run_outcome(status: dict[str, str], reasons: dict[str, str]) -> tuple[int, s
         )
     greens = sum(1 for st in status.values() if st == "green")
     return int(ExitCode.OK), f"Ejecución completada: {greens} escenarios en verde"
+
+
+def forbidden_paths(paths: Sequence[str], patterns: Sequence[str]) -> list[str]:
+    """Return the paths with any component matching a pattern, as `*.pth` or `conftest.py`."""
+    return [
+        path
+        for path in paths
+        if any(
+            fnmatch.fnmatchcase(part, pattern) for part in path.split("/") for pattern in patterns
+        )
+    ]
+
+
+def banned_matches(lines: Sequence[str], patterns: Sequence[str]) -> list[str]:
+    """Return the regular expressions, ignoring case, that some line matches."""
+    return sorted(
+        pattern
+        for pattern in patterns
+        if any(re.search(pattern, line, re.IGNORECASE) for line in lines)
+    )
 
 
 def count_agent_failures(status: AgentStatus, failures: int) -> int:

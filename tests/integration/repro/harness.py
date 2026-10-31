@@ -54,6 +54,7 @@ GOOD_3 = GOOD_2.replace("raise NotImplementedError", "return importe < 0", 1)
 GOOD_BY_SCENARIO = {"IVA-001": GOOD_1, "IVA-002": GOOD_2, "IVA-003": GOOD_3}
 UNIT_TEST = "import iva\n\n\ndef test_ok():\n    assert iva is not None\n"
 DRIVER_PATH = "tests/acceptance/test_iva.py"
+VERIFY_ENV = ".lictor/verify-env"
 MODULE_PATH = "src/iva/__init__.py"
 
 ORACLE = {
@@ -73,6 +74,13 @@ class ReproSetupError(Exception):
 def pending(phase: int, finding: str) -> pytest.MarkDecorator:
     """Mark a case as known-broken until `phase` closes it."""
     return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"Fase {phase}: {finding}")
+
+
+def known_limitation(finding: str) -> pytest.MarkDecorator:
+    """Mark a case no phase of this plan closes: it stays visible until the sandbox arrives."""
+    return pytest.mark.xfail(
+        strict=True, raises=AssertionError, reason=f"Limitación de la v0.1, incremento 4: {finding}"
+    )
 
 
 def require(condition: object, message: str) -> None:

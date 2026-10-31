@@ -7,8 +7,11 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 
 import contextlib
 import shlex
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
+from lictor.application.ports import Vcs
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
@@ -36,6 +39,15 @@ def new_step_dir(path: Path) -> Path:
     step_dir = unused_path(path)
     step_dir.mkdir(parents=True)
     return step_dir
+
+
+@contextlib.contextmanager
+def verification_tree(vcs: Vcs, rev: str) -> Iterator[Path]:
+    """Yield a clean clone of `rev`, outside the project, gone afterwards."""
+    with tempfile.TemporaryDirectory(prefix="lictor-verify-", ignore_cleanup_errors=True) as tmp:
+        tree = Path(tmp) / "tree"
+        vcs.export_tree(rev, tree)
+        yield tree
 
 
 def fill_report_path(command: str, report: Path) -> list[str]:

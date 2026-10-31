@@ -19,11 +19,14 @@ from lictor.application.run_files import (
     new_step_dir,
     relative_to_project,
     save_output,
+    verification_tree,
     write_text,
 )
 from lictor.application.seal import collect_monitored_files
+from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError, InternalLictorError, SpecError
 from lictor.domain.model import (
+    Candidate,
     CommandOutput,
     ControlResult,
     ScenarioId,
@@ -32,7 +35,9 @@ from lictor.domain.model import (
 )
 from lictor.domain.rules import (
     acceptance_failure,
+    banned_matches,
     condense_error,
+    forbidden_paths,
     map_test_cases_to_scenarios,
     render_full_error,
     suite_crash_reason,
@@ -100,7 +105,10 @@ class VerifyAttemptRequest:
     error_max_chars: int = 4000
     attempt: int = 1
     acceptance_failure_exit_codes: Sequence[int] = (1,)
+    forbidden_paths: Sequence[str] = ()
+    banned_patterns: Sequence[str] = ()
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
+    tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,12 @@ def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
 class IntegritySnapshot:
     """ADR-0001: In-memory integrity snapshot of .lictor/ and configuration metadata files."""
 
-    MONITORED_LICTOR_FILES = ("seal.json", "checkpoints.sqlite", "journal.jsonl")
+    MONITORED_LICTOR_FILES = (
+        "seal.json",
+        "checkpoints.sqlite",
+        "journal.jsonl",
+        "verify_env.json",
+    )
 
     def __init__(self, lictor_dir: Path, project_root: Path | None = None) -> None:
         self.lictor_dir = lictor_dir
@@ -226,11 +239,13 @@ class VerifyAttempt:
         runner: CommandRunner,
         readers: Mapping[str, ResultReader],
         project_root: Path,
+        environment: VerificationEnvironment | None = None,
     ) -> None:
         self.vcs = vcs
         self.runner = runner
         self.readers = readers
         self.project_root = project_root
+        self.environment = environment
 
     def execute(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run verification steps L0 to Acceptance sequentially."""
@@ -239,23 +254,64 @@ class VerifyAttempt:
         step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-verify"))
         req = replace(req, step_dir=step_dir)
 
-        # Step 1: L0-rutas
+        gates = self._run_gates(req)
+        if not gates.ok:
+            return gates
+
+        # Entorno, candidato y clon limpio: nada de lo ignorado o sin versionar cuenta
+        env_problem = self._environment_problem(req)
+        if env_problem:
+            return self._fail(req, _Failure("L0-entorno", env_problem))
+
+        candidate = self._create_candidate(req, scenario)
+        with verification_tree(self.vcs, candidate.sha) as tree:
+            result = self._run_commands(replace(req, tree_dir=tree))
+        if not result.ok:
+            return result
+
+        # The commands above run project code, which can reach the environment as well.
+        env_problem = self._environment_problem(req)
+        if env_problem:
+            return self._fail(
+                req,
+                _Failure("L0-entorno", env_problem, control_results=result.control_results),
+            )
+        return replace(result, candidate=candidate)
+
+    def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
+        """Run L0 over the working tree, the only place where the agent's changes can be seen."""
         routes_res = self._check_routes(req)
         if not routes_res.ok:
             return routes_res
 
-        # Step 2: L0-sello (only in implement role)
         if req.role == "implement":
             seal_res = self._check_seal(req)
             if not seal_res.ok:
                 return seal_res
 
-        # Step 3: L0-supresiones
-        suppressions_res = self._check_suppressions(req)
-        if not suppressions_res.ok:
-            return suppressions_res
+        return self._check_suppressions(req)
 
-        # Step 4: Controles
+    def _environment_problem(self, req: VerifyAttemptRequest) -> str | None:
+        return self.environment.ensure(req.run_id) if self.environment else None
+
+    def _command_env(self) -> dict[str, str] | None:
+        return self.environment.command_env() if self.environment else None
+
+    def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:
+        paths = list(req.paths_writable)
+        if req.role == "driver":
+            paths.extend(req.paths_driver)
+        return self.vcs.create_candidate(
+            message=f"feat({scenario}): implementar escenario",
+            trailers={
+                "Scenario": scenario,
+                "Lictor-Run": req.run_id,
+                "Lictor-Attempts": str(req.attempt),
+            },
+            paths=paths,
+        )
+
+    def _run_commands(self, req: VerifyAttemptRequest) -> VerifyResult:
         control_results: dict[str, ControlResult] = {}
         for ctrl in req.controls:
             ctrl_run = self._run_single_control(ctrl, req)
@@ -286,7 +342,6 @@ class VerifyAttempt:
                     ),
                 )
 
-        # Step 5: Aceptación
         return self._run_acceptance(req, control_results)
 
     def _fail(self, req: VerifyAttemptRequest, failure: _Failure) -> VerifyResult:
@@ -315,13 +370,23 @@ class VerifyAttempt:
             raise InternalLictorError("step_dir lo asigna execute")
         return req.step_dir
 
+    def _tree_dir(self, req: VerifyAttemptRequest) -> Path:
+        if req.tree_dir is None:
+            raise InternalLictorError("tree_dir lo asigna execute")
+        return req.tree_dir
+
     def _check_routes(self, req: VerifyAttemptRequest) -> VerifyResult:
         allowed = list(req.paths_writable)
         if req.role == "driver":
             allowed.extend(req.paths_driver)
 
         changed_files = self.vcs.status()
-        forbidden: list[str] = [f for f in changed_files if not _is_path_allowed(f, allowed)]
+        rejected = set(forbidden_paths(changed_files, req.forbidden_paths))
+        # A link in the commit can point to what the commit leaves out.
+        rejected.update(f for f in changed_files if (self.project_root / f).is_symlink())
+        forbidden: list[str] = [
+            f for f in changed_files if f in rejected or not _is_path_allowed(f, allowed)
+        ]
 
         if forbidden:
             self.vcs.revert_paths(forbidden)
@@ -379,11 +444,11 @@ class VerifyAttempt:
         return None
 
     def _check_suppressions(self, req: VerifyAttemptRequest) -> VerifyResult:
-        if not req.suppressions:
+        if not req.suppressions and not req.banned_patterns:
             return VerifyResult(ok=True)
 
         added_lines = _collect_added_lines(self.vcs, self.project_root)
-        detected: list[str] = []
+        detected = banned_matches(added_lines, req.banned_patterns)
         for line in added_lines:
             for pattern in req.suppressions:
                 if pattern in line:
@@ -408,8 +473,9 @@ class VerifyAttempt:
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
             cmd_tokens,
-            cwd=self.project_root,
+            cwd=self._tree_dir(req),
             timeout_s=ctrl.timeout_s,
+            env=self._command_env(),
         )
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)
@@ -456,8 +522,9 @@ class VerifyAttempt:
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
         cmd_out = self.runner.run(
             cmd_tokens,
-            cwd=self.project_root,
+            cwd=self._tree_dir(req),
             timeout_s=req.acceptance_timeout_s,
+            env=self._command_env(),
         )
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)

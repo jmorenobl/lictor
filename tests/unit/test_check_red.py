@@ -7,16 +7,33 @@ import pytest
 
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
-from lictor.application.ports import Clock, CommandRunner, EventLog, ResultReader, SpecSource, Vcs
-from lictor.application.usecases.check_red import AuditSink, CheckRed, CheckRedRequest
+from lictor.application.ports import (
+    AuditSink,
+    Clock,
+    CommandRunner,
+    EventLog,
+    ResultReader,
+    SpecSource,
+    Vcs,
+)
+from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
+from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
 from lictor.domain.model import (
+    Candidate,
     CommandOutput,
     ControlResult,
     Event,
     ScenarioId,
     TestCaseResult,
 )
+
+
+def _environment(
+    runner: CommandRunner, vcs: MagicMock, tmp_path: Path, spec: VerificationEnvSpec | None = None
+) -> VerificationEnvironment:
+    audit = AuditSink(event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock))
+    return VerificationEnvironment(vcs, runner, audit, tmp_path, spec or VerificationEnvSpec())
 
 
 def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
@@ -33,7 +50,8 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
-    vcs.commit.return_value = "driver_commit_sha"
+    vcs.get_trailers.return_value = ["IVA-001"]
+    vcs.create_candidate.return_value = Candidate("driver_commit_sha", "tree", "parent")
 
     spec_source = MagicMock(spec=SpecSource)
     spec_source.write_seal.return_value = {
@@ -47,7 +65,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     clock.now_iso.return_value = "2026-10-30T14:00:00Z"
 
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -72,10 +90,15 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.scenario_status == {"IVA-001": "green", "IVA-002": "pending"}
     spec_source.write_seal.assert_called_once()
-    vcs.commit.assert_called_once_with(
+    vcs.create_candidate.assert_called_once_with(
         message="chore(lictor): driver de aceptación",
         trailers={"Lictor-Run": "20261030-140000-abcd"},
     )
+    vcs.advance_head.assert_called_once_with("driver_commit_sha", expected="parent")
+    vcs.export_tree.assert_called_once()
+    assert vcs.export_tree.call_args.args[0] == "driver_commit_sha"
+    seal_source = spec_source.write_seal.call_args.kwargs["source_root"]
+    assert seal_source == vcs.export_tree.call_args.args[1]
 
     event_log.append.assert_called_once()
     event = event_log.append.call_args[0][0]
@@ -101,7 +124,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
     clock = MagicMock(spec=Clock)
 
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -141,7 +164,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
     clock = MagicMock(spec=Clock)
 
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -191,7 +214,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     clock.now_iso.return_value = "2026-10-30T14:00:00Z"
 
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -212,7 +235,8 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     res = use_case.execute(req)
     assert res.ok is True
     assert res.commit_sha == "sha_already_committed"
-    vcs.commit.assert_not_called()
+    vcs.create_candidate.assert_not_called()
+    vcs.advance_head.assert_not_called()
 
 
 def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path) -> None:
@@ -240,7 +264,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
     clock = MagicMock(spec=Clock)
 
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -307,14 +331,14 @@ def _real_check(
     runner = _SuiteRunner(report, code)
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = []
-    vcs.commit.return_value = "sha"
+    vcs.create_candidate.return_value = Candidate("sha", "tree", "parent")
     spec_source = MagicMock(spec=SpecSource)
     spec_source.write_seal.return_value = {"files": {}}
     event_log = MagicMock(spec=EventLog)
     clock = MagicMock(spec=Clock)
     clock.now_iso.return_value = "2026-10-31T10:00:00Z"
     use_case = CheckRed(
-        runner=runner,
+        environment=_environment(runner, vcs, tmp_path),
         reader=JUnitReader(),
         vcs=vcs,
         spec_source=spec_source,
@@ -482,3 +506,70 @@ def test_check_red_stop_message_stays_bounded(tmp_path: Path, overrides: dict[st
 
     assert "código 3" in str(raised.value)
     assert len(str(raised.value)) < 600
+
+
+def _tampered_environment(check: CheckRed, problems: list[str | None]) -> None:
+    environment = MagicMock(spec=VerificationEnvironment)
+    environment.ensure.side_effect = problems
+    environment.run.return_value = CommandOutput(returncode=1, stdout="", stderr="")
+    check.environment = environment
+
+
+def test_check_red_tampered_environment_rejects_without_running(tmp_path: Path) -> None:
+    use_case, request, event_log, spec_source, runner = _real_check(tmp_path, _REPORT_RED, 1)
+    _tampered_environment(use_case, ["manipulado"])
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert _rejection(event_log).data["reason"] == "L0-entorno"
+    assert runner.paths == []
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_environment_tampered_during_the_suite_blocks_the_seal(tmp_path: Path) -> None:
+    use_case, request, event_log, spec_source, _ = _real_check(tmp_path, _REPORT_RED, 1)
+    environment = MagicMock(spec=VerificationEnvironment)
+    environment.ensure.side_effect = [None, "manipulado"]
+    original_runner = use_case.environment.runner
+    environment.run.side_effect = original_runner.run
+    use_case.environment = environment
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert _rejection(event_log).data["reason"] == "L0-entorno"
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_baseline_verifies_head_and_commits_nothing(tmp_path: Path) -> None:
+    use_case, request, _, spec_source, _ = _real_check(
+        tmp_path, _REPORT_RED, 1, driver_fresh=False, driver_attempts=0
+    )
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+
+    assert use_case.execute(request).ok is True
+
+    assert vcs.export_tree.call_args.args[0] == "HEAD"
+    vcs.create_candidate.assert_not_called()
+    vcs.advance_head.assert_not_called()
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_rerun_after_a_crash_verifies_the_driver_already_committed(
+    tmp_path: Path,
+) -> None:
+    use_case, request, _, spec_source, _ = _real_check(tmp_path, _REPORT_RED, 1)
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.status.return_value = []
+    vcs.get_trailers.side_effect = lambda key, commit_ref=None: ["R"] if commit_ref else []
+    vcs.get_head_sha.return_value = "head"
+
+    result = use_case.execute(request)
+
+    assert result.commit_sha == "head"
+    vcs.create_candidate.assert_not_called()
+    vcs.advance_head.assert_not_called()
+    spec_source.write_seal.assert_called_once()

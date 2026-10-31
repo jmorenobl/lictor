@@ -15,6 +15,7 @@ from tests.integration.repro.harness import (
     MODULE_PATH,
     STUB,
     Agent,
+    events_of,
     false_greens,
     git,
     good_impl,
@@ -57,7 +58,6 @@ def test_c5_agent_commit_is_rejected(make_project: ProjectFactory) -> None:
     assert "IVA-999" not in git(root, "log", "--format=%B")
 
 
-@pending(4, "C3")
 def test_d34_rename_cannot_remove_a_protected_file(make_project: ProjectFactory) -> None:
     root = make_project()
 
@@ -189,7 +189,6 @@ def test_d13_resume_stops_instead_of_wiping_user_work(make_project: ProjectFacto
     assert "edición del usuario" in module.read_text(encoding="utf-8")
 
 
-@pending(4, "C2")
 def test_d14_resume_never_commits_unverified_code(
     make_project: ProjectFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -206,6 +205,7 @@ def test_d14_resume_never_commits_unverified_code(
     monkeypatch.setattr(CommitGreen, "execute", die_once)
     agent = Agent()
     require(run_lictor(root, agent).killed, "CommitGreen debía matar la ejecución")
+    require(events_of(root, "verify.finished"), "la muerte debía llegar tras verificar")
 
     broken = '"""General."""\n    import os\n    os.remove("/x")'
     write(root, MODULE_PATH, STUB.replace('"""General."""', broken))

@@ -16,6 +16,7 @@ from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import (
+    AuditSink,
     Clock,
     CommandRunner,
     EventLog,
@@ -26,13 +27,14 @@ from lictor.application.ports import (
 )
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_project import CheckProject
-from lictor.application.usecases.check_red import AuditSink, CheckRed
+from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.init_project import InitProject
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
+from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import ConfigError
 from lictor.orchestration.graph import GraphContext
 
@@ -122,10 +124,21 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
-    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
     audit_sink = AuditSink(event_log=active_event_log, clock=active_clock)
-    check_red_uc = CheckRed(
+    environment = VerificationEnvironment(
+        vcs=vcs,
         runner=runner,
+        audit=audit_sink,
+        project_root=resolved_root,
+        spec=VerificationEnvSpec(
+            prepare=active_config.verification.prepare,
+            env=active_config.verification.env,
+        ),
+    )
+
+    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
+    check_red_uc = CheckRed(
+        environment=environment,
         reader=acceptance_reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -145,6 +158,7 @@ def bootstrap_runtime(
         runner=runner,
         readers=readers,
         project_root=resolved_root,
+        environment=environment,
     )
 
     commit_green_uc = CommitGreen(
@@ -193,6 +207,8 @@ def bootstrap_runtime(
         profile_name=active_config.profile,
         build_report=report_uc,
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
+        forbidden_paths=active_config.forbidden_paths,
+        banned_patterns=active_config.banned_patterns,
     )
 
     return BootstrapResult(

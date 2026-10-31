@@ -7,10 +7,12 @@ from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
     acceptance_failure,
+    banned_matches,
     check_red_rule,
     condense_error,
     count_agent_failures,
     describe_red_violation,
+    forbidden_paths,
     is_agent_unavailable,
     map_test_cases_to_scenarios,
     red_rule_offenders,
@@ -580,6 +582,37 @@ def test_run_outcome_quarantined_status_without_reason() -> None:
 def test_run_outcome_reason_without_status_still_quarantines() -> None:
     code, _ = run_outcome({}, {"IVA-001": "intentos agotados"})
     assert code == ExitCode.QUARANTINED
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/x.pth", "src/a-1.0.dist-info/METADATA", "tests/unit/conftest.py", "src/a/.gitignore"],
+)
+def test_forbidden_paths_match_any_component(path: str) -> None:
+    patterns = ["*.pth", "*.dist-info", "conftest.py", ".gitignore"]
+    assert forbidden_paths([path, "src/bien.py"], patterns) == [path]
+
+
+def test_forbidden_paths_do_not_match_substrings() -> None:
+    assert forbidden_paths(["src/conftest_helpers.py"], ["conftest.py"]) == []
+
+
+def test_forbidden_paths_with_no_patterns() -> None:
+    assert forbidden_paths(["src/x.pth"], []) == []
+
+
+@pytest.mark.parametrize("line", ["x = 1  # NOQA", "y  #noqa", "z  # NoQa: E501"])
+def test_banned_matches_ignore_case(line: str) -> None:
+    assert banned_matches([line], [r"#\s*noqa"]) == [r"#\s*noqa"]
+
+
+def test_banned_matches_lists_each_pattern_once_and_sorted() -> None:
+    lines = ["# b", "# a", "# b"]
+    assert banned_matches(lines, ["# b", "# a", "# c"]) == ["# a", "# b"]
+
+
+def test_banned_matches_clean_lines() -> None:
+    assert banned_matches(["x = 1"], [r"#\s*noqa"]) == []
 
 
 def test_run_outcome_exact_reasons() -> None:

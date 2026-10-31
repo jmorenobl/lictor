@@ -237,6 +237,15 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class Candidate:
+    """A commit outside the branch: only what passes verification becomes green."""
+
+    sha: str
+    tree: str
+    parent: str
+
+
+@dataclass(frozen=True)
 class VerifyResult:
     """Aggregated result of all verification steps for an attempt."""
 
@@ -247,6 +256,7 @@ class VerifyResult:
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = field(default_factory=tuple)
     error_path: str | None = None
+    candidate: Candidate | None = None
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,8 +20,9 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
-from lictor.domain.model import CommandOutput
+from lictor.domain.model import Candidate, CommandOutput
 
 
 class FakeVcs(Vcs):
@@ -39,8 +41,24 @@ class FakeVcs(Vcs):
         self.reset_count += 1
         self._changed_files.clear()
 
-    def commit(self, message: str, trailers: dict[str, str] | None = None) -> str:
-        return "fake-sha-12345"
+    def create_candidate(
+        self,
+        message: str,
+        trailers: dict[str, str] | None = None,
+        paths: Sequence[str] | None = None,
+    ) -> Candidate:
+        self.candidate_paths = paths
+        self.candidate_trailers = trailers
+        return Candidate(sha="fake-candidate", tree="fake-tree", parent="fake-sha-head")
+
+    def export_tree(self, rev: str, dest: Path) -> None:
+        dest.mkdir(parents=True)
+
+    def advance_head(self, sha: str, expected: str) -> None:
+        raise NotImplementedError
+
+    def get_tree(self, rev: str) -> str:
+        return "fake-tree"
 
     def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
         return []
@@ -488,6 +506,7 @@ class _PlantingRunner(FakeRunner):
             self.paths.append(out)
             if report:
                 out.write_text(report, encoding="utf-8")
+        super().run(cmd, cwd, timeout_s, env)
         return CommandOutput(returncode=code, stdout=f"salida de {cmd[0]}", stderr="stderr crudo")
 
 
@@ -820,3 +839,120 @@ def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
         f".lictor/runs/{req.run_id}/IVA-001/002-verify/control_mut.log"
     )
     json.dumps(summaries)
+
+
+def test_verify_runs_every_command_in_the_tree_of_the_candidate(tmp_path: Path) -> None:
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert result.candidate == Candidate("fake-candidate", "fake-tree", "fake-sha-head")
+    assert len(runner.calls) == 2
+    assert {call["cwd"] for call in runner.calls} != {tmp_path}
+    assert all(call["cwd"] == runner.calls[0]["cwd"] for call in runner.calls)
+    assert not Path(str(runner.calls[0]["cwd"])).exists(), "el clon debía borrarse"
+
+
+def test_verify_candidate_takes_writable_paths_and_trailers(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 0)}))
+    assert isinstance(verifier.vcs, FakeVcs)
+
+    verifier.execute(req)
+
+    assert verifier.vcs.candidate_paths == ["src/"]
+    assert verifier.vcs.candidate_trailers == {
+        "Scenario": "IVA-001",
+        "Lictor-Run": req.run_id,
+        "Lictor-Attempts": "2",
+    }
+
+
+def test_verify_failed_attempt_has_no_candidate(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": ("", 3)}))
+
+    assert verifier.execute(req).candidate is None
+
+
+def test_verify_gate_failure_runs_nothing(tmp_path: Path) -> None:
+    runner = _PlantingRunner({})
+    verifier, req = _verify(tmp_path, runner, forbidden_paths=("code.py",))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-rutas"
+    assert result.reverted_files == ("src/code.py",)
+    assert runner.calls == []
+
+
+def test_verify_rejects_a_symlink_in_a_writable_path(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "code.py").symlink_to("/etc/hosts")
+    verifier, req = _verify(tmp_path, _PlantingRunner({}))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-rutas"
+
+
+def test_verify_banned_pattern_reports_itself(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "code.py").write_text("x = 1  # NOQA\n", encoding="utf-8")
+    verifier, req = _verify(
+        tmp_path, _PlantingRunner({}), suppressions=(), banned_patterns=(r"#\s*noqa",)
+    )
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-supresiones"
+    assert r"#\s*noqa" in (result.condensed_error or "")
+
+
+def _spied_environment(problems: list[str | None]) -> MagicMock:
+    environment = MagicMock(spec=VerificationEnvironment)
+    environment.ensure.side_effect = problems
+    environment.command_env.return_value = {"VAR": "1"}
+    return environment
+
+
+def test_verify_tampered_environment_fails_before_running_anything(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner)
+    verifier.environment = _spied_environment(["manipulado"])
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-entorno"
+    assert "manipulado" in (result.condensed_error or "")
+    assert runner.calls == []
+
+
+def test_verify_environment_tampered_during_the_commands_fails(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner)
+    verifier.environment = _spied_environment([None, "manipulado"])
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "L0-entorno"
+    assert result.candidate is None
+    assert "acceptance" in result.control_results
+
+
+def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner)
+    verifier.environment = _spied_environment([None, None])
+
+    assert verifier.execute(req).ok is True
+
+    assert verifier.environment.ensure.call_count == 2
+
+
+def test_verify_tree_dir_comes_from_execute(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, FakeRunner())
+
+    with pytest.raises(InternalLictorError):
+        verifier._tree_dir(req)

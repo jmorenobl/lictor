@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 from lictor.domain.model import (
     AgentResult,
     AgentTask,
+    Candidate,
     CommandOutput,
     ControlResult,
     Event,
@@ -72,13 +73,25 @@ class Vcs(Protocol):
         """Discard all uncommitted changes and clean untracked files."""
         ...
 
-    def commit(
+    def create_candidate(
         self,
         message: str,
         trailers: dict[str, str] | None = None,
         paths: Sequence[str] | None = None,
-    ) -> str:
-        """Create a commit with optional git trailers and return commit sha."""
+    ) -> Candidate:
+        """Build a commit from the working tree on top of HEAD, leaving the branch alone."""
+        ...
+
+    def export_tree(self, rev: str, dest: Path) -> None:
+        """Materialize a commit in a clean clone at `dest`, with nothing ignored or untracked."""
+        ...
+
+    def advance_head(self, sha: str, expected: str) -> None:
+        """Move the branch to `sha` only if it is still at `expected`, without adding anything."""
+        ...
+
+    def get_tree(self, rev: str) -> str:
+        """Return the tree hash of a commit."""
         ...
 
     def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
@@ -149,9 +162,18 @@ class SpecSource(Protocol):
         project_root: Path,
         run_id: str,
         driver_paths: Sequence[str],
+        source_root: Path | None = None,
     ) -> dict[str, Any]:
-        """Compute and write seal to .lictor/seal.json."""
+        """Hash `source_root`, or the project, and write the seal to .lictor/seal.json."""
         ...
+
+
+@dataclass(frozen=True)
+class AuditSink:
+    """Audit sink grouping EventLog and Clock dependencies."""
+
+    event_log: EventLog
+    clock: Clock
 
 
 @dataclass(frozen=True)

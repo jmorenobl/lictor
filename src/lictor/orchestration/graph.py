@@ -3,7 +3,7 @@
 import sqlite3
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -29,7 +29,7 @@ from lictor.application.usecases.verify_attempt import (
     control_summaries,
 )
 from lictor.domain.errors import DriverError, ExitCode, SealTamperedError, SpecError
-from lictor.domain.model import AgentStatus, Event, Scenario, ScenarioId
+from lictor.domain.model import AgentStatus, Candidate, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_implement,
     route_load_spec,
@@ -136,6 +136,8 @@ class GraphContext:
     profile_name: str = ""
     build_report: BuildReport | None = None
     acceptance_failure_exit_codes: Sequence[int] = (1,)
+    forbidden_paths: Sequence[str] = ()
+    banned_patterns: Sequence[str] = ()
 
 
 class _GraphNodes:
@@ -264,6 +266,7 @@ class _GraphNodes:
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
                 agent_failures=state.get("agent_failures", 0),
+                forbidden_paths=self.ctx.forbidden_paths,
             )
         )
 
@@ -440,6 +443,8 @@ class _GraphNodes:
                 error_max_chars=self.ctx.error_max_chars,
                 attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
                 acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
+                forbidden_paths=self.ctx.forbidden_paths,
+                banned_patterns=self.ctx.banned_patterns,
             )
         )
 
@@ -461,6 +466,8 @@ class _GraphNodes:
                 "reverted_files": list(res.reverted_files),
                 "error": res.condensed_error,
                 "error_path": res.error_path,
+                "candidate": res.candidate.sha if res.candidate else None,
+                "tree": res.candidate.tree if res.candidate else None,
             },
         )
         self.ctx.event_log.append(event)
@@ -469,6 +476,7 @@ class _GraphNodes:
                 "ok": res.ok,
                 "failed_at": res.failed_at,
                 "condensed_error": res.condensed_error,
+                "candidate": asdict(res.candidate) if res.candidate else None,
             },
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
@@ -485,12 +493,13 @@ class _GraphNodes:
         if not current_id:
             return {}
 
+        verified = (state.get("last_verify") or {}).get("candidate")
         self.ctx.commit_green.execute(
             CommitGreenRequest(
                 scenario_id=current_id,
                 run_id=state["run_id"],
                 attempt=state.get("attempt", 1),
-                paths_writable=self.ctx.paths_writable,
+                candidate=Candidate(**verified) if verified else None,
             )
         )
         return {"status": {current_id: "green"}}

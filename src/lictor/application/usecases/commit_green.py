@@ -1,11 +1,11 @@
 """CommitGreen use case for recording green scenarios to version control."""
 
 import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lictor.application.ports import Clock, EventLog, Vcs
-from lictor.domain.model import Event, ScenarioId
+from lictor.domain.errors import CandidateError
+from lictor.domain.model import Candidate, Event, ScenarioId
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class CommitGreenRequest:
     scenario_id: str | ScenarioId
     run_id: str
     attempt: int
-    paths_writable: Sequence[str] | None = None
+    candidate: Candidate | None = None
 
 
 @dataclass(frozen=True)
@@ -34,35 +34,25 @@ class CommitGreen:
         self.clock = clock
 
     def execute(self, request: CommitGreenRequest) -> CommitGreenResult:
-        """Create a git commit with metadata trailers and append CloudEvent."""
+        """Advance the branch to the verified commit and append CloudEvent."""
         sid_str = (
             request.scenario_id.value
             if isinstance(request.scenario_id, ScenarioId)
             else str(request.scenario_id)
         )
 
-        trailers = {
-            "Scenario": sid_str,
-            "Lictor-Run": request.run_id,
-            "Lictor-Attempts": str(request.attempt),
-        }
-
-        # Check idempotency: if HEAD already has matching Scenario and Lictor-Run
-        head_scenarios = self.vcs.get_trailers("Scenario", commit_ref="HEAD")
-        head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
-        if (
-            head_scenarios
-            and head_scenarios[0] == sid_str
-            and head_runs
-            and head_runs[0] == request.run_id
-        ):
-            commit_sha = self.vcs.get_head_sha()
-        else:
-            commit_sha = self.vcs.commit(
-                message=f"feat({sid_str}): implementar escenario",
-                trailers=trailers,
-                paths=request.paths_writable,
+        candidate = request.candidate
+        if candidate is None:
+            raise CandidateError(
+                f"No hay commit verificado para {sid_str}: lanza una ejecución nueva con --new."
             )
+        if self.vcs.get_tree(candidate.sha) != candidate.tree:
+            raise CandidateError(f"El commit {candidate.sha[:12]} no es el árbol verificado.")
+
+        # After a crash the branch may already be there. Nothing is added here: what the working
+        # tree holds now was not verified.
+        if self.vcs.get_head_sha() != candidate.sha:
+            self.vcs.advance_head(candidate.sha, expected=candidate.parent)
 
         event = Event(
             id=uuid.uuid4().hex,
@@ -72,11 +62,12 @@ class CommitGreen:
             runid=request.run_id,
             scenarioid=sid_str,
             data={
-                "commit": commit_sha,
+                "commit": candidate.sha,
+                "tree": candidate.tree,
                 "attempt": request.attempt,
                 "attempts": request.attempt,
             },
         )
         self.event_log.append(event)
 
-        return CommitGreenResult(commit_sha=commit_sha)
+        return CommitGreenResult(commit_sha=candidate.sha)
