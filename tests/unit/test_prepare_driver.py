@@ -133,6 +133,7 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
 
     vcs.revert_paths.assert_called_once_with(["pyproject.toml"])
     assert result.reverted_files == ("pyproject.toml",)
+    assert event_log.append.call_args_list[0].args[0].data["reverted_files"] == ["pyproject.toml"]
 
 
 def test_prepare_driver_does_not_increment_attempts_on_rate_limit(tmp_path: Path) -> None:

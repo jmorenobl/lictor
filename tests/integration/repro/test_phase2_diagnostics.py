@@ -185,6 +185,7 @@ def test_m4_every_attempt_keeps_its_own_report(make_project: ProjectFactory) -> 
     assert len(reports) >= 2 + 2 + 2, f"informes: {reports}"
     failed = [e for e in events_of(root, "verify.finished") if not e["data"]["ok"]]
     require(failed, "el primer intento debía fallar")
+    assert "assert 1 == 121" in failed[0]["data"]["error"]
     assert "assert 1 == 121" in (root / failed[0]["data"]["error_path"]).read_text(encoding="utf-8")
 
 

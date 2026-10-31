@@ -178,10 +178,13 @@ def _merge_profile_defaults(
             merged[key] = profile_dump[key]
 
     acc = merged.get("acceptance")
-    if isinstance(acc, dict) and "driver_hints" not in acc:
-        acc_copy = dict(acc)
-        acc_copy["driver_hints"] = profile.acceptance.driver_hints
-        merged["acceptance"] = acc_copy
+    if isinstance(acc, dict):
+        inherited = profile_dump["acceptance"]
+        merged["acceptance"] = {
+            "driver_hints": inherited["driver_hints"],
+            "failure_exit_codes": inherited["failure_exit_codes"],
+            **acc,
+        }
     return merged
 
 

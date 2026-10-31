@@ -287,6 +287,29 @@ def test_acceptance_failure_exit_codes_reject_invalid_values(codes: list[int]) -
         AcceptanceConfig(run="suite {out}", failure_exit_codes=codes)
 
 
+def test_project_acceptance_inherits_the_failure_codes_of_its_profile(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    profile = load_profile("python-uv").model_dump(mode="json")
+    profile["acceptance"]["failure_exit_codes"] = [1, 2]
+    (profiles / "python-uv.json").write_text(json.dumps(profile), encoding="utf-8")
+    config = tmp_path / "lictor.json"
+    config.write_text(
+        json.dumps(
+            {
+                "profile": "python-uv@0.1",
+                "acceptance": {"run": "otra {out}", "report": "junit"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config, profiles)
+
+    assert loaded.acceptance.run == "otra {out}"
+    assert loaded.acceptance.failure_exit_codes == [1, 2]
+
+
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
     out_file = tmp_path / "lictor.schema.json"
     schema = export_config_schema(out_file)

@@ -739,6 +739,7 @@ def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> No
     accepted = result.control_results["acceptance"]
     assert accepted.exit_code == 0
     assert accepted.output_path is not None
+    assert "salida de suite" in (tmp_path / accepted.output_path).read_text(encoding="utf-8")
 
 
 def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path: Path) -> None:

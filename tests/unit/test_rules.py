@@ -278,6 +278,91 @@ def test_condense_error_assertion_lines_are_capped_from_the_end() -> None:
     assert "linea-19x" not in condensed
 
 
+def test_condense_error_exact_format() -> None:
+    long_details = "\n".join([*(f"m{i}" for i in range(16)), "E   assert 1 == 2"])
+    cases = [
+        TestCaseResult("test_a", status="failure", message=" corto ", details=long_details),
+        TestCaseResult("test_b", status="error"),
+    ]
+    head = "\n".join(f"    m{i}" for i in range(15))
+    assert condense_error("x", "el motivo", cases) == (
+        "Falló x\n\nel motivo\n\n"
+        f"- test_a\n  Mensaje: corto\n  Detalle:\n{head}\n    ...\n    E   assert 1 == 2"
+        "\n\n- test_b"
+    )
+
+
+def test_condense_error_blank_details_add_no_section() -> None:
+    cases = [TestCaseResult("test_a", status="failure", details="")]
+    assert condense_error("x", "", cases) == "Falló x\n\n- test_a"
+
+
+def test_condense_error_keeps_a_40_line_reason_verbatim() -> None:
+    reason = "\n".join(f"linea {i}" for i in range(40))
+    assert condense_error("x", reason) == f"Falló x\n\n{reason}"
+
+
+def test_condense_error_of_41_lines_adds_nothing_between_reason_and_tail() -> None:
+    lines = [f"linea {i}" for i in range(41)]
+    assert condense_error("x", "\n".join(lines)) == "\n".join(
+        ["Falló x", "", "linea 0", *lines[1:]]
+    )
+
+
+def test_condense_error_fills_the_limit_exactly_with_a_long_reason() -> None:
+    condensed = condense_error("L1", "x" * 5000, max_chars=200)
+    assert len(condensed) == 200
+
+
+def test_condense_error_text_at_the_limit_is_not_clipped() -> None:
+    reason = "x" * (200 - len("Falló L1\n\n"))
+    assert condense_error("L1", reason, max_chars=200) == f"Falló L1\n\n{reason}"
+
+
+def test_condense_error_clip_keeps_as_much_of_the_end_as_of_the_start() -> None:
+    condensed = condense_error("x", "a" * 3000 + "z" * 3000, max_chars=200)
+    assert abs(condensed.count("a") - condensed.count("z")) <= 1
+
+
+def test_condense_error_limit_too_small_for_the_clip_marker() -> None:
+    condensed = condense_error("x", "abcdefghij", max_chars=len("Falló x\n\n") + 3)
+    assert condensed.endswith("abc")
+
+
+def test_condense_error_limit_of_exactly_the_clip_marker() -> None:
+    condensed = condense_error("x", "abcdefghij", max_chars=len("Falló x\n\n") + 5)
+    assert condensed.endswith("abcde")
+
+
+def test_condense_error_long_reason_does_not_push_the_count_out() -> None:
+    cases = [TestCaseResult(f"test_{i}", status="failure") for i in range(100)]
+    condensed = condense_error("x", "r" * 5000, cases, max_chars=600)
+    assert "casos fallidos más" in condensed
+
+
+def test_condense_error_reason_gets_half_of_the_budget() -> None:
+    cases = [TestCaseResult("test_a", status="failure", details="d\n" * 500)]
+    condensed = condense_error("x", "r" * 5000, cases, max_chars=1000)
+    assert condensed.count("r") >= 480
+
+
+def test_condense_error_last_case_gets_its_share_of_detail() -> None:
+    cases = [
+        TestCaseResult(f"test_{i}", status="failure", details="\n".join(["y" * 80] * 15))
+        for i in range(3)
+    ]
+    condensed = condense_error("x", "", cases, max_chars=1500)
+    shares = [len(part) for part in condensed.split("\n\n- ")[1:]]
+    assert min(shares) > max(shares) / 2
+
+
+def test_full_error_exact_format() -> None:
+    cases = [TestCaseResult("test_a", status="failure", message=" m ", details="  d1\nd2\n")]
+    assert render_full_error("x", " r ", cases, " salida ") == (
+        "Falló x\n\nr\n\n- test_a\n  Mensaje: m\n  d1\nd2\n\nSalida:\nsalida\n"
+    )
+
+
 def test_full_error_keeps_everything() -> None:
     cases = [
         TestCaseResult(
@@ -334,6 +419,18 @@ def test_red_rule_violation_names_only_the_offender() -> None:
     assert cases == ()
 
 
+def test_red_rule_violation_lists_one_offender_per_line() -> None:
+    mapped = {
+        "IVA-001": TestCaseResult("test_iva_001", status="passed"),
+        "IVA-002": TestCaseResult("test_iva_002", status="skipped"),
+    }
+    reason, _ = describe_red_violation(mapped, [])
+    assert reason == (
+        "El test test_iva_001 del escenario IVA-001 debía fallar, pero su estado es passed\n"
+        "El test test_iva_002 del escenario IVA-002 debía fallar, pero su estado es skipped"
+    )
+
+
 def test_red_rule_violation_keeps_the_failure_of_a_green() -> None:
     broken = TestCaseResult("test_iva_001", status="failure", message="m")
     reason, cases = describe_red_violation({"IVA-001": broken}, ["IVA-001"])
@@ -385,6 +482,15 @@ def test_acceptance_failure_reports_every_regression() -> None:
     assert "Regresión detectada en escenario verde previo: IVA-001" in reason
     assert "Regresión detectada en escenario verde previo: IVA-002" in reason
     assert cases == (mapped["IVA-001"], mapped["IVA-002"])
+
+
+def test_acceptance_failure_lists_one_reason_per_line() -> None:
+    failure = acceptance_failure("IVA-002", ["IVA-001"], {})
+    assert failure is not None
+    assert failure[0] == (
+        "Escenario IVA-002 no pasó (sin resultado)\n"
+        "Regresión detectada en escenario verde previo: IVA-001"
+    )
 
 
 def test_acceptance_failure_puts_the_current_scenario_before_regressions() -> None:
@@ -474,6 +580,17 @@ def test_run_outcome_quarantined_status_without_reason() -> None:
 def test_run_outcome_reason_without_status_still_quarantines() -> None:
     code, _ = run_outcome({}, {"IVA-001": "intentos agotados"})
     assert code == ExitCode.QUARANTINED
+
+
+def test_run_outcome_exact_reasons() -> None:
+    conflict = {"IVA-001": "spec_conflict", "IVA-002": "spec_conflict"}
+    assert run_outcome({}, conflict)[1] == (
+        "Conflicto de especificación en IVA-001, IVA-002. Detalle en .lictor/report.md"
+    )
+    status = {"IVA-001": "quarantined", "IVA-002": "quarantined"}
+    assert run_outcome(status, {})[1] == (
+        "Escenarios en cuarentena: IVA-001, IVA-002. Detalle en .lictor/report.md"
+    )
 
 
 def test_run_outcome_all_green() -> None:

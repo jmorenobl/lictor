@@ -208,6 +208,7 @@ uv run lictor report
 - **Escenarios en cuarentena**: 0
 - **Escenarios pendientes**: 0
 - **Código de salida**: 0
+- **Motivo**: Ejecución completada: 3 escenarios en verde
 - **Duración total**: 18.42s
 
 ## Escenarios
@@ -222,6 +223,19 @@ uv run lictor report
 
 ## Intentos fallidos por nivel
 - *Sin fallos registrados.*
+
+## Verificaciones
+| Escenario | Intento | Resultado | Error |
+|---|---|---|---|
+| IVA-001 | 1 | verde | - |
+| IVA-002 | 1 | verde | - |
+| IVA-003 | 1 | verde | - |
+
+## Controles en medición
+- *Ningún control en medición.*
+
+## Drivers rechazados
+- *Ningún driver rechazado.*
 ```
 
 </details>
@@ -243,7 +257,7 @@ uv run lictor report
 
 ### Códigos de Salida Estables
 
-Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts de automatización:
+Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts de automatización. Cada salida explica su motivo en stderr, en `.lictor/journal.jsonl` y en `.lictor/report.md`:
 
 | Código | Constante (`ExitCode`) | Significado |
 | :---: | :--- | :--- |
@@ -259,7 +273,7 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 
 ## 🛡️ Puertas de Calidad (`L0`–`L5`)
 
-Cada intento del agente atraviesa una tubería de verificación secuencial que **corta en el primer fallo bloqueante** y condensa el error para alimentar el siguiente intento:
+Cada intento del agente atraviesa una tubería de verificación secuencial que **corta en el primer fallo bloqueante** y condensa el error para alimentar el siguiente intento. El mensaje queda acotado por `limits.error_max_chars` y siempre conserva el motivo; el error completo va a `.lictor/runs/`. Los controles `measure` no bloquean, pero su resultado y su salida quedan registrados en `.lictor/journal.jsonl` y `.lictor/report.md`:
 
 | Nivel | Puerta | Qué verifica | Modo |
 | :---: | :--- | :--- | :---: |
@@ -271,7 +285,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Mapea cada test del reporte JUnit a su `@ID-NNN`: exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. | `measure` / `block` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. Hoy solo registra resultado y salida: `mutmut` termina con 0 aunque queden supervivientes, y Lictor aún no lee la puntuación. | `measure` |
 
 ---
 
@@ -312,6 +326,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   },
   "acceptance": {
     "run": "uv run pytest tests/acceptance -q --junitxml {out}",
+    "failure_exit_codes": [1],
     "report": "junit",
     "timeout_s": 600
   },
@@ -335,7 +350,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 | `.lictor/seal.json` | Hashes `SHA-256` de `features/*.feature` y de los archivos del *driver*. |
 | `.lictor/journal.jsonl` | Bitácora inmutable de eventos en formato CloudEvents 1.0. |
 | `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
-| `.lictor/runs/<run_id>/` | Salidas crudas del agente y reportes XML generados por cada control. |
+| `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente y su stderr (`NNN-implement.json`, `NNN-implement.stderr.log`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. |
 
 </details>
 

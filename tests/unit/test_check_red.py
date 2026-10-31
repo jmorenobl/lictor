@@ -466,10 +466,15 @@ def test_check_red_passing_keeps_its_output(tmp_path: Path) -> None:
     assert "stderr crudo" in log.read_text(encoding="utf-8")
 
 
-def test_check_red_stop_message_stays_bounded(tmp_path: Path) -> None:
-    use_case, request, _, _, runner = _real_check(
-        tmp_path, "", 3, driver_fresh=False, driver_attempts=0, error_max_chars=500
-    )
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"driver_fresh": False, "driver_attempts": 0},
+        {"driver_attempts": 3, "max_driver_attempts": 3},
+    ],
+)
+def test_check_red_stop_message_stays_bounded(tmp_path: Path, overrides: dict[str, Any]) -> None:
+    use_case, request, _, _, runner = _real_check(tmp_path, "", 3, error_max_chars=500, **overrides)
     runner.stdout = "x" * 100_000
 
     with pytest.raises(DriverError) as raised:
