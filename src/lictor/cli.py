@@ -22,7 +22,7 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
-from lictor.domain.errors import ConfigError, LictorError
+from lictor.domain.errors import ConfigError, ExitCode, LictorError
 from lictor.domain.model import Event
 from lictor.orchestration.graph import create_graph, get_sqlite_saver
 
@@ -304,6 +304,22 @@ def _check_resume_guard(
     return None
 
 
+def _paused_exit_code(state_snapshot: Any) -> int | None:
+    interrupts = [i for task in state_snapshot.tasks for i in task.interrupts]
+    if not interrupts:
+        return None
+    if interrupts[0].value.get("reason") == "agent_unavailable":
+        detail = interrupts[0].value.get("detail", "")
+        typer.echo(
+            "Ejecución detenida: el agente no está disponible, sin penalizar ningún escenario. "
+            f"Corrige el problema y vuelve a lanzar `lictor run`.\n{detail}",
+            err=True,
+        )
+        return int(ExitCode.AGENT_UNAVAILABLE)
+    typer.echo("Ejecución pausada por límite de cuota.", err=True)
+    return int(ExitCode.RATE_LIMITED)
+
+
 def _resume_run(
     runtime: BootstrapResult,
     graph: Any,
@@ -338,9 +354,9 @@ def _resume_run(
         graph.invoke(None, config=chk_config)
 
     updated_state = graph.get_state(config=chk_config)
-    if any(task.interrupts for task in updated_state.tasks):
-        typer.echo("Ejecución pausada por límite de cuota.", err=True)
-        return 50
+    paused_code = _paused_exit_code(updated_state)
+    if paused_code is not None:
+        return paused_code
 
     return int(updated_state.values.get("exit_code", 0) or 0)
 
@@ -372,9 +388,9 @@ def _start_new_run(
     graph.invoke(init_state, config=chk_config)
 
     final_state = graph.get_state(config=chk_config)
-    if any(task.interrupts for task in final_state.tasks):
-        typer.echo("Ejecución pausada por límite de cuota.", err=True)
-        return 50
+    paused_code = _paused_exit_code(final_state)
+    if paused_code is not None:
+        return paused_code
 
     return int(final_state.values.get("exit_code", 0) or 0)
 

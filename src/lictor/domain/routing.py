@@ -41,7 +41,7 @@ def route_implement(state: Mapping[str, Any]) -> str:
         return END
 
     signal = state.get("agent_signal")
-    if signal == "rate_limited":
+    if signal in ("rate_limited", "unavailable"):
         return "pause"
     if signal == "spec_conflict":
         return "quarantine"

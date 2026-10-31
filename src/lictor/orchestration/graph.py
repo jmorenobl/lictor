@@ -25,7 +25,7 @@ from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDri
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
 from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
 from lictor.domain.errors import DriverError, SealTamperedError, SpecError
-from lictor.domain.model import Event, Scenario, ScenarioId
+from lictor.domain.model import AgentStatus, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_implement,
     route_load_spec,
@@ -82,6 +82,9 @@ class GraphState(TypedDict, total=False):
     last_failed_at: str | None
     last_verify: dict[str, Any] | None
     agent_signal: str | None
+    agent_failures: int
+    last_agent_status: AgentStatus | None
+    agent_detail: str
     totals: Annotated[dict[str, Any], reduce_totals]
     exit_code: int | None
     seal_ok: bool
@@ -212,18 +215,15 @@ class _GraphNodes:
                 green_ids=green_ids,
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
+                agent_failures=state.get("agent_failures", 0),
             )
-        )
-
-        signal = (
-            "rate_limited"
-            if res.agent_result.status == "rate_limited"
-            else ("ok" if res.agent_result.status == "ok" else "error")
         )
 
         return {
             "driver_attempts": res.driver_attempts,
-            "agent_signal": signal,
+            "agent_signal": res.agent_signal,
+            "agent_failures": res.agent_failures,
+            "agent_detail": res.agent_result.text,
             "totals": {
                 "tokens": {
                     "input": res.agent_result.tokens.input,
@@ -282,6 +282,7 @@ class _GraphNodes:
                     "attempt": 0,
                     "last_error": None,
                     "last_failed_at": None,
+                    "last_agent_status": None,
                 }
         return {"current": None}
 
@@ -328,6 +329,8 @@ class _GraphNodes:
                     hints=self.ctx.hints,
                     last_error=state.get("last_error"),
                     failed_at=state.get("last_failed_at"),
+                    agent_failures=state.get("agent_failures", 0),
+                    last_agent_status=state.get("last_agent_status"),
                 )
             )
         except SealTamperedError:
@@ -336,6 +339,9 @@ class _GraphNodes:
         return {
             "attempt": res.attempt,
             "agent_signal": res.agent_signal,
+            "agent_failures": res.agent_failures,
+            "agent_detail": res.agent_result.text,
+            "last_agent_status": res.agent_result.status,
             "totals": {
                 "tokens": {
                     "input": res.agent_result.tokens.input,
@@ -449,8 +455,16 @@ class _GraphNodes:
         }
 
     def pause(self, state: GraphState) -> dict[str, Any]:
-        interrupt({"reason": "rate_limited", "resume_to": state.get("resume_to")})
-        return {}
+        signal = state.get("agent_signal")
+        reason = "rate_limited" if signal == "rate_limited" else "agent_unavailable"
+        interrupt(
+            {
+                "reason": reason,
+                "resume_to": state.get("resume_to"),
+                "detail": state.get("agent_detail", ""),
+            }
+        )
+        return {"agent_failures": 0}
 
     def report(self, state: GraphState) -> dict[str, Any]:
         status = state.get("status", {})
@@ -513,7 +527,7 @@ def create_graph(
         return "load_spec"
 
     def route_build_driver_edge(state: GraphState) -> str:
-        if state.get("agent_signal") == "rate_limited":
+        if state.get("agent_signal") in ("rate_limited", "unavailable"):
             return "pause"
         return "red_check"
 

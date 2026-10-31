@@ -62,9 +62,11 @@ class TestClaudeCLIHealth:
     def test_health_success(self) -> None:
         cli = ClaudeCLI(auth="subscription")
         session = '{"loggedIn": true, "authMethod": "claude.ai"}'
-        with patch("subprocess.run", side_effect=_health_with_session(session)) as mock_run:
-            with patch.dict(os.environ, {}, clear=True):
-                health = cli.health()
+        with (
+            patch("subprocess.run", side_effect=_health_with_session(session)) as mock_run,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            health = cli.health()
         assert health.ok is True
         assert health.cli_version == "2.1.316 (Claude Code)"
         assert health.auth_status == "subscription"
@@ -73,18 +75,22 @@ class TestClaudeCLIHealth:
     def test_health_without_session_is_not_ok(self) -> None:
         cli = ClaudeCLI(auth="subscription")
         session = '{"loggedIn": false, "authMethod": "none"}'
-        with patch("subprocess.run", side_effect=_health_with_session(session)):
-            with patch.dict(os.environ, {}, clear=True):
-                health = cli.health()
+        with (
+            patch("subprocess.run", side_effect=_health_with_session(session)),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            health = cli.health()
         assert health.ok is False
         assert health.auth_status == "none"
 
     @pytest.mark.parametrize("stdout", ["no es json", "[]", '{"loggedIn": "si"}', "{}"])
     def test_health_is_not_ok_when_the_session_is_unknown(self, stdout: str) -> None:
         cli = ClaudeCLI(auth="subscription")
-        with patch("subprocess.run", side_effect=_health_with_session(stdout)):
-            with patch.dict(os.environ, {}, clear=True):
-                health = cli.health()
+        with (
+            patch("subprocess.run", side_effect=_health_with_session(stdout)),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            health = cli.health()
         assert health.ok is False
         assert health.auth_status == "error"
 

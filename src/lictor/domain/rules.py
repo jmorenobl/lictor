@@ -4,8 +4,9 @@ import re
 from collections.abc import Sequence
 
 from lictor.domain.errors import DriverError
-from lictor.domain.model import ScenarioId, TestCaseResult
+from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
 
+AGENT_FAILURE_LIMIT = 2
 _MAX_EXIT_CODE_TAIL_LINES = 40
 _MAX_JUNIT_DETAIL_LINES = 15
 
@@ -122,3 +123,13 @@ def condense_error(
     if len(full) > max_chars:
         return full[:max_chars]
     return full
+
+
+def count_agent_failures(status: AgentStatus, failures: int) -> int:
+    """Count consecutive calls the agent itself failed, as opposed to failing a verification."""
+    return failures + 1 if status == "error" else 0
+
+
+def is_agent_unavailable(status: AgentStatus, failures: int) -> bool:
+    """Tell whether the backend is at fault, so that no scenario should pay for it."""
+    return status == "auth" or failures >= AGENT_FAILURE_LIMIT

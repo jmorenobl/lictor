@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,10 +8,198 @@ from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
+    ImplementScenarioResult,
     _extract_scenario_gherkin,
 )
 from lictor.domain.errors import SealTamperedError
-from lictor.domain.model import AgentResult, Event, Scenario, ScenarioId, Tokens
+from lictor.domain.model import (
+    AgentResult,
+    AgentStatus,
+    AgentTask,
+    Event,
+    PermissionDenial,
+    Scenario,
+    ScenarioId,
+    Tokens,
+)
+
+
+def _execute(
+    tmp_path: Path,
+    result: AgentResult | MagicMock,
+    **overrides: Any,
+) -> tuple[ImplementScenarioResult, MagicMock, MagicMock]:
+    feature_file = tmp_path / "features" / "iva.feature"
+    feature_file.parent.mkdir(parents=True, exist_ok=True)
+    feature_file.write_text("Feature: IVA\n", encoding="utf-8")
+    executor = MagicMock(spec=Executor)
+    if isinstance(result, AgentResult):
+        executor.run.return_value = result
+    else:
+        executor.run.side_effect = result
+    spec_source = MagicMock(spec=SpecSource)
+    spec_source.verify_seal.return_value = True
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:35:00Z"
+    use_case = ImplementScenario(
+        vcs=MagicMock(spec=Vcs),
+        executor=executor,
+        spec_source=spec_source,
+        event_log=event_log,
+        clock=clock,
+    )
+    fields: dict[str, Any] = {
+        "project_root": tmp_path,
+        "run_id": "run",
+        "scenario": Scenario(id=ScenarioId("IVA-001"), name="N", file=str(feature_file), line=1),
+        "attempt": 1,
+        "model": "m",
+        "allowed_tools": [],
+        "max_turns": 1,
+        "timeout_s": 1,
+        "paths_writable": ["src/"],
+        "paths_protected": [],
+        "paths_driver": [],
+        "suppressions": [],
+        "green_ids": [],
+        "check_commands": [],
+        "hints": "",
+    }
+    return (
+        use_case.execute(ImplementScenarioRequest(**{**fields, **overrides})),
+        executor,
+        event_log,
+    )
+
+
+def _events(event_log: MagicMock) -> list[Event]:
+    return [call.args[0] for call in event_log.append.call_args_list]
+
+
+def test_agent_error_keeps_the_attempt_and_counts_the_failure(tmp_path: Path) -> None:
+    result, _, _ = _execute(tmp_path, AgentResult(status="error"))
+
+    assert result.agent_signal == "error"
+    assert result.attempt == 1
+    assert result.agent_failures == 1
+
+
+def test_second_agent_error_in_a_row_reports_unavailable(tmp_path: Path) -> None:
+    result, _, _ = _execute(tmp_path, AgentResult(status="error"), agent_failures=1)
+
+    assert result.agent_signal == "unavailable"
+    assert result.attempt == 1
+
+
+def test_auth_failure_reports_unavailable_at_once(tmp_path: Path) -> None:
+    result, _, _ = _execute(tmp_path, AgentResult(status="auth"))
+
+    assert result.agent_signal == "unavailable"
+    assert result.attempt == 1
+    assert result.agent_failures == 0
+
+
+@pytest.mark.parametrize("status", ["max_turns", "timeout"])
+def test_agent_that_ran_out_uses_up_the_attempt(tmp_path: Path, status: AgentStatus) -> None:
+    result, _, _ = _execute(tmp_path, AgentResult(status=status), agent_failures=1)
+
+    assert result.agent_signal == "error"
+    assert result.attempt == 2
+    assert result.agent_failures == 0
+
+
+def test_successful_call_clears_the_failures(tmp_path: Path) -> None:
+    result, _, _ = _execute(tmp_path, AgentResult(status="ok"), agent_failures=1)
+
+    assert result.agent_signal == "ok"
+    assert result.agent_failures == 0
+
+
+def test_tampering_is_not_a_backend_failure(tmp_path: Path) -> None:
+    lictor_dir = tmp_path / ".lictor"
+    lictor_dir.mkdir()
+    journal = lictor_dir / "journal.jsonl"
+    journal.write_text("", encoding="utf-8")
+
+    def tamper(_task: AgentTask) -> AgentResult:
+        journal.write_text("forjado\n", encoding="utf-8")
+        return AgentResult(status="ok", text="hecho", num_turns=7)
+
+    result, _, _ = _execute(tmp_path, MagicMock(side_effect=tamper), agent_failures=1)
+
+    assert result.agent_signal == "error"
+    assert result.attempt == 2
+    assert result.agent_failures == 0
+    assert result.agent_result.status == "error"
+    assert result.agent_result.num_turns == 7
+
+
+def test_failed_call_does_not_overwrite_the_previous_raw_output(tmp_path: Path) -> None:
+    _, first, _ = _execute(tmp_path, AgentResult(status="error"))
+    _, second, _ = _execute(tmp_path, AgentResult(status="error"), agent_failures=1)
+
+    first_path = first.run.call_args.args[0].raw_path
+    second_path = second.run.call_args.args[0].raw_path
+    assert first_path.name == "002-implement.json"
+    assert second_path.name == "002-implement-r1.json"
+
+
+def test_denials_and_exit_code_reach_the_journal(tmp_path: Path) -> None:
+    denial = PermissionDenial(tool="Bash", target="curl -V")
+    agent = AgentResult(status="ok", exit_code=0, permission_denials=(denial,))
+
+    _, _, event_log = _execute(tmp_path, agent)
+
+    finished, denied = _events(event_log)
+    expected = [{"tool": "Bash", "target": "curl -V"}]
+    assert finished.data["permission_denials"] == expected
+    assert finished.data["exit_code"] == 0
+    assert finished.data["signal"] == "ok"
+    assert denied.type == "lictor.agent.denied.v1"
+    assert denied.scenarioid == "IVA-001"
+    assert denied.data == {"role": "implement", "attempt": 2, "denials": expected}
+
+
+def test_no_denial_event_without_denials(tmp_path: Path) -> None:
+    _, _, event_log = _execute(tmp_path, AgentResult(status="ok"))
+
+    assert [e.type for e in _events(event_log)] == ["lictor.agent.finished.v1"]
+
+
+@pytest.mark.parametrize(
+    ("status", "note"), [("max_turns", "sin turnos"), ("timeout", "sin tiempo")]
+)
+def test_retry_prompt_says_the_agent_ran_out(
+    tmp_path: Path, status: AgentStatus, note: str
+) -> None:
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        last_agent_status=status,
+        last_error="fallo de L2",
+        failed_at="L2",
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert note in prompt
+    assert "fallo de L2" in prompt
+
+
+def test_error_block_is_shown_even_if_a_failed_call_kept_the_attempt_at_zero(
+    tmp_path: Path,
+) -> None:
+    _, executor, _ = _execute(
+        tmp_path, AgentResult(status="ok"), attempt=0, last_error="fallo de L2"
+    )
+
+    assert "fallo de L2" in executor.run.call_args.args[0].prompt
+
+
+def test_prompt_falls_back_when_the_profile_has_no_commands(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"))
+
+    assert "ejecutando: los tests del proyecto" in executor.run.call_args.args[0].prompt
 
 
 def test_implement_scenario_seal_tampered_raises_without_reset(tmp_path: Path) -> None:

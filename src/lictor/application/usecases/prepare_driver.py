@@ -5,12 +5,17 @@ import hashlib
 import importlib.resources
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
+from lictor.application.usecases.agent_events import denial_event, denial_targets
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.domain.model import AgentResult, AgentTask, Event
+from lictor.domain.rules import count_agent_failures, is_agent_unavailable
+
+DriverSignal = Literal["ok", "rate_limited", "unavailable", "error"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,7 @@ class PrepareDriverRequest:
     driver_attempts: int
     last_error: str | None = None
     prompt_template: str | None = None
+    agent_failures: int = 0
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,8 @@ class PrepareDriverResult:
     driver_attempts: int
     prompt_sha: str
     reverted_files: tuple[str, ...] = ()
+    agent_signal: DriverSignal = "ok"
+    agent_failures: int = 0
 
 
 def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
@@ -132,7 +140,8 @@ class PrepareDriver:
         lictor_dir = request.project_root / ".lictor"
         runs_dir = lictor_dir / "runs" / request.run_id
         runs_dir.mkdir(parents=True, exist_ok=True)
-        raw_path = runs_dir / f"{request.driver_attempts:03d}-driver.json"
+        retry = f"-r{request.agent_failures}" if request.agent_failures else ""
+        raw_path = runs_dir / f"{request.driver_attempts:03d}-driver{retry}.json"
 
         task = AgentTask(
             role="driver",
@@ -161,23 +170,18 @@ class PrepareDriver:
         if reverted:
             self.vcs.revert_paths(reverted)
 
+        agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
         if not integrity_ok and agent_result.status == "ok":
-            agent_result = AgentResult(
-                status="error",
-                spec_conflict=agent_result.spec_conflict,
-                text=agent_result.text,
-                session_id=agent_result.session_id,
-                num_turns=agent_result.num_turns,
-                duration_ms=agent_result.duration_ms,
-                tokens=agent_result.tokens,
-                cost_usd=agent_result.cost_usd,
-                cost_kind=agent_result.cost_kind,
-                raw_path=agent_result.raw_path,
-            )
+            agent_result = replace(agent_result, status="error")
 
+        agent_signal: DriverSignal
+        new_attempts = request.driver_attempts
         if agent_result.status == "rate_limited":
-            new_attempts = request.driver_attempts
+            agent_signal = "rate_limited"
+        elif is_agent_unavailable(agent_result.status, agent_failures):
+            agent_signal = "unavailable"
         else:
+            agent_signal = "ok" if agent_result.status == "ok" else "error"
             new_attempts = request.driver_attempts + 1
 
         rel_raw = str(raw_path)
@@ -197,6 +201,9 @@ class PrepareDriver:
                 "role": "driver",
                 "attempt": new_attempts,
                 "status": agent_result.status,
+                "signal": agent_signal,
+                "exit_code": agent_result.exit_code,
+                "permission_denials": denial_targets(agent_result),
                 "model": request.model,
                 "cli_version": cli_version,
                 "tokens": {
@@ -214,10 +221,14 @@ class PrepareDriver:
             },
         )
         self.event_log.append(event)
+        if agent_result.permission_denials:
+            self.event_log.append(denial_event(agent_result, event))
 
         return PrepareDriverResult(
             agent_result=agent_result,
             driver_attempts=new_attempts,
             prompt_sha=prompt_sha,
             reverted_files=tuple(reverted),
+            agent_signal=agent_signal,
+            agent_failures=agent_failures,
         )

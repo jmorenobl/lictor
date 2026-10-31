@@ -76,37 +76,36 @@ class ClaudeCLI:
             )
 
         if self.auth == "subscription":
-            has_api_var = bool(
-                os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-            )
-            if has_api_var:
-                return Health(
-                    ok=False,
-                    cli_version=version_str,
-                    auth_status="api_key_override",
-                    message=(
-                        "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN present while"
-                        " auth is 'subscription'"
-                    ),
-                )
-            logged_in = self._logged_in()
-            if logged_in is None:
-                return Health(
-                    ok=False,
-                    cli_version=version_str,
-                    auth_status="error",
-                    message="No se pudo comprobar la sesión del CLI",
-                )
-            if not logged_in:
-                return Health(
-                    ok=False,
-                    cli_version=version_str,
-                    auth_status="none",
-                    message="El CLI no tiene sesión iniciada",
-                )
-            return Health(ok=True, cli_version=version_str, auth_status="subscription")
+            return self._subscription_health(version_str)
 
         return Health(ok=True, cli_version=version_str, auth_status="api_key")
+
+    def _subscription_health(self, version: str) -> Health:
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="api_key_override",
+                message=(
+                    "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN present while auth is 'subscription'"
+                ),
+            )
+        logged_in = self._logged_in()
+        if logged_in is None:
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="error",
+                message="No se pudo comprobar la sesión del CLI",
+            )
+        if not logged_in:
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="none",
+                message="El CLI no tiene sesión iniciada",
+            )
+        return Health(ok=True, cli_version=version, auth_status="subscription")
 
     def _logged_in(self) -> bool | None:
         """Ask the CLI for its session, which costs no model call; None if it can't tell."""
@@ -230,6 +229,9 @@ class ClaudeCLI:
             duration_ms = int((time.monotonic() - start_time) * 1000)
             return "", err, None, duration_ms, True
 
+    def _cost_kind(self) -> CostKind:
+        return "notional_subscription" if self.auth == "subscription" else "estimated"
+
     def _read_events(self, stdout: str) -> tuple[dict[str, Any] | None, str | None]:
         """Return the result event and the last rate limit status from the stream."""
         result: dict[str, Any] | None = None
@@ -272,7 +274,6 @@ class ClaudeCLI:
         rate_limit_status: str | None,
         exit_code: int,
         duration_ms: int,
-        cost_kind: CostKind,
         raw_path: Path,
     ) -> AgentResult:
         # error_max_turns has no `result`, only an `errors` list.
@@ -307,7 +308,7 @@ class ClaudeCLI:
             duration_ms=effective_duration,
             tokens=tokens,
             cost_usd=cost_usd,
-            cost_kind=cost_kind,
+            cost_kind=self._cost_kind(),
             raw_path=raw_path,
             permission_denials=self._read_denials(data),
             exit_code=exit_code,
@@ -317,9 +318,7 @@ class ClaudeCLI:
         """Run claude -p for the given task and map the output to AgentResult."""
         cmd = self._build_command(task)
         env = self._prepare_env()
-        cost_kind: CostKind = (
-            "notional_subscription" if self.auth == "subscription" else "estimated"
-        )
+        cost_kind = self._cost_kind()
 
         stdout, stderr, exit_code, duration_ms, timed_out = self._execute_subprocess(
             cmd=cmd,
@@ -360,6 +359,5 @@ class ClaudeCLI:
             rate_limit_status=rate_limit_status,
             exit_code=exit_code or 0,
             duration_ms=duration_ms,
-            cost_kind=cost_kind,
             raw_path=task.raw_path,
         )

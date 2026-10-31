@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
+from lictor.domain.errors import ExitCode
 from lictor.domain.model import AgentResult, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
-    pending,
+    events_of,
+    green_ids,
     quarantined,
     require,
     run_lictor,
@@ -19,7 +21,7 @@ from tests.integration.repro.harness import (
     write,
 )
 
-# Output shapes come from the spike with the real CLI 2.1.316 (.audits/analisis-base/spike-fase1.md).
+# Output shapes come from the spike with the real CLI 2.1.316, see .audits/analisis-base/.
 # Lines are what the adapter reads from `--output-format stream-json`.
 PLAIN_LIMIT = "echo 'Claude usage limit reached. Your limit will reset at 7pm'; exit 1"
 REJECTED_LIMIT = (
@@ -73,7 +75,7 @@ if "user" in sources.split(","):
         hook, shell=True, input=payload, capture_output=True, text=True, check=True
     ).stdout
     command = json.loads(output)["hookSpecificOutput"]["updatedInput"]["command"]
-prefixes = [a[len("Bash("):-len(":*)")] for a in args if a.startswith("Bash(") and a.endswith(":*)")]
+prefixes = [a[5:-3] for a in args if a.startswith("Bash(") and a.endswith(":*)")]
 denials = []
 if any(command.startswith(prefix) for prefix in prefixes):
     Path("executed").write_text(command)
@@ -171,7 +173,6 @@ def test_user_hook_does_not_alter_agent_commands(
     assert result.permission_denials == ()
 
 
-@pending(1, "A6")
 def test_d18_backend_down_quarantines_nothing(make_project: ProjectFactory) -> None:
     root = make_project()
     agent = Agent(impl=lambda _task, _sid, _attempt: "error")
@@ -181,9 +182,48 @@ def test_d18_backend_down_quarantines_nothing(make_project: ProjectFactory) -> N
     require("IVA-001" in agent.calls, "el agente debía llegar a implementar")
     assert quarantined(root) == [], f"exit {outcome.exit_code}, llamadas {agent.calls}"
     assert agent.calls.count("IVA-001") < 3
+    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
 
 
-@pending(1, "A1")
+def test_auth_failure_stops_at_the_first_call(make_project: ProjectFactory) -> None:
+    root = make_project()
+    agent = Agent(impl=lambda _task, _sid, _attempt: "auth")
+
+    outcome = run_lictor(root, agent)
+
+    require("IVA-001" in agent.calls, "el agente debía llegar a implementar")
+    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert agent.calls.count("IVA-001") == 1
+    assert quarantined(root) == []
+
+
+def test_d18_run_resumes_without_lost_attempts_once_the_backend_is_back(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    down = Agent(impl=lambda _task, _sid, _attempt: "error")
+    stopped = run_lictor(root, down)
+    require(down.calls.count("IVA-001") > 0, "el agente debía llegar a implementar")
+
+    outcome = run_lictor(root, Agent())
+
+    assert stopped.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert outcome.exit_code == 0
+    assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
+    finished = events_of(root, "agent.finished")
+    assert [e["data"]["attempt"] for e in finished if e.get("scenarioid") == "IVA-001"][-1] == 1
+
+
+def test_backend_down_during_the_driver_stops_the_run(make_project: ProjectFactory) -> None:
+    root = make_project()
+    agent = Agent(driver=lambda _task, _attempt: "error")
+
+    outcome = run_lictor(root, agent)
+
+    assert outcome.exit_code == ExitCode.AGENT_UNAVAILABLE
+    assert agent.calls == ["driver", "driver"]
+
+
 def test_d26_agent_gets_runnable_commands_including_acceptance(
     make_project: ProjectFactory,
 ) -> None:

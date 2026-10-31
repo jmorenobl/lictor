@@ -3,10 +3,13 @@
 import pytest
 
 from lictor.domain.errors import DriverError
-from lictor.domain.model import ScenarioId, TestCaseResult
+from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
+    AGENT_FAILURE_LIMIT,
     check_red_rule,
     condense_error,
+    count_agent_failures,
+    is_agent_unavailable,
     map_test_cases_to_scenarios,
 )
 
@@ -153,3 +156,38 @@ def test_condense_error_strict_truncation() -> None:
     condensed = condense_error("L1", raw_error, max_chars=200)
     assert len(condensed) <= 200
     assert condensed.startswith("Falló L1")
+
+
+@pytest.mark.parametrize(
+    ("status", "failures", "expected"),
+    [
+        ("error", 0, 1),
+        ("error", 1, 2),
+        ("ok", 1, 0),
+        ("max_turns", 1, 0),
+        ("timeout", 1, 0),
+        ("rate_limited", 1, 0),
+    ],
+)
+def test_count_agent_failures_only_counts_consecutive_errors(
+    status: AgentStatus, failures: int, expected: int
+) -> None:
+    assert count_agent_failures(status, failures) == expected
+
+
+def test_agent_failure_limit_stops_before_a_third_call() -> None:
+    assert AGENT_FAILURE_LIMIT == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "failures", "expected"),
+    [
+        ("auth", 0, True),
+        ("error", AGENT_FAILURE_LIMIT, True),
+        ("error", AGENT_FAILURE_LIMIT - 1, False),
+        ("ok", 0, False),
+        ("max_turns", 0, False),
+    ],
+)
+def test_is_agent_unavailable(status: AgentStatus, failures: int, expected: bool) -> None:
+    assert is_agent_unavailable(status, failures) is expected
