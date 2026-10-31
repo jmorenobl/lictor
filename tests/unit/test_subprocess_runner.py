@@ -28,7 +28,9 @@ def test_subprocess_runner_env_is_the_whole_environment(
     monkeypatch.setenv("HEREDADA", "x")
     show = "import os; print(os.environ.get('NUEVA'), os.environ.get('HEREDADA'))"
 
-    out = SubprocessRunner().run([sys.executable, "-c", show], cwd=tmp_path, env={"NUEVA": "z"})
+    out = SubprocessRunner().run(
+        [sys.executable, "-B", "-c", show], cwd=tmp_path, env={"NUEVA": "z"}
+    )
 
     assert out.stdout.split() == ["z", "None"]
 

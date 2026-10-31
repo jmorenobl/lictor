@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from lictor.adapters.config import loader
 from lictor.cli import app
+from tests.conftest import VERIFICATION_VARIABLES
 from tests.integration.repro.harness import (
     copy_project,
     git,
@@ -55,6 +56,8 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     with pytest.MonkeyPatch.context() as patch:
         for name, value in isolated_env().items():
             patch.setenv(name, value)
+        for name in VERIFICATION_VARIABLES:
+            patch.delenv(name, raising=False)
         git(root, "init", "-q", "-b", "master")
         git(root, "config", "user.name", "Test User")
         git(root, "config", "user.email", "test@example.com")
