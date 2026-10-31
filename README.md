@@ -4,6 +4,7 @@
 
 <br/>
 
+![Estado: experimental](https://img.shields.io/badge/Estado-Experimental-F59E0B?style=for-the-badge)
 [![Python >= 3.12](https://img.shields.io/badge/Python-3.12%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/uv-Astral-DE5FE9?style=for-the-badge&logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
 [![LangGraph](https://img.shields.io/badge/Orquestaci%C3%B3n-LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
@@ -52,6 +53,19 @@ Dejar a un agente de codificación suelto sobre un repositorio suele derivar en 
 | **Dejan el verde en ficheros que nadie versiona** (`.pyc` forjados, ficheros ignorados, plugins). | **Commit candidato en clon limpio:** los controles y la aceptación corren sobre lo que se va a commitear, con un entorno comprobado por hash. |
 | **Rompen escenarios anteriores** al intentar arreglar el escenario actual. | **Verificación de no regresión (`L3`):** exige que pase el escenario actual **y** todos los escenarios que ya estaban en verde. |
 | **Se quedan a medias** si se agota la cuota de suscripción o API. | **Checkpoints SQLite + Pausa limpia (`exit 50`):** guarda el estado exacto del grafo LangGraph y reanuda donde quedó al volver a ejecutar `lictor run`. |
+
+---
+
+## 🏭 ¿Qué es una factoría agéntica de software?
+
+Una factoría agéntica de software (*AI Software Factory*) lleva el desarrollo a una cadena de producción: entra trabajo por un lado, sale por el otro, y cada paso es repetible y auditable. Combina pasos de código deterministas, pasos de agente y, cuando hace falta, aprobación humana.
+
+Lictor aplica esa idea a un tramo concreto, de los escenarios Gherkin al commit verificado: los agentes escriben el *driver* y la implementación, y el arnés determinista decide qué entra. Cada paso deja rastro en `.lictor/journal.jsonl` y `.lictor/runs/`. Hoy no hay aprobación humana dentro del grafo: tú escribes la especificación y resuelves las cuarentenas.
+
+Para profundizar en el concepto:
+
+- 🎬 [**Programar con agentes ya no basta: monta tu Software Factory**](https://youtu.be/p6nnqerea7w), de Eric Risco (17 min). Qué es una AI Factory y cómo se monta una de principio a fin.
+- 🎙️ [**AI Factory: el siguiente nivel de programar con agentes**](https://youtu.be/eYbDSOkXsdM?t=119), de Codemancers (del 01:59 al 14:17). Conversación sobre las *dark factories* y los límites de los revisores automáticos. El resto del episodio trata de otros temas.
 
 ---
 
