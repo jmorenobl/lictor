@@ -4,9 +4,10 @@ Project code runs with the user's permissions and can reach this directory, so i
 compared around every verification. Everything counts, bytecode included: a stale or planted
 `.pyc` runs like any other file, and verifying generates none, as the profile's env must ensure.
 
-The commands inherit nothing that could load code: `unset` removes it from what this process
-received and `env` then fixes what must hold. `files` are written into the environment before
-hashing it, so the tool can reach the project after starting rather than through its startup path.
+The commands start from an empty environment: only the names in `inherit` pass, and `env` then
+fixes what must hold, so whatever nobody listed stays out. `files` are written into the environment
+before hashing it, so the tool can reach the project after starting rather than through its
+startup path.
 """
 
 import json
@@ -17,7 +18,6 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from fnmatch import fnmatchcase
 from pathlib import Path, PurePath
 from typing import NoReturn
 
@@ -38,7 +38,7 @@ class VerificationEnvSpec:
 
     prepare: str = ""
     env: Mapping[str, str] = field(default_factory=dict)
-    unset: Sequence[str] = ()
+    inherit: Sequence[str] = ()
     files: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -61,18 +61,14 @@ class VerificationEnvironment:
         self.env_dir = project_root / ".lictor" / "verify-env"
         self.manifest = project_root / ".lictor" / "verify_env.json"
 
-    def command_env(self) -> dict[str, str | None]:
-        """Return the variables every verification command runs with; `None` removes one."""
-        removed: dict[str, str | None] = {
-            name: None
-            for name in os.environ
-            if any(fnmatchcase(name, pattern) for pattern in self.spec.unset)
-        }
+    def command_env(self) -> dict[str, str]:
+        """Return the whole environment of a verification command."""
+        inherited = {name: os.environ[name] for name in self.spec.inherit if name in os.environ}
         fixed = {
             name: value.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir))
             for name, value in self.spec.env.items()
         }
-        return removed | fixed
+        return inherited | fixed
 
     def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int) -> CommandOutput:
         """Run a verification command inside this environment."""

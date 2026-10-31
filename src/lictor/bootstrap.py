@@ -133,7 +133,7 @@ def bootstrap_runtime(
         spec=VerificationEnvSpec(
             prepare=active_config.verification.prepare,
             env=active_config.verification.env,
-            unset=active_config.verification.unset,
+            inherit=active_config.verification.inherit,
             files=active_config.verification.files,
         ),
     )

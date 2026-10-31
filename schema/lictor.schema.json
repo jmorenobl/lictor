@@ -217,7 +217,7 @@
     },
     "VerificationConfig": {
       "additionalProperties": false,
-      "description": "Entorno de verificación: se construye con prepare y se usa con env.",
+      "description": "Entorno de verificación: parte de vacío, inherit deja pasar nombres y env fija valores.",
       "properties": {
         "prepare": {
           "default": "",
@@ -231,11 +231,11 @@
           "title": "Env",
           "type": "object"
         },
-        "unset": {
+        "inherit": {
           "items": {
             "type": "string"
           },
-          "title": "Unset",
+          "title": "Inherit",
           "type": "array"
         },
         "files": {

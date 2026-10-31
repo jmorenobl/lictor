@@ -48,10 +48,12 @@
       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
       "PYTEST_PLUGINS": "pytest_bdd.plugin,lictor_project_path"
     },
-    "unset": [
-      "PYTHON*", "PYTEST*", "COV_CORE_*", "COVERAGE_*", "MYPY*", "RUFF_*",
-      "UV_CONFIG_FILE", "UV_ENV_FILE", "UV_PROJECT", "UV_PYTHON", "UV_WORKING_DIR",
-      "VIRTUAL_ENV", "LD_*", "DYLD_*", "BASH_ENV", "ENV"
+    "inherit": [
+      "PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+      "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR",
+      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+      "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_SYSTEM_CERTS", "REQUESTS_CA_BUNDLE"
     ],
     "files": {
       "lib/python*/site-packages/lictor_project_path.py": "\"\"\"Adds the project sources to the end of the path, once the tool has started.\"\"\"\nimport sys\n\n\ndef pytest_load_initial_conftests(early_config):\n    sys.path.append(str(early_config.invocation_params.dir / \"src\"))\n"

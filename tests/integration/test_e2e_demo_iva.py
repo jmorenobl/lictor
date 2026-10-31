@@ -119,7 +119,7 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
         "suppressions": ["# noqa", "# type: ignore"],
         "banned_patterns": [],
         "forbidden_paths": [],
-        "verification": {},
+        "verification": {"inherit": ["PATH", "HOME", "VIRTUAL_ENV"]},
         "agent_tools": [],
         "hints": "demo-iva hints",
         "gitignore": [".venv/", "__pycache__/"],

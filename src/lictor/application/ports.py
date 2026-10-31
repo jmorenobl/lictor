@@ -124,9 +124,9 @@ class CommandRunner(Protocol):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: Mapping[str, str | None] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
-        """Execute a command synchronously; a `None` in `env` removes an inherited variable."""
+        """Execute a command synchronously; `env` replaces what it would inherit, if given."""
         ...
 
 

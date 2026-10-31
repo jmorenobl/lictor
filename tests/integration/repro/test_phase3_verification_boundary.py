@@ -307,17 +307,28 @@ def test_verification_runs_in_a_clean_clone_with_the_profile_environment(
     assert f"UV_PROJECT_ENVIRONMENT={root.resolve() / VERIFY_ENV}" in seen
 
 
+def _probe_control(probe: Path) -> dict[str, str]:
+    return {"id": "sonda", "level": "L2", "run": f"sh -c 'env > {probe}'", "report": "exit-code"}
+
+
+def test_undeclared_variable_does_not_reach_the_commands(
+    make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name is invented, so no list of known dangers could have foreseen it."""
+    probe = tmp_path / "sonda"
+    root = make_project(extra_controls=[_probe_control(probe)])
+    monkeypatch.setenv("LICTOR_NADIE_LA_ENUMERO_7Q2", "x")
+
+    assert run_lictor(root, Agent()) == Outcome(0)
+
+    assert "LICTOR_NADIE_LA_ENUMERO_7Q2" not in probe.read_text(encoding="utf-8")
+
+
 def test_verification_inherits_nothing_that_loads_code(
     make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     probe = tmp_path / "sonda"
-    control = {
-        "id": "sonda",
-        "level": "L2",
-        "run": f"sh -c 'env > {probe}'",
-        "report": "exit-code",
-    }
-    root = make_project(extra_controls=[control])
+    root = make_project(extra_controls=[_probe_control(probe)])
     monkeypatch.setenv("PYTHONPATH", "src")
     monkeypatch.setenv("PYTHONSTARTUP", "src/inicio.py")
     monkeypatch.setenv("PYTEST_ADDOPTS", "-p lab_cheat")
@@ -327,6 +338,20 @@ def test_verification_inherits_nothing_that_loads_code(
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert not [line for line in seen if line.startswith(("PYTHONPATH=", "PYTHONSTARTUP="))]
     assert "PYTEST_ADDOPTS=-o pythonpath=" in seen
+
+
+def test_verification_keeps_what_the_tools_need(
+    make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = tmp_path / "sonda"
+    root = make_project(extra_controls=[_probe_control(probe)])
+    monkeypatch.setenv("SSL_CERT_DIR", "/ruta/de/prueba")
+
+    assert run_lictor(root, Agent()) == Outcome(0)
+
+    seen = probe.read_text(encoding="utf-8").splitlines()
+    assert f"PATH={os.environ['PATH']}" in seen
+    assert "SSL_CERT_DIR=/ruta/de/prueba" in seen
 
 
 def test_verification_venv_shares_nothing_and_has_no_bytecode(

@@ -294,7 +294,7 @@ class VerifyAttempt:
     def _environment_problem(self, req: VerifyAttemptRequest) -> str | None:
         return self.environment.ensure(req.run_id) if self.environment else None
 
-    def _command_env(self) -> dict[str, str | None] | None:
+    def _command_env(self) -> dict[str, str] | None:
         return self.environment.command_env() if self.environment else None
 
     def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:

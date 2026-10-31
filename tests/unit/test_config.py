@@ -1,5 +1,4 @@
 import json
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -337,45 +336,61 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
     assert len(files) == 1
 
 
+# Each entry holds because of something measured with an exact environment: a variable the tools
+# read to find themselves, their cache or the network. Nothing here names code to load.
+INHERITED = {
+    "PATH": "without it the tools can't be found",
+    "HOME": "where the tools keep their state, when it differs from the user database",
+    "TMPDIR": "sandboxes and CI may only allow writing there",
+    "XDG_CACHE_HOME": "moves the cache of uv",
+    "XDG_DATA_HOME": "moves the interpreters uv manages",
+    "UV_CACHE_DIR": "moves the cache of uv",
+    "UV_PYTHON_INSTALL_DIR": "moves the interpreters uv manages",
+    "HTTP_PROXY": "the network may only be reachable through it",
+    "HTTPS_PROXY": "the network may only be reachable through it",
+    "ALL_PROXY": "the network may only be reachable through it",
+    "NO_PROXY": "exceptions to the proxy",
+    "http_proxy": "the lowercase spelling is read as well",
+    "https_proxy": "the lowercase spelling is read as well",
+    "all_proxy": "the lowercase spelling is read as well",
+    "no_proxy": "the lowercase spelling is read as well",
+    "SSL_CERT_FILE": "corporate roots",
+    "SSL_CERT_DIR": "corporate roots",
+    "UV_SYSTEM_CERTS": "corporate roots in the system store",
+    "REQUESTS_CA_BUNDLE": "corporate roots for the audit, which doesn't read the others",
+}
+
+
+def test_profile_inherits_exactly_what_was_justified() -> None:
+    assert sorted(load_profile("python-uv").verification.inherit) == sorted(INHERITED)
+
+
 @pytest.mark.parametrize(
     "name",
     [
         "PYTHONPATH",
         "PYTHONSTARTUP",
         "PYTHONHOME",
-        "PYTHONOPTIMIZE",
-        "PYTHONWARNINGS",
-        "PYTHONPYCACHEPREFIX",
         "PYTEST_ADDOPTS",
-        "PYTEST_PLUGINS",
-        "COV_CORE_SOURCE",
         "COVERAGE_PROCESS_START",
         "MYPYPATH",
-        "MYPY_CONFIG_FILE_DIR",
         "RUFF_CONFIG",
         "UV_CONFIG_FILE",
         "UV_ENV_FILE",
+        "UV_INDEX_URL",
         "UV_PROJECT",
         "UV_PYTHON",
-        "UV_WORKING_DIR",
         "VIRTUAL_ENV",
         "LD_PRELOAD",
         "DYLD_INSERT_LIBRARIES",
         "BASH_ENV",
         "ENV",
+        "LANG",
+        "LC_ALL",
     ],
 )
-def test_profile_inherits_nothing_that_loads_code(name: str) -> None:
-    patterns = load_profile("python-uv").verification.unset
-
-    assert any(fnmatchcase(name, pattern) for pattern in patterns)
-
-
-@pytest.mark.parametrize("name", ["PATH", "HOME", "UV_CACHE_DIR", "UV_INDEX_URL", "SSL_CERT_FILE"])
-def test_profile_keeps_what_the_tools_need(name: str) -> None:
-    patterns = load_profile("python-uv").verification.unset
-
-    assert not any(fnmatchcase(name, pattern) for pattern in patterns)
+def test_profile_doesnt_inherit_what_the_tools_dont_need(name: str) -> None:
+    assert name not in load_profile("python-uv").verification.inherit
 
 
 def test_invalid_banned_pattern_is_rejected() -> None:

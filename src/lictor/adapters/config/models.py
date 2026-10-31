@@ -114,13 +114,13 @@ class AcceptanceConfig(BaseModel):
 
 
 class VerificationConfig(BaseModel):
-    """Entorno de verificación: se construye con prepare y se usa con env."""
+    """Entorno de verificación: parte de vacío, inherit deja pasar nombres y env fija valores."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     prepare: str = ""
     env: dict[str, str] = Field(default_factory=dict)
-    unset: list[str] = Field(default_factory=list)
+    inherit: list[str] = Field(default_factory=list)
     files: dict[str, str] = Field(default_factory=dict)
 
 

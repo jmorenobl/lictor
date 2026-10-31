@@ -37,7 +37,7 @@ class FakeRunner(CommandRunner):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: Mapping[str, str | None] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
         """Record the call and return a canned or queued response."""
         self.calls.append(

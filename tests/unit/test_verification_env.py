@@ -3,11 +3,13 @@
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from lictor.adapters.runner.fake import FakeRunner
+from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.application.ports import AuditSink, Clock, EventLog, Vcs
 from lictor.application.seal import hash_tree
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
@@ -158,36 +160,54 @@ def test_a_removed_file_counts_as_a_change(tmp_path: Path) -> None:
     assert environment.ensure("R") is not None
 
 
-def test_inherited_variables_are_removed_and_fixed_ones_win(
+def test_only_declared_variables_are_inherited_and_fixed_ones_win(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("HEREDADA_A", "x")
+    monkeypatch.setenv("DECLARADA", "x")
     monkeypatch.setenv("FIJADA", "heredada")
-    monkeypatch.setenv("heredada_b", "x")
-    monkeypatch.setenv("OTRA_EXACTA", "x")
-    monkeypatch.setenv("LIBRE", "x")
-    spec = VerificationEnvSpec(env={"FIJADA": "1"}, unset=("HEREDADA_*", "FIJADA", "OTRA_EXACTA"))
+    monkeypatch.setenv("SIN_DECLARAR", "x")
+    monkeypatch.delenv("AUSENTE", raising=False)
+    spec = VerificationEnvSpec(inherit=("DECLARADA", "FIJADA", "AUSENTE"), env={"FIJADA": "1"})
     environment, _ = _environment(tmp_path, FakeRunner(), spec)
 
-    env = environment.command_env()
-
-    assert env["HEREDADA_A"] is None
-    assert env["OTRA_EXACTA"] is None
-    assert env["FIJADA"] == "1"
-    assert "heredada_b" not in env
-    assert "LIBRE" not in env
+    assert environment.command_env() == {"DECLARADA": "x", "FIJADA": "1"}
 
 
-def test_commands_run_with_the_removals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HEREDADA", "x")
+def test_inherit_names_are_exact_not_patterns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DECLARADA_B", "x")
+    monkeypatch.setenv("declarada", "x")
+    spec = VerificationEnvSpec(inherit=("DECLARADA", "DECLARADA_*"))
+    environment, _ = _environment(tmp_path, FakeRunner(), spec)
+
+    assert environment.command_env() == {}
+
+
+def test_commands_run_with_the_exact_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DECLARADA", "x")
     runner = _Builder()
-    spec = VerificationEnvSpec(prepare=SPEC.prepare, unset=("HEREDADA",))
+    spec = VerificationEnvSpec(prepare=SPEC.prepare, inherit=("DECLARADA",))
     environment, _ = _environment(tmp_path, runner, spec)
 
     environment.ensure("R")
     environment.run(["control"], tmp_path, 1)
 
-    assert [call["env"] for call in runner.calls] == [{"HEREDADA": None}] * 2
+    assert [call["env"] for call in runner.calls] == [{"DECLARADA": "x"}] * 2
+
+
+def test_forgetting_a_variable_a_tool_needs_stops_visibly(tmp_path: Path) -> None:
+    """With no `PATH` declared the tool isn't found: the build fails and says what it tried."""
+    spec = VerificationEnvSpec(prepare="herramienta-de-la-ruta", inherit=())
+    environment, event_log = _environment(tmp_path, SubprocessRunner(), spec)
+    cast(MagicMock, environment.vcs).export_tree.side_effect = lambda _rev, dest: dest.mkdir()
+
+    with pytest.raises(EnvironmentUnavailableError, match="herramienta-de-la-ruta"):
+        environment.ensure("R")
+
+    assert event_log.append.call_args.args[0].type == "lictor.env.failed.v1"
 
 
 def test_files_are_written_before_hashing(tmp_path: Path) -> None:

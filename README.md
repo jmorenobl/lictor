@@ -347,7 +347,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "verification": {
     "prepare": "uv sync --frozen --no-install-project",
     "env": {"UV_PROJECT_ENVIRONMENT": "{env_dir}", "UV_NO_SYNC": "1", "PYTHONDONTWRITEBYTECODE": "1"},
-    "unset": ["PYTHON*", "PYTEST*", "LD_*", "DYLD_*"],
+    "inherit": ["PATH", "HOME", "TMPDIR", "SSL_CERT_FILE"],
     "files": {"lib/python*/site-packages/lictor_project_path.py": "..."}
   },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
@@ -355,7 +355,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 }
 ```
 
-En `verification`, `unset` son patrones de variables heredadas que se eliminan y `env` fija después lo que debe valer, así que `env` gana. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo. Si un proyecto declara su propio bloque `verification`, sustituye al completo del perfil.
+En `verification`, el entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana. Lo que nadie enumeró no entra. `files` son ficheros que Lictor escribe en el entorno antes de calcular su hash; la clave es una ruta relativa al entorno cuyo directorio puede llevar comodines y debe resolverse a uno solo. Si un proyecto declara su propio bloque `verification`, sustituye al completo del perfil.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 

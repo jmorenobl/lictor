@@ -20,16 +20,9 @@ class SubprocessRunner(CommandRunner):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: Mapping[str, str | None] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
         """Execute a command list synchronously with process group timeout management."""
-        merged_env = os.environ.copy()
-        for name, value in (env or {}).items():
-            if value is None:
-                merged_env.pop(name, None)
-            else:
-                merged_env[name] = value
-
         start_time = time.monotonic()
         try:
             proc = subprocess.Popen(
@@ -38,7 +31,7 @@ class SubprocessRunner(CommandRunner):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=merged_env,
+                env=None if env is None else dict(env),
                 start_new_session=True,
             )
         except OSError as exc:
