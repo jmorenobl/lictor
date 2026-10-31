@@ -10,3 +10,4 @@ htmlcov/
 mutants/
 examples/demo-iva/.venv/
 .codegraph/
+.audits/

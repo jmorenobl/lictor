@@ -1,4 +1,4 @@
-"""Reproduction harness for the cases in .audits/analisis-base/informe.md.
+"""Reproduction harness for the cases from the v0.1 audit.
 
 Every case runs the real CLI graph over a demo-iva copy using the real python-uv profile, with
 the agent replaced by a scripted FakeExecutor. Cases assert the desired behaviour and stay under
