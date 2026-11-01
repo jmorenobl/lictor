@@ -292,7 +292,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Mapea cada test del reporte JUnit a su `@ID-NNN`: exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. Hoy solo registra resultado y salida: `mutmut` termina con 0 aunque queden supervivientes, y Lictor aún no lee la puntuación. | `measure` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Hoy solo registra resultado y salida: `mutmut` termina con 0 aunque queden supervivientes, y Lictor aún no lee la puntuación. | `measure` |
 
 ---
 
@@ -342,7 +342,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
   ],
-  "verification": {"plugins": ["pytest_bdd.plugin"], "env": {}, "inherit": []},
+  "verification": {"env": {}, "inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }
@@ -352,11 +352,24 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
-| Proyecto | `verification.plugins`, `verification.env`, `verification.inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
+| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
+| Proyecto | `verification.env`, `verification.inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
 
-El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, de modo que cada proyecto declara los suyos en `verification.plugins` (nombres de módulo importables desde el entorno de verificación); `demo-iva` declara `pytest_bdd.plugin`. Sin esa declaración, un driver con pytest-bdd no encuentra sus fixtures y falla. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
+El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
+
+**Reanudar comprueba la configuración resuelta.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`. Si cambió cualquiera de ellos, sale con exit 10 y explica el motivo. Un cambio solo de formato en `lictor.json` no cuenta.
+
+**`paths.protected` es decisión del proyecto.** `lictor init` escribe la lista del perfil como punto de partida, pero `paths` sustituye a ese valor, así que un `lictor.json` puede quitar entradas. Quitar `uv.lock` tiene más alcance del que parece: lo que el bloqueo instala es lo que entra en el entorno de verificación, y un plugin instalado se carga. `forbidden_paths` y `IntegritySnapshot` cubren parte del resto, pero no sustituyen a esa lista.
+
+**Por qué `UV_*` está reservado.** Esas variables deciden dónde se instala el entorno, si `uv` puede sincronizarlo y de dónde baja código. Un proyecto que las fijase podría deshacer lo que el perfil garantiza, de modo que nombrar una da exit 10.
+
+**Índice privado.** `verification.prepare` usa `--frozen`, de modo que las URL salen de `uv.lock` y solo faltan las credenciales. `UV_INDEX_<NOMBRE>_USERNAME` y `_PASSWORD` funcionan en `uv`, pero quedan fuera por lo anterior. Hay dos vías, sin ninguna contraseña en `lictor.json` ni en `uv.lock`:
+
+- `~/.netrc`, que llega porque `HOME` se hereda.
+- Un fichero netrc en otra ruta, con `"verification": {"inherit": ["NETRC"]}`.
+
+Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación básica sobre HTTP: sin credenciales, `prepare` falla (exit 40 en Lictor) y con ellas instala. No se han probado contra un índice real ni con `keyring`. Las credenciales quedan al alcance del código del proyecto, que corre con el mismo usuario y el mismo entorno que `prepare`.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 
@@ -368,7 +381,7 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 | `.lictor/journal.jsonl` | Bitácora inmutable de eventos en formato CloudEvents 1.0. |
 | `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
 | `.lictor/verify-env/` | Entorno de verificación, construido una vez por ejecución fuera del clon. |
-| `.lictor/verify_env.json` | Hash esperado de ese entorno. |
+| `.lictor/verify_env.json` | Hash esperado de ese entorno y plugins que tiene instalados. |
 | `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente y su stderr (`NNN-implement.json`, `NNN-implement.stderr.log`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. |
 
 </details>
