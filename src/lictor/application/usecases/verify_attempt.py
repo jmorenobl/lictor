@@ -264,7 +264,7 @@ class VerifyAttempt:
             return self._fail(req, _Failure("L0-entorno", env_problem))
 
         candidate = self._create_candidate(req, scenario)
-        with verification_tree(self.vcs, candidate.sha) as tree:
+        with verification_tree(self.vcs, candidate.sha, self.project_root) as tree:
             result = self._run_commands(replace(req, tree_dir=tree))
         if not result.ok:
             return result
@@ -294,8 +294,13 @@ class VerifyAttempt:
     def _environment_problem(self, req: VerifyAttemptRequest) -> str | None:
         return self.environment.ensure(req.run_id) if self.environment else None
 
-    def _command_env(self) -> dict[str, str] | None:
-        return self.environment.command_env() if self.environment else None
+    def _run_project_command(
+        self, cmd: Sequence[str], req: VerifyAttemptRequest, timeout_s: int
+    ) -> CommandOutput:
+        tree = self._tree_dir(req)
+        if self.environment is None:
+            return self.runner.run(cmd, cwd=tree, timeout_s=timeout_s)
+        return self.environment.run(cmd, tree, timeout_s)
 
     def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:
         paths = list(req.paths_writable)
@@ -471,12 +476,7 @@ class VerifyAttempt:
         cmd_tokens = fill_report_path(ctrl.run, out_file)
 
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
-        cmd_out = self.runner.run(
-            cmd_tokens,
-            cwd=self._tree_dir(req),
-            timeout_s=ctrl.timeout_s,
-            env=self._command_env(),
-        )
+        cmd_out = self._run_project_command(cmd_tokens, req, ctrl.timeout_s)
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)
 
@@ -520,12 +520,7 @@ class VerifyAttempt:
         cmd_tokens = fill_report_path(req.acceptance_run, out_file)
 
         snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
-        cmd_out = self.runner.run(
-            cmd_tokens,
-            cwd=self._tree_dir(req),
-            timeout_s=req.acceptance_timeout_s,
-            env=self._command_env(),
-        )
+        cmd_out = self._run_project_command(cmd_tokens, req, req.acceptance_timeout_s)
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)
         if tampered:

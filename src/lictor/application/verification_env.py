@@ -5,9 +5,15 @@ compared around every verification. Everything counts, bytecode included: a stal
 `.pyc` runs like any other file, and verifying generates none, as the profile's env must ensure.
 
 The commands start from an empty environment: only the names in `inherit` pass, and `env` then
-fixes what must hold, so whatever nobody listed stays out. `files` are copied into the environment
-before hashing it, to the directory `files_dir_command` prints, so the tool can reach the project
-after starting rather than through its startup path.
+fixes what must hold, so whatever nobody listed stays out. Each one gets a new, empty home, so no
+user configuration decides a control and nothing a previous command wrote there survives. `files`
+are copied into the environment before hashing it, to the directory `files_dir_command` prints, so
+the tool can reach the project after starting rather than through its startup path.
+
+`prepare` needs what the commands must not have: network settings and credentials pass through
+`prepare_inherit`, which the commands never see. It has an empty home as well, so what it does need
+from the user's is explicit: `prepare_ask` asks the tool, with the caller's environment, for values
+that would otherwise follow the home, and `prepare_home_files` points to files that live in it.
 
 What the tool loads is decided once, when building: `plugins_command` lists what the environment
 has installed, the list goes to the manifest and every later check asks again and compares. The
@@ -28,12 +34,13 @@ from pathlib import Path
 from typing import NoReturn
 
 from lictor.application.ports import AuditSink, CommandRunner, Vcs
-from lictor.application.run_files import save_output, unused_path, verification_tree
+from lictor.application.run_files import save_output, scratch_dir, unused_path, verification_tree
 from lictor.application.seal import hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput, Event
 
 ENV_DIR_PLACEHOLDER = "{env_dir}"
+HOME_DIR_PLACEHOLDER = "{home_dir}"
 _PREPARE_TIMEOUT_S = 1800
 _QUESTION_TIMEOUT_S = 60
 _MAX_ERROR_LINES = 20
@@ -45,6 +52,9 @@ class VerificationEnvSpec:
     """What the profile declares: how to build the environment and how to use it."""
 
     prepare: str = ""
+    prepare_inherit: Sequence[str] = ()
+    prepare_ask: Mapping[str, str] = field(default_factory=dict)
+    prepare_home_files: Mapping[str, str] = field(default_factory=dict)
     env: Mapping[str, str] = field(default_factory=dict)
     inherit: Sequence[str] = ()
     files_dir_command: str = ""
@@ -74,21 +84,54 @@ class VerificationEnvironment:
         self.manifest = project_root / ".lictor" / "verify_env.json"
         self._installed_plugins: list[str] = []
 
-    def command_env(self) -> dict[str, str]:
-        """Return the whole environment of a verification command."""
-        inherited = {name: os.environ[name] for name in self.spec.inherit if name in os.environ}
-        fixed = {
-            name: value.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir))
+    def _fixed_env(self, home: Path) -> dict[str, str]:
+        return {
+            name: value.replace(ENV_DIR_PLACEHOLDER, str(self.env_dir)).replace(
+                HOME_DIR_PLACEHOLDER, str(home)
+            )
             for name, value in self.spec.env.items()
         }
+
+    def command_env(self, home: Path) -> dict[str, str]:
+        """Return the whole environment of a verification command living in `home`."""
+        inherited = {name: os.environ[name] for name in self.spec.inherit if name in os.environ}
+        fixed = self._fixed_env(home)
         plugins = [*self.spec.plugins, *self._installed_plugins]
         if plugins:
             fixed[self.spec.plugin_variable] = ",".join(plugins)
         return inherited | fixed
 
     def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int) -> CommandOutput:
-        """Run a verification command inside this environment."""
-        return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=self.command_env())
+        """Run a verification command inside this environment, with a home nobody has used."""
+        with scratch_dir(self.project_root, "home-") as home:
+            return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=self.command_env(home))
+
+    def _prepare_env(self, run_id: str, home: Path) -> dict[str, str]:
+        """Return what `prepare` runs with, which no verification command gets to see."""
+        inherited = {
+            name: os.environ[name] for name in self.spec.prepare_inherit if name in os.environ
+        }
+        user_home = Path.home()
+        files = {
+            name: str(user_home / rel_path)
+            for name, rel_path in self.spec.prepare_home_files.items()
+            if (user_home / rel_path).is_file()
+        }
+        answers = {
+            name: self._ask_the_tool(run_id, name, command)
+            for name, command in self.spec.prepare_ask.items()
+        }
+        return files | inherited | answers | self._fixed_env(home)
+
+    def _ask_the_tool(self, run_id: str, name: str, command: str) -> str:
+        """Ask with the caller's own environment: the answer depends on its home."""
+        output = self.runner.run(
+            shlex.split(command), cwd=self.project_root, timeout_s=_QUESTION_TIMEOUT_S
+        )
+        answer = output.stdout.strip()
+        if output.returncode != 0 or not answer:
+            self._fail(run_id, f"No se pudo averiguar {name}: {output.stderr}", output.returncode)
+        return answer
 
     def ensure(self, run_id: str) -> str | None:
         """Build the environment if this run has none, and return why it can't be trusted.
@@ -132,9 +175,15 @@ class VerificationEnvironment:
         shutil.rmtree(self.env_dir, ignore_errors=True)
 
         tokens = self._tokens(self.spec.prepare)
-        with verification_tree(self.vcs, "HEAD") as tree:
+        with (
+            verification_tree(self.vcs, "HEAD", self.project_root) as tree,
+            scratch_dir(self.project_root, "home-") as home,
+        ):
             output = self.runner.run(
-                tokens, cwd=tree, timeout_s=_PREPARE_TIMEOUT_S, env=self.command_env()
+                tokens,
+                cwd=tree,
+                timeout_s=_PREPARE_TIMEOUT_S,
+                env=self._prepare_env(run_id, home),
             )
 
         log = unused_path(self.project_root / ".lictor" / "runs" / run_id / "env" / "build.log")
@@ -203,12 +252,7 @@ class VerificationEnvironment:
         return plugins
 
     def _ask(self, run_id: str, command: str, failure: str) -> str:
-        output = self.runner.run(
-            self._tokens(command),
-            cwd=self.env_dir,
-            timeout_s=_QUESTION_TIMEOUT_S,
-            env=self.command_env(),
-        )
+        output = self.run(self._tokens(command), self.env_dir, _QUESTION_TIMEOUT_S)
         if output.returncode != 0:
             self._fail(run_id, f"{failure}: {output.stderr}", output.returncode)
         return output.stdout

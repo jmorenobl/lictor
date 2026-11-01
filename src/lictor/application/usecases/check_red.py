@@ -107,7 +107,8 @@ class CheckRed:
             return self._reject_or_raise(request, step_dir, _Rejection("L0-entorno", env_problem))
 
         candidate = self._create_candidate(request)
-        with verification_tree(self.vcs, candidate.sha if candidate else "HEAD") as tree:
+        rev = candidate.sha if candidate else "HEAD"
+        with verification_tree(self.vcs, rev, request.project_root) as tree:
             result, sealable = self._check_tree(request, step_dir, tree)
             if not result.ok:
                 return result

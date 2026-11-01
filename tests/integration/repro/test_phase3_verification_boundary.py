@@ -414,15 +414,21 @@ def test_verification_inherits_nothing_that_loads_code(
 def test_verification_keeps_what_the_tools_need(
     make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The network settings and credentials of `prepare` don't reach project code."""
     probe = tmp_path / "sonda"
     root = make_project(extra_controls=[_probe_control(probe)])
     monkeypatch.setenv("SSL_CERT_DIR", "/ruta/de/prueba")
+    monkeypatch.setenv("NETRC", "/ruta/de/credenciales")
+    monkeypatch.setenv("HTTPS_PROXY", "http://usuario:clave@proxy.invalid:9")
+    monkeypatch.setenv("NO_PROXY", "*")
 
     assert run_lictor(root, Agent()) == Outcome(0)
 
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert f"PATH={os.environ['PATH']}" in seen
-    assert "SSL_CERT_DIR=/ruta/de/prueba" in seen
+    names = {line.partition("=")[0] for line in seen}
+    assert not names & {"SSL_CERT_DIR", "NETRC", "HTTPS_PROXY", "NO_PROXY"}
+    assert f"HOME={os.environ['HOME']}" not in seen
 
 
 def test_project_needs_reach_the_commands(
@@ -943,7 +949,7 @@ def test_resume_refuses_a_changed_profile(
     make_project: ProjectFactory, tmp_path: Path, change: Callable[[dict[str, Any]], None]
 ) -> None:
     """The defences live in the profile, so `lictor.json` alone can't vouch for a resume."""
-    root = make_project(own_profiles=True)
+    root = make_project()
     agent = Agent(impl=_limited)
     require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
     calls = len(agent.calls)
@@ -960,7 +966,7 @@ def test_resume_refuses_a_changed_profile(
 def test_resume_refuses_a_changed_profile_file(
     make_project: ProjectFactory, tmp_path: Path
 ) -> None:
-    root = make_project(own_profiles=True)
+    root = make_project()
     agent = Agent(impl=_limited)
     require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
 
@@ -972,7 +978,7 @@ def test_resume_refuses_a_changed_profile_file(
 
 
 def test_resume_goes_on_when_nothing_changed(make_project: ProjectFactory, tmp_path: Path) -> None:
-    root = make_project(own_profiles=True)
+    root = make_project()
     limited = [True]
 
     def impl(task: AgentTask, scenario_id: str, attempt: int) -> AgentStatus | None:

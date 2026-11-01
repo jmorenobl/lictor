@@ -402,16 +402,15 @@ def test_profile_files_need_a_command_that_says_where_they_go() -> None:
         Profile.model_validate(data)
 
 
-# Each entry holds because of something measured with an exact environment: a variable the tools
-# read to find themselves, their cache or the network. Nothing here names code to load.
+# Each entry holds because of something measured with an exact environment. The commands get almost
+# nothing: the network settings and credentials stay with `prepare`, out of reach of project code.
 INHERITED = {
     "PATH": "without it the tools can't be found",
-    "HOME": "where the tools keep their state, when it differs from the user database",
     "TMPDIR": "sandboxes and CI may only allow writing there",
-    "XDG_CACHE_HOME": "moves the cache of uv",
-    "XDG_DATA_HOME": "moves the interpreters uv manages",
-    "UV_CACHE_DIR": "moves the cache of uv",
-    "UV_PYTHON_INSTALL_DIR": "moves the interpreters uv manages",
+}
+PREPARE_INHERITED = {
+    **INHERITED,
+    "NETRC": "credentials of a private index",
     "HTTP_PROXY": "the network may only be reachable through it",
     "HTTPS_PROXY": "the network may only be reachable through it",
     "ALL_PROXY": "the network may only be reachable through it",
@@ -428,7 +427,20 @@ INHERITED = {
 
 
 def test_profile_inherits_exactly_what_was_justified() -> None:
-    assert sorted(load_profile("python-uv").verification.inherit) == sorted(INHERITED)
+    verification = load_profile("python-uv").verification
+    assert sorted(verification.inherit) == sorted(INHERITED)
+    assert sorted(verification.prepare_inherit) == sorted(PREPARE_INHERITED)
+
+
+def test_profile_gives_prepare_and_the_commands_a_home_of_their_own() -> None:
+    verification = load_profile("python-uv").verification
+    assert verification.env["HOME"] == "{home_dir}"
+    assert verification.prepare_ask == {"UV_PYTHON_INSTALL_DIR": "uv python dir"}
+    assert verification.prepare_home_files == {"NETRC": ".netrc"}
+
+
+def test_profile_prepares_without_a_cache_anyone_can_write() -> None:
+    assert "--no-cache" in load_profile("python-uv").verification.prepare
 
 
 @pytest.mark.parametrize(
@@ -456,7 +468,9 @@ def test_profile_inherits_exactly_what_was_justified() -> None:
     ],
 )
 def test_profile_doesnt_inherit_what_the_tools_dont_need(name: str) -> None:
-    assert name not in load_profile("python-uv").verification.inherit
+    verification = load_profile("python-uv").verification
+    assert name not in verification.inherit
+    assert name not in verification.prepare_inherit
 
 
 def test_invalid_banned_pattern_is_rejected() -> None:
@@ -516,12 +530,18 @@ def test_a_project_cannot_declare_a_defence_of_the_profile(
         "RUFF_CONFIG",
         "PATH",
         "HOME",
+        "NETRC",
+        "HTTP_PROXY",
     ],
 )
 @pytest.mark.parametrize(
     "declare",
-    [lambda name: {"env": {name: "x"}}, lambda name: {"inherit": [name]}],
-    ids=["env", "inherit"],
+    [
+        lambda name: {"env": {name: "x"}},
+        lambda name: {"inherit": [name]},
+        lambda name: {"prepare_inherit": [name]},
+    ],
+    ids=["env", "inherit", "prepare_inherit"],
 )
 def test_a_project_cannot_touch_a_reserved_variable(
     tmp_path: Path, name: str, declare: Callable[[str], dict[str, object]]
@@ -623,7 +643,7 @@ def test_init_copies_no_defence(tmp_path: Path) -> None:
     init_config_file(tmp_path)
 
     written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
-    assert written["verification"] == {"env": {}, "inherit": []}
+    assert written["verification"] == {"env": {}, "inherit": [], "prepare_inherit": []}
     assert not {"suppressions", "banned_patterns", "forbidden_paths"} & set(written)
 
 
@@ -716,8 +736,8 @@ def test_fingerprint_does_not_depend_on_where_lictor_is_installed(tmp_path: Path
     "field",
     [
         "prepare",
-        "env",
-        "inherit",
+        "prepare_ask",
+        "prepare_home_files",
         "files_dir_command",
         "plugin_variable",
         "plugins",

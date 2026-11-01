@@ -6,7 +6,9 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 """
 
 import contextlib
+import hashlib
 import shlex
+import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -41,11 +43,31 @@ def new_step_dir(path: Path) -> Path:
     return step_dir
 
 
+def _scratch_root(project_root: Path) -> Path:
+    """Return where this project's temporary directories live, outside the project."""
+    digest = hashlib.sha256(str(project_root.resolve()).encode()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"lictor-{digest}"
+
+
 @contextlib.contextmanager
-def verification_tree(vcs: Vcs, rev: str) -> Iterator[Path]:
+def scratch_dir(project_root: Path, prefix: str) -> Iterator[Path]:
+    """Yield an empty directory outside the project, gone afterwards."""
+    root = _scratch_root(project_root)
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=root, ignore_cleanup_errors=True) as tmp:
+        yield Path(tmp)
+
+
+def sweep_scratch(project_root: Path) -> None:
+    """Remove what a killed run left behind, which nothing else would ever clean."""
+    shutil.rmtree(_scratch_root(project_root), ignore_errors=True)
+
+
+@contextlib.contextmanager
+def verification_tree(vcs: Vcs, rev: str, project_root: Path) -> Iterator[Path]:
     """Yield a clean clone of `rev`, outside the project, gone afterwards."""
-    with tempfile.TemporaryDirectory(prefix="lictor-verify-", ignore_cleanup_errors=True) as tmp:
-        tree = Path(tmp) / "tree"
+    with scratch_dir(project_root, "verify-") as tmp:
+        tree = tmp / "tree"
         vcs.export_tree(rev, tree)
         yield tree
 

@@ -910,10 +910,13 @@ def test_verify_banned_pattern_reports_itself(tmp_path: Path) -> None:
     assert r"#\s*noqa" in (result.condensed_error or "")
 
 
-def _spied_environment(problems: list[str | None]) -> MagicMock:
+def _spied_environment(problems: list[str | None], runner: FakeRunner | None = None) -> MagicMock:
     environment = MagicMock(spec=VerificationEnvironment)
     environment.ensure.side_effect = problems
-    environment.command_env.return_value = {"VAR": "1"}
+    if runner is not None:
+        environment.run.side_effect = lambda cmd, cwd, timeout_s: runner.run(
+            cmd, cwd, timeout_s, env={"VAR": "1"}
+        )
     return environment
 
 
@@ -932,7 +935,7 @@ def test_verify_tampered_environment_fails_before_running_anything(tmp_path: Pat
 def test_verify_environment_tampered_during_the_commands_fails(tmp_path: Path) -> None:
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner)
-    verifier.environment = _spied_environment([None, "manipulado"])
+    verifier.environment = _spied_environment([None, "manipulado"], runner)
 
     result = verifier.execute(req)
 
@@ -945,7 +948,7 @@ def test_verify_environment_tampered_during_the_commands_fails(tmp_path: Path) -
 def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner)
-    verifier.environment = _spied_environment([None, None])
+    verifier.environment = _spied_environment([None, None], runner)
 
     control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
     req = replace(req, controls=(control,))

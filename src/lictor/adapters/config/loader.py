@@ -230,8 +230,15 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
 
 
 def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerification) -> None:
-    fixed_by_profile = {*profile.env, *profile.inherit, profile.plugin_variable}
-    for name in (*project.env, *project.inherit):
+    fixed_by_profile = {
+        *profile.env,
+        *profile.inherit,
+        *profile.prepare_inherit,
+        *profile.prepare_ask,
+        *profile.prepare_home_files,
+        profile.plugin_variable,
+    }
+    for name in (*project.env, *project.inherit, *project.prepare_inherit):
         if name in fixed_by_profile or any(fnmatchcase(name, p) for p in profile.reserved):
             msg = f"verification no puede declarar '{name}': esa variable la gobierna el perfil"
             raise ConfigError(msg)
@@ -253,6 +260,9 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
     return Defences(
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,
+            prepare_inherit=[*profile.verification.prepare_inherit, *project.prepare_inherit],
+            prepare_ask=profile.verification.prepare_ask,
+            prepare_home_files=profile.verification.prepare_home_files,
             inherit=[*profile.verification.inherit, *project.inherit],
             env={**project.env, **profile.verification.env},
             files_dir_command=profile.verification.files_dir_command,
