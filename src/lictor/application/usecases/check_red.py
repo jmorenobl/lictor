@@ -54,6 +54,7 @@ class CheckRedRequest:
     acceptance_timeout_s: int = 600
     error_max_chars: int = 4000
     acceptance_failure_exit_codes: Sequence[int] = (1,)
+    tree: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,13 +126,15 @@ class CheckRed:
         return replace(result, commit_sha=commit_sha)
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
-        """Take the fresh driver from the working tree, unless a crash left it committed."""
-        if not request.driver_fresh:
+        """Take the fresh driver from what the agent left, unless a crash left it committed."""
+        if not request.driver_fresh or request.tree is None:
             return None
         head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
-        if not self.vcs.status() and head_runs and head_runs[0] == request.run_id:
+        committed = head_runs and head_runs[0] == request.run_id
+        if committed and self.vcs.get_tree("HEAD") == request.tree:
             return None
-        return self.vcs.create_candidate(
+        return self.vcs.commit_tree(
+            request.tree,
             message=DRIVER_COMMIT_MESSAGE,
             trailers={"Lictor-Run": request.run_id},
         )

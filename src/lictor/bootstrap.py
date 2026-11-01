@@ -172,7 +172,6 @@ def bootstrap_runtime(
     )
 
     quarantine_uc = Quarantine(
-        vcs=vcs,
         event_log=active_event_log,
         clock=active_clock,
     )

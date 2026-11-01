@@ -23,36 +23,48 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
-from lictor.domain.model import Candidate, CommandOutput
+from lictor.domain.model import Candidate, CommandOutput, TreeChange
 
 
 class FakeVcs(Vcs):
     """In-memory VCS fake for testing VerifyAttempt."""
 
-    def __init__(self, changed_files: list[str] | None = None, diff_output: str = "") -> None:
+    def __init__(
+        self, changed_files: list[str] | None = None, added: list[str] | None = None
+    ) -> None:
         self._changed_files = list(changed_files or [])
-        self._diff_output = diff_output
-        self.reverted: list[str] = []
-        self.reset_count = 0
+        self._added = list(added or [])
+        self.links: list[str] = []
 
     def status(self) -> list[str]:
-        return list(self._changed_files)
+        return []
 
-    def reset_to_head(self) -> None:
-        self.reset_count += 1
-        self._changed_files.clear()
+    def capture(self, workdir: Path, skip: Sequence[str] = ()) -> str:
+        return "fake-tree"
 
-    def create_candidate(
+    def changes(self, tree: str) -> list[TreeChange]:
+        return [
+            TreeChange(path, "120000" if path in self.links else "100644")
+            for path in self._changed_files
+        ]
+
+    def added_lines(self, tree: str) -> list[str]:
+        return list(self._added)
+
+    def commit_tree(
         self,
+        tree: str,
         message: str,
         trailers: dict[str, str] | None = None,
-        paths: Sequence[str] | None = None,
     ) -> Candidate:
-        self.candidate_paths = paths
+        self.candidate_tree = tree
         self.candidate_trailers = trailers
         return Candidate(sha="fake-candidate", tree="fake-tree", parent="fake-sha-head")
 
     def export_tree(self, rev: str, dest: Path) -> None:
+        dest.mkdir(parents=True)
+
+    def export_copy(self, rev: str, dest: Path) -> None:
         dest.mkdir(parents=True)
 
     def advance_head(self, sha: str, expected: str) -> None:
@@ -69,15 +81,6 @@ class FakeVcs(Vcs):
 
     def get_head_message(self) -> str:
         return "fake head commit message"
-
-    def revert_paths(self, paths: list[str] | tuple[str, ...]) -> None:
-        for p in paths:
-            self.reverted.append(p)
-            if p in self._changed_files:
-                self._changed_files.remove(p)
-
-    def diff(self) -> str:
-        return self._diff_output
 
 
 def _setup_project(
@@ -125,6 +128,7 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -136,7 +140,6 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.failed_at == "L0-rutas"
     assert "forbidden/exploit.py" in result.reverted_files
-    assert "forbidden/exploit.py" in vcs.reverted
 
 
 def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
@@ -147,6 +150,7 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -170,6 +174,7 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -196,6 +201,7 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -212,13 +218,13 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
 
 def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
-    diff = "+ x = 1  # noqa: F401\n"
-    vcs = FakeVcs(changed_files=["src/code.py"], diff_output=diff)
+    vcs = FakeVcs(changed_files=["src/code.py"], added=[" x = 1  # noqa: F401"])
     runner = FakeRunner()
     readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -245,6 +251,7 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -286,6 +293,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -325,6 +333,7 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -355,6 +364,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -389,6 +399,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -418,6 +429,7 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -457,15 +469,7 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
     code_file.parent.mkdir(parents=True, exist_ok=True)
     code_file.write_text("x = 1  # noqa\ny = 2\n", encoding="utf-8")
 
-    diff_text = """diff --git a/src/code.py b/src/code.py
-index 1111..2222 100644
---- a/src/code.py
-+++ b/src/code.py
-@@ -1 +1,2 @@
- x = 1  # noqa
-+y = 2
-"""
-    vcs = FakeVcs(changed_files=["src/code.py"], diff_output=diff_text)
+    vcs = FakeVcs(changed_files=["src/code.py"], added=["y = 2"])
     runner = FakeRunner()
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
     runner.default_response = CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10)
@@ -473,6 +477,7 @@ index 1111..2222 100644
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
+        tree="agent-tree",
         scenario_id="IVA-001",
         run_id=run_id,
         role="implement",
@@ -534,6 +539,7 @@ def _verify(
         "acceptance_run": "suite --junitxml {out}",
         "all_scenario_ids": ("IVA-001", "IVA-002"),
         "attempt": 2,
+        "tree": "agent-tree",
     }
     return (
         VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root),
@@ -715,7 +721,9 @@ def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
         readers={},
         project_root=project_root,
     )
-    req = VerifyAttemptRequest(scenario_id="IVA-001", run_id=run_id, paths_writable=("src/",))
+    req = VerifyAttemptRequest(
+        scenario_id="IVA-001", run_id=run_id, paths_writable=("src/",), tree="agent-tree"
+    )
 
     result = verifier.execute(req)
 
@@ -856,13 +864,13 @@ def test_verify_runs_every_command_in_the_tree_of_the_candidate(tmp_path: Path) 
     assert not Path(str(runner.calls[0]["cwd"])).exists(), "el clon debía borrarse"
 
 
-def test_verify_candidate_takes_writable_paths_and_trailers(tmp_path: Path) -> None:
+def test_verify_candidate_is_the_tree_the_agent_left_with_trailers(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 0)}))
     assert isinstance(verifier.vcs, FakeVcs)
 
     verifier.execute(req)
 
-    assert verifier.vcs.candidate_paths == ["src/"]
+    assert verifier.vcs.candidate_tree == "agent-tree"
     assert verifier.vcs.candidate_trailers == {
         "Scenario": "IVA-001",
         "Lictor-Run": req.run_id,
@@ -888,9 +896,9 @@ def test_verify_gate_failure_runs_nothing(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_a_symlink_in_a_writable_path(tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "code.py").symlink_to("/etc/hosts")
     verifier, req = _verify(tmp_path, _PlantingRunner({}))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.links = ["src/code.py"]
 
     result = verifier.execute(req)
 
@@ -898,11 +906,11 @@ def test_verify_rejects_a_symlink_in_a_writable_path(tmp_path: Path) -> None:
 
 
 def test_verify_banned_pattern_reports_itself(tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "code.py").write_text("x = 1  # NOQA\n", encoding="utf-8")
     verifier, req = _verify(
         tmp_path, _PlantingRunner({}), suppressions=(), banned_patterns=(r"#\s*noqa",)
     )
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs._added = ["x = 1  # NOQA"]
 
     result = verifier.execute(req)
 

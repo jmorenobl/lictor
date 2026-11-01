@@ -10,14 +10,19 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
-from lictor.application.run_files import attempt_prefix, relative_to_project, unused_path
+from lictor.application.run_files import (
+    agent_workspace,
+    attempt_prefix,
+    relative_to_project,
+    unused_path,
+)
 from lictor.application.usecases.agent_events import denial_event, denial_targets
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
-from lictor.domain.errors import SealTamperedError
+from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import AgentResult, AgentStatus, AgentTask, Event, Scenario
 from lictor.domain.rules import count_agent_failures, is_agent_unavailable
 
-AgentSignal = Literal["ok", "spec_conflict", "rate_limited", "unavailable", "error"]
+AgentSignal = Literal["ok", "spec_conflict", "rate_limited", "unavailable", "error", "rejected"]
 
 _STOPPED_EARLY_NOTES: dict[str, str] = {
     "max_turns": "El intento anterior se quedó sin turnos antes de terminar.",
@@ -61,6 +66,9 @@ class ImplementScenarioResult:
     prompt_sha: str
     agent_failures: int = 0
     attempt_slot: int = 1
+    tree: str | None = None
+    failed_at: str | None = None
+    error: str | None = None
 
 
 def _extract_background(lines: Sequence[str]) -> str:
@@ -178,15 +186,12 @@ class ImplementScenario:
         self.clock = clock
 
     def execute(self, request: ImplementScenarioRequest) -> ImplementScenarioResult:
-        """Verify seal, reset repo, invoke agent with integrity snapshot, and emit CloudEvent."""
-        # Check seal first: if modified, terminate without resetting working tree
+        """Verify seal, invoke agent on a copy of HEAD with integrity snapshot, read its result."""
         if not self.spec_source.verify_seal(request.project_root, request.paths_driver):
             raise SealTamperedError(
                 "La especificación o el driver cambiaron fuera de Lictor. "
-                "Edición manual detectada; ejecución terminada sin resetear."
+                "Edición manual detectada; ejecución terminada."
             )
-
-        self.vcs.reset_to_head()
 
         raw_template = (
             request.prompt_template
@@ -233,27 +238,37 @@ class ImplementScenario:
             prefix.with_name(f"{prefix.name}-implement.json"), request.agent_failures
         )
 
-        task = AgentTask(
-            role="implement",
-            prompt=prompt,
-            prompt_sha=prompt_sha,
-            cwd=request.project_root,
-            model=request.model,
-            allowed_tools=request.allowed_tools,
-            max_turns=request.max_turns,
-            timeout_s=request.timeout_s,
-            raw_path=raw_path,
-        )
-
         snapshot = IntegritySnapshot(lictor_dir, request.project_root)
-        agent_result = self.executor.run(task)
-        integrity_ok = snapshot.verify_and_restore()
+        tree: str | None = None
+        unreadable: str | None = None
+        with agent_workspace(self.vcs, request.project_root) as workspace:
+            agent_result = self.executor.run(
+                AgentTask(
+                    role="implement",
+                    prompt=prompt,
+                    prompt_sha=prompt_sha,
+                    cwd=workspace,
+                    model=request.model,
+                    allowed_tools=request.allowed_tools,
+                    max_turns=request.max_turns,
+                    timeout_s=request.timeout_s,
+                    raw_path=raw_path,
+                )
+            )
+            integrity_ok = snapshot.verify_and_restore()
+            if not agent_result.spec_conflict and agent_result.status != "rate_limited":
+                try:
+                    tree = self.vcs.capture(workspace)
+                except CandidateError as exc:
+                    unreadable = str(exc)
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
         if not integrity_ok and agent_result.status == "ok":
             agent_result = replace(agent_result, status="error")
 
         agent_signal = _classify_agent(agent_result, agent_failures)
+        if unreadable is not None and agent_signal in ("ok", "error"):
+            agent_signal = "rejected"
         keeps_attempt = agent_signal in ("rate_limited", "unavailable") or (
             agent_signal == "error" and agent_failures > 0
         )
@@ -308,4 +323,7 @@ class ImplementScenario:
             prompt_sha=prompt_sha,
             agent_failures=agent_failures,
             attempt_slot=request.attempt + 1,
+            tree=tree,
+            failed_at="L0-rutas" if agent_signal == "rejected" else None,
+            error=unreadable if agent_signal == "rejected" else None,
         )

@@ -89,7 +89,7 @@ class DynamicTestRunner(FakeRunner):
                 return CommandOutput(returncode=0, stdout="OK", stderr="", duration_ms=10)
 
             # Check implementation in src/
-            iva_code = self.repo_dir / "src" / "iva.py"
+            iva_code = cwd / "src" / "iva.py"
             code_content = iva_code.read_text(encoding="utf-8") if iva_code.is_file() else ""
 
             # Check if IVA-001 or IVA-002 are implemented
@@ -192,7 +192,7 @@ Característica: IVA de facturas
         project_root=tmp_path,
     )
     commit_green = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
-    quarantine = Quarantine(vcs=vcs, event_log=event_log, clock=clock)
+    quarantine = Quarantine(event_log=event_log, clock=clock)
 
     return GraphContext(
         project_root=tmp_path,

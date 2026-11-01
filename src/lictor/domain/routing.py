@@ -28,6 +28,9 @@ def route_red_check(state: Mapping[str, Any], max_attempts: int | None = None) -
     if state.get("exit_code") is not None:
         return END
 
+    if state.get("agent_signal") == "blocked":
+        return "pause"
+
     last_verify = state.get("last_verify")
     if last_verify is not None and not _is_verify_ok(last_verify):
         return "build_driver"
@@ -35,7 +38,7 @@ def route_red_check(state: Mapping[str, Any], max_attempts: int | None = None) -
     return "pick_next"
 
 
-def route_implement(state: Mapping[str, Any]) -> str:
+def route_implement(state: Mapping[str, Any], max_attempts: int | None = None) -> str:
     """Route after implement node."""
     if state.get("exit_code") is not None:
         return END
@@ -45,6 +48,8 @@ def route_implement(state: Mapping[str, Any]) -> str:
         return "pause"
     if signal == "spec_conflict":
         return "quarantine"
+    if signal == "rejected":
+        return _retry_or_quarantine(state, max_attempts)
     return "verify"
 
 
@@ -53,7 +58,10 @@ def route_verify(state: Mapping[str, Any], max_attempts: int | None = None) -> s
     last_verify = state.get("last_verify")
     if _is_verify_ok(last_verify):
         return "commit"
+    return _retry_or_quarantine(state, max_attempts)
 
+
+def _retry_or_quarantine(state: Mapping[str, Any], max_attempts: int | None) -> str:
     limit: int
     if max_attempts is not None:
         limit = max_attempts
@@ -68,6 +76,11 @@ def route_verify(state: Mapping[str, Any], max_attempts: int | None = None) -> s
     if attempt < limit:
         return "implement"
     return "quarantine"
+
+
+def route_commit(state: Mapping[str, Any]) -> str:
+    """Route after commit node: a branch that can't advance waits for the user."""
+    return "pause" if state.get("agent_signal") == "blocked" else "pick_next"
 
 
 def route_pause(state: Mapping[str, Any]) -> str:

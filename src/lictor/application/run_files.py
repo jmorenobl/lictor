@@ -72,6 +72,19 @@ def verification_tree(vcs: Vcs, rev: str, project_root: Path) -> Iterator[Path]:
         yield tree
 
 
+@contextlib.contextmanager
+def agent_workspace(vcs: Vcs, project_root: Path) -> Iterator[Path]:
+    """Yield a copy of HEAD for the agent, with no repository, no state and no project around it.
+
+    Named after the project, as the prompt calls it. It is gone afterwards: its result is what
+    `Vcs.capture` reads from it, and nothing of an attempt reaches the next one.
+    """
+    with scratch_dir(project_root, "work-") as tmp:
+        workspace = tmp / project_root.name
+        vcs.export_copy("HEAD", workspace)
+        yield workspace
+
+
 def fill_report_path(command: str, report: Path) -> list[str]:
     """Split a command and drop any report already at its `{out}`, which proves nothing."""
     report.unlink(missing_ok=True)

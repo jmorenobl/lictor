@@ -7,7 +7,7 @@ Objetivo: que pase el escenario {id}.
 Reglas:
 - Solo puedes crear o modificar archivos en: {writable}.
 - No toques {protected}. Cualquier cambio ahí se revierte y cuenta como intento fallido.
-- No uses git ni hagas commits. Lictor guarda tu trabajo si pasa la verificación.
+- Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}.
 - Estos escenarios ya funcionan y deben seguir funcionando: {green_ids}.
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.

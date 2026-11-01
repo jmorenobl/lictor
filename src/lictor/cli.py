@@ -13,6 +13,7 @@ import typer
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from lictor.application.run_files import sweep_scratch
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -324,7 +325,18 @@ def _paused_exit_code(runtime: BootstrapResult, run_id: str, state_snapshot: Any
     interrupts = [i for task in state_snapshot.tasks for i in task.interrupts]
     if not interrupts:
         return None
-    if interrupts[0].value.get("reason") == "agent_unavailable":
+    pause_reason = interrupts[0].value.get("reason")
+    if pause_reason == "branch_blocked":
+        code = int(ExitCode.PRECONDITION)
+        reason = (
+            "Ejecución detenida antes de avanzar la rama, sin perder nada: "
+            f"{interrupts[0].value.get('detail', '')} "
+            "Resuélvelo y vuelve a lanzar `lictor run`; lo verificado se conserva."
+        )
+        typer.echo(reason, err=True)
+        _record_stop(runtime, run_id, code, reason)
+        return code
+    if pause_reason == "agent_unavailable":
         code = int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         reason = (
             "Ejecución detenida: el agente no está disponible, sin penalizar ningún escenario. "
@@ -431,6 +443,7 @@ def _execute_run(cwd: Path, force_new: bool) -> int:
     runtime = bootstrap_runtime(resolved_cwd)
     saver = get_sqlite_saver(db_path)
     graph = create_graph(runtime.graph_context, checkpointer=saver)
+    sweep_scratch(resolved_cwd)
 
     existing_run_id: str | None = None
     if current_run_file.is_file() and not force_new:

@@ -3,7 +3,6 @@
 Includes ADR-0001 integrity snapshot for state protection.
 """
 
-import contextlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -107,6 +106,7 @@ class VerifyAttemptRequest:
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
+    tree: str | None = None
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
     tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
@@ -192,31 +192,6 @@ class IntegritySnapshot:
         return not changed
 
 
-def _collect_added_lines(vcs: Vcs, project_root: Path) -> list[str]:
-    added_lines: list[str] = []
-    diff_text = vcs.diff()
-    diff_files: set[str] = set()
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git a/"):
-            _, sep, b_path = line.partition(" b/")
-            if sep:
-                diff_files.add(b_path.strip().strip('"'))
-        elif line.startswith("+") and not line.startswith("+++"):
-            added_lines.append(line[1:])
-
-    for rel_path in vcs.status():
-        norm_rel = rel_path.strip('"')
-        if norm_rel not in diff_files:
-            target = project_root / norm_rel
-            if target.is_file():
-                with contextlib.suppress(OSError):
-                    added_lines.extend(
-                        target.read_text(encoding="utf-8", errors="ignore").splitlines()
-                    )
-    return added_lines
-
-
 def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
     target = PurePosixPath(rel_path)
     for root_str in allowed_roots:
@@ -279,7 +254,7 @@ class VerifyAttempt:
         return replace(result, candidate=candidate)
 
     def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
-        """Run L0 over the working tree, the only place where the agent's changes can be seen."""
+        """Run L0 over what the agent left: the tree read from its copy, before any project code."""
         routes_res = self._check_routes(req)
         if not routes_res.ok:
             return routes_res
@@ -303,17 +278,14 @@ class VerifyAttempt:
         return self.environment.run(cmd, tree, timeout_s)
 
     def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:
-        paths = list(req.paths_writable)
-        if req.role == "driver":
-            paths.extend(req.paths_driver)
-        return self.vcs.create_candidate(
+        return self.vcs.commit_tree(
+            self._tree(req),
             message=f"feat({scenario}): implementar escenario",
             trailers={
                 "Scenario": scenario,
                 "Lictor-Run": req.run_id,
                 "Lictor-Attempts": str(req.attempt),
             },
-            paths=paths,
         )
 
     def _run_commands(self, req: VerifyAttemptRequest) -> VerifyResult:
@@ -370,6 +342,11 @@ class VerifyAttempt:
             error_path=relative_to_project(error_path, self.project_root),
         )
 
+    def _tree(self, req: VerifyAttemptRequest) -> str:
+        if req.tree is None:
+            raise InternalLictorError("El intento llegó a verificación sin árbol")
+        return req.tree
+
     def _step_dir(self, req: VerifyAttemptRequest) -> Path:
         if req.step_dir is None:
             raise InternalLictorError("step_dir lo asigna execute")
@@ -385,16 +362,16 @@ class VerifyAttempt:
         if req.role == "driver":
             allowed.extend(req.paths_driver)
 
-        changed_files = self.vcs.status()
+        changes = self.vcs.changes(self._tree(req))
+        changed_files = [change.path for change in changes]
         rejected = set(forbidden_paths(changed_files, req.forbidden_paths))
         # A link in the commit can point to what the commit leaves out.
-        rejected.update(f for f in changed_files if (self.project_root / f).is_symlink())
+        rejected.update(change.path for change in changes if change.is_link)
         forbidden: list[str] = [
             f for f in changed_files if f in rejected or not _is_path_allowed(f, allowed)
         ]
 
         if forbidden:
-            self.vcs.revert_paths(forbidden)
             err = f"Archivos modificados fuera de las rutas permitidas: {', '.join(forbidden)}"
             return self._fail(req, _Failure("L0-rutas", err, reverted_files=tuple(forbidden)))
         return VerifyResult(ok=True)
@@ -452,7 +429,7 @@ class VerifyAttempt:
         if not req.suppressions and not req.banned_patterns:
             return VerifyResult(ok=True)
 
-        added_lines = _collect_added_lines(self.vcs, self.project_root)
+        added_lines = self.vcs.added_lines(self._tree(req))
         detected = banned_matches(added_lines, req.banned_patterns)
         for line in added_lines:
             for pattern in req.suppressions:

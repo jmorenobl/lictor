@@ -209,7 +209,7 @@ def _assert_rejected_by(project: Callable[[], Path], agent: Agent, *reasons: str
 
 def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        forged = shell([".venv/bin/python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
+        forged = shell(["uv", "run", "python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
     _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
@@ -217,7 +217,7 @@ def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
 
 def test_c2_forged_driver_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        forged = shell([".venv/bin/python", "-c", FORGE_DRIVER_PYC], task.cwd)
+        forged = shell(["uv", "run", "python", "-c", FORGE_DRIVER_PYC], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
     _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
@@ -235,7 +235,7 @@ def test_c3_plugin_in_the_verification_venv_fails_by_hash(make_project: ProjectF
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         if scenario_id == "IVA-001" and not planted:
-            for site_packages in task.cwd.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
+            for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 _plant_plugin(site_packages)
                 planted.append(site_packages)
 
@@ -308,7 +308,7 @@ def test_c3_forged_bytecode_in_the_verification_venv_fails_by_hash(
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         if scenario_id == "IVA-001" and not planted:
-            for site_packages in task.cwd.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
+            for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 pyc = site_packages / "_pytest" / "__pycache__" / "forjado.cpython-312.pyc"
                 write(pyc.parent, pyc.name, b"\x00")
                 planted.append(pyc)
@@ -325,6 +325,8 @@ def test_c3_plugin_in_the_agents_venv_does_not_reach_verification(
     make_project: ProjectFactory,
 ) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        synced = shell(["uv", "sync", "-q", "--frozen", "--no-install-project"], task.cwd)
+        require(synced.returncode == 0, f"el agente debía tener su venv: {synced.stderr}")
         sites = list(task.cwd.glob(".venv/lib/python*/site-packages"))
         require(sites, "el ataque debía llegar a la venv del agente")
         for site_packages in sites:

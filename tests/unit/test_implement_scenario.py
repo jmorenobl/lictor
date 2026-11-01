@@ -11,7 +11,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioResult,
     _extract_scenario_gherkin,
 )
-from lictor.domain.errors import SealTamperedError
+from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
     AgentResult,
     AgentStatus,
@@ -43,7 +43,7 @@ def _execute(
     clock = MagicMock(spec=Clock)
     clock.now_iso.return_value = "2026-10-30T14:35:00Z"
     use_case = ImplementScenario(
-        vcs=MagicMock(spec=Vcs),
+        vcs=overrides.pop("vcs", MagicMock(spec=Vcs)),
         executor=executor,
         spec_source=spec_source,
         event_log=event_log,
@@ -232,7 +232,7 @@ def test_prompt_falls_back_when_the_profile_has_no_commands(tmp_path: Path) -> N
     assert "ejecutando: los tests del proyecto" in executor.run.call_args.args[0].prompt
 
 
-def test_implement_scenario_seal_tampered_raises_without_reset(tmp_path: Path) -> None:
+def test_implement_scenario_seal_tampered_raises_before_the_agent(tmp_path: Path) -> None:
     vcs = MagicMock(spec=Vcs)
     executor = MagicMock(spec=Executor)
     spec_source = MagicMock(spec=SpecSource)
@@ -272,7 +272,7 @@ def test_implement_scenario_seal_tampered_raises_without_reset(tmp_path: Path) -
     with pytest.raises(SealTamperedError) as exc_info:
         use_case.execute(req)
     assert exc_info.value.exit_code == 10
-    vcs.reset_to_head.assert_not_called()
+    vcs.export_copy.assert_not_called()
     executor.run.assert_not_called()
 
 
@@ -336,7 +336,14 @@ def test_implement_scenario_success(tmp_path: Path) -> None:
 
     result = use_case.execute(req)
 
-    vcs.reset_to_head.assert_called_once()
+    vcs.export_copy.assert_called_once()
+    assert vcs.export_copy.call_args.args[0] == "HEAD"
+    workspace = executor.run.call_args.args[0].cwd
+    assert workspace == vcs.export_copy.call_args.args[1]
+    assert not workspace.is_relative_to(tmp_path)
+    assert workspace.name == tmp_path.name
+    vcs.capture.assert_called_once_with(workspace)
+    assert result.tree == vcs.capture.return_value
     assert result.attempt == 1
     assert result.agent_signal == "ok"
     assert result.agent_result.status == "ok"
@@ -548,3 +555,30 @@ def test_implement_scenario_handles_curly_braces_in_hints_and_errors(tmp_path: P
 
     result = use_case.execute(req)
     assert result.agent_signal == "ok"
+
+
+def test_a_result_that_cant_be_read_fails_the_attempt(tmp_path: Path) -> None:
+    vcs = MagicMock(spec=Vcs)
+    vcs.capture.side_effect = CandidateError("repositorio anidado")
+    result, _, _ = _execute(tmp_path, AgentResult(status="ok"), vcs=vcs)
+
+    assert result.agent_signal == "rejected"
+    assert result.failed_at == "L0-rutas"
+    assert result.error == "repositorio anidado"
+    assert result.tree is None
+    assert result.attempt == 2
+
+
+@pytest.mark.parametrize(
+    "agent_result",
+    [AgentResult(status="rate_limited"), AgentResult(status="ok", spec_conflict="contradice")],
+    ids=["cuota", "conflicto"],
+)
+def test_no_result_is_read_from_a_call_that_produced_none(
+    tmp_path: Path, agent_result: AgentResult
+) -> None:
+    vcs = MagicMock(spec=Vcs)
+    result, _, _ = _execute(tmp_path, agent_result, vcs=vcs)
+
+    vcs.capture.assert_not_called()
+    assert result.tree is None

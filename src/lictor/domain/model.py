@@ -236,6 +236,10 @@ class ControlResult:
     output_path: str | None = None
 
 
+_SYMLINK_MODE = "120000"
+_GITLINK_MODE = "160000"
+
+
 @dataclass(frozen=True)
 class Candidate:
     """A commit outside the branch: only what passes verification becomes green."""
@@ -243,6 +247,19 @@ class Candidate:
     sha: str
     tree: str
     parent: str
+
+
+@dataclass(frozen=True)
+class TreeChange:
+    """A path that differs from HEAD in a tree, with the mode it has there."""
+
+    path: str
+    mode: str
+
+    @property
+    def is_link(self) -> bool:
+        """Tell links and nested repositories: what they point to is not in the commit."""
+        return self.mode in (_SYMLINK_MODE, _GITLINK_MODE)
 
 
 @dataclass(frozen=True)

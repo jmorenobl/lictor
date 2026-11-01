@@ -51,7 +51,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
     vcs.get_trailers.return_value = ["IVA-001"]
-    vcs.create_candidate.return_value = Candidate("driver_commit_sha", "tree", "parent")
+    vcs.commit_tree.return_value = Candidate("driver_commit_sha", "tree", "parent")
 
     spec_source = MagicMock(spec=SpecSource)
     spec_source.write_seal.return_value = {
@@ -73,6 +73,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     )
 
     req = CheckRedRequest(
+        tree="driver-tree",
         project_root=tmp_path,
         run_id="20261030-140000-abcd",
         acceptance_run="acceptance-runner --junitxml {out}",
@@ -90,7 +91,8 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.scenario_status == {"IVA-001": "green", "IVA-002": "pending"}
     spec_source.write_seal.assert_called_once()
-    vcs.create_candidate.assert_called_once_with(
+    vcs.commit_tree.assert_called_once_with(
+        "driver-tree",
         message="chore(lictor): driver de aceptación",
         trailers={"Lictor-Run": "20261030-140000-abcd"},
     )
@@ -132,6 +134,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
     )
 
     req = CheckRedRequest(
+        tree="driver-tree",
         project_root=tmp_path,
         run_id="20261030-140000-abcd",
         acceptance_run="acceptance-runner --junitxml {out}",
@@ -172,6 +175,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
     )
 
     req = CheckRedRequest(
+        tree="driver-tree",
         project_root=tmp_path,
         run_id="20261030-140000-abcd",
         acceptance_run="acceptance-runner --junitxml {out}",
@@ -203,7 +207,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
         return []
 
     vcs.get_trailers.side_effect = mock_get_trailers
-    vcs.status.return_value = []
+    vcs.get_tree.return_value = "driver-tree"
     vcs.get_head_message.return_value = "chore(lictor): driver de aceptación"
     vcs.get_head_sha.return_value = "sha_already_committed"
 
@@ -222,6 +226,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     )
 
     req = CheckRedRequest(
+        tree="driver-tree",
         project_root=tmp_path,
         run_id="run123",
         acceptance_run="acceptance-runner",
@@ -235,7 +240,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     res = use_case.execute(req)
     assert res.ok is True
     assert res.commit_sha == "sha_already_committed"
-    vcs.create_candidate.assert_not_called()
+    vcs.commit_tree.assert_not_called()
     vcs.advance_head.assert_not_called()
 
 
@@ -272,6 +277,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
     )
 
     req = CheckRedRequest(
+        tree="driver-tree",
         project_root=tmp_path,
         run_id="run123",
         acceptance_run="acceptance-runner",
@@ -331,7 +337,7 @@ def _real_check(
     runner = _SuiteRunner(report, code)
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = []
-    vcs.create_candidate.return_value = Candidate("sha", "tree", "parent")
+    vcs.commit_tree.return_value = Candidate("sha", "tree", "parent")
     spec_source = MagicMock(spec=SpecSource)
     spec_source.write_seal.return_value = {"files": {}}
     event_log = MagicMock(spec=EventLog)
@@ -552,7 +558,7 @@ def test_check_red_baseline_verifies_head_and_commits_nothing(tmp_path: Path) ->
     assert use_case.execute(request).ok is True
 
     assert vcs.export_tree.call_args.args[0] == "HEAD"
-    vcs.create_candidate.assert_not_called()
+    vcs.commit_tree.assert_not_called()
     vcs.advance_head.assert_not_called()
     spec_source.write_seal.assert_not_called()
 
@@ -570,6 +576,6 @@ def test_check_red_rerun_after_a_crash_verifies_the_driver_already_committed(
     result = use_case.execute(request)
 
     assert result.commit_sha == "head"
-    vcs.create_candidate.assert_not_called()
+    vcs.commit_tree.assert_not_called()
     vcs.advance_head.assert_not_called()
     spec_source.write_seal.assert_called_once()

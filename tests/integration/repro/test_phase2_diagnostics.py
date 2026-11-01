@@ -134,6 +134,7 @@ def test_d24_stale_report_does_not_hide_a_crashed_suite(
             suppressions=(),
             acceptance_run=f"{sys.executable} -c 'import sys;sys.exit(3)' --junitxml {{out}}",
             all_scenario_ids=["IVA-001"],
+            tree=GitCli(root).get_tree("HEAD"),
         )
     )
 
