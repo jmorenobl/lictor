@@ -129,7 +129,6 @@ class VerificationEnvironment:
     def _build(self, run_id: str, reason: str) -> None:
         started = time.monotonic()
         self.manifest.unlink(missing_ok=True)
-        self._installed_plugins = []
         shutil.rmtree(self.env_dir, ignore_errors=True)
 
         tokens = self._tokens(self.spec.prepare)

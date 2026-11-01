@@ -640,6 +640,30 @@ def test_profile_no_longer_assumes_a_project_dependency() -> None:
     assert "PYTEST_PLUGINS" not in verification.env
 
 
+def test_the_plugins_question_ignores_the_working_directory_and_the_environment(
+    tmp_path: Path,
+) -> None:
+    """A distribution planted where Python would look must not become a loaded plugin."""
+    info = tmp_path / "trampa-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: trampa\nVersion: 1.0\n")
+    (info / "entry_points.txt").write_text("[pytest11]\ntrampa = trampa\n")
+    command = load_profile("python-uv").verification.plugins_command
+    tokens = shlex.split(command.replace("{env_dir}", sys.prefix))
+
+    listed = subprocess.run(
+        tokens,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tmp_path,
+        env={"PYTHONPATH": str(tmp_path)},
+    ).stdout.split()
+
+    assert "trampa" not in listed
+    assert "xdist.plugin" in listed
+
+
 def _fingerprint(root: Path, profiles: Path | None = None) -> str:
     config = load_config(root, profiles)
     return config_fingerprint(config, resolve_defences(config, profiles))
