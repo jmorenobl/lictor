@@ -1,5 +1,6 @@
 """Phase 2 (A5, M4, M1): the reason for a failure reaches the agent and the user."""
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -329,7 +330,9 @@ def test_m4_refused_resume_is_recorded(
     root = make_project()
     run_lictor(root, Agent(impl=lambda _t, _s, _a: "rate_limited"))
     capsys.readouterr()
-    write(root, "lictor.json", (root / "lictor.json").read_text(encoding="utf-8") + "\n")
+    config = json.loads((root / "lictor.json").read_text(encoding="utf-8"))
+    config["limits"]["max_attempts"] += 1
+    write(root, "lictor.json", json.dumps(config))
 
     outcome = run_lictor(root, Agent())
 

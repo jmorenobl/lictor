@@ -1,6 +1,7 @@
+import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -264,6 +265,20 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         banned_patterns=profile.banned_patterns,
         forbidden_paths=profile.forbidden_paths,
     )
+
+
+def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
+    """Hash what a run depends on: the resolved values, whatever file each one came from.
+
+    Files count by name and content, so moving the installation doesn't look like a change.
+    """
+    resolved = asdict(defences)
+    resolved["verification"]["files"] = {
+        source.name: hashlib.sha256(source.read_bytes()).hexdigest()
+        for source in defences.verification.files
+    }
+    payload = {"config": config.model_dump(mode="json"), "defences": resolved}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def export_config_schema(output_path: Path | None = None) -> dict[str, object]:

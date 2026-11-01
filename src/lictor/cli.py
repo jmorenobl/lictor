@@ -1,6 +1,5 @@
 """Command Line Interface for Lictor."""
 
-import hashlib
 import json
 import os
 import shlex
@@ -22,7 +21,7 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
-from lictor.domain.errors import ConfigError, ExitCode, LictorError
+from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
 from lictor.orchestration.graph import create_graph, get_sqlite_saver
 
@@ -297,14 +296,12 @@ def _check_resume_guard(
     run_id: str,
     state_snapshot: Any,
 ) -> int | None:
-    config_file = resolved_cwd / "lictor.json"
-    if not config_file.is_file():
-        raise ConfigError("No se encontró 'lictor.json'")
-
-    current_cfg_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
     saved_cfg_hash = state_snapshot.values.get("config_hash")
-    if saved_cfg_hash and current_cfg_hash != saved_cfg_hash:
-        reason = "la configuración lictor.json cambió a mitad de ejecución"
+    if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
+        reason = (
+            "la configuración cambió a mitad de ejecución: "
+            "lictor.json, el perfil o los ficheros del perfil"
+        )
         return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
     if state_snapshot.values.get("seal_ok") and not runtime.spec_source.verify_seal(
@@ -403,14 +400,9 @@ def _start_new_run(
 ) -> int:
     run_id = runtime.clock.generate_run_id()
     current_run_file.write_text(run_id, encoding="utf-8")
-    config_file = resolved_cwd / "lictor.json"
-    if not config_file.is_file():
-        raise ConfigError("No se encontró 'lictor.json'")
-    cfg_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
-
     init_state = {
         "run_id": run_id,
-        "config_hash": cfg_hash,
+        "config_hash": runtime.config_hash,
         "driver_fresh": False,
         "driver_attempts": 0,
         "attempt": 0,

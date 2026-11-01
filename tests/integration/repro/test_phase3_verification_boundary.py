@@ -1,6 +1,7 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
 import importlib.util
+import json
 import os
 import shlex
 import subprocess
@@ -14,7 +15,7 @@ import pytest
 
 from lictor.adapters.config.loader import load_config
 from lictor.domain.errors import ConfigError
-from lictor.domain.model import AgentTask
+from lictor.domain.model import AgentStatus, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     DRIVER,
@@ -886,3 +887,82 @@ def test_d22_writable_paths_cannot_neutralize_l1_and_l2(make_project: ProjectFac
     require("IVA-001" in agent.calls, "el agente debía llegar a implementar")
     tracked = set(git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines())
     assert tracked.isdisjoint(evasions), sorted(tracked & set(evasions))
+
+
+def _edit_profile(profiles: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    path = profiles / "python-uv.json"
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    change(profile)
+    path.write_text(json.dumps(profile), encoding="utf-8")
+
+
+def _drop_banned_patterns(profile: dict[str, Any]) -> None:
+    profile["banned_patterns"] = []
+
+
+def _add_forbidden_path(profile: dict[str, Any]) -> None:
+    profile["forbidden_paths"].append("nuevo.py")
+
+
+def _relax_verification_env(profile: dict[str, Any]) -> None:
+    del profile["verification"]["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"]
+
+
+def _change_prepare(profile: dict[str, Any]) -> None:
+    profile["verification"]["prepare"] += " --offline"
+
+
+def _limited(_task: AgentTask, _sid: str, _attempt: int) -> AgentStatus:
+    return "rate_limited"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_drop_banned_patterns, _add_forbidden_path, _relax_verification_env, _change_prepare],
+)
+def test_resume_refuses_a_changed_profile(
+    make_project: ProjectFactory, tmp_path: Path, change: Callable[[dict[str, Any]], None]
+) -> None:
+    """The defences live in the profile, so `lictor.json` alone can't vouch for a resume."""
+    root = make_project(own_profiles=True)
+    agent = Agent(impl=_limited)
+    require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
+    calls = len(agent.calls)
+
+    _edit_profile(tmp_path / "perfiles", change)
+
+    assert run_lictor(root, agent) == Outcome(10)
+    assert len(agent.calls) == calls
+    stopped = events_of(root, "run.stopped")[-1]["data"]
+    assert stopped["exit_code"] == 10
+    assert "perfil" in stopped["reason"]
+
+
+def test_resume_refuses_a_changed_profile_file(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    root = make_project(own_profiles=True)
+    agent = Agent(impl=_limited)
+    require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
+
+    plugin = tmp_path / "perfiles" / "python_uv" / "lictor_project_path.py"
+    plugin.write_text(plugin.read_text(encoding="utf-8") + "\n# tocado\n", encoding="utf-8")
+
+    assert run_lictor(root, agent) == Outcome(10)
+    assert "perfil" in events_of(root, "run.stopped")[-1]["data"]["reason"]
+
+
+def test_resume_goes_on_when_nothing_changed(make_project: ProjectFactory, tmp_path: Path) -> None:
+    root = make_project(own_profiles=True)
+    limited = [True]
+
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> AgentStatus | None:
+        if limited.pop() if limited else False:
+            return "rate_limited"
+        good_impl(task, scenario_id, attempt)
+        return None
+
+    agent = Agent(impl=impl)
+    require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
+
+    assert run_lictor(root, agent) == Outcome(0)

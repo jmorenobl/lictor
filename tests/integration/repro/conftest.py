@@ -95,10 +95,11 @@ def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch
         extra_controls: list[dict[str, Any]] | None = None,
         allowed_paths: tuple[str, ...] = (),
         config_changes: dict[str, Any] | None = None,
+        own_profiles: bool = False,
     ) -> Path:
         root = tmp_path / "demo-iva"
         copy_project(template, root)
-        if allowed_paths:
+        if allowed_paths or own_profiles:
             profiles = _profiles_without(allowed_paths, tmp_path / "perfiles")
             monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
         if extra_controls or config_changes:

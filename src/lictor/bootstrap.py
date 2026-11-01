@@ -8,6 +8,7 @@ from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
+    config_fingerprint,
     load_config,
     resolve_defences,
 )
@@ -48,6 +49,7 @@ class BootstrapResult:
     """Aggregated container holding configured adapters, use cases, and graph context."""
 
     config: LictorConfig
+    config_hash: str
     clock: Clock
     event_log: EventLog
     vcs: Vcs
@@ -215,6 +217,7 @@ def bootstrap_runtime(
 
     return BootstrapResult(
         config=active_config,
+        config_hash=config_fingerprint(active_config, defences),
         clock=active_clock,
         event_log=active_event_log,
         vcs=vcs,

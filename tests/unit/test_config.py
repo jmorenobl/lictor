@@ -1,9 +1,11 @@
 import ast
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -12,7 +14,9 @@ import pytest
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
+    DEFAULT_PROFILES_DIR,
     build_config_from_profile,
+    config_fingerprint,
     detect_profile,
     export_config_schema,
     init_config_file,
@@ -634,6 +638,102 @@ def test_profile_no_longer_assumes_a_project_dependency() -> None:
 
     assert verification.plugins == ["lictor_project_path"]
     assert "PYTEST_PLUGINS" not in verification.env
+
+
+def _fingerprint(root: Path, profiles: Path | None = None) -> str:
+    config = load_config(root, profiles)
+    return config_fingerprint(config, resolve_defences(config, profiles))
+
+
+def _profiles_copy(dest: Path) -> Path:
+    shutil.copytree(DEFAULT_PROFILES_DIR, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    return dest
+
+
+def test_fingerprint_ignores_the_format_of_lictor_json(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    before = _fingerprint(root)
+    data = json.loads(root.read_text(encoding="utf-8"))
+
+    root.write_text(json.dumps(data, indent=8, sort_keys=True), encoding="utf-8")
+
+    assert _fingerprint(root) == before
+
+
+def test_fingerprint_changes_with_lictor_json(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    before = _fingerprint(root)
+
+    assert _fingerprint(_project(tmp_path, verification={"env": {"MIO": "1"}})) != before
+
+
+def test_fingerprint_does_not_depend_on_the_key_order_of_the_profile(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    profiles = _profiles_copy(tmp_path / "perfiles")
+    before = _fingerprint(root, profiles)
+    path = profiles / "python-uv.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["verification"]["env"] = dict(reversed(data["verification"]["env"].items()))
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert _fingerprint(root, profiles) == before
+
+
+def test_fingerprint_does_not_depend_on_where_lictor_is_installed(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+
+    first = _fingerprint(root, _profiles_copy(tmp_path / "aqui"))
+    second = _fingerprint(root, _profiles_copy(tmp_path / "alli" / "otro"))
+
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "prepare",
+        "env",
+        "inherit",
+        "files_dir_command",
+        "plugin_variable",
+        "plugins",
+        "plugins_command",
+    ],
+)
+def test_fingerprint_covers_every_field_of_the_verification(tmp_path: Path, field: str) -> None:
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+    current = getattr(defences.verification, field)
+    if isinstance(current, str):
+        changed: object = f"{current}x"
+    elif isinstance(current, dict):
+        changed = {**current, "NUEVA": "1"}
+    else:
+        changed = [*current, "nuevo"]
+    other = replace(defences, verification=replace(defences.verification, **{field: changed}))
+
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+@pytest.mark.parametrize("field", ["suppressions", "banned_patterns", "forbidden_paths"])
+def test_fingerprint_covers_the_heuristics(tmp_path: Path, field: str) -> None:
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    other = replace(defences, **{field: [*getattr(defences, field), "nuevo"]})
+
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_fingerprint_covers_the_content_of_the_profile_files(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    profiles = _profiles_copy(tmp_path / "perfiles")
+    before = _fingerprint(root, profiles)
+
+    plugin = profiles / "python_uv" / "lictor_project_path.py"
+    plugin.write_text(plugin.read_text(encoding="utf-8") + "\n# nuevo\n", encoding="utf-8")
+
+    assert _fingerprint(root, profiles) != before
 
 
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
