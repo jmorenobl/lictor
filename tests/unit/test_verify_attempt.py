@@ -39,6 +39,8 @@ class FakeVcs(Vcs):
         self.moved: list[str] = []
 
     def pin(self) -> RepoPin:
+        """Pin what is there now: a move nobody caught stops being a change, as in a real repo."""
+        self.moved = []
         return RepoPin("fake-sha-head")
 
     def restore(self, pin: RepoPin) -> list[str]:
