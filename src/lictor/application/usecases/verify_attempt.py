@@ -18,6 +18,7 @@ from lictor.application.run_files import (
     new_step_dir,
     relative_to_project,
     save_output,
+    step_evidence,
     verification_tree,
     write_text,
 )
@@ -25,9 +26,11 @@ from lictor.application.seal import collect_monitored_files
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError, InternalLictorError, SpecError
 from lictor.domain.model import (
+    AgentResult,
     Candidate,
     CommandOutput,
     ControlResult,
+    RepoPin,
     ScenarioId,
     TestCaseResult,
     VerifyResult,
@@ -44,7 +47,7 @@ from lictor.domain.rules import (
 
 RoleKind = Literal["implement", "driver"]
 
-_STATE_TAMPERED = "El estado en .lictor/ fue modificado indebidamente"
+STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
 
 
 class VerificationControlProtocol(Protocol):
@@ -131,7 +134,7 @@ class _ControlRun:
     """A control after running, with the output its failure may need."""
 
     result: ControlResult
-    tampered: bool = False
+    tampered: tuple[str, ...] = ()
     output: CommandOutput | None = None
 
 
@@ -150,19 +153,33 @@ def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
 
 
 class IntegritySnapshot:
-    """ADR-0001: In-memory integrity snapshot of .lictor/ and configuration metadata files."""
+    """ADR-0001: state files and repository, held in memory while untrusted code runs.
+
+    What changed is restored and listed in `changes`. SQLite keeps recent writes in `-wal`, so the
+    checkpoint is both files. `-shm` is only an index over them, moved by anyone who merely reads
+    the database, so it doesn't count as a change and only returns along with the data.
+    """
 
     MONITORED_LICTOR_FILES = (
         "seal.json",
         "checkpoints.sqlite",
+        "checkpoints.sqlite-wal",
         "journal.jsonl",
         "verify_env.json",
+        "current_run",
+        "fake_executor.json",
     )
+    WAL_INDEX = "checkpoints.sqlite-shm"
 
-    def __init__(self, lictor_dir: Path, project_root: Path | None = None) -> None:
+    def __init__(
+        self, lictor_dir: Path, project_root: Path | None = None, vcs: Vcs | None = None
+    ) -> None:
         self.lictor_dir = lictor_dir
         self.project_root = project_root if project_root is not None else lictor_dir.parent
+        self.vcs = vcs
         self.snapshots: dict[Path, bytes | None] = {}
+        self.pin: RepoPin | None = None
+        self.changes: list[str] = []
         self.take()
 
     def _monitored_paths(self) -> list[Path]:
@@ -172,24 +189,56 @@ class IntegritySnapshot:
         return paths
 
     def take(self) -> None:
-        for target in self._monitored_paths():
-            if target.is_file():
-                self.snapshots[target] = target.read_bytes()
-            else:
-                self.snapshots[target] = None
+        for target in [*self._monitored_paths(), self.lictor_dir / self.WAL_INDEX]:
+            self.snapshots[target] = target.read_bytes() if target.is_file() else None
+        self.pin = self.vcs.pin() if self.vcs is not None else None
+
+    def _restore_file(self, target: Path) -> bool:
+        """Bring a file back to what it held and tell whether it had changed."""
+        initial_bytes = self.snapshots[target]
+        if initial_bytes is None:
+            if not target.exists():
+                return False
+            target.unlink(missing_ok=True)
+            return True
+        if target.is_file() and target.read_bytes() == initial_bytes:
+            return False
+        target.write_bytes(initial_bytes)
+        return True
 
     def verify_and_restore(self) -> bool:
-        """Check if monitored files changed. If so, restore them and return False."""
-        changed = False
-        for target, initial_bytes in self.snapshots.items():
-            if initial_bytes is None:
-                if target.exists():
-                    changed = True
-                    target.unlink(missing_ok=True)
-            elif not target.is_file() or target.read_bytes() != initial_bytes:
-                changed = True
-                target.write_bytes(initial_bytes)
-        return not changed
+        """Check if anything monitored changed. If so, restore it and return False."""
+        changed = [path for path in self._monitored_paths() if self._restore_file(path)]
+        if changed:
+            self._restore_file(self.lictor_dir / self.WAL_INDEX)
+        self.changes = [relative_to_project(path, self.project_root) for path in changed]
+        if self.vcs is not None and self.pin is not None:
+            self.changes.extend(self.vcs.restore(self.pin))
+        return not self.changes
+
+
+@dataclass(frozen=True)
+class AgentCopyOutcome:
+    """What an agent call left: its result and what could be read from its copy."""
+
+    agent_result: AgentResult
+    tree: str | None = None
+    tampered: tuple[str, ...] = ()
+    unreadable: str | None = None
+    reverted: tuple[str, ...] = ()
+
+    @property
+    def failed_at(self) -> str:
+        return "L0-estado" if self.tampered else "L0-rutas"
+
+    @property
+    def error(self) -> str | None:
+        return describe_tampering(self.tampered) if self.tampered else self.unreadable
+
+
+def describe_tampering(changes: Sequence[str]) -> str:
+    """Name what was restored: the agent reads it, and so does whoever audits the run."""
+    return f"{STATE_TAMPERED}: {', '.join(changes)}. Se ha restaurado."
 
 
 def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
@@ -228,7 +277,10 @@ class VerifyAttempt:
         prefix = attempt_prefix(self.project_root, req.run_id, scenario, req.attempt)
         step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-verify"))
         req = replace(req, step_dir=step_dir)
+        result = self._verify(req, scenario)
+        return replace(result, evidence=step_evidence(step_dir, self.project_root))
 
+    def _verify(self, req: VerifyAttemptRequest, scenario: str) -> VerifyResult:
         gates = self._run_gates(req)
         if not gates.ok:
             return gates
@@ -296,7 +348,11 @@ class VerifyAttempt:
             if ctrl_run.tampered:
                 return self._fail(
                     req,
-                    _Failure("L0-estado", _STATE_TAMPERED, control_results=control_results),
+                    _Failure(
+                        "L0-estado",
+                        describe_tampering(ctrl_run.tampered),
+                        control_results=control_results,
+                    ),
                 )
 
             ctrl_res = ctrl_run.result
@@ -452,7 +508,7 @@ class VerifyAttempt:
         log_file = step_dir / f"control_{ctrl.id}.log"
         cmd_tokens = fill_report_path(ctrl.run, out_file)
 
-        snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
+        snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
         cmd_out = self._run_project_command(cmd_tokens, req, ctrl.timeout_s)
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)
@@ -466,7 +522,8 @@ class VerifyAttempt:
             )
 
         if tampered:
-            return _ControlRun(recorded(ControlResult(ok=False)), tampered=True)
+            changes = tuple(snapshot.changes)
+            return _ControlRun(recorded(ControlResult(ok=False)), tampered=changes)
 
         reader = self.readers.get(ctrl.report)
         if reader is None:
@@ -496,13 +553,18 @@ class VerifyAttempt:
         log_file = step_dir / "acceptance.log"
         cmd_tokens = fill_report_path(req.acceptance_run, out_file)
 
-        snapshot = IntegritySnapshot(self.project_root / ".lictor", project_root=self.project_root)
+        snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
         cmd_out = self._run_project_command(cmd_tokens, req, req.acceptance_timeout_s)
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_out)
         if tampered:
             return self._fail(
-                req, _Failure("L0-estado", _STATE_TAMPERED, control_results=control_results)
+                req,
+                _Failure(
+                    "L0-estado",
+                    describe_tampering(snapshot.changes),
+                    control_results=control_results,
+                ),
             )
 
         output = format_output(cmd_out)

@@ -13,6 +13,7 @@ import typer
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from lictor.application.anchor import observe_anchor
 from lictor.application.run_files import sweep_scratch
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import (
@@ -24,7 +25,8 @@ from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
-from lictor.orchestration.graph import create_graph, get_sqlite_saver
+from lictor.domain.rules import anchor_problems
+from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
 app = typer.Typer(
     name="lictor",
@@ -33,6 +35,7 @@ app = typer.Typer(
 )
 
 DEFAULT_CWD = Path(".")
+_UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con `lictor run --new`."
 
 
 def _safe_run(cmd_func: Callable[[], int | None]) -> None:
@@ -291,24 +294,63 @@ def _refuse_resume(runtime: BootstrapResult, run_id: str, code: int, reason: str
     return code
 
 
+def _anchor_problems(runtime: BootstrapResult, resolved_cwd: Path, values: Any) -> list[str]:
+    """Compare the repository with the run's record, allowing what a crash can leave behind."""
+    anchor = values.get("anchor") or {}
+    observed = observe_anchor(runtime.vcs, resolved_cwd)
+    accepted = {anchor.get("head")}
+    verified = (values.get("last_verify") or {}).get("candidate")
+    if verified:
+        accepted.add(verified["sha"])
+    # A driver commits inside its node: the checkpoint only knows the tree it was built from.
+    tree = values.get("attempt_tree")
+    if tree and not values.get("seal_ok") and runtime.vcs.get_tree("HEAD") == tree:
+        accepted.add(observed["head"])
+    return anchor_problems(anchor, observed, {sha for sha in accepted if sha})
+
+
+def _integrity_refusal(runtime: BootstrapResult, resolved_cwd: Path, values: Any) -> str | None:
+    """Say why this run can't go on. Control files come first: they are read without git."""
+    anchor = values.get("anchor") or {}
+    if anchor.get("repo") and runtime.vcs.fingerprint() != anchor["repo"]:
+        return (
+            "cambiaron los ficheros de control de .git (config, hooks o info) a mitad de "
+            f"ejecución, y no se ha ejecutado git con ellos. {_UNDO_OR_START_OVER}"
+        )
+
+    saved_cfg_hash = values.get("config_hash")
+    if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
+        return (
+            "la configuración cambió a mitad de ejecución: "
+            "lictor.json, el perfil o los ficheros del perfil"
+        )
+
+    problems = _anchor_problems(runtime, resolved_cwd, values)
+    if problems:
+        return f"{'; '.join(problems)}. {_UNDO_OR_START_OVER}"
+
+    if values.get("seal_ok") and not runtime.spec_source.verify_seal(
+        resolved_cwd, runtime.graph_context.paths_driver
+    ):
+        return "la especificación o el driver cambiaron a mitad de ejecución"
+
+    changed = runtime.vcs.status()
+    if changed:
+        return (
+            f"hay cambios sin confirmar: {', '.join(changed)}. No se ha tocado nada: "
+            "confírmalos o descártalos y vuelve a lanzar `lictor run`."
+        )
+    return None
+
+
 def _check_resume_guard(
     runtime: BootstrapResult,
     resolved_cwd: Path,
     run_id: str,
     state_snapshot: Any,
 ) -> int | None:
-    saved_cfg_hash = state_snapshot.values.get("config_hash")
-    if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
-        reason = (
-            "la configuración cambió a mitad de ejecución: "
-            "lictor.json, el perfil o los ficheros del perfil"
-        )
-        return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
-
-    if state_snapshot.values.get("seal_ok") and not runtime.spec_source.verify_seal(
-        resolved_cwd, runtime.graph_context.paths_driver
-    ):
-        reason = "la especificación o el driver cambiaron a mitad de ejecución"
+    reason = _integrity_refusal(runtime, resolved_cwd, state_snapshot.values)
+    if reason is not None:
         return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
     health = runtime.executor.health()
@@ -392,9 +434,9 @@ def _resume_run(
     chk_config: RunnableConfig = {"configurable": {"thread_id": existing_run_id}}
     has_interrupts = any(task.interrupts for task in state_snapshot.tasks)
     if has_interrupts:
-        graph.invoke(Command(resume=True), config=chk_config)
+        graph.invoke(Command(resume=True), config=chk_config, durability=DURABILITY)
     else:
-        graph.invoke(None, config=chk_config)
+        graph.invoke(None, config=chk_config, durability=DURABILITY)
 
     updated_state = graph.get_state(config=chk_config)
     paused_code = _paused_exit_code(runtime, existing_run_id, updated_state)
@@ -423,7 +465,7 @@ def _start_new_run(
         "totals": {},
     }
     chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
-    graph.invoke(init_state, config=chk_config)
+    graph.invoke(init_state, config=chk_config, durability=DURABILITY)
 
     final_state = graph.get_state(config=chk_config)
     paused_code = _paused_exit_code(runtime, run_id, final_state)

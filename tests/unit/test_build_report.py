@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from lictor.application.ports import EventLog
+from lictor.application.seal import hash_tree
 from lictor.application.usecases.build_report import (
     BuildReport,
     BuildReportRequest,
@@ -280,3 +281,50 @@ def test_report_lists_rejected_drivers(tmp_path: Path) -> None:
 
 def test_report_says_when_no_driver_was_rejected(tmp_path: Path) -> None:
     assert "*Ningún driver rechazado.*" in _report(tmp_path, [])
+
+
+def _verified(path: str, digest: str) -> Event:
+    return Event(
+        id="v",
+        type="lictor.verify.finished.v1",
+        source="lictor/0.1.0",
+        time="2026-10-30T10:00:00Z",
+        runid="run-1",
+        scenarioid="IVA-001",
+        data={"attempt": 1, "ok": True, "evidence": {"path": path, "hash": digest}},
+    )
+
+
+def _report(tmp_path: Path, events: list[Event]) -> str:
+    use_case = BuildReport(event_log=InMemoryEventLog(events))
+    return use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1")).content
+
+
+def test_report_says_when_the_evidence_is_intact(tmp_path: Path) -> None:
+    step = tmp_path / ".lictor" / "runs" / "paso"
+    step.mkdir(parents=True)
+    (step / "acceptance.log").write_text("ok", encoding="utf-8")
+
+    report = _report(tmp_path, [_verified(".lictor/runs/paso", hash_tree(step))])
+
+    assert "coincide con lo registrado" in report
+    assert "Alterada" not in report
+
+
+def test_report_names_evidence_changed_after_it_was_recorded(tmp_path: Path) -> None:
+    step = tmp_path / ".lictor" / "runs" / "paso"
+    step.mkdir(parents=True)
+    log = step / "acceptance.log"
+    log.write_text("ok", encoding="utf-8")
+    digest = hash_tree(step)
+    log.write_text("todo fue bien", encoding="utf-8")
+
+    report = _report(tmp_path, [_verified(".lictor/runs/paso", digest)])
+
+    assert "**Alterada tras registrarse**: `.lictor/runs/paso`" in report
+
+
+def test_report_names_evidence_that_is_gone(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_verified(".lictor/runs/borrado", "sha256:x")])
+
+    assert "`.lictor/runs/borrado`" in report

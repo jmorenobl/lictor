@@ -150,7 +150,7 @@ def test_capture_that_git_cant_read_is_a_candidate_error(git_repo: Path, tmp_pat
     nested.mkdir()
     subprocess.run([GIT_BIN, "init", "-q"], cwd=nested, check=True)
 
-    with pytest.raises(CandidateError, match="^No se pudo leer"):
+    with pytest.raises(CandidateError, match=r"^No se pudo leer"):
         cli.capture(workdir)
 
 
@@ -335,7 +335,7 @@ def test_advance_head_refuses_to_overwrite_an_edit(
     candidate = _candidate(cli, tmp_path)
     (git_repo / "file_a.txt").write_text("del usuario", encoding="utf-8")
 
-    with pytest.raises(CandidateError, match="file_a.txt"):
+    with pytest.raises(CandidateError, match=r"file_a\.txt"):
         cli.advance_head(candidate.sha, expected=candidate.parent)
 
     assert _head(git_repo) == candidate.parent
@@ -379,3 +379,156 @@ def test_git_output_that_is_not_utf8_doesnt_break_the_adapter(git_repo: Path) ->
     cli = GitCli(repo_dir=git_repo)
 
     assert cli.status() == ["binario"]
+
+
+def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    before = cli.fingerprint()
+    assert cli.fingerprint() == before
+
+    def no_git(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no debe ejecutarse git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    for rel_path in ("config", "hooks/pre-commit", "info/attributes"):
+        target = git_repo / ".git" / rel_path
+        target.parent.mkdir(exist_ok=True)
+        target.write_text("x\n", encoding="utf-8")
+        assert cli.fingerprint() != before, rel_path
+        if rel_path != "config":
+            target.unlink()
+
+
+def test_fingerprint_doesnt_depend_on_refs_or_objects(git_repo: Path) -> None:
+    """Advancing the branch is Lictor's own job: only control files count here."""
+    cli = GitCli(repo_dir=git_repo)
+    before = cli.fingerprint()
+
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "x"], cwd=git_repo, check=True)
+
+    assert cli.fingerprint() == before
+
+
+def test_restore_brings_back_control_files_and_removes_planted_ones(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    config = git_repo / ".git" / "config"
+    original = config.read_bytes()
+    pin = cli.pin()
+    config.write_text("[core]\n\tfsmonitor = /x\n", encoding="utf-8")
+    hook = git_repo / ".git" / "hooks" / "post-merge"
+    hook.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    changed = cli.restore(pin)
+
+    assert sorted(changed) == [".git/config", ".git/hooks/post-merge"]
+    assert config.read_bytes() == original
+    assert not hook.exists()
+    assert cli.restore(pin) == []
+
+
+def test_restore_replaces_a_link_instead_of_writing_through_it(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    outside = tmp_path.with_name(f"{tmp_path.name}-fuera")
+    outside.write_text("ajeno", encoding="utf-8")
+    config = git_repo / ".git" / "config"
+    config.unlink()
+    config.symlink_to(outside)
+
+    cli.restore(pin)
+
+    assert outside.read_text(encoding="utf-8") == "ajeno"
+    assert not config.is_symlink()
+
+
+def test_restore_undoes_a_commit_and_keeps_unrelated_edits(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "README.md").write_text("# Editado\n", encoding="utf-8")
+    pin = cli.pin()
+    (git_repo / "otro.txt").write_text("x", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "otro.txt"], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "ajeno"], cwd=git_repo, check=True)
+
+    assert cli.restore(pin) == ["HEAD"]
+
+    assert _head(git_repo) == pin.head
+    assert not (git_repo / "otro.txt").exists()
+    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Editado\n"
+
+
+def test_restore_moves_head_even_if_the_tree_cant_follow(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    (git_repo / "README.md").write_text("cambiado", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "ajeno"], cwd=git_repo, check=True)
+    (git_repo / "README.md").write_text("sin confirmar", encoding="utf-8")
+
+    assert cli.restore(pin) == ["HEAD"]
+
+    assert _head(git_repo) == pin.head
+
+
+def test_a_worktree_finds_its_repository_by_reading(git_repo: Path, tmp_path: Path) -> None:
+    other = tmp_path.with_name(f"{tmp_path.name}-worktree")
+    subprocess.run(
+        [GIT_BIN, "worktree", "add", "-q", "-b", "w", str(other)], cwd=git_repo, check=True
+    )
+
+    assert GitCli(repo_dir=other).pin().files["HEAD"].startswith(b"ref:")
+
+
+def test_every_call_is_hardened_against_the_repository_config(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    marker = tmp_path.with_name(f"{tmp_path.name}-marca")
+    hook = git_repo / ".git" / "evil.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run([GIT_BIN, "config", "core.fsmonitor", str(hook)], cwd=git_repo, check=True)
+    (git_repo / "README.md").write_text("x", encoding="utf-8")
+    cli = GitCli(repo_dir=git_repo)
+
+    cli.status()
+    cli.get_head_sha()
+    cli.get_trailers("Scenario")
+
+    assert not marker.exists()
+
+
+def test_inherited_git_locations_dont_redirect_the_adapter(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launched from a git hook, GIT_DIR points wherever that hook ran."""
+    head = _head(git_repo)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path.with_name("no-existe")))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path.with_name("no-existe-index")))
+
+    assert GitCli(repo_dir=git_repo).get_head_sha() == head
+
+
+def test_replaced_objects_are_ignored(git_repo: Path) -> None:
+    head = _head(git_repo)
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "b"], cwd=git_repo, check=True)
+    other = _head(git_repo)
+    subprocess.run([GIT_BIN, "replace", other, head], cwd=git_repo, check=True)
+
+    assert GitCli(repo_dir=git_repo).get_head_message() == "b"
+
+
+def test_export_tree_is_independent_of_the_user_configuration(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A global `core.autocrlf` would rewrite the tree under test on that machine alone."""
+    config = tmp_path.with_name(f"{tmp_path.name}-gitconfig")
+    config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    dest = tmp_path.with_name(f"{tmp_path.name}-exportado")
+
+    GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
+
+    assert b"\r" not in (dest / "README.md").read_bytes()

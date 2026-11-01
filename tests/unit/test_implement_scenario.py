@@ -128,11 +128,15 @@ def test_tampering_is_not_a_backend_failure(tmp_path: Path) -> None:
 
     result, _, _ = _execute(tmp_path, MagicMock(side_effect=tamper), agent_failures=1)
 
-    assert result.agent_signal == "error"
+    assert result.agent_signal == "rejected"
+    assert result.failed_at == "L0-estado"
+    assert ".lictor/journal.jsonl" in (result.error or "")
+    assert result.tree is None
     assert result.attempt == 2
     assert result.agent_failures == 0
-    assert result.agent_result.status == "error"
+    assert result.agent_result.status == "ok"
     assert result.agent_result.num_turns == 7
+    assert journal.read_text(encoding="utf-8") == "", "se restaura"
 
 
 def test_failed_call_does_not_overwrite_the_previous_raw_output(tmp_path: Path) -> None:

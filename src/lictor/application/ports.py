@@ -14,6 +14,7 @@ from lictor.domain.model import (
     ControlResult,
     Event,
     Health,
+    RepoPin,
     Scenario,
     TreeChange,
 )
@@ -101,6 +102,18 @@ class Vcs(Protocol):
 
     def advance_head(self, sha: str, expected: str) -> None:
         """Fast-forward from `expected` to `sha`, refusing to overwrite what the user changed."""
+        ...
+
+    def pin(self) -> RepoPin:
+        """Record HEAD and the repository's control files before untrusted code runs."""
+        ...
+
+    def restore(self, pin: RepoPin) -> list[str]:
+        """Bring back what changed since `pin`, control files first, and say what it was."""
+        ...
+
+    def fingerprint(self) -> str:
+        """Hash the repository's control files without running git, which would obey them."""
         ...
 
     def get_tree(self, rev: str) -> str:

@@ -7,6 +7,7 @@ from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
     acceptance_failure,
+    anchor_problems,
     banned_matches,
     check_red_rule,
     condense_error,
@@ -666,3 +667,41 @@ def test_agent_failure_limit_stops_before_a_third_call() -> None:
 )
 def test_is_agent_unavailable(status: AgentStatus, failures: int, expected: bool) -> None:
     assert is_agent_unavailable(status, failures) is expected
+
+
+_ANCHOR = {"head": "a" * 40, "seal": "sha256:s", "repo": "sha256:r"}
+
+
+def test_anchor_without_differences_has_no_problems() -> None:
+    assert anchor_problems(_ANCHOR, _ANCHOR, {"a" * 40}) == []
+
+
+def test_anchor_accepts_a_head_the_run_knows() -> None:
+    observed = {**_ANCHOR, "head": "b" * 40}
+    assert anchor_problems(_ANCHOR, observed, {"a" * 40, "b" * 40}) == []
+
+
+def test_anchor_reports_a_moved_head_with_both_values() -> None:
+    observed = {**_ANCHOR, "head": "b" * 40}
+    problems = anchor_problems(_ANCHOR, observed, {"a" * 40})
+    assert problems == [f"HEAD está en {'b' * 12} y la ejecución lo dejó en {'a' * 12}"]
+
+
+def test_anchor_reports_a_forged_seal() -> None:
+    observed = {**_ANCHOR, "seal": "sha256:otro"}
+    assert anchor_problems(_ANCHOR, observed, {"a" * 40}) == [
+        ".lictor/seal.json no es el que escribió la ejecución"
+    ]
+
+
+def test_anchor_reports_a_missing_seal() -> None:
+    observed = {**_ANCHOR, "seal": ""}
+    assert len(anchor_problems(_ANCHOR, observed, {"a" * 40})) == 1
+
+
+def test_anchor_before_sealing_ignores_the_seal() -> None:
+    assert anchor_problems({**_ANCHOR, "seal": ""}, _ANCHOR, {"a" * 40}) == []
+
+
+def test_anchor_of_a_run_that_recorded_nothing_has_no_problems() -> None:
+    assert anchor_problems({}, _ANCHOR, set()) == []

@@ -26,6 +26,7 @@ from lictor.application.usecases.verify_attempt import VerificationControl, Veri
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.model import CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
+    DURABILITY,
     GraphContext,
     GraphState,
     _GraphNodes,
@@ -268,7 +269,7 @@ def test_graph_mode_good(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0001"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 0
     assert final_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
@@ -310,7 +311,7 @@ def test_graph_mode_fail(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0002"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 30
     assert final_state.get("status") == {"IVA-001": "quarantined", "IVA-002": "quarantined"}
@@ -350,7 +351,7 @@ def test_graph_mode_cheat(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0003"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 30
     assert final_state.get("status", {}).get("IVA-001") == "quarantined"
@@ -383,7 +384,7 @@ def test_graph_mode_conflict(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0004"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 11
     assert final_state.get("status", {}).get("IVA-001") == "quarantined"
@@ -417,7 +418,7 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
 
     config = {"configurable": {"thread_id": "20261030-150000-0005"}}
     # First invocation hits rate_limit in build_driver and triggers interrupt in pause node
-    graph.invoke(initial_state, config=config)
+    graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     # Check thread state shows pause interrupt
     state_snap = graph.get_state(config)
@@ -440,7 +441,7 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
     }
 
     # Resume the interrupted execution
-    resumed_state = graph.invoke(Command(resume=True), config=config)
+    resumed_state = graph.invoke(Command(resume=True), config=config, durability=DURABILITY)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
     assert resumed_state.get("driver_attempts") == 1
@@ -476,7 +477,7 @@ def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
     config = {"configurable": {"thread_id": "20261030-150000-0006"}}
 
     with pytest.raises(RuntimeError, match="Simulated FakeExecutor crash on scenario IVA-001"):
-        graph.invoke(initial_state, config=config)
+        graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     # Working tree may be dirty from interrupted run; fix executor and resume from checkpoint!
     executor.crash_on_scenario = None
@@ -494,7 +495,7 @@ def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
     }
 
     # Resume with invoke(None)
-    resumed_state = graph.invoke(None, config=config)
+    resumed_state = graph.invoke(None, config=config, durability=DURABILITY)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
 
@@ -555,7 +556,7 @@ def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path:
     context = dataclasses.replace(context, spec_source=_TamperSpecSource(context.spec_source))
     graph = create_graph(context, checkpointer=saver)
 
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
     assert final_state.get("exit_code") == 10
     # verify must NOT have run or set last_verify
     assert final_state.get("last_verify") == {"ok": True}

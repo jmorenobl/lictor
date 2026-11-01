@@ -236,6 +236,14 @@ class ControlResult:
     output_path: str | None = None
 
 
+@dataclass(frozen=True)
+class RepoPin:
+    """What a repository holds before untrusted code runs: its HEAD and its control files."""
+
+    head: str
+    files: dict[str, bytes] = field(default_factory=dict)
+
+
 _SYMLINK_MODE = "120000"
 _GITLINK_MODE = "160000"
 
@@ -274,6 +282,7 @@ class VerifyResult:
     reverted_files: tuple[str, ...] = field(default_factory=tuple)
     error_path: str | None = None
     candidate: Candidate | None = None
+    evidence: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

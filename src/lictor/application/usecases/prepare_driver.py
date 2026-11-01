@@ -5,7 +5,7 @@ import hashlib
 import importlib.resources
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -17,8 +17,8 @@ from lictor.application.run_files import (
     relative_to_project,
     unused_path,
 )
-from lictor.application.usecases.agent_events import denial_event, denial_targets
-from lictor.application.usecases.verify_attempt import IntegritySnapshot
+from lictor.application.usecases.agent_events import denial_event, denial_targets, tamper_event
+from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentTask, Event, TreeChange
 from lictor.domain.rules import count_agent_failures, forbidden_paths, is_agent_unavailable
@@ -61,17 +61,6 @@ class PrepareDriverResult:
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
-
-
-@dataclass(frozen=True)
-class _CopyOutcome:
-    """What an agent call left: its result and what could be read from its copy."""
-
-    agent_result: AgentResult
-    integrity_ok: bool
-    tree: str | None = None
-    reverted: list[str] = field(default_factory=list)
-    unreadable: str | None = None
 
 
 def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
@@ -194,15 +183,16 @@ class PrepareDriver:
         )
         outcome = self._run_in_copy(task, request)
         agent_result = outcome.agent_result
-        reverted = outcome.reverted
+        reverted = list(outcome.reverted)
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
-        if not outcome.integrity_ok and agent_result.status == "ok":
-            agent_result = replace(agent_result, status="error")
 
         agent_signal: DriverSignal
         new_attempts = request.driver_attempts
-        if agent_result.status == "rate_limited":
+        if outcome.tampered:
+            agent_signal = "rejected"
+            new_attempts = request.driver_attempts + 1
+        elif agent_result.status == "rate_limited":
             agent_signal = "rate_limited"
         elif is_agent_unavailable(agent_result.status, agent_failures):
             agent_signal = "unavailable"
@@ -254,6 +244,8 @@ class PrepareDriver:
         self.event_log.append(event)
         if agent_result.permission_denials:
             self.event_log.append(denial_event(agent_result, event))
+        if outcome.tampered:
+            self.event_log.append(tamper_event(event, outcome.tampered))
 
         return PrepareDriverResult(
             agent_result=agent_result,
@@ -263,21 +255,24 @@ class PrepareDriver:
             agent_signal=agent_signal,
             agent_failures=agent_failures,
             tree=outcome.tree,
-            error=outcome.unreadable if agent_signal == "rejected" else None,
+            error=outcome.error if agent_signal == "rejected" else None,
         )
 
-    def _run_in_copy(self, task: AgentTask, request: PrepareDriverRequest) -> _CopyOutcome:
-        snapshot = IntegritySnapshot(request.project_root / ".lictor", request.project_root)
+    def _run_in_copy(self, task: AgentTask, request: PrepareDriverRequest) -> AgentCopyOutcome:
+        lictor_dir = request.project_root / ".lictor"
+        snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
         with agent_workspace(self.vcs, request.project_root) as workspace:
             agent_result = self.executor.run(replace(task, cwd=workspace))
-            integrity_ok = snapshot.verify_and_restore()
+            snapshot.verify_and_restore()
+            if snapshot.changes:
+                return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
             if agent_result.status == "rate_limited":
-                return _CopyOutcome(agent_result, integrity_ok)
+                return AgentCopyOutcome(agent_result)
             try:
                 tree = self.vcs.capture(workspace)
                 reverted = _discarded_paths(self.vcs.changes(tree), request)
                 if reverted:
                     tree = self.vcs.capture(workspace, skip=reverted)
             except CandidateError as exc:
-                return _CopyOutcome(agent_result, integrity_ok, unreadable=str(exc))
-        return _CopyOutcome(agent_result, integrity_ok, tree, reverted)
+                return AgentCopyOutcome(agent_result, unreadable=str(exc))
+        return AgentCopyOutcome(agent_result, tree=tree, reverted=tuple(reverted))

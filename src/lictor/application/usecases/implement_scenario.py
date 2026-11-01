@@ -16,8 +16,11 @@ from lictor.application.run_files import (
     relative_to_project,
     unused_path,
 )
-from lictor.application.usecases.agent_events import denial_event, denial_targets
-from lictor.application.usecases.verify_attempt import IntegritySnapshot
+from lictor.application.usecases.agent_events import denial_event, denial_targets, tamper_event
+from lictor.application.usecases.verify_attempt import (
+    AgentCopyOutcome,
+    IntegritySnapshot,
+)
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import AgentResult, AgentStatus, AgentTask, Event, Scenario
 from lictor.domain.rules import count_agent_failures, is_agent_unavailable
@@ -228,7 +231,6 @@ class ImplementScenario:
         for k, v in replacements.items():
             prompt = prompt.replace(k, v)
 
-        lictor_dir = request.project_root / ".lictor"
         prefix = attempt_prefix(
             request.project_root, request.run_id, request.scenario.id.value, request.attempt + 1
         )
@@ -238,36 +240,23 @@ class ImplementScenario:
             prefix.with_name(f"{prefix.name}-implement.json"), request.agent_failures
         )
 
-        snapshot = IntegritySnapshot(lictor_dir, request.project_root)
-        tree: str | None = None
-        unreadable: str | None = None
-        with agent_workspace(self.vcs, request.project_root) as workspace:
-            agent_result = self.executor.run(
-                AgentTask(
-                    role="implement",
-                    prompt=prompt,
-                    prompt_sha=prompt_sha,
-                    cwd=workspace,
-                    model=request.model,
-                    allowed_tools=request.allowed_tools,
-                    max_turns=request.max_turns,
-                    timeout_s=request.timeout_s,
-                    raw_path=raw_path,
-                )
-            )
-            integrity_ok = snapshot.verify_and_restore()
-            if not agent_result.spec_conflict and agent_result.status != "rate_limited":
-                try:
-                    tree = self.vcs.capture(workspace)
-                except CandidateError as exc:
-                    unreadable = str(exc)
+        task = AgentTask(
+            role="implement",
+            prompt=prompt,
+            prompt_sha=prompt_sha,
+            cwd=request.project_root,
+            model=request.model,
+            allowed_tools=request.allowed_tools,
+            max_turns=request.max_turns,
+            timeout_s=request.timeout_s,
+            raw_path=raw_path,
+        )
+        outcome = self._run_in_copy(task, request.project_root)
+        agent_result = outcome.agent_result
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
-        if not integrity_ok and agent_result.status == "ok":
-            agent_result = replace(agent_result, status="error")
-
         agent_signal = _classify_agent(agent_result, agent_failures)
-        if unreadable is not None and agent_signal in ("ok", "error"):
+        if outcome.tampered or (outcome.unreadable and agent_signal in ("ok", "error")):
             agent_signal = "rejected"
         keeps_attempt = agent_signal in ("rate_limited", "unavailable") or (
             agent_signal == "error" and agent_failures > 0
@@ -315,6 +304,8 @@ class ImplementScenario:
         self.event_log.append(event)
         if agent_result.permission_denials:
             self.event_log.append(denial_event(agent_result, event))
+        if outcome.tampered:
+            self.event_log.append(tamper_event(event, outcome.tampered))
 
         return ImplementScenarioResult(
             agent_result=agent_result,
@@ -323,7 +314,21 @@ class ImplementScenario:
             prompt_sha=prompt_sha,
             agent_failures=agent_failures,
             attempt_slot=request.attempt + 1,
-            tree=tree,
-            failed_at="L0-rutas" if agent_signal == "rejected" else None,
-            error=unreadable if agent_signal == "rejected" else None,
+            tree=None if agent_signal == "rejected" else outcome.tree,
+            failed_at=outcome.failed_at if agent_signal == "rejected" else None,
+            error=outcome.error if agent_signal == "rejected" else None,
         )
+
+    def _run_in_copy(self, task: AgentTask, project_root: Path) -> AgentCopyOutcome:
+        snapshot = IntegritySnapshot(project_root / ".lictor", project_root, self.vcs)
+        with agent_workspace(self.vcs, project_root) as workspace:
+            agent_result = self.executor.run(replace(task, cwd=workspace))
+            snapshot.verify_and_restore()
+            if snapshot.changes:
+                return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
+            if agent_result.spec_conflict or agent_result.status == "rate_limited":
+                return AgentCopyOutcome(agent_result)
+            try:
+                return AgentCopyOutcome(agent_result, tree=self.vcs.capture(workspace))
+            except CandidateError as exc:
+                return AgentCopyOutcome(agent_result, unreadable=str(exc))

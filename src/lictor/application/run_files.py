@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from lictor.application.ports import Vcs
+from lictor.application.seal import hash_tree
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
@@ -114,6 +115,15 @@ def describe_crash(crash: str, control: ControlResult, output: str) -> str:
     """Put what the report itself says on the first line: it survives any condensing."""
     first_line = crash if control.test_cases or not control.error else f"{crash}: {control.error}"
     return f"{first_line}\n{output}".strip()
+
+
+def step_evidence(step_dir: Path, project_root: Path) -> dict[str, str]:
+    """Describe a finished step for the journal, which is protected where `runs/` isn't.
+
+    `runs/` grows without limit and no decision reads it once a step is over, so it stays out of
+    `IntegritySnapshot`. Its hash in the journal makes a later change visible in the report.
+    """
+    return {"path": relative_to_project(step_dir, project_root), "hash": hash_tree(step_dir)}
 
 
 def relative_to_project(path: Path, project_root: Path) -> str:

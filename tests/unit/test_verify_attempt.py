@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
+from lictor.application.seal import hash_tree
 from lictor.application.usecases.verify_attempt import (
     IntegritySnapshot,
     VerificationControl,
@@ -985,3 +986,118 @@ def test_environment_manifest_is_protected_during_untrusted_windows(tmp_path: Pa
 
     assert snapshot.verify_and_restore() is False
     assert manifest.read_text(encoding="utf-8") == "original"
+
+
+def _state(tmp_path: Path) -> Path:
+    lictor_dir = tmp_path / ".lictor"
+    lictor_dir.mkdir()
+    return lictor_dir
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "seal.json",
+        "checkpoints.sqlite",
+        "checkpoints.sqlite-wal",
+        "journal.jsonl",
+        "verify_env.json",
+        "current_run",
+        "fake_executor.json",
+    ],
+)
+def test_snapshot_restores_each_state_file_and_names_it(tmp_path: Path, name: str) -> None:
+    lictor_dir = _state(tmp_path)
+    target = lictor_dir / name
+    target.write_bytes(b"original")
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path)
+
+    target.write_bytes(b"forjado")
+
+    assert snapshot.verify_and_restore() is False
+    assert target.read_bytes() == b"original"
+    assert snapshot.changes == [f".lictor/{name}"]
+
+
+def test_snapshot_removes_a_state_file_that_didnt_exist(tmp_path: Path) -> None:
+    lictor_dir = _state(tmp_path)
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path)
+    wal = lictor_dir / "checkpoints.sqlite-wal"
+
+    wal.write_bytes(b"forjado")
+
+    assert snapshot.verify_and_restore() is False
+    assert not wal.exists()
+
+
+def test_snapshot_doesnt_count_the_wal_index_but_restores_it_with_the_data(tmp_path: Path) -> None:
+    lictor_dir = _state(tmp_path)
+    index = lictor_dir / "checkpoints.sqlite-shm"
+    index.write_bytes(b"indice")
+    wal = lictor_dir / "checkpoints.sqlite-wal"
+    wal.write_bytes(b"datos")
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path)
+
+    index.write_bytes(b"lector")
+    assert snapshot.verify_and_restore() is True
+    assert index.read_bytes() == b"lector", "leer no es manipular"
+
+    wal.write_bytes(b"forjado")
+    assert snapshot.verify_and_restore() is False
+    assert index.read_bytes() == b"indice"
+
+
+def test_snapshot_pins_the_repository_and_reports_what_it_restored(tmp_path: Path) -> None:
+    lictor_dir = _state(tmp_path)
+    vcs = MagicMock(spec=Vcs)
+    vcs.restore.return_value = ["HEAD"]
+
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path, vcs)
+
+    assert snapshot.verify_and_restore() is False
+    vcs.restore.assert_called_once_with(vcs.pin.return_value)
+    assert snapshot.changes == ["HEAD"]
+
+
+def test_snapshot_restores_state_files_before_touching_the_repository(tmp_path: Path) -> None:
+    lictor_dir = _state(tmp_path)
+    seal = lictor_dir / "seal.json"
+    seal.write_bytes(b"original")
+    vcs = MagicMock(spec=Vcs)
+    seen: list[bytes] = []
+    vcs.restore.side_effect = lambda _pin: seen.append(seal.read_bytes()) or []
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path, vcs)
+
+    seal.write_bytes(b"forjado")
+    snapshot.verify_and_restore()
+
+    assert seen == [b"original"]
+
+
+def test_tampering_during_a_command_is_named_in_the_error(tmp_path: Path) -> None:
+    class Forger(FakeRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: Mapping[str, str] | None = None,
+        ) -> CommandOutput:
+            (tmp_path / ".lictor" / "journal.jsonl").write_text("forjado", encoding="utf-8")
+            return super().run(cmd, cwd, timeout_s, env)
+
+    verifier, req = _verify(tmp_path, Forger())
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-estado"
+    assert ".lictor/journal.jsonl" in (result.condensed_error or "")
+
+
+def test_every_verification_records_its_evidence(tmp_path: Path) -> None:
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (_GREEN_REPORT, 0)}))
+
+    result = verifier.execute(req)
+
+    assert result.evidence["path"] == f".lictor/runs/{req.run_id}/IVA-001/002-verify"
+    assert result.evidence["hash"] == hash_tree(tmp_path / result.evidence["path"])

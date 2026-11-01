@@ -13,6 +13,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
+from lictor.application.anchor import observe_anchor
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
@@ -95,6 +96,7 @@ class GraphState(TypedDict, total=False):
     last_failed_at: str | None
     last_verify: dict[str, Any] | None
     attempt_tree: str | None
+    anchor: dict[str, str]
     agent_signal: str | None
     agent_failures: int
     last_agent_status: AgentStatus | None
@@ -147,6 +149,10 @@ class GraphContext:
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
 
+
+# Each step is on disk before the next one starts. With the default, a background thread writes the
+# checkpoint while the agent runs: a kill loses it, and `IntegritySnapshot` sees it as tampering.
+DURABILITY: Literal["sync"] = "sync"
 
 _PAUSE_REASONS = {"rate_limited": "rate_limited", "blocked": "branch_blocked"}
 
@@ -215,7 +221,10 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
-        return {}
+        return {"anchor": self._anchor()}
+
+    def _anchor(self) -> dict[str, str]:
+        return observe_anchor(self.ctx.vcs, self.ctx.project_root)
 
     def load_spec(self, state: GraphState) -> dict[str, Any]:
         features_dir = self.ctx.project_root / "features"
@@ -344,6 +353,7 @@ class _GraphNodes:
                 "last_error": None,
                 "seal_ok": True,
                 "agent_signal": None,
+                "anchor": self._anchor(),
             }
         return {
             "last_verify": {"ok": False},
@@ -529,6 +539,7 @@ class _GraphNodes:
                 "reverted_files": list(res.reverted_files),
                 "error": res.condensed_error,
                 "error_path": res.error_path,
+                "evidence": res.evidence,
                 "candidate": res.candidate.sha if res.candidate else None,
                 "tree": res.candidate.tree if res.candidate else None,
             },
@@ -568,7 +579,7 @@ class _GraphNodes:
             )
         except CandidateError as exc:
             return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "commit"}
-        return {"status": {current_id: "green"}, "agent_signal": None}
+        return {"status": {current_id: "green"}, "agent_signal": None, "anchor": self._anchor()}
 
     def quarantine(self, state: GraphState) -> dict[str, Any]:
         current_id = state.get("current")
