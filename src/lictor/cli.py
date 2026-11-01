@@ -322,7 +322,7 @@ def _integrity_refusal(runtime: BootstrapResult, resolved_cwd: Path, values: Any
     if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
         return (
             "la configuración cambió a mitad de ejecución: "
-            "lictor.json, el perfil o los ficheros del perfil"
+            f"lictor.json, el perfil o los ficheros del perfil. {_UNDO_OR_START_OVER}"
         )
 
     problems = _anchor_problems(runtime, resolved_cwd, values)
@@ -332,7 +332,9 @@ def _integrity_refusal(runtime: BootstrapResult, resolved_cwd: Path, values: Any
     if values.get("seal_ok") and not runtime.spec_source.verify_seal(
         resolved_cwd, runtime.graph_context.paths_driver
     ):
-        return "la especificación o el driver cambiaron a mitad de ejecución"
+        return (
+            f"la especificación o el driver cambiaron a mitad de ejecución. {_UNDO_OR_START_OVER}"
+        )
 
     changed = runtime.vcs.status()
     if changed:

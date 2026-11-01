@@ -7,7 +7,7 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_tree
-from lictor.domain.model import Event
+from lictor.domain.model import Event, JournalDamage
 
 _MS_PER_SECOND: Final[int] = 1000
 
@@ -40,6 +40,17 @@ class BuildReportResult:
 
     report_path: Path
     content: str
+
+
+def _journal_lines(damage: JournalDamage) -> list[str]:
+    if damage.total == 0:
+        return ["- *Ninguna línea descartada.*"]
+    return [
+        f"- **Líneas descartadas**: {damage.total}",
+        f"  - Corruptas, que no son JSON (escritura cortada o edición): {damage.corrupt}",
+        f"  - Ajenas, JSON que no es un evento de Lictor (forjadas): {damage.foreign}",
+        "- Una línea forjada con la forma exacta de un evento no se distingue y no cuenta aquí.",
+    ]
 
 
 def _altered_evidence(events: list[Event], project_root: Path) -> list[str]:
@@ -87,6 +98,7 @@ class BuildReport:
     def _render_report(self, events: list[Event], project_root: Path) -> str:
         data = self._aggregate_metrics(events)
         data["altered_evidence"] = _altered_evidence(events, project_root)
+        data["journal_damage"] = self.event_log.damage()
         return self._format_markdown(data)
 
     def _aggregate_metrics(self, events: list[Event]) -> dict[str, Any]:
@@ -311,6 +323,9 @@ class BuildReport:
 
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])
+
+        lines.extend(["", "## Integridad de la bitácora"])
+        lines.extend(_journal_lines(info["journal_damage"]))
 
         lines.extend(["", "## Integridad de la evidencia"])
         lines.extend(

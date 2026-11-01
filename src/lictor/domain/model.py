@@ -237,6 +237,23 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class JournalDamage:
+    """Lines of the journal that were skipped when reading it.
+
+    `corrupt` lines aren't JSON: a write cut short, or an edit. `foreign` lines are JSON that no
+    Lictor event looks like, which only someone else can have written. A forged line with the exact
+    shape of an event can't be told apart here, and is in neither count.
+    """
+
+    corrupt: int = 0
+    foreign: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.corrupt + self.foreign
+
+
+@dataclass(frozen=True)
 class RepoPin:
     """What a repository holds before untrusted code runs: its HEAD and its control files."""
 

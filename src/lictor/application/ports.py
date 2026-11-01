@@ -14,6 +14,7 @@ from lictor.domain.model import (
     ControlResult,
     Event,
     Health,
+    JournalDamage,
     RepoPin,
     Scenario,
     TreeChange,
@@ -43,6 +44,10 @@ class EventLog(Protocol):
 
     def events(self, run_id: str | None = None) -> list[Event]:
         """Retrieve all recorded events, optionally filtered by run ID."""
+        ...
+
+    def damage(self) -> JournalDamage:
+        """Count the lines that reading the journal has to skip."""
         ...
 
 

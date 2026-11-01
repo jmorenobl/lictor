@@ -6,12 +6,13 @@ from lictor.application.usecases.build_report import (
     BuildReport,
     BuildReportRequest,
 )
-from lictor.domain.model import Event
+from lictor.domain.model import Event, JournalDamage
 
 
 class InMemoryEventLog(EventLog):
-    def __init__(self, events: list[Event]) -> None:
+    def __init__(self, events: list[Event], damage: JournalDamage | None = None) -> None:
         self._events = events
+        self.journal_damage = damage or JournalDamage()
 
     def append(self, event: Event) -> None:
         self._events.append(event)
@@ -20,6 +21,9 @@ class InMemoryEventLog(EventLog):
         if run_id is None:
             return list(self._events)
         return [e for e in self._events if e.runid == run_id]
+
+    def damage(self) -> JournalDamage:
+        return self.journal_damage
 
 
 def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
@@ -328,3 +332,18 @@ def test_report_names_evidence_that_is_gone(tmp_path: Path) -> None:
     report = _report(tmp_path, [_verified(".lictor/runs/borrado", "sha256:x")])
 
     assert "`.lictor/runs/borrado`" in report
+
+
+def test_report_says_when_no_journal_line_was_discarded(tmp_path: Path) -> None:
+    assert "Ninguna línea descartada" in _report(tmp_path, [])
+
+
+def test_report_counts_discarded_lines_by_kind(tmp_path: Path) -> None:
+    log = InMemoryEventLog([], JournalDamage(corrupt=2, foreign=5))
+    use_case = BuildReport(event_log=log)
+
+    report = use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1")).content
+
+    assert "**Líneas descartadas**: 7" in report
+    assert "(escritura cortada o edición): 2" in report
+    assert "(forjadas): 5" in report

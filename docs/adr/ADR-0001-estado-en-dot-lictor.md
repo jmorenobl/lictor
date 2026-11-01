@@ -15,11 +15,11 @@ En la versión v0.1 no existe sandbox de aislamiento por contenedores: cualquier
 Adoptar la **Opción A**: el directorio `.lictor/` se sitúa en la raíz del repositorio e ignorado por git.
 La protección de la integridad del estado no depende de su ubicación en el sistema de archivos, sino de tres mecanismos de control:
 1. **Reglas de denegación del agente:** el adaptador `ClaudeCLI` configura `--disallowedTools` explícitos sobre `Read(.lictor/**)`, `Edit(.lictor/**)` y `Write(.lictor/**)`.
-2. **Instantánea de integridad (L0-estado):** Lictor calcula hashes en memoria de `lictor.json`, `seal.json`, `checkpoints.sqlite` y la bitácora antes y después de cada llamada no confiable. Si se detecta alteración, falla con `failed_at: L0-estado` y restaura los archivos.
+2. **Instantánea de integridad (L0-estado):** Lictor guarda en memoria `lictor.json`, `seal.json`, `checkpoints.sqlite` con su WAL, la bitácora, HEAD y los ficheros de control de `.git` antes de cada llamada no confiable, y los compara después. Si se detecta alteración, falla con `failed_at: L0-estado` y restaura los archivos.
 3. **Sandbox futuro (a partir del Incremento 4):** el agente operará en un contenedor sobre un árbol de trabajo limpio que excluye `.lictor/` y `.git`.
 
 ## Consecuencias
 - `git status` no detecta `.lictor/` por estar en `.gitignore`, requiriendo la instantánea de integridad.
-- `reset_to_head` debe usar `git clean -fd` (sin bandera `-x`) para conservar los archivos ignorados y preservar el estado entre intentos.
+- Lictor no limpia ni resetea el árbol de trabajo del proyecto: el agente trabaja en una copia desde la Fase 4 y `.lictor/` queda fuera de su directorio, aunque siga al alcance por ruta absoluta hasta el sandbox.
 - Múltiples clones del repositorio gestionan su propio estado local de forma independiente y predecible.
 

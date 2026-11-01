@@ -35,6 +35,11 @@ from lictor.domain.rules import (
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
+_COLLATERAL_HINT = (
+    " Si el escenario ya pasa por un commit anterior, regístralo y relanza: "
+    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>"'
+)
+
 RejectionKind = Literal["L0-estado", "L0-entorno", "suite_caida", "mapeo", "regla_del_rojo"]
 
 
@@ -242,7 +247,8 @@ class CheckRed:
         final = not request.driver_fresh or exhausted
         result = self._reject(request, step_dir, rejection, final=final)
         if not request.driver_fresh:
-            raise DriverError(f"El driver sellado no es válido.\n{result.last_error}")
+            hint = _COLLATERAL_HINT if rejection.kind == "regla_del_rojo" else ""
+            raise DriverError(f"El driver sellado no es válido.{hint}\n{result.last_error}")
         if exhausted:
             raise DriverError(
                 f"Driver rechazado tras {request.driver_attempts} intentos.\n{result.last_error}"
