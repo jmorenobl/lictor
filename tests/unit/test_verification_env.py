@@ -413,6 +413,26 @@ def test_the_files_exist_before_the_plugins_are_asked_and_both_are_hashed(tmp_pa
     assert [call["cmd"][0] for call in runner.calls] == ["build", "donde", "plugins"]
 
 
+def test_whatever_the_question_leaves_behind_is_hashed(tmp_path: Path) -> None:
+    class _Littering(_Builder):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == "plugins" and self.builds == 1:
+                (cwd / "resto.pyc").write_text("x", encoding="utf-8")
+            return super().run(cmd, cwd, timeout_s, env)
+
+    environment, _ = _environment(tmp_path, _Littering(), WITH_PLUGINS)
+
+    environment.ensure("R")
+
+    assert environment.ensure("R") is None
+
+
 def test_plugins_survive_into_a_new_process(tmp_path: Path) -> None:
     """A resumed run has only the manifest, and it trusts it after comparing."""
     runner = _Builder()
