@@ -17,6 +17,7 @@ from tests.integration.repro.harness import (
     STUB,
     Agent,
     Outcome,
+    error_block,
     events_of,
     false_greens,
     git,
@@ -315,6 +316,7 @@ def test_c7_state_tampering_fails_the_attempt(make_project: ProjectFactory) -> N
     assert "IVA-001" not in green_ids(root)
     assert quarantined(root) == ["IVA-001"]
     assert agent.calls.count("IVA-001") == 3, "cada manipulación gasta el intento"
+    assert "journal.jsonl" in error_block(agent.prompts["IVA-001"][1])
     assert not [
         e
         for e in events_of(root, "verify.finished")

@@ -381,6 +381,21 @@ def test_git_output_that_is_not_utf8_doesnt_break_the_adapter(git_repo: Path) ->
     assert cli.status() == ["binario"]
 
 
+def test_advance_head_runs_no_hook_of_the_repository(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    candidate = _candidate(cli, tmp_path)
+    marker = tmp_path / "hook-ejecutado"
+    hook = git_repo / ".git" / "hooks" / "post-merge"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == candidate.sha
+    assert not marker.exists()
+
+
 def test_advance_head_refuses_if_the_branch_went_back(git_repo: Path, tmp_path: Path) -> None:
     """Fast-forwarding would succeed here: only the comparison with `expected` stops it."""
     subprocess.run([GIT_BIN, "commit", "--allow-empty", "-m", "base"], cwd=git_repo, check=True)

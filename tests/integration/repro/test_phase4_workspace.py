@@ -10,6 +10,7 @@ from tests.integration.repro.harness import (
     DRIVER_PATH,
     GOOD_1,
     MODULE_PATH,
+    VERIFY_ENV,
     Agent,
     Outcome,
     events_of,
@@ -254,6 +255,32 @@ def test_a_conflict_with_the_driver_stops_without_losing_anything(
     (root / DRIVER_PATH).unlink()
     assert run_lictor(root, agent) == Outcome(0)
 
+    assert green_ids(root) == ALL_GREEN
+    assert false_greens(root) == []
+
+
+def test_a_driver_rejected_after_unblocking_the_branch_retries_instead_of_pausing(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    edited = [False]
+
+    def driver(task: AgentTask, attempt: int) -> None:
+        if not edited[0]:
+            edited[0] = True
+            write(root, DRIVER_PATH, "# edición del usuario\n")
+        good_driver(task, attempt)
+
+    agent = Agent(driver=driver)
+    assert run_lictor(root, agent) == Outcome(10)
+    calls = agent.calls.count("driver")
+
+    (root / DRIVER_PATH).unlink()
+    write(root, f"{VERIFY_ENV}/plantado.py", "x = 1\n")
+    assert run_lictor(root, agent) == Outcome(0)
+
+    assert events_of(root, "env.tampered"), "el rechazo debía venir del entorno"
+    assert agent.calls.count("driver") > calls
     assert green_ids(root) == ALL_GREEN
     assert false_greens(root) == []
 
