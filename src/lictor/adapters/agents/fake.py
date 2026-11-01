@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,6 +16,7 @@ from lictor.domain.model import (
 )
 
 FakeMode = Literal["good", "fail", "cheat", "conflict", "rate_limit", "crash"]
+FakeEffect = Callable[[AgentTask, str | None, int], AgentStatus | None]
 _SCENARIO_TAG_RE = re.compile(r"([A-Z][A-Z0-9]*-[0-9]+)")
 
 
@@ -33,6 +35,7 @@ class FakeExecutor:
         tokens_per_call: Tokens | None = None,
         cost_per_call: float = 0.005,
         duration_ms: int = 150,
+        effect: FakeEffect | None = None,
     ) -> None:
         self.default_mode = mode
         self.scenario_modes = scenario_modes or {}
@@ -45,6 +48,8 @@ class FakeExecutor:
         )
         self.cost_per_call = cost_per_call
         self.duration_ms = duration_ms
+        self.effect = effect
+        self.calls: list[str] = []
 
     def health(self) -> Health:
         """Return healthy fake status."""
@@ -115,8 +120,12 @@ class FakeExecutor:
         if mode == "crash":
             raise RuntimeError("Simulated FakeExecutor crash")
 
+        call_key = scenario_id or task.role
+        self.calls.append(call_key)
         self._apply_filesystem_effects(mode, task.cwd, role=task.role, scenario_id=scenario_id)
         status, spec_conflict, result_text = self._build_mode_outcome(mode)
+        if self.effect is not None:
+            status = self.effect(task, scenario_id, self.calls.count(call_key)) or status
 
         tokens = self.tokens_per_call if status != "rate_limited" else Tokens()
         cost = self.cost_per_call if status != "rate_limited" else 0.0

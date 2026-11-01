@@ -183,3 +183,100 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
     assert "Duración total" in md
     assert "claude-code 1.0.0" in md
     assert "sha_imp_1" in md
+
+
+def _event(event_type: str, data: dict[str, object], scenario: str | None = None) -> Event:
+    return Event(
+        id=event_type,
+        type=event_type,
+        source="lictor/0.1.0",
+        time="2026-10-31T10:00:00Z",
+        runid="run-1",
+        scenarioid=scenario,
+        data=data,
+    )
+
+
+def _report(tmp_path: Path, events: list[Event]) -> str:
+    use_case = BuildReport(InMemoryEventLog(events))
+    return use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1")).content
+
+
+def test_report_gives_the_reason_of_the_exit(tmp_path: Path) -> None:
+    finished = _event("lictor.run.finished.v1", {"exit_code": 10, "reason": "Árbol sucio"})
+
+    report = _report(tmp_path, [finished])
+
+    assert "**Código de salida**: 10" in report
+    assert "**Motivo**: Árbol sucio" in report
+
+
+def test_report_omits_the_reason_when_there_is_none(tmp_path: Path) -> None:
+    assert "Motivo" not in _report(tmp_path, [_event("lictor.run.finished.v1", {"exit_code": 0})])
+
+
+def test_report_gives_the_reason_of_a_stopped_run(tmp_path: Path) -> None:
+    stopped = _event("lictor.run.stopped.v1", {"exit_code": 50, "reason": "Cuota agotada"})
+
+    report = _report(tmp_path, [stopped])
+
+    assert "**Código de salida**: 50" in report
+    assert "**Motivo**: Cuota agotada" in report
+
+
+def _verify_event(controls: dict[str, object], **data: object) -> Event:
+    return _event(
+        "lictor.verify.finished.v1",
+        {"attempt": 1, "ok": True, "controls": controls, **data},
+        "IVA-001",
+    )
+
+
+def test_report_lists_measure_controls_with_result_and_output(tmp_path: Path) -> None:
+    controls: dict[str, object] = {
+        "mut": {"ok": False, "mode": "measure", "exit_code": 7, "output": "r/mut.log"},
+        "cov": {"ok": True, "mode": "measure", "exit_code": 0, "output": "r/cov.log"},
+        "lint": {"ok": True, "mode": "block", "exit_code": 0, "output": "r/lint.log"},
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Controles en medición")[1].split("##")[0]
+    assert "**mut** (IVA-001, intento 1): fallo, código 7, salida en `r/mut.log`" in section
+    assert "**cov** (IVA-001, intento 1): correcto, código 0, salida en `r/cov.log`" in section
+    assert "lint" not in section
+
+
+def test_report_says_when_nothing_was_measured(tmp_path: Path) -> None:
+    assert "*Ningún control en medición.*" in _report(tmp_path, [_verify_event({})])
+
+
+def test_report_lists_every_attempt_with_its_error(tmp_path: Path) -> None:
+    failed = _event(
+        "lictor.verify.finished.v1",
+        {"attempt": 1, "ok": False, "failed_at": "acceptance", "error_path": "r/error.txt"},
+        "IVA-001",
+    )
+    passed = _event("lictor.verify.finished.v1", {"attempt": 2, "ok": True}, "IVA-001")
+
+    report = _report(tmp_path, [failed, passed])
+
+    section = report.split("## Verificaciones")[1].split("##")[0]
+    assert "| IVA-001 | 1 | acceptance | `r/error.txt` |" in section
+    assert "| IVA-001 | 2 | verde | - |" in section
+
+
+def test_report_lists_rejected_drivers(tmp_path: Path) -> None:
+    rejected = _event(
+        "lictor.driver.rejected.v1",
+        {"attempt": 1, "reason": "mapeo", "final": False, "error_path": "r/error.txt"},
+    )
+
+    report = _report(tmp_path, [rejected])
+
+    section = report.split("## Drivers rechazados")[1].split("##")[0]
+    assert "- Intento 1: mapeo (`r/error.txt`)" in section
+
+
+def test_report_says_when_no_driver_was_rejected(tmp_path: Path) -> None:
+    assert "*Ningún driver rechazado.*" in _report(tmp_path, [])

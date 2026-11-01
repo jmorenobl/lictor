@@ -1,12 +1,22 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
 from lictor.application.usecases.prepare_driver import (
     PrepareDriver,
     PrepareDriverRequest,
+    PrepareDriverResult,
 )
-from lictor.domain.model import AgentResult, Event, Health, Tokens
+from lictor.domain.model import (
+    AgentResult,
+    AgentStatus,
+    Event,
+    Health,
+    PermissionDenial,
+    Tokens,
+)
 
 
 def test_prepare_driver_executes_task_and_emits_event(tmp_path: Path) -> None:
@@ -123,6 +133,7 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
 
     vcs.revert_paths.assert_called_once_with(["pyproject.toml"])
     assert result.reverted_files == ("pyproject.toml",)
+    assert event_log.append.call_args_list[0].args[0].data["reverted_files"] == ["pyproject.toml"]
 
 
 def test_prepare_driver_does_not_increment_attempts_on_rate_limit(tmp_path: Path) -> None:
@@ -214,3 +225,105 @@ def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Pa
 
     result = use_case.execute(req)
     assert result.agent_result.status == "ok"
+
+
+def _execute_driver(
+    tmp_path: Path, agent: AgentResult, agent_failures: int = 0
+) -> tuple[PrepareDriverResult, MagicMock, MagicMock]:
+    vcs = MagicMock(spec=Vcs)
+    vcs.status.return_value = []
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = agent
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:30:00Z"
+    use_case = PrepareDriver(vcs=vcs, executor=executor, event_log=event_log, clock=clock)
+    request = PrepareDriverRequest(
+        project_root=tmp_path,
+        run_id="run1",
+        model="fake",
+        allowed_tools=[],
+        max_turns=1,
+        timeout_s=1,
+        paths_writable=["src/"],
+        paths_driver=["tests/acceptance/"],
+        paths_protected=[],
+        driver_hints="",
+        hints="",
+        green_ids=[],
+        driver_attempts=1,
+        agent_failures=agent_failures,
+    )
+    return use_case.execute(request), executor, event_log
+
+
+@pytest.mark.parametrize(
+    ("status", "failures", "expected"),
+    [
+        ("ok", 1, ("ok", 2, 0)),
+        ("error", 0, ("error", 2, 1)),
+        ("error", 1, ("unavailable", 1, 2)),
+        ("auth", 0, ("unavailable", 1, 0)),
+        ("rate_limited", 0, ("rate_limited", 1, 0)),
+    ],
+)
+def test_prepare_driver_signal(
+    tmp_path: Path, status: AgentStatus, failures: int, expected: tuple[str, int, int]
+) -> None:
+    result, _, _ = _execute_driver(tmp_path, AgentResult(status=status), failures)
+
+    assert (result.agent_signal, result.driver_attempts, result.agent_failures) == expected
+
+
+def test_prepare_driver_retry_keeps_the_previous_raw_output(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(tmp_path, AgentResult(status="error"), 1)
+
+    raw_path = executor.run.call_args.args[0].raw_path
+    assert raw_path.name == "002-driver-r1.json"
+    assert raw_path.parent.name == "driver"
+
+
+def test_prepare_driver_records_denials(tmp_path: Path) -> None:
+    denial = PermissionDenial(tool="Bash", target="curl -V")
+    agent = AgentResult(status="ok", exit_code=0, permission_denials=(denial,))
+
+    _, _, event_log = _execute_driver(tmp_path, agent)
+
+    finished, denied = [call.args[0] for call in event_log.append.call_args_list]
+    assert finished.data["exit_code"] == 0
+    assert finished.data["signal"] == "ok"
+    assert denied.type == "lictor.agent.denied.v1"
+    assert denied.scenarioid is None
+    assert denied.data["role"] == "driver"
+
+
+def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    vcs = MagicMock(spec=Vcs)
+    vcs.status.return_value = ["src/evil.pth", "tests/acceptance/conftest.py", "src/iva.py"]
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+    use_case = PrepareDriver(
+        vcs=vcs, executor=executor, event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock)
+    )
+
+    result = use_case.execute(
+        PrepareDriverRequest(
+            project_root=tmp_path,
+            run_id="R",
+            model="m",
+            allowed_tools=[],
+            max_turns=1,
+            timeout_s=1,
+            paths_writable=["src/"],
+            paths_driver=["tests/acceptance/"],
+            paths_protected=[],
+            driver_hints="",
+            hints="",
+            green_ids=[],
+            driver_attempts=0,
+            forbidden_paths=["*.pth", "conftest.py"],
+        )
+    )
+
+    assert result.reverted_files == ("src/evil.pth",)

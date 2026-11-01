@@ -3,13 +3,18 @@
 import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 from lictor.application.ports import Vcs
+from lictor.domain.errors import CandidateError
+from lictor.domain.model import Candidate
 
 _MIN_PORCELAIN_LINE_LEN = 4
 _PORCELAIN_PREFIX_LEN = 3
+_HARDENED = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
+_EXPORT_REF = "refs/lictor/verified"
 
 
 class GitCli(Vcs):
@@ -59,33 +64,58 @@ class GitCli(Vcs):
         self._run_git(["checkout", "--", "."], check=False)
         self._run_git(["clean", "-fd"])
 
-    def commit(
+    def create_candidate(
         self,
         message: str,
         trailers: dict[str, str] | None = None,
         paths: Sequence[str] | None = None,
-    ) -> str:
-        """Create a commit with author Lictor, disabled hooks, and trailers."""
-        if paths:
-            self._run_git(["add", "--"] + [p for p in paths if (self.repo_dir / p).exists()])
-        else:
-            self._run_git(["add", "-A"])
+    ) -> Candidate:
+        """Build a commit with author Lictor in a throwaway index, outside the branch."""
+        parent = self.get_head_sha()
+        with tempfile.TemporaryDirectory(prefix="lictor-index-") as tmp:
+            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            self._run_git([*_HARDENED, "read-tree", "HEAD"], env=env)
+            if paths is None:
+                self._run_git([*_HARDENED, "add", "-A"], env=env)
+            else:
+                existing = [p for p in paths if (self.repo_dir / p).exists()]
+                if existing:
+                    self._run_git([*_HARDENED, "add", "--", *existing], env=env)
+            tree = self._run_git([*_HARDENED, "write-tree"], env=env).stdout.strip()
 
-        cmd = [
-            "-c",
-            "core.hooksPath=/dev/null",
-            "commit",
-            "--author=Lictor <lictor@localhost>",
-            "-m",
-            message,
-        ]
-        if trailers:
-            for key, val in trailers.items():
-                cmd.extend(["--trailer", f"{key}: {val}"])
+        lines = [f"{key}: {val}" for key, val in (trailers or {}).items()]
+        full_message = "\n\n".join([message, "\n".join(lines)]) if lines else message
+        sha = self._run_git(
+            [*_HARDENED, "commit-tree", tree, "-p", parent, "-m", full_message],
+            env={"GIT_AUTHOR_NAME": "Lictor", "GIT_AUTHOR_EMAIL": "lictor@localhost"},
+        ).stdout.strip()
+        return Candidate(sha=sha, tree=tree, parent=parent)
 
-        self._run_git(cmd)
-        sha_res = self._run_git(["rev-parse", "HEAD"])
-        return sha_res.stdout.strip()
+    def export_tree(self, rev: str, dest: Path) -> None:
+        """Fetch one commit into an empty repository, which inherits no hook or local config."""
+        sha = self._run_git([*_HARDENED, "rev-parse", "--verify", f"{rev}^{{commit}}"])
+        self._run_git([*_HARDENED, "update-ref", _EXPORT_REF, sha.stdout.strip()])
+        dest.mkdir(parents=True)
+        clone = GitCli(dest)
+        clone._run_git([*_HARDENED, "init", "-q", "--template="])
+        clone._run_git(
+            [*_HARDENED, "fetch", "-q", "--no-tags", str(self.repo_dir.resolve()), _EXPORT_REF]
+        )
+        clone._run_git([*_HARDENED, "checkout", "-q", "--detach", "FETCH_HEAD"])
+
+    def advance_head(self, sha: str, expected: str) -> None:
+        """Move the branch atomically; the working tree stays as it is, and only the index syncs."""
+        res = self._run_git([*_HARDENED, "update-ref", "HEAD", sha, expected], check=False)
+        if res.returncode != 0:
+            raise CandidateError(
+                f"La rama ya no está en {expected[:12]}: no se puede avanzar a {sha[:12]}. "
+                f"{res.stderr.strip()}"
+            )
+        self._run_git([*_HARDENED, "reset", "-q"])
+
+    def get_tree(self, rev: str) -> str:
+        """Return the tree hash of a commit."""
+        return self._run_git(["rev-parse", f"{rev}^{{tree}}"]).stdout.strip()
 
     def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
         """Extract trailer values from git log for the given key, optionally for a commit."""

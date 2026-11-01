@@ -28,6 +28,17 @@
           "exclusiveMinimum": 0,
           "title": "Timeout S",
           "type": "integer"
+        },
+        "failure_exit_codes": {
+          "default": [
+            1
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Failure Exit Codes",
+          "type": "array"
         }
       },
       "required": [
@@ -203,10 +214,32 @@
       ],
       "title": "PathsConfig",
       "type": "object"
+    },
+    "ProjectVerification": {
+      "additionalProperties": false,
+      "description": "Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "inherit": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Inherit",
+          "type": "array"
+        }
+      },
+      "title": "ProjectVerification",
+      "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "Configuración completa de un proyecto (lictor.json).",
+  "description": "Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil.",
   "properties": {
     "version": {
       "default": "0.1",
@@ -237,18 +270,21 @@
       "title": "Controls",
       "type": "array"
     },
-    "suppressions": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Suppressions",
-      "type": "array"
+    "verification": {
+      "$ref": "#/$defs/ProjectVerification"
     },
     "agent_tools": {
       "items": {
         "type": "string"
       },
       "title": "Agent Tools",
+      "type": "array"
+    },
+    "agent_commands": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Agent Commands",
       "type": "array"
     },
     "hints": {

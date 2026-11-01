@@ -1,6 +1,5 @@
 """Command Line Interface for Lictor."""
 
-import hashlib
 import json
 import os
 import shlex
@@ -22,7 +21,7 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
-from lictor.domain.errors import ConfigError, LictorError
+from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
 from lictor.orchestration.graph import create_graph, get_sqlite_saver
 
@@ -139,7 +138,7 @@ def doctor(
                 f"✗ El ejecutor no está listo: {health.message or health.auth_status}",
                 err=True,
             )
-            return 10
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         typer.echo(f"✓ Ejecutor disponible: {health.cli_version} ({health.auth_status})")
 
         # 4. Comandos de controles
@@ -233,6 +232,8 @@ def check(
         for name, cr in res.control_results.items():
             status_char = "✓" if cr.ok else "✗"
             typer.echo(f"{status_char} {name} ({cr.duration_ms}ms)")
+            if not cr.ok and cr.output_path:
+                typer.echo(f"  salida: {cr.output_path}")
 
         if not res.ok:
             if res.condensed_error:
@@ -270,38 +271,84 @@ def run(
     _safe_run(_execute)
 
 
+def _record_stop(runtime: BootstrapResult, run_id: str, code: int, reason: str) -> None:
+    """Leave in the journal why a run that can still be resumed stopped."""
+    event = Event(
+        id=uuid.uuid4().hex,
+        type="lictor.run.stopped.v1",
+        source="lictor/0.1.0",
+        time=runtime.clock.now_iso(),
+        runid=run_id,
+        data={"exit_code": code, "reason": reason},
+    )
+    runtime.event_log.append(event)
+
+
+def _refuse_resume(runtime: BootstrapResult, run_id: str, code: int, reason: str) -> int:
+    typer.echo(f"Error: {reason}", err=True)
+    _record_stop(runtime, run_id, code, reason)
+    return code
+
+
 def _check_resume_guard(
     runtime: BootstrapResult,
     resolved_cwd: Path,
+    run_id: str,
     state_snapshot: Any,
 ) -> int | None:
-    config_file = resolved_cwd / "lictor.json"
-    if not config_file.is_file():
-        raise ConfigError("No se encontró 'lictor.json'")
-
-    current_cfg_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
     saved_cfg_hash = state_snapshot.values.get("config_hash")
-    if saved_cfg_hash and current_cfg_hash != saved_cfg_hash:
-        typer.echo(
-            "Error: la configuración lictor.json cambió a mitad de ejecución",
-            err=True,
+    if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
+        reason = (
+            "la configuración cambió a mitad de ejecución: "
+            "lictor.json, el perfil o los ficheros del perfil"
         )
-        return 10
+        return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
     if state_snapshot.values.get("seal_ok") and not runtime.spec_source.verify_seal(
         resolved_cwd, runtime.graph_context.paths_driver
     ):
-        typer.echo(
-            "Error: la especificación o el driver cambiaron a mitad de ejecución",
-            err=True,
-        )
-        return 10
+        reason = "la especificación o el driver cambiaron a mitad de ejecución"
+        return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
-    if not runtime.executor.health().ok:
-        typer.echo("Error: el ejecutor no está disponible para reanudar", err=True)
-        return 10
+    health = runtime.executor.health()
+    if not health.ok:
+        reason = (
+            f"el ejecutor no está disponible para reanudar: {health.message or health.auth_status}"
+        )
+        return _refuse_resume(runtime, run_id, int(ExitCode.ENVIRONMENT_UNAVAILABLE), reason)
 
     return None
+
+
+def _paused_exit_code(runtime: BootstrapResult, run_id: str, state_snapshot: Any) -> int | None:
+    interrupts = [i for task in state_snapshot.tasks for i in task.interrupts]
+    if not interrupts:
+        return None
+    if interrupts[0].value.get("reason") == "agent_unavailable":
+        code = int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+        reason = (
+            "Ejecución detenida: el agente no está disponible, sin penalizar ningún escenario. "
+            "Corrige el problema y vuelve a lanzar `lictor run`."
+        )
+    else:
+        code = int(ExitCode.RATE_LIMITED)
+        reason = (
+            "Ejecución pausada por límite de cuota, sin penalizar ningún escenario. "
+            "Vuelve a lanzar `lictor run` cuando se renueve."
+        )
+    detail = str(interrupts[0].value.get("detail", ""))
+    typer.echo(f"{reason}\n{detail}".strip(), err=True)
+    _record_stop(runtime, run_id, code, reason)
+    return code
+
+
+def _finished_exit_code(values: Any) -> int:
+    """Return the exit code of a finished run after explaining it."""
+    code = int(values.get("exit_code", 0) or 0)
+    reason = values.get("exit_reason", "")
+    if reason:
+        typer.echo(reason if code == 0 else f"Error: {reason}", err=code != 0)
+    return code
 
 
 def _resume_run(
@@ -311,7 +358,7 @@ def _resume_run(
     resolved_cwd: Path,
     state_snapshot: Any,
 ) -> int:
-    guard_code = _check_resume_guard(runtime, resolved_cwd, state_snapshot)
+    guard_code = _check_resume_guard(runtime, resolved_cwd, existing_run_id, state_snapshot)
     if guard_code is not None:
         return guard_code
 
@@ -338,11 +385,11 @@ def _resume_run(
         graph.invoke(None, config=chk_config)
 
     updated_state = graph.get_state(config=chk_config)
-    if any(task.interrupts for task in updated_state.tasks):
-        typer.echo("Ejecución pausada por límite de cuota.", err=True)
-        return 50
+    paused_code = _paused_exit_code(runtime, existing_run_id, updated_state)
+    if paused_code is not None:
+        return paused_code
 
-    return int(updated_state.values.get("exit_code", 0) or 0)
+    return _finished_exit_code(updated_state.values)
 
 
 def _start_new_run(
@@ -353,14 +400,9 @@ def _start_new_run(
 ) -> int:
     run_id = runtime.clock.generate_run_id()
     current_run_file.write_text(run_id, encoding="utf-8")
-    config_file = resolved_cwd / "lictor.json"
-    if not config_file.is_file():
-        raise ConfigError("No se encontró 'lictor.json'")
-    cfg_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
-
     init_state = {
         "run_id": run_id,
-        "config_hash": cfg_hash,
+        "config_hash": runtime.config_hash,
         "driver_fresh": False,
         "driver_attempts": 0,
         "attempt": 0,
@@ -372,11 +414,11 @@ def _start_new_run(
     graph.invoke(init_state, config=chk_config)
 
     final_state = graph.get_state(config=chk_config)
-    if any(task.interrupts for task in final_state.tasks):
-        typer.echo("Ejecución pausada por límite de cuota.", err=True)
-        return 50
+    paused_code = _paused_exit_code(runtime, run_id, final_state)
+    if paused_code is not None:
+        return paused_code
 
-    return int(final_state.values.get("exit_code", 0) or 0)
+    return _finished_exit_code(final_state.values)
 
 
 def _execute_run(cwd: Path, force_new: bool) -> int:
@@ -451,6 +493,7 @@ def status(
             "run_id": run_id,
             "next_nodes": next_nodes,
             "exit_code": state_vals.get("exit_code"),
+            "exit_reason": state_vals.get("exit_reason"),
             "status": state_vals.get("status", {}),
             "reasons": state_vals.get("reasons", {}),
             "totals": state_vals.get("totals", {}),
@@ -462,6 +505,8 @@ def status(
             typer.echo(f"Ejecución: {run_id}")
             typer.echo(f"Nodos pendientes: {next_nodes or 'ninguno'}")
             typer.echo(f"Código de salida: {payload['exit_code']}")
+            if payload["exit_reason"]:
+                typer.echo(f"Motivo: {payload['exit_reason']}")
             typer.echo("Escenarios:")
             for sid, st in payload["status"].items():
                 typer.echo(f"  - {sid}: {st}")

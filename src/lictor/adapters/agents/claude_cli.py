@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,11 +15,14 @@ from lictor.domain.model import (
     AgentTask,
     CostKind,
     Health,
+    PermissionDenial,
     Tokens,
 )
 
 AuthKind = Literal["subscription", "api_key"]
+_HTTP_UNAUTHORIZED = 401
 _HTTP_TOO_MANY_REQUESTS = 429
+_AUTH_CHECK_TIMEOUT_S = 10
 _DEFAULT_BASE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 _DEFAULT_DISALLOWED_TOOLS = (
     "Bash(git:*)",
@@ -73,22 +77,53 @@ class ClaudeCLI:
             )
 
         if self.auth == "subscription":
-            has_api_var = bool(
-                os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-            )
-            if has_api_var:
-                return Health(
-                    ok=False,
-                    cli_version=version_str,
-                    auth_status="api_key_override",
-                    message=(
-                        "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN present while"
-                        " auth is 'subscription'"
-                    ),
-                )
-            return Health(ok=True, cli_version=version_str, auth_status="subscription")
+            return self._subscription_health(version_str)
 
         return Health(ok=True, cli_version=version_str, auth_status="api_key")
+
+    def _subscription_health(self, version: str) -> Health:
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="api_key_override",
+                message=(
+                    "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN present while auth is 'subscription'"
+                ),
+            )
+        logged_in = self._logged_in()
+        if logged_in is None:
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="error",
+                message="No se pudo comprobar la sesión del CLI",
+            )
+        if not logged_in:
+            return Health(
+                ok=False,
+                cli_version=version,
+                auth_status="none",
+                message="El CLI no tiene sesión iniciada",
+            )
+        return Health(ok=True, cli_version=version, auth_status="subscription")
+
+    def _logged_in(self) -> bool | None:
+        """Ask the CLI for its session, which costs no model call; None if it can't tell."""
+        try:
+            res = subprocess.run(
+                [self.cli_binary, "auth", "status", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=_AUTH_CHECK_TIMEOUT_S,
+                check=False,
+                env=self._prepare_env(),
+            )
+            data = json.loads(res.stdout)
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+            return None
+        logged_in = data.get("loggedIn") if isinstance(data, dict) else None
+        return logged_in if isinstance(logged_in, bool) else None
 
     def _build_command(self, task: AgentTask) -> list[str]:
         tools: list[str] = list(_DEFAULT_BASE_TOOLS)
@@ -101,7 +136,8 @@ class ClaudeCLI:
             "-p",
             task.prompt,
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--model",
             task.model,
             "--max-turns",
@@ -112,6 +148,12 @@ class ClaudeCLI:
             *tools,
             "--disallowedTools",
             *_DEFAULT_DISALLOWED_TOOLS,
+            # No user, project or local settings: their hooks, permissions and CLAUDE.md would
+            # make the run depend on the machine, and the agent can write the project's ones.
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--no-session-persistence",
         ]
 
     def _prepare_env(self) -> dict[str, str]:
@@ -131,33 +173,32 @@ class ClaudeCLI:
                 last_conflict = reason if reason else "SPEC_CONFLICT"
         return last_conflict
 
+    def _is_auth_failure(self, data: dict[str, Any]) -> bool:
+        if data.get("api_error_status") == _HTTP_UNAUTHORIZED:
+            return True
+        return data.get("terminal_reason") == "api_error" and self._logged_in() is False
+
     def _determine_status(
         self,
-        subtype: str,
-        is_error: bool,
-        api_error_status: Any,
-        combined_err_text: str,
+        data: dict[str, Any],
+        rate_limit_status: str | None,
+        exit_code: int,
     ) -> AgentStatus:
+        subtype = str(data.get("subtype", ""))
+        is_error = bool(data.get("is_error", False))
+        failed = is_error or exit_code != 0 or subtype == "error_during_execution"
+
         if subtype == "error_max_turns":
             return "max_turns"
         if subtype == "rate_limited":
             return "rate_limited"
-
-        is_rate_limited = is_error and (
-            api_error_status == _HTTP_TOO_MANY_REQUESTS
-            or "rate limit" in combined_err_text
-            or "usage limit" in combined_err_text
-            or "quota exceeded" in combined_err_text
-            or "exceeded your quota" in combined_err_text
-        )
-
-        if is_rate_limited:
+        if failed and data.get("api_error_status") == _HTTP_TOO_MANY_REQUESTS:
             return "rate_limited"
-        if subtype == "error_during_execution":
-            return "error"
-        if subtype == "success" and not is_error:
-            return "ok"
-        return "error" if is_error else "ok"
+        if failed and rate_limit_status == "rejected":
+            return "rate_limited"
+        if is_error and self._is_auth_failure(data):
+            return "auth"
+        return "error" if failed else "ok"
 
     def _execute_subprocess(
         self,
@@ -165,7 +206,7 @@ class ClaudeCLI:
         cwd: Path,
         env: dict[str, str],
         timeout_s: int,
-    ) -> tuple[str, str, int, bool]:
+    ) -> tuple[str, str, int | None, int, bool]:
         start_time = time.monotonic()
         try:
             proc = subprocess.Popen(
@@ -179,7 +220,7 @@ class ClaudeCLI:
             )
             stdout, stderr = proc.communicate(timeout=timeout_s)
             duration_ms = int((time.monotonic() - start_time) * 1000)
-            return stdout, stderr, duration_ms, False
+            return stdout, stderr, proc.returncode, duration_ms, False
         except subprocess.TimeoutExpired:
             try:
                 pgid = os.getpgid(proc.pid)
@@ -188,22 +229,61 @@ class ClaudeCLI:
                 pass
             _out, err = proc.communicate()
             duration_ms = int((time.monotonic() - start_time) * 1000)
-            return "", err, duration_ms, True
+            return "", err, None, duration_ms, True
+
+    def _cost_kind(self) -> CostKind:
+        return "notional_subscription" if self.auth == "subscription" else "estimated"
+
+    def _read_events(self, stdout: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Return the result event and the last rate limit status from the stream."""
+        result: dict[str, Any] | None = None
+        rate_limit_status: str | None = None
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "result":
+                result = event
+            elif event.get("type") == "rate_limit_event":
+                info = event.get("rate_limit_info")
+                if isinstance(info, dict) and isinstance(info.get("status"), str):
+                    rate_limit_status = info["status"]
+        return result, rate_limit_status
+
+    def _read_denials(self, data: dict[str, Any]) -> tuple[PermissionDenial, ...]:
+        denials = data.get("permission_denials")
+        if not isinstance(denials, list):
+            return ()
+        parsed: list[PermissionDenial] = []
+        for denial in denials:
+            if not isinstance(denial, dict):
+                parsed.append(PermissionDenial(tool="", target=str(denial)))
+                continue
+            tool_input = denial.get("tool_input")
+            fields = tool_input if isinstance(tool_input, dict) else {}
+            target = fields.get("command") or fields.get("file_path") or ""
+            parsed.append(
+                PermissionDenial(tool=str(denial.get("tool_name", "")), target=str(target))
+            )
+        return tuple(parsed)
 
     def _parse_agent_data(
         self,
         data: dict[str, Any],
+        rate_limit_status: str | None,
+        exit_code: int,
         duration_ms: int,
-        cost_kind: CostKind,
         raw_path: Path,
     ) -> AgentResult:
-        subtype = str(data.get("subtype", ""))
-        is_error = bool(data.get("is_error", False))
-        api_error_status = data.get("api_error_status")
-        result_text = str(data.get("result", ""))
-        combined_err_text = f"{data.get('error', '')} {result_text}".lower()
+        # error_max_turns has no `result`, only an `errors` list.
+        errors = data.get("errors")
+        fallback = "; ".join(str(e) for e in errors) if isinstance(errors, list) else ""
+        result_text = str(data.get("result") or fallback)
 
-        status = self._determine_status(subtype, is_error, api_error_status, combined_err_text)
+        status = self._determine_status(data, rate_limit_status, exit_code)
         spec_conflict = self._extract_spec_conflict(result_text)
 
         usage = data.get("usage") or {}
@@ -230,19 +310,27 @@ class ClaudeCLI:
             duration_ms=effective_duration,
             tokens=tokens,
             cost_usd=cost_usd,
-            cost_kind=cost_kind,
+            cost_kind=self._cost_kind(),
             raw_path=raw_path,
+            permission_denials=self._read_denials(data),
+            exit_code=exit_code,
         )
+
+    def _save_stderr(self, raw_path: Path, stderr: str) -> Path | None:
+        """Keep stderr beside the raw stdout, which each call already has for itself."""
+        if not stderr:
+            return None
+        stderr_path = raw_path.with_suffix(".stderr.log")
+        stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+        return stderr_path
 
     def run(self, task: AgentTask) -> AgentResult:
         """Run claude -p for the given task and map the output to AgentResult."""
         cmd = self._build_command(task)
         env = self._prepare_env()
-        cost_kind: CostKind = (
-            "notional_subscription" if self.auth == "subscription" else "estimated"
-        )
+        cost_kind = self._cost_kind()
 
-        stdout, stderr, duration_ms, timed_out = self._execute_subprocess(
+        stdout, stderr, exit_code, duration_ms, timed_out = self._execute_subprocess(
             cmd=cmd,
             cwd=task.cwd,
             env=env,
@@ -250,6 +338,7 @@ class ClaudeCLI:
         )
 
         task.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path = self._save_stderr(task.raw_path, stderr)
         if timed_out:
             task.raw_path.write_text(stderr or "TimeoutExpired", encoding="utf-8")
             return AgentResult(
@@ -258,24 +347,33 @@ class ClaudeCLI:
                 duration_ms=duration_ms,
                 cost_kind=cost_kind,
                 raw_path=task.raw_path,
+                stderr_path=stderr_path,
             )
 
         task.raw_path.write_text(stdout, encoding="utf-8")
 
-        try:
-            data: dict[str, Any] = json.loads(stdout)
-        except json.JSONDecodeError:
+        data, rate_limit_status = self._read_events(stdout)
+        if data is None:
             return AgentResult(
-                status="error",
-                text=f"Invalid JSON from claude CLI. Stderr: {stderr}\nStdout: {stdout}",
+                status="rate_limited" if rate_limit_status == "rejected" else "error",
+                text=(
+                    f"No result event from claude CLI (exit code {exit_code}). "
+                    f"Stderr: {stderr}\nStdout: {stdout}"
+                ),
                 duration_ms=duration_ms,
                 cost_kind=cost_kind,
                 raw_path=task.raw_path,
+                exit_code=exit_code,
+                stderr_path=stderr_path,
             )
 
-        return self._parse_agent_data(
-            data=data,
-            duration_ms=duration_ms,
-            cost_kind=cost_kind,
-            raw_path=task.raw_path,
+        return replace(
+            self._parse_agent_data(
+                data=data,
+                rate_limit_status=rate_limit_status,
+                exit_code=exit_code or 0,
+                duration_ms=duration_ms,
+                raw_path=task.raw_path,
+            ),
+            stderr_path=stderr_path,
         )

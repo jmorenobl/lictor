@@ -1,8 +1,10 @@
 import pytest
 
 from lictor.domain.errors import (
+    CandidateError,
     ConfigError,
     DriverError,
+    EnvironmentUnavailableError,
     ExitCode,
     InternalLictorError,
     LictorError,
@@ -56,3 +58,11 @@ def test_precondition_subclasses() -> None:
         assert isinstance(err, PreconditionError)
         assert err.exit_code == ExitCode.PRECONDITION
     assert issubclass(SpecError, ValueError)
+
+
+def test_environment_unavailable_error_exits_40() -> None:
+    assert EnvironmentUnavailableError("x").exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
+
+
+def test_candidate_error_is_a_precondition() -> None:
+    assert CandidateError("x").exit_code == ExitCode.PRECONDITION

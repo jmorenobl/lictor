@@ -6,11 +6,28 @@ from pathlib import Path
 
 from lictor.domain.errors import SpecError
 
+EXECUTABLE_BITS = 0o111
+
 
 def hash_file(file_path: Path) -> str:
     """Calculate sha256 checksum with sha256: prefix."""
     digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
     return f"sha256:{digest}"
+
+
+def hash_tree(root: Path) -> str:
+    """Hash every file under a directory: paths, modes, link targets and content."""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8", "surrogateescape"))
+        if path.is_symlink():
+            digest.update(b"\0link\0")
+            digest.update(str(path.readlink()).encode("utf-8", "surrogateescape"))
+        elif path.is_file():
+            digest.update(b"\0exec\0" if path.stat().st_mode & EXECUTABLE_BITS else b"\0file\0")
+            digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _verify_symlink_and_hash(
@@ -19,6 +36,8 @@ def _verify_symlink_and_hash(
     resolved_root: Path,
     files_map: dict[str, str],
 ) -> None:
+    if any(part == "__pycache__" for part in path.parts) or path.suffix == ".pyc":
+        return
     if path.is_symlink():
         try:
             resolved_p = path.resolve()

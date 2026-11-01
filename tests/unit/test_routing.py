@@ -119,3 +119,7 @@ def test_route_pause_returns_resume_to() -> None:
     assert route_pause({"resume_to": "implement"}) == "implement"
     assert route_pause({"resume_to": "build_driver"}) == "build_driver"
     assert route_pause({}) == "implement"
+
+
+def test_route_implement_unavailable_agent_pauses() -> None:
+    assert route_implement({"agent_signal": "unavailable"}) == "pause"

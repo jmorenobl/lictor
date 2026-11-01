@@ -9,6 +9,7 @@ class ExitCode(IntEnum):
     PRECONDITION = 10
     SPEC_CONFLICT = 11
     QUARANTINED = 30
+    ENVIRONMENT_UNAVAILABLE = 40  # Could not run: fix the environment; no scenario is to blame
     RATE_LIMITED = 50
 
 
@@ -48,6 +49,16 @@ class DriverError(PreconditionError):
 
 class SealTamperedError(PreconditionError):
     """La especificación o el driver sellado cambiaron fuera de Lictor (código 10)."""
+
+
+class CandidateError(PreconditionError):
+    """El commit verificado ya no puede convertirse en verde (código 10)."""
+
+
+class EnvironmentUnavailableError(LictorError):
+    """No se pudo preparar el entorno de verificación (código 40)."""
+
+    exit_code: int = int(ExitCode.ENVIRONMENT_UNAVAILABLE)
 
 
 class SpecConflictError(LictorError):

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.domain.errors import CandidateError
 
 GIT_BIN = shutil.which("git") or "git"
 
@@ -85,39 +86,186 @@ def test_reset_to_head_preserves_ignored_files(git_repo: Path) -> None:
     assert lictor_state.exists()
 
 
-def test_commit_with_trailers_and_get_trailers(git_repo: Path) -> None:
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        [GIT_BIN, "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_candidate_carries_author_and_trailers_without_moving_the_branch(git_repo: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
+    (git_repo / "file_a.txt").write_text("content", encoding="utf-8")
+    head = _head(git_repo)
 
-    file_a = git_repo / "file_a.txt"
-    file_a.write_text("content", encoding="utf-8")
-
-    sha = cli.commit(
+    candidate = cli.create_candidate(
         message="feat: implement iva_001",
-        trailers={
-            "Scenario": "IVA-001",
-            "Lictor-Run": "run-1234",
-            "Lictor-Attempts": "1",
-        },
+        trailers={"Scenario": "IVA-001", "Lictor-Run": "run-1234", "Lictor-Attempts": "1"},
     )
 
-    assert len(sha) >= 7
-
-    # Verify author is Lictor <lictor@localhost>
-    author_res = subprocess.run(
-        [GIT_BIN, "log", "-1", "--format=%an <%ae>"],
+    assert _head(git_repo) == head
+    assert cli.status() == ["file_a.txt"]
+    assert cli.get_tree(candidate.sha) == candidate.tree
+    assert cli.get_trailers("Scenario", commit_ref=candidate.sha) == ["IVA-001"]
+    assert cli.get_trailers("Lictor-Run", commit_ref=candidate.sha) == ["run-1234"]
+    author = subprocess.run(
+        [GIT_BIN, "log", "-1", "--format=%an <%ae>", candidate.sha],
         cwd=git_repo,
         check=True,
         capture_output=True,
         text=True,
     )
-    assert author_res.stdout.strip() == "Lictor <lictor@localhost>"
+    assert author.stdout.strip() == "Lictor <lictor@localhost>"
 
-    # Verify get_trailers
-    scenarios = cli.get_trailers("Scenario")
-    assert "IVA-001" in scenarios
 
-    runs = cli.get_trailers("Lictor-Run")
-    assert "run-1234" in runs
+def test_candidate_does_not_touch_the_index(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "file_a.txt").write_text("content", encoding="utf-8")
+
+    cli.create_candidate(message="m")
+
+    staged = subprocess.run(
+        [GIT_BIN, "diff", "--cached", "--name-only"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert staged.stdout == ""
+
+
+def test_candidate_only_takes_the_given_paths(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "src").mkdir()
+    (git_repo / "src" / "code.py").write_text("print(1)\n", encoding="utf-8")
+    (git_repo / "leak.txt").write_text("fuera\n", encoding="utf-8")
+
+    candidate = cli.create_candidate(message="m", paths=["src/", "falta/"])
+
+    files = _tree_files(git_repo, candidate.sha)
+    assert "src/code.py" in files
+    assert "leak.txt" not in files
+
+
+def test_candidate_without_paths_takes_everything_but_ignored_files(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "nuevo.txt").write_text("x\n", encoding="utf-8")
+    (git_repo / "oculto.ignored").write_text("x\n", encoding="utf-8")
+
+    candidate = cli.create_candidate(message="m")
+
+    files = _tree_files(git_repo, candidate.sha)
+    assert "nuevo.txt" in files
+    assert "oculto.ignored" not in files
+
+
+def test_candidate_allows_empty_changes(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+
+    candidate = cli.create_candidate(message="m", trailers={"Scenario": "IVA-003"})
+
+    assert candidate.tree == cli.get_tree(head)
+    assert candidate.sha != head
+
+
+def _tree_files(repo: Path, rev: str) -> list[str]:
+    return subprocess.run(
+        [GIT_BIN, "ls-tree", "-r", "--name-only", rev],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+
+def test_export_tree_has_the_commit_and_nothing_ignored(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "nuevo.txt").write_text("x\n", encoding="utf-8")
+    (git_repo / "oculto.ignored").write_text("x\n", encoding="utf-8")
+    (git_repo / ".lictor").mkdir()
+    candidate = cli.create_candidate(message="m")
+    dest = tmp_path.parent / f"{tmp_path.name}-export"
+
+    cli.export_tree(candidate.sha, dest)
+
+    assert (dest / "nuevo.txt").is_file()
+    assert (dest / "README.md").is_file()
+    assert not (dest / "oculto.ignored").exists()
+    assert not (dest / ".lictor").exists()
+    assert GitCli(dest).get_tree("HEAD") == candidate.tree
+    assert cli.get_head_message() == "initial commit"
+
+
+def test_export_tree_ignores_the_hooks_of_the_template(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    hook = git_repo / ".git" / "hooks" / "post-checkout"
+    hook.write_text("#!/bin/sh\ntouch delatado\n", encoding="utf-8")
+    hook.chmod(0o755)
+    dest = tmp_path.parent / f"{tmp_path.name}-export"
+
+    cli.export_tree("HEAD", dest)
+
+    assert not (dest / "delatado").exists()
+    assert not (git_repo / "delatado").exists()
+
+
+def test_export_tree_ignores_the_git_template(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    template = tmp_path.parent / f"{tmp_path.name}-template"
+    (template / "info").mkdir(parents=True)
+    (template / "info" / "exclude").write_text("*\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
+    dest = tmp_path.parent / f"{tmp_path.name}-export"
+
+    GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
+
+    assert not (dest / ".git" / "info" / "exclude").exists()
+
+
+def test_advance_head_moves_the_branch_to_the_exact_commit(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "file_a.txt").write_text("verificado", encoding="utf-8")
+    head = _head(git_repo)
+    candidate = cli.create_candidate(message="m", trailers={"Scenario": "IVA-001"})
+    (git_repo / "file_a.txt").write_text("cambiado después", encoding="utf-8")
+
+    cli.advance_head(candidate.sha, expected=head)
+
+    assert _head(git_repo) == candidate.sha
+    shown = subprocess.run(
+        [GIT_BIN, "show", "HEAD:file_a.txt"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert shown.stdout == "verificado"
+    assert cli.status() == ["file_a.txt"], "el cambio posterior no debe entrar ni perderse"
+
+
+def test_advance_head_leaves_the_tree_clean_when_nothing_changed(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "file_a.txt").write_text("x", encoding="utf-8")
+    head = _head(git_repo)
+    candidate = cli.create_candidate(message="m")
+
+    cli.advance_head(candidate.sha, expected=head)
+
+    assert cli.status() == []
+
+
+def test_advance_head_refuses_if_the_branch_moved(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+    candidate = cli.create_candidate(message="m")
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-m", "otro"], cwd=git_repo, check=True)
+    moved = _head(git_repo)
+
+    with pytest.raises(CandidateError):
+        cli.advance_head(candidate.sha, expected=head)
+
+    assert _head(git_repo) == moved
 
 
 def test_revert_paths_selective(git_repo: Path) -> None:
@@ -165,31 +313,6 @@ def test_revert_paths_removes_broken_symlinks(git_repo: Path) -> None:
     cli.revert_paths(["features/broken.feature"])
     assert not broken_symlink.is_symlink()
     assert not broken_symlink.exists()
-
-
-def test_commit_with_specific_paths_does_not_stage_other_files(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    src_file = git_repo / "src" / "code.py"
-    src_file.parent.mkdir(parents=True, exist_ok=True)
-    src_file.write_text("print(1)\n", encoding="utf-8")
-
-    untracked_leak = git_repo / "leak.txt"
-    untracked_leak.write_text("untracked leak\n", encoding="utf-8")
-
-    sha = cli.commit(message="feat: only src", paths=["src/"])
-    assert len(sha) >= 7
-
-    head_files = subprocess.run(
-        [GIT_BIN, "show", "--name-only", "--format=", "HEAD"],
-        cwd=git_repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-
-    assert "src/code.py" in head_files
-    assert "leak.txt" not in head_files
-    assert "leak.txt" in cli.status()
 
 
 def test_reset_to_head_clears_staged_changes(git_repo: Path) -> None:

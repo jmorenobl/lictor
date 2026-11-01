@@ -47,9 +47,10 @@ class GherkinSource(SpecSource):
         project_root: Path,
         run_id: str,
         driver_paths: Sequence[str],
+        source_root: Path | None = None,
     ) -> dict[str, Any]:
-        """Compute and write seal to .lictor/seal.json."""
-        data = compute_seal(project_root, run_id, driver_paths)
+        """Hash `source_root`, or the project, and write the seal to .lictor/seal.json."""
+        data = compute_seal(source_root or project_root, run_id, driver_paths)
         write_seal(project_root, data)
         return data
 

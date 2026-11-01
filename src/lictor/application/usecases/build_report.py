@@ -82,10 +82,14 @@ class BuildReport:
             "profile": "desconocido",
             "prompt_shas": {},
             "exit_code": 0,
+            "exit_reason": "",
             "totals": {},
             "scenarios": {},
             "quarantines": {},
             "failed_by_level": defaultdict(int),
+            "attempts": [],
+            "measures": [],
+            "rejected_drivers": [],
         }
 
         for ev in events:
@@ -102,6 +106,8 @@ class BuildReport:
             "lictor.scenario.green.v1": self._on_scenario_green,
             "lictor.scenario.quarantined.v1": self._on_scenario_quarantined,
             "lictor.run.finished.v1": self._on_run_finished,
+            "lictor.run.stopped.v1": self._on_run_stopped,
+            "lictor.driver.rejected.v1": self._on_driver_rejected,
         }
         handler = handlers.get(ev.type)
         if handler is not None:
@@ -152,10 +158,20 @@ class BuildReport:
                 "last_error": str(ev.data.get("last_error") or ev.data.get("details") or ""),
             }
 
-    def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
+    def _on_run_stopped(self, ev: Event, info: dict[str, Any]) -> None:
         raw_exit = ev.data.get("exit_code", 0)
         if isinstance(raw_exit, (int, str)):
             info["exit_code"] = int(raw_exit)
+        info["exit_reason"] = str(ev.data.get("reason", "") or "")
+
+    def _on_driver_rejected(self, ev: Event, info: dict[str, Any]) -> None:
+        info["rejected_drivers"].append(
+            f"- Intento {ev.data.get('attempt')}: {ev.data.get('reason')} "
+            f"(`{ev.data.get('error_path')}`)"
+        )
+
+    def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
+        self._on_run_stopped(ev, info)
         totals = ev.data.get("totals", {})
         if isinstance(totals, dict):
             info["totals"] = totals
@@ -202,6 +218,21 @@ class BuildReport:
             if failed_at:
                 info["failed_by_level"][str(failed_at)] += 1
 
+        attempt = ev.data.get("attempt")
+        outcome = "verde" if ev.data.get("ok") else str(ev.data.get("failed_at") or "falló")
+        error_path = ev.data.get("error_path")
+        error_cell = f"`{error_path}`" if error_path else "-"
+        info["attempts"].append(f"| {sid} | {attempt} | {outcome} | {error_cell} |")
+
+        controls = ev.data.get("controls")
+        for control_id, control in controls.items() if isinstance(controls, dict) else ():
+            if isinstance(control, dict) and control.get("mode") == "measure":
+                result = "correcto" if control.get("ok") else "fallo"
+                info["measures"].append(
+                    f"- **{control_id}** ({sid}, intento {attempt}): {result}, "
+                    f"código {control.get('exit_code')}, salida en `{control.get('output')}`"
+                )
+
     def _format_markdown(self, info: dict[str, Any]) -> str:
         greens = sum(1 for s in info["scenarios"].values() if s["status"] == "green")
         quarantined = len(info["quarantines"])
@@ -216,6 +247,7 @@ class BuildReport:
             f"- **Escenarios en cuarentena**: {quarantined}",
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
+            *([f"- **Motivo**: {info['exit_reason']}"] if info["exit_reason"] else []),
             f"- **Duración total**: {duration_str}",
             "",
             "## Escenarios",
@@ -253,6 +285,17 @@ class BuildReport:
         else:
             for lvl, count in sorted(info["failed_by_level"].items()):
                 lines.append(f"- **{lvl}**: {count}")
+
+        if info["attempts"]:
+            lines.extend(["", "## Verificaciones", "| Escenario | Intento | Resultado | Error |"])
+            lines.append("|---|---|---|---|")
+            lines.extend(info["attempts"])
+
+        lines.extend(["", "## Controles en medición"])
+        lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
+
+        lines.extend(["", "## Drivers rechazados"])
+        lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])
 
         lines.extend(
             [

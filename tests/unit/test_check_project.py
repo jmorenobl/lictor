@@ -119,3 +119,39 @@ def test_check_project_level_filter(tmp_path: Path) -> None:
     assert "l1_ctrl" in res.control_results
     assert "l4_ctrl" not in res.control_results
     assert "acceptance" not in res.control_results
+
+
+def _project(tmp_path: Path, stdout: str, code: int) -> tuple[CheckProject, CheckProjectRequest]:
+    runner = FakeRunner()
+    runner.set_response("suite", CommandOutput(returncode=code, stdout=stdout, stderr="fallo"))
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    use_case = CheckProject(runner=runner, readers=readers)
+    control = CheckControlSpec(
+        id="mut", level="L5", run="suite", report="exit-code", mode="measure"
+    )
+    junit = CheckControlSpec(id="unit", level="L2", run="suite --out {out}", report="junit")
+    return use_case, CheckProjectRequest(project_root=tmp_path, controls=[control, junit])
+
+
+def test_check_project_does_not_reuse_an_old_report(tmp_path: Path) -> None:
+    use_case, request = _project(tmp_path, "", 0)
+    runs = tmp_path / ".lictor" / "runs" / "check"
+    runs.mkdir(parents=True)
+    old = '<testsuite><testcase name="test_viejo"/></testsuite>'
+    (runs / "unit.xml").write_text(old, encoding="utf-8")
+
+    result = use_case.execute(request)
+
+    assert result.control_results["unit"].ok is False
+    assert not (runs / "unit.xml").exists()
+
+
+def test_check_project_records_the_output_of_a_measure_control(tmp_path: Path) -> None:
+    use_case, request = _project(tmp_path, "salida de medida", 7)
+
+    result = use_case.execute(request)
+
+    measured = result.control_results["mut"]
+    assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
+    assert measured.output_path is not None
+    assert "salida de medida" in (tmp_path / measured.output_path).read_text(encoding="utf-8")

@@ -161,8 +161,16 @@ class AgentTask:
         object.__setattr__(self, "raw_path", Path(self.raw_path))
 
 
-AgentStatus = Literal["ok", "error", "max_turns", "rate_limited", "timeout"]
+AgentStatus = Literal["ok", "error", "auth", "max_turns", "rate_limited", "timeout"]
 CostKind = Literal["notional_subscription", "estimated"]
+
+
+@dataclass(frozen=True)
+class PermissionDenial:
+    """A tool call the agent attempted and the backend refused."""
+
+    tool: str
+    target: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,9 @@ class AgentResult:
     cost_usd: float | None = None
     cost_kind: CostKind = "notional_subscription"
     raw_path: Path | None = None
+    permission_denials: tuple[PermissionDenial, ...] = ()
+    exit_code: int | None = None
+    stderr_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +231,18 @@ class ControlResult:
     duration_ms: int = 0
     error: str | None = None
     test_cases: tuple[TestCaseResult, ...] = field(default_factory=tuple)
+    exit_code: int | None = None
+    mode: str = "block"
+    output_path: str | None = None
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A commit outside the branch: only what passes verification becomes green."""
+
+    sha: str
+    tree: str
+    parent: str
 
 
 @dataclass(frozen=True)
@@ -232,6 +255,8 @@ class VerifyResult:
     control_results: dict[str, ControlResult] = field(default_factory=dict)
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = field(default_factory=tuple)
+    error_path: str | None = None
+    candidate: Candidate | None = None
 
 
 @dataclass(frozen=True)

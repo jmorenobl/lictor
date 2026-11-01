@@ -3,7 +3,7 @@
 import sqlite3
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -23,9 +23,13 @@ from lictor.application.usecases.implement_scenario import (
 )
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
-from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
-from lictor.domain.errors import DriverError, SealTamperedError, SpecError
-from lictor.domain.model import Event, Scenario, ScenarioId
+from lictor.application.usecases.verify_attempt import (
+    VerifyAttempt,
+    VerifyAttemptRequest,
+    control_summaries,
+)
+from lictor.domain.errors import DriverError, ExitCode, SealTamperedError, SpecError
+from lictor.domain.model import AgentStatus, Candidate, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_implement,
     route_load_spec,
@@ -33,6 +37,7 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
+from lictor.domain.rules import run_outcome
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -78,12 +83,18 @@ class GraphState(TypedDict, total=False):
     driver_attempts: int
     current: str | None
     attempt: int
+    attempt_slot: int
     last_error: str | None
     last_failed_at: str | None
     last_verify: dict[str, Any] | None
     agent_signal: str | None
+    agent_failures: int
+    last_agent_status: AgentStatus | None
+    agent_detail: str
     totals: Annotated[dict[str, Any], reduce_totals]
     exit_code: int | None
+    exit_reason: str
+    spec_conflict: str | None
     seal_ok: bool
     resume_to: str | None
 
@@ -124,6 +135,9 @@ class GraphContext:
     clock: Clock
     profile_name: str = ""
     build_report: BuildReport | None = None
+    acceptance_failure_exit_codes: Sequence[int] = (1,)
+    forbidden_paths: Sequence[str] = ()
+    banned_patterns: Sequence[str] = ()
 
 
 class _GraphNodes:
@@ -132,14 +146,49 @@ class _GraphNodes:
     def __init__(self, ctx: GraphContext) -> None:
         self.ctx = ctx
 
+    def _finish(self, state: GraphState, code: int, reason: str) -> dict[str, Any]:
+        """End the run leaving its reason in the journal, the report and the state."""
+        event = Event(
+            id=uuid.uuid4().hex,
+            type="lictor.run.finished.v1",
+            source="lictor/0.1.0",
+            time=self.ctx.clock.now_iso(),
+            runid=state["run_id"],
+            data={
+                "exit_code": code,
+                "reason": reason,
+                "totals": state.get("totals", {}),
+            },
+        )
+        self.ctx.event_log.append(event)
+        if self.ctx.build_report is not None:
+            self.ctx.build_report.execute(
+                BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
+            )
+        return {"exit_code": code, "exit_reason": reason}
+
     def preflight(self, state: GraphState) -> dict[str, Any]:
         if state.get("exit_code") is not None:
             return {}
-        if self.ctx.vcs.status():
-            return {"exit_code": 10}
+        changed = self.ctx.vcs.status()
+        if changed:
+            return self._finish(
+                state,
+                int(ExitCode.PRECONDITION),
+                "El árbol de trabajo tiene cambios sin confirmar: "
+                f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
+            )
         health = self.ctx.executor.health()
         if not health.ok:
-            return {"exit_code": 10}
+            detail = health.message or health.auth_status
+            return {
+                **self._finish(
+                    state,
+                    int(ExitCode.ENVIRONMENT_UNAVAILABLE),
+                    f"el ejecutor no está disponible: {detail}",
+                ),
+                "agent_detail": detail,
+            }
 
         event = Event(
             id=uuid.uuid4().hex,
@@ -161,11 +210,15 @@ class _GraphNodes:
         features_dir = self.ctx.project_root / "features"
         try:
             scenarios = self.ctx.spec_source.load(features_dir)
-        except SpecError:
-            return {"exit_code": 10, "seal_ok": False}
+        except SpecError as exc:
+            return {
+                **self._finish(state, int(ExitCode.PRECONDITION), f"Spec inválida: {exc}"),
+                "seal_ok": False,
+            }
 
         if not scenarios:
-            return {"exit_code": 10, "seal_ok": False}
+            reason = f"No hay escenarios en {features_dir}"
+            return {**self._finish(state, int(ExitCode.PRECONDITION), reason), "seal_ok": False}
 
         seal_ok = self.ctx.spec_source.verify_seal(self.ctx.project_root, self.ctx.paths_driver)
 
@@ -212,18 +265,16 @@ class _GraphNodes:
                 green_ids=green_ids,
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
+                agent_failures=state.get("agent_failures", 0),
+                forbidden_paths=self.ctx.forbidden_paths,
             )
-        )
-
-        signal = (
-            "rate_limited"
-            if res.agent_result.status == "rate_limited"
-            else ("ok" if res.agent_result.status == "ok" else "error")
         )
 
         return {
             "driver_attempts": res.driver_attempts,
-            "agent_signal": signal,
+            "agent_signal": res.agent_signal,
+            "agent_failures": res.agent_failures,
+            "agent_detail": res.agent_result.text,
             "totals": {
                 "tokens": {
                     "input": res.agent_result.tokens.input,
@@ -254,10 +305,14 @@ class _GraphNodes:
                     acceptance_report=self.ctx.acceptance_report,
                     acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                     error_max_chars=self.ctx.error_max_chars,
+                    acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                 )
             )
-        except DriverError:
-            return {"exit_code": 10, "last_verify": {"ok": False}}
+        except DriverError as exc:
+            return {
+                **self._finish(state, int(ExitCode.PRECONDITION), str(exc)),
+                "last_verify": {"ok": False},
+            }
 
         if res.ok:
             return {
@@ -282,6 +337,7 @@ class _GraphNodes:
                     "attempt": 0,
                     "last_error": None,
                     "last_failed_at": None,
+                    "last_agent_status": None,
                 }
         return {"current": None}
 
@@ -293,12 +349,17 @@ class _GraphNodes:
         if state.get("seal_ok") and not self.ctx.spec_source.verify_seal(
             self.ctx.project_root, self.ctx.paths_driver
         ):
-            return {"exit_code": 10}
+            return self._finish(
+                state,
+                int(ExitCode.PRECONDITION),
+                "La especificación o el driver cambiaron a mitad de ejecución.",
+            )
 
         scenarios = state.get("scenarios", [])
         scen_dict = next((s for s in scenarios if s["id"] == current_id), None)
         if not scen_dict:
-            return {"exit_code": 1}
+            reason = f"El escenario {current_id} no está en la spec cargada"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
 
         scenario = Scenario(
             id=ScenarioId(scen_dict["id"]),
@@ -328,14 +389,21 @@ class _GraphNodes:
                     hints=self.ctx.hints,
                     last_error=state.get("last_error"),
                     failed_at=state.get("last_failed_at"),
+                    agent_failures=state.get("agent_failures", 0),
+                    last_agent_status=state.get("last_agent_status"),
                 )
             )
-        except SealTamperedError:
-            return {"exit_code": 10}
+        except SealTamperedError as exc:
+            return self._finish(state, int(ExitCode.PRECONDITION), str(exc))
 
         return {
             "attempt": res.attempt,
+            "attempt_slot": res.attempt_slot,
             "agent_signal": res.agent_signal,
+            "agent_failures": res.agent_failures,
+            "agent_detail": res.agent_result.text,
+            "last_agent_status": res.agent_result.status,
+            "spec_conflict": res.agent_result.spec_conflict,
             "totals": {
                 "tokens": {
                     "input": res.agent_result.tokens.input,
@@ -373,6 +441,10 @@ class _GraphNodes:
                 green_scenario_ids=green_ids,
                 all_scenario_ids=all_sids,
                 error_max_chars=self.ctx.error_max_chars,
+                attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
+                acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
+                forbidden_paths=self.ctx.forbidden_paths,
+                banned_patterns=self.ctx.banned_patterns,
             )
         )
 
@@ -390,7 +462,12 @@ class _GraphNodes:
                 "ok": res.ok,
                 "failed_at": res.failed_at,
                 "control_durations": control_durations,
+                "controls": control_summaries(res),
                 "reverted_files": list(res.reverted_files),
+                "error": res.condensed_error,
+                "error_path": res.error_path,
+                "candidate": res.candidate.sha if res.candidate else None,
+                "tree": res.candidate.tree if res.candidate else None,
             },
         )
         self.ctx.event_log.append(event)
@@ -399,6 +476,7 @@ class _GraphNodes:
                 "ok": res.ok,
                 "failed_at": res.failed_at,
                 "condensed_error": res.condensed_error,
+                "candidate": asdict(res.candidate) if res.candidate else None,
             },
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
@@ -415,12 +493,13 @@ class _GraphNodes:
         if not current_id:
             return {}
 
+        verified = (state.get("last_verify") or {}).get("candidate")
         self.ctx.commit_green.execute(
             CommitGreenRequest(
                 scenario_id=current_id,
                 run_id=state["run_id"],
                 attempt=state.get("attempt", 1),
-                paths_writable=self.ctx.paths_writable,
+                candidate=Candidate(**verified) if verified else None,
             )
         )
         return {"status": {current_id: "green"}}
@@ -430,10 +509,11 @@ class _GraphNodes:
         if not current_id:
             return {}
 
+        conflict = state.get("agent_signal") == "spec_conflict"
         reason: Literal["intentos agotados", "spec_conflict"] = (
-            "spec_conflict" if state.get("agent_signal") == "spec_conflict" else "intentos agotados"
+            "spec_conflict" if conflict else "intentos agotados"
         )
-        details = state.get("last_error") or ""
+        details = (state.get("spec_conflict") if conflict else state.get("last_error")) or ""
 
         self.ctx.quarantine.execute(
             QuarantineRequest(
@@ -449,45 +529,22 @@ class _GraphNodes:
         }
 
     def pause(self, state: GraphState) -> dict[str, Any]:
-        interrupt({"reason": "rate_limited", "resume_to": state.get("resume_to")})
-        return {}
+        signal = state.get("agent_signal")
+        reason = "rate_limited" if signal == "rate_limited" else "agent_unavailable"
+        interrupt(
+            {
+                "reason": reason,
+                "resume_to": state.get("resume_to"),
+                "detail": state.get("agent_detail", ""),
+            }
+        )
+        return {"agent_failures": 0}
 
     def report(self, state: GraphState) -> dict[str, Any]:
-        status = state.get("status", {})
-        reasons = state.get("reasons", {})
-
-        code: int
         exit_val = state.get("exit_code")
         if exit_val is not None:
-            code = exit_val
-        elif any(r == "spec_conflict" for r in reasons.values()):
-            code = 11
-        elif any(r == "intentos agotados" for r in reasons.values()) or any(
-            s == "quarantined" for s in status.values()
-        ):
-            code = 30
-        elif all(s == "green" for s in status.values()) and status:
-            code = 0
-        else:
-            code = 0
-
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
-            data={
-                "exit_code": code,
-                "totals": state.get("totals", {}),
-            },
-        )
-        self.ctx.event_log.append(event)
-        if self.ctx.build_report is not None:
-            self.ctx.build_report.execute(
-                BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
-            )
-        return {"exit_code": code}
+            return self._finish(state, exit_val, state.get("exit_reason", ""))
+        return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
 
 
 def get_sqlite_saver(db_path: Path) -> SqliteSaver:
@@ -513,7 +570,7 @@ def create_graph(
         return "load_spec"
 
     def route_build_driver_edge(state: GraphState) -> str:
-        if state.get("agent_signal") == "rate_limited":
+        if state.get("agent_signal") in ("rate_limited", "unavailable"):
             return "pause"
         return "red_check"
 

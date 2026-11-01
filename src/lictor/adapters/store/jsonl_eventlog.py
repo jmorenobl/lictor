@@ -20,18 +20,23 @@ class JsonlEventLog:
             f.write(line + "\n")
 
     def events(self, run_id: str | None = None) -> list[Event]:
-        """Read all events from journal.jsonl, optionally filtering by run_id."""
+        """Read all events from journal.jsonl, optionally filtering by run_id.
+
+        A line that isn't an event is skipped: it must not cost the record of everything else.
+        """
         if not self._path.exists():
             return []
 
         result: list[Event] = []
-        with open(self._path, encoding="utf-8") as f:
+        with open(self._path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 stripped = line.strip()
                 if not stripped:
                     continue
-                data = json.loads(stripped)
-                event = Event.from_dict(data)
+                try:
+                    event = Event.from_dict(json.loads(stripped))
+                except (json.JSONDecodeError, KeyError, AttributeError):
+                    continue
                 if run_id is None or event.runid == run_id:
                     result.append(event)
         return result

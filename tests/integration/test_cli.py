@@ -2,9 +2,12 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from lictor.adapters.agents.fake import FakeExecutor
 from lictor.cli import app
+from lictor.domain.model import Health
 
 runner = CliRunner()
 
@@ -35,6 +38,12 @@ def test_cli_init_and_doctor(tmp_path: Path) -> None:
     assert (tmp_path / "lictor.json").is_file()
     assert (tmp_path / ".lictor").is_dir()
 
+    # The fake backend keeps this from depending on the machine having a usable agent binary.
+    config_path = tmp_path / "lictor.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["backend"]["kind"] = "fake"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
     # Commit the generated config to have clean tree for doctor
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
@@ -42,8 +51,7 @@ def test_cli_init_and_doctor(tmp_path: Path) -> None:
     )
 
     doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
-    # Doctor exits with 0 or 10 depending on whether claude binary is installed in environment
-    assert doc_res.exit_code in (0, 10)
+    assert doc_res.exit_code == 0, doc_res.output
 
 
 def test_cli_init_existing_without_force_fails(tmp_path: Path) -> None:
@@ -77,7 +85,6 @@ def test_cli_check_success_and_filter(tmp_path: Path) -> None:
             {"id": "ctrl1", "level": "L1", "run": "echo ctrl1", "report": "exit-code"},
             {"id": "ctrl2", "level": "L2", "run": "echo ctrl2", "report": "exit-code"},
         ],
-        "suppressions": [],
         "agent_tools": [],
         "hints": "",
         "gitignore": [],
@@ -92,6 +99,34 @@ def test_cli_check_success_and_filter(tmp_path: Path) -> None:
     res_l1 = runner.invoke(app, ["check", "--level", "L1", "--cwd", str(tmp_path)])
     assert res_l1.exit_code == 0
     assert "ctrl1" in res_l1.output
+
+
+def test_cli_check_shows_where_a_failed_control_left_its_output(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    lictor_json = {
+        "profile": "python-uv@0.1",
+        "backend": {"kind": "fake", "model": "fake-model-1"},
+        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
+        "acceptance": {"run": "true {out}", "report": "junit"},
+        "controls": [
+            {
+                "id": "medida",
+                "level": "L5",
+                "run": "false",
+                "report": "exit-code",
+                "mode": "measure",
+            }
+        ],
+        "agent_tools": [],
+        "hints": "",
+        "gitignore": [],
+    }
+    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
+
+    res = runner.invoke(app, ["check", "--level", "L5", "--cwd", str(tmp_path)])
+
+    assert res.exit_code == 0
+    assert ".lictor/runs/check/medida.log" in res.output
 
 
 def test_cli_status_and_report(tmp_path: Path) -> None:
@@ -109,7 +144,6 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
         "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
         "acceptance": {"run": "echo test {out}", "report": "exit-code"},
         "controls": [],
-        "suppressions": [],
         "agent_tools": [],
         "hints": "",
         "gitignore": [],
@@ -124,6 +158,25 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
     res_rep = runner.invoke(app, ["report", "--cwd", str(tmp_path)])
     assert res_rep.exit_code == 0
     assert (lictor_dir / "report.md").is_file()
+
+
+def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert runner.invoke(app, ["init", "--cwd", str(tmp_path)]).exit_code == 0
+    config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    config["backend"]["kind"] = "fake"
+    (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
+    broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
+    monkeypatch.setattr(FakeExecutor, "health", lambda _self: broken)
+
+    result = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 40
 
 
 def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:
@@ -141,7 +194,6 @@ def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:
                 "report": "exit-code",
             },
         ],
-        "suppressions": [],
         "agent_tools": [],
         "hints": "",
         "gitignore": [],

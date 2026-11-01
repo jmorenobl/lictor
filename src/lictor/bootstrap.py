@@ -6,7 +6,12 @@ from pathlib import Path
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
-from lictor.adapters.config.loader import ProfileConfigInitializer, load_config
+from lictor.adapters.config.loader import (
+    ProfileConfigInitializer,
+    config_fingerprint,
+    load_config,
+    resolve_defences,
+)
 from lictor.adapters.config.models import LictorConfig
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
@@ -16,6 +21,7 @@ from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import (
+    AuditSink,
     Clock,
     CommandRunner,
     EventLog,
@@ -26,13 +32,14 @@ from lictor.application.ports import (
 )
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_project import CheckProject
-from lictor.application.usecases.check_red import AuditSink, CheckRed
+from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.init_project import InitProject
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
+from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import ConfigError
 from lictor.orchestration.graph import GraphContext
 
@@ -42,6 +49,7 @@ class BootstrapResult:
     """Aggregated container holding configured adapters, use cases, and graph context."""
 
     config: LictorConfig
+    config_hash: str
     clock: Clock
     event_log: EventLog
     vcs: Vcs
@@ -78,6 +86,7 @@ def bootstrap_runtime(
     """Assemble all adapters, use cases, and graph context from lictor.json."""
     resolved_root = project_root.resolve()
     active_config = config if config is not None else load_config(resolved_root)
+    defences = resolve_defences(active_config)
 
     active_clock = clock if clock is not None else SystemClock()
     lictor_dir = resolved_root / ".lictor"
@@ -122,10 +131,18 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
-    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
     audit_sink = AuditSink(event_log=active_event_log, clock=active_clock)
-    check_red_uc = CheckRed(
+    environment = VerificationEnvironment(
+        vcs=vcs,
         runner=runner,
+        audit=audit_sink,
+        project_root=resolved_root,
+        spec=defences.verification,
+    )
+
+    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
+    check_red_uc = CheckRed(
+        environment=environment,
         reader=acceptance_reader,
         vcs=vcs,
         spec_source=spec_source,
@@ -145,6 +162,7 @@ def bootstrap_runtime(
         runner=runner,
         readers=readers,
         project_root=resolved_root,
+        environment=environment,
     )
 
     commit_green_uc = CommitGreen(
@@ -159,17 +177,15 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
-    check_commands = [ctrl.run for ctrl in active_config.controls]
-
     graph_context = GraphContext(
         project_root=resolved_root,
         paths_writable=active_config.paths.writable,
         paths_protected=active_config.paths.protected,
         paths_driver=active_config.paths.driver,
-        suppressions=active_config.suppressions,
+        suppressions=defences.suppressions,
         driver_hints=active_config.acceptance.driver_hints,
         hints=active_config.hints,
-        check_commands=check_commands,
+        check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,
         max_turns=active_config.backend.max_turns,
@@ -194,10 +210,14 @@ def bootstrap_runtime(
         clock=active_clock,
         profile_name=active_config.profile,
         build_report=report_uc,
+        acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
+        forbidden_paths=defences.forbidden_paths,
+        banned_patterns=defences.banned_patterns,
     )
 
     return BootstrapResult(
         config=active_config,
+        config_hash=config_fingerprint(active_config, defences),
         clock=active_clock,
         event_log=active_event_log,
         vcs=vcs,

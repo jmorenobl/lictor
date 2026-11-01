@@ -1,6 +1,6 @@
 """In-memory fake implementation of CommandRunner for unit and integration testing."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import CommandRunner
@@ -37,7 +37,7 @@ class FakeRunner(CommandRunner):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
         """Record the call and return a canned or queued response."""
         self.calls.append(

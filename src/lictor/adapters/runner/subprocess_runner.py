@@ -5,7 +5,7 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import CommandRunner
@@ -20,13 +20,9 @@ class SubprocessRunner(CommandRunner):
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
         """Execute a command list synchronously with process group timeout management."""
-        merged_env = os.environ.copy()
-        if env is not None:
-            merged_env.update(env)
-
         start_time = time.monotonic()
         try:
             proc = subprocess.Popen(
@@ -35,7 +31,7 @@ class SubprocessRunner(CommandRunner):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=merged_env,
+                env=None if env is None else dict(env),
                 start_new_session=True,
             )
         except OSError as exc:

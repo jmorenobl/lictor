@@ -3,8 +3,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from lictor.adapters.config import loader
+from lictor.adapters.config.loader import load_profile
 from lictor.cli import app
 
 runner = CliRunner()
@@ -65,6 +68,26 @@ GOOD_FILES = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _profile_without_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """These cycles use the interpreter at hand: the real environment is what `repro` covers."""
+    profiles = tmp_path / "perfiles"
+    profiles.mkdir()
+    profile = load_profile("python-uv").model_dump(mode="json")
+    profile |= {
+        "name": "sin-entorno",
+        "banned_patterns": [],
+        "forbidden_paths": [],
+        "suppressions": ["# noqa", "# type: ignore"],
+        "verification": {
+            "inherit": ["PATH", "HOME", "VIRTUAL_ENV"],
+            "env": {"PYTHONDONTWRITEBYTECODE": "1"},
+        },
+    }
+    (profiles / "sin-entorno.json").write_text(json.dumps(profile), encoding="utf-8")
+    monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
+
+
 def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None = None) -> Path:
     project_dir = tmp_path / "demo-iva"
     # Copy essential files from examples/demo-iva
@@ -92,7 +115,7 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
 
     # Initialize lictor.json with fake backend
     lictor_json = {
-        "profile": "python-uv@0.1",
+        "profile": "sin-entorno@0.1",
         "backend": {
             "kind": "fake",
             "model": "claude-3-5-sonnet-20241022",
@@ -116,7 +139,6 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
             "driver_hints": "hints",
         },
         "controls": [],
-        "suppressions": ["# noqa", "# type: ignore"],
         "agent_tools": [],
         "hints": "demo-iva hints",
         "gitignore": [".venv/", "__pycache__/"],

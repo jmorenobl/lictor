@@ -10,6 +10,8 @@ Lictor is a deterministic harness and agentic runtime that implements Gherkin ac
 - **Core Architecture:** Hexagonal Architecture (Ports and Adapters) enforced with `import-linter`
 - **Primary Dependencies:** LangGraph, Pydantic v2, Typer, `gherkin-official`, `defusedxml`
 
+> **Known limitations:** inherited `HOME` brings user configuration into verification: in a project without `[tool.ruff]` or `[tool.mypy]`, `~/.config/ruff/ruff.toml` and `~/.config/mypy/config` replace the tools' defaults, and either can switch the control off. Phase 4 has to close this. A green commit doesn't yet withstand an adversarial agent. Since phase 3 it is the exact tree that passed in a clean clone, but `.git`, `.lictor/` and the verification environment share the agent's user, so it can still tamper with them. That stays true until phase 4 closes. Separately, any project code imported during the tests runs in the runner's process, so it can alter the runner as well as forge the report (`test_c6`). No phase of this plan closes that: it stays as a strict `xfail` until the sandbox of increment 4, and until then a green doesn't withstand an adversary. The `c4` and `c4b` cases only close specific routes: an installed plugin, `src` in the interpreter's startup path (`sitecustomize`), a package in `src` replacing a dependency, and inherited variables. They don't close `c4` in general.
+
 ---
 
 ## Essential Commands
@@ -29,10 +31,10 @@ uv run ruff format --check .
 uv run ruff format .       # Automatically format code
 
 # Strict typechecking (L1)
-uv run mypy --strict src
+uv run mypy --strict src scripts
 
 # Architectural boundaries check (L4)
-uv run lint-imports
+uv run python scripts/check_architecture.py
 ```
 
 ### Testing & Verification (L2, L4 & L5)
@@ -41,20 +43,26 @@ uv run lint-imports
 uv run pytest tests/unit -q
 
 # Integration & architecture acceptance tests
-uv run pytest tests/integration -q
+uv run pytest tests/integration -n auto -q
+
+# Same, without the slow audit reproduction cases
+uv run pytest tests/integration -q -m "not repro"
 
 # Full test suite with coverage enforcement (L4 - minimum 90% branch coverage)
-uv run pytest tests --cov=lictor --cov-branch --cov-fail-under=90 -q
+uv run pytest tests -n auto --cov=lictor --cov-branch --cov-fail-under=90 -q
 
 # Domain purity test coverage (L4 - minimum 95% domain coverage)
 uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 
-# Security audits (L4)
-uvx pip-audit
+# Security audits (L4). `uvx pip-audit` alone would audit its own environment, not uv.lock
+uv run python scripts/audit_dependencies.py
 gitleaks detect --no-banner
 
 # Mutation testing (L5)
 uv run mutmut run
+
+# Every control of lictor.json in a clean clone of HEAD, in the real verification environment
+uv run python scripts/verify_self.py [control ...]
 ```
 
 ### Running a Subset
@@ -105,14 +113,29 @@ Lictor strictly enforces hexagonal architecture layers. Dependencies only point 
 `lictor run` drives an 11-node LangGraph graph (`orchestration/graph.py`), and each scenario moves through `pick_next → implement → verify → commit | quarantine`. The pieces that interact:
 
 - **Routing is split.** Most conditional edges are pure functions in `domain/routing.py`, tested without a graph. A few trivial ones are closures in `create_graph`. Graph state is a flat serializable `TypedDict`; nodes convert to and from domain types at the boundary (ADR-0003).
-- **Git is the source of truth for green scenarios.** `CheckRed` derives them from `Scenario:` commit trailers, not from the checkpoint. `CommitGreen` and the driver seal commit check HEAD trailers (`Scenario`, `Lictor-Run`) so that re-running a node after a crash doesn't commit twice. Changing commit messages or trailers can break resume.
+- **Git is the source of truth for green scenarios.** `CheckRed` derives them from `Scenario:` commit trailers, not from the checkpoint. Changing commit messages or trailers can break resume.
+- **What's verified is what's committed.** After the L0 gates, `VerifyAttempt` builds a candidate commit outside the branch (`create_candidate`, with a throwaway index) and runs controls and acceptance in a clean clone of it (`verification_tree`). `CheckRed` does the same and seals from the clone. The branch only moves to that exact SHA with a conditional `update-ref` (`advance_head`), which adds nothing, so what the working tree holds afterwards can't get in. `Vcs` has no `commit` on purpose. Re-running `commit` after a crash compares HEAD with the candidate; `CheckRed` compares the `Lictor-Run` trailer.
+- **Verification runs in its own environment.** `VerificationEnvironment` builds `.lictor/verify-env` once per run from `verification.prepare` and hashes every file, bytecode included. `ensure` compares the hash before and after the commands: a mismatch fails `L0-entorno`, rebuilds and emits `env.tampered`. A failed `prepare` is exit 40. Commands run through `verification.env`, which in `python-uv` must stop the tool from syncing or creating an environment in the clone and from writing bytecode: dropping any of those variables changes the hash or the tree under test. The project isn't installed in that environment: an editable install would import the agent's tree instead of the clone's. Autoload is off, and plugins come from what is installed: after `prepare` and before the hash, `plugins_command` asks the environment's own interpreter (`-I -B`) for the `pytest11` entry points without importing them. The list joins the profile's `plugins` in `plugin_variable` and goes to the manifest. `ensure` asks again once the hash matches and compares, and the commands read it from memory, never from the manifest, because project code runs between them. Nothing is discovered at run time. Each entry must be a module: `module:attr` can't be loaded by name and exits 40. Plugins register under their module name, so `-p no:<name>` only blocks one whose module is `<name>` or `pytest_<name>`.
+- **Project code never enters the interpreter's startup.** `PYTHONPATH` must not name the tree under test: it would run `sitecustomize` in every Python tool, `mypy` included, and pytest's `pythonpath` isn't a substitute, because pytest applies it before importing `PYTEST_PLUGINS`, so `src` could replace a dependency. `python-uv` fixes `PYTEST_ADDOPTS="-o pythonpath="`, which also voids what the project's `pyproject.toml` declares, and `verification.files` copies a plugin (`profiles/python_uv/lictor_project_path.py`, a real module that imports nothing of Lictor) into the hashed environment, in the directory the environment's own interpreter reports (`files_dir_command`, with `-I` for isolation and `-B` because `-I` ignores `PYTHONDONTWRITEBYTECODE`; never `-S`, because `site` is what activates the venv). It appends `src` in `pytest_load_initial_conftests`: after startup, after the plugins, and behind `site-packages`. Tools that need the project on the path get it the same way, after starting and at the end: `scripts/check_architecture.py` appends `src` and then calls Import Linter. It must not run from `src`: Import Linter puts its working directory first, so a `src/typing_extensions.py` would run inside the control and could exit 0 over a broken contract.
+- **Verification starts from an empty environment.** `verification.inherit` lists the exact names that pass, and `env` then fixes values, so `env` wins and whatever nobody listed stays out. `command_env` returns the whole environment and `CommandRunner.run` uses it as given: `env=None` inherits, anything else replaces. A missing variable breaks visibly (a tool that isn't found fails `prepare` with exit 40). This only covers verification: `lictor check` and the agent's commands keep the caller's environment.
+- **The profile owns what verification guarantees.** `prepare`, `env`, `inherit`, `reserved`, `plugins`, `plugins_command`, `files`, `suppressions`, `banned_patterns` and `forbidden_paths` live only in the profile; `resolve_defences` (`adapters/config/loader.py`) reads them on every load and `LictorConfig` has no such fields, so declaring one in `lictor.json` fails and a copy can't go stale. A project only adds, through `verification.env` and `inherit`, and naming a variable the profile fixes, inherits or reserves exits 10. A case that must prove it doesn't depend on a heuristic relaxes it in a copy of the profile (`allowed_paths` in `make_project`), never in `lictor.json`. `paths.protected` stays a project decision, so `uv.lock` is also in `forbidden_paths`: what the lock installs loads as a plugin, so its defence can't depend on `paths`. `UV_*` is reserved because those variables decide where the environment lives, whether `uv` may sync it and where code is downloaded from; a private index authenticates through `~/.netrc` or an inherited `NETRC`, not `UV_INDEX_*`.
 - **Every implement attempt starts from HEAD.** `ImplementScenario` verifies the seal, then calls `vcs.reset_to_head()`, so a retry never inherits the previous attempt's edits; only the condensed error carries over. The order matters: a tampered seal must abort without wiping the tree.
 - **`reset_to_head` must not remove ignored files** (`git clean -fd`, never `-x`), because `.lictor/` is git-ignored and holds the run's state (ADR-0001).
-- **The seal changes who may write what.** `features/` and `paths.driver` are hashed into `.lictor/seal.json` after the red check passes on a fresh driver. Before sealing, the driver role may write them. After, any change fails `L0-sello`. On resume, a changed `lictor.json` or seal exits with code 10.
+- **The seal changes who may write what.** `features/` and `paths.driver` are hashed into `.lictor/seal.json` after the red check passes on a fresh driver. Before sealing, the driver role may write them. After, any change fails `L0-sello`. On resume, a changed seal or resolved configuration exits with code 10. `config_fingerprint` (`adapters/config/loader.py`) hashes `lictor.json` merged with its profile plus the content of `verification.files`, so a profile edit counts and a format-only edit of `lictor.json` doesn't.
 - **Untrusted commands are wrapped in `IntegritySnapshot`** (`verify_attempt.py`). Agent calls and every control or acceptance command run between `take` and `verify_and_restore`, which restores `.lictor/` state files and `lictor.json` on tampering. New code that runs agent or project commands needs the same wrapper.
-- **L0 gates are not controls.** `L0-rutas`, `L0-sello`, `L0-supresiones` and `L0-estado` are hardcoded in `VerifyAttempt`. Levels L1–L5 are data in `lictor.json`, merged over the profile defaults in `adapters/config/profiles/`. `mode: measure` records a failure without blocking.
+- **L0 gates are not controls.** `L0-rutas`, `L0-sello`, `L0-supresiones`, `L0-entorno` and `L0-estado` are hardcoded in `VerifyAttempt`. Levels L1–L5 are data in `lictor.json`, merged over the profile defaults in `adapters/config/profiles/`. `mode: measure` never blocks: result, exit code and output are recorded whether it passes or fails, in the `controls` of `verify.finished` and in `report.md`. There's no score yet: `mutmut` exits 0 with survivors, so the mutation control reads `ok` until its reader arrives in phase 6.
 - **Scenarios map to tests by name.** `map_test_cases_to_scenarios` normalizes `IVA-001` to `iva_001` and requires exactly one match per scenario in the JUnit test name or classname. Otherwise it raises `DriverError`.
 - **Pausing is an interrupt.** On a rate limit, `pause` calls LangGraph `interrupt()` and `resume_to` records the node to return to. That attempt isn't counted. The CLI exits 50, and the next `lictor run` resumes from `.lictor/current_run` via `Command(resume=True)`. Exit codes are stable public API (`ExitCode` in `domain/errors.py`).
+- **A backend that answers badly doesn't cost a scenario.** Status `auth`, or `AGENT_FAILURE_LIMIT` consecutive `error` calls, gives the signal `unavailable`: `pause` interrupts with the reason `agent_unavailable`, no attempt is spent and the CLI exits 40. It resumes the same way as a rate limit. An `error` below the limit doesn't spend an attempt either; `max_turns` and `timeout` do, so a hung backend still spends attempts until a later phase separates that case.
+- **Exit 40 means "couldn't run", not "the work failed".** `ENVIRONMENT_UNAVAILABLE` holds at start (`preflight`, `doctor`), on resume and mid-run: someone has to fix the environment and relaunch, and no scenario is to blame. Keep future environment failures, such as the sandbox, under this code and put the specifics in the message.
+- **`forbidden_paths` and `banned_patterns` are heuristics of the profile.** The first are matched against each path component and rejected in `L0-rutas`, along with any symlink; the driver's own paths are exempt, so it may keep a `conftest.py`. The second are case-insensitive regexes over added lines, in `L0-supresiones`. They are heuristics: they raise the cost of cheating, they don't close it. `sitecustomize.py` and `usercustomize.py` are listed as an extra defence; what keeps them from running is the startup path.
+- **The agent runs without user or project settings.** `ClaudeCLI` passes `--setting-sources ""` and `--strict-mcp-config`, so hooks, permissions and `CLAUDE.md` from the machine or the repository don't apply. OAuth survives this. It reads `--output-format stream-json`, the only format with `rate_limit_event`.
+- **Status comes from structured fields, never from the text.** `rate_limited` needs a failed call (`is_error` or a non-zero exit code) with `api_error_status` 429 or `rate_limit_info.status == "rejected"`, or that `rejected` with no `result` event at all. A successful call stays `ok` whatever those fields say. `auth` needs a 401, or `claude auth status --json` reporting `loggedIn: false` after an `api_error`. Unrecognised output is `error`, with the raw message kept in `AgentResult.text`.
+- **Every exit explains itself.** `_finish` (`orchestration/graph.py`) sets `exit_reason` in the state and writes it to `run.finished` and `report.md`, and the CLI prints it. A stop that can still resume (pause, refused resume) goes through `_record_stop` as `run.stopped`. New exits must go through one of the two: an exit code alone is not enough.
+- **A run's evidence lives in `.lictor/runs/<run_id>/<owner>/`**, where the owner is a scenario or `driver` (`application/run_files.py`). Each attempt leaves `NNN-implement.json` or `NNN-driver.json`, `.stderr.log` beside it, and one directory per verification: `NNN-verify/` or `NNN-red/` with `acceptance.xml`, `acceptance.log`, `control_<id>.xml`, `control_<id>.log` and `error.txt`. Names are never reused: retries and resumes get `-rN`. `NNN` is the attempt the agent call belonged to, which is why `attempt_slot` exists apart from `attempt`.
+- **What goes to the prompt is bounded; the rest goes to `runs/`.** `condense_error` keeps, in order, the reason, each failed case's name and message, and then details and assertion lines. Callers pass only the cases that matter, not expected pending reds. `render_full_error` has no limit and goes to `error.txt`.
+- **A suite that crashed proves nothing.** The report is deleted before each run. `suite_crash_reason` rejects a run without test cases, with an exit code outside `acceptance.failure_exit_codes`, or with a failure code and no failed test. Exit codes other than 0 stay normal while scenarios are pending, so the profile must declare which ones mean "tests failed".
+- **The agent's commands aren't the controls.** `agent_commands` in the profile are runnable as they stand and include acceptance, and each must match `agent_tools`. Controls keep `{out}` and belong to verification.
 
 ---
 
@@ -129,7 +152,26 @@ These are easy to trip:
 
 ## Testing Without an LLM
 
-Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters/agents/fake.py`). Its modes are `good`, `fail`, `cheat`, `conflict`, `rate_limit` and `crash`, and they can be set per scenario. `bootstrap_runtime` reads its options from `.lictor/fake_executor.json`, or accepts `executor=` directly. `tests/integration/test_e2e_demo_iva.py` runs full cycles against a copy of `examples/demo-iva/`, which is the model for new end-to-end tests.
+Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters/agents/fake.py`). Its modes are `good`, `fail`, `cheat`, `conflict`, `rate_limit` and `crash`, and they can be set per scenario. `bootstrap_runtime` reads its options from `.lictor/fake_executor.json`, or accepts `executor=` directly. `tests/integration/test_e2e_demo_iva.py` runs full cycles against a copy of `examples/demo-iva/`.
+
+For behaviour the modes can't express, pass `FakeExecutor(effect=fn)`: `fn(task, scenario_id, attempt)` runs arbitrary code in the agent's turn (forged bytecode, git commands, killing the run) and may return a status. `effect` can't go in `fake_executor.json`, so it needs `executor=`.
+
+## Running in Parallel
+
+The suite runs under `pytest-xdist` (`-n auto`), which is not in `addopts` because `mutmut` runs pytest without it. Each worker builds its own `template` under its own `tmp_path_factory` base, every case works in its `tmp_path`, and no test opens a port; `test_each_worker_builds_its_own_template` holds the first. The only thing workers share is the `uv` cache, which locks itself.
+
+`tests/conftest.py` clears the variables of a verification that may be running the suite, test by test: left in place, a nested `uv sync` would rewrite the verification environment and a nested pytest would load its plugins. It can't happen at startup, because xdist workers inherit them. A test that launches an interpreter with an exact environment needs `-B`, or its bytecode lands in that environment and fails the hash.
+
+## Audit Reproduction Cases
+
+`tests/integration/repro/` holds the cases from the v0.1 audit, one file per correction phase. Unlike the other e2e tests, they use the real `python-uv` profile and `uv`, with the configuration from `lictor init`, so they are the model for new end-to-end tests. Add `-m "not repro"` to skip them while iterating.
+
+- A case asserts the desired behaviour and stays under `@pending(phase, finding)`, a strict `xfail` that only tolerates `AssertionError`. Closing a case means removing its marker.
+- Preconditions go through `require`, which raises `ReproSetupError`, so a broken set-up fails the test instead of counting as the expected failure.
+- `false_greens` re-checks every `Scenario:` commit in a clean clone with an oracle that uses neither pytest nor the project venv. Keep it that way: cases `c3`, `c4` and `c6` fool anything that runs inside the suite.
+- Agent effects must tolerate a missing `.git` or `.lictor/`, which phases 3 and 4 take away from the agent.
+
+The audit report, the original lab scripts and the phase tracking live in `.audits/analisis-base/`, which is git-ignored and exists only on the maintainer's machine.
 
 ---
 
@@ -143,6 +185,8 @@ Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters
 │   ├── domain/                 # Pure domain: model.py, rules.py, routing.py, errors.py
 │   ├── application/
 │   │   ├── ports.py            # Protocols (Executor, EventLog, Clock, Vcs, Runner, etc.)
+│   │   ├── run_files.py        # Evidence paths under runs/ and the clean verification tree
+│   │   ├── verification_env.py # Verification environment: build, hash, rebuild
 │   │   └── usecases/           # Application use case interactors
 │   ├── adapters/
 │   │   ├── agents/             # Agent executors (Claude CLI, Fake, etc.)
@@ -178,7 +222,7 @@ Set `backend.kind` to `"fake"` in `lictor.json` to use `FakeExecutor` (`adapters
 ## Agent Dos and Don'ts
 
 ### Do
-- Run `uv run ruff check .`, `uv run mypy --strict src`, and `uv run lint-imports` before completing any change.
+- Run `uv run ruff check .`, `uv run mypy --strict src scripts`, and `uv run python scripts/check_architecture.py` before completing any change.
 - Implement new capabilities starting from the Domain and Ports, then implement Use Cases, and finally attach Adapters.
 - Provide comprehensive unit tests in `tests/unit/` for all new domain and application logic.
 - Mock or fake external processes (`subprocess`, `git`, external CLI binaries) using corresponding ports in unit tests.
