@@ -360,7 +360,7 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Reanudar comprueba la configuración resuelta.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`. Si cambió cualquiera de ellos, sale con exit 10 y explica el motivo. Un cambio solo de formato en `lictor.json` no cuenta.
 
-**`paths.protected` es decisión del proyecto.** `lictor init` escribe la lista del perfil como punto de partida, pero `paths` sustituye a ese valor, así que un `lictor.json` puede quitar entradas. Quitar `uv.lock` tiene más alcance del que parece: lo que el bloqueo instala es lo que entra en el entorno de verificación, y un plugin instalado se carga. `forbidden_paths` y `IntegritySnapshot` cubren parte del resto, pero no sustituyen a esa lista.
+**`paths.protected` es decisión del proyecto.** `lictor init` escribe la lista del perfil como punto de partida, pero `paths` sustituye a ese valor, así que un `lictor.json` puede quitar entradas. `uv.lock` es la excepción: lo que el bloqueo instala es lo que entra en el entorno de verificación, y un plugin instalado se carga, así que también está en `forbidden_paths` y el agente no puede cambiarlo aunque el proyecto lo quite de esa lista. `forbidden_paths` y `IntegritySnapshot` cubren parte del resto, pero no sustituyen a `paths.protected`.
 
 **Por qué `UV_*` está reservado.** Esas variables deciden dónde se instala el entorno, si `uv` puede sincronizarlo y de dónde baja código. Un proyecto que las fijase podría deshacer lo que el perfil garantiza, de modo que nombrar una da exit 10.
 

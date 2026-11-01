@@ -569,6 +569,7 @@ def test_verification_venv_is_built_once_per_run(make_project: ProjectFactory) -
         ("src/ruff.toml", "x", "L0-rutas"),
         ("src/sitecustomize.py", "x = 1\n", "L0-rutas"),
         ("src/usercustomize.py", "x = 1\n", "L0-rutas"),
+        ("src/uv.lock", "x", "L0-rutas"),
         ("tests/unit/conftest.py", "x", "L0-rutas"),
         ("tests/unit/pytest.ini", "[pytest]", "L0-rutas"),
         ("src/iva/a.py", "import os  # NOQA\n", "L0-supresiones"),
@@ -592,6 +593,24 @@ def test_d22_each_evasion_is_rejected_on_its_own(
 
     assert events_of(root, "verify.finished")[0]["data"]["failed_at"] == scenario
     assert rel_path not in git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+
+
+def test_project_cannot_open_the_lock_to_the_agent(make_project: ProjectFactory) -> None:
+    """What the lock installs loads as a plugin: its defence can't depend on `paths`."""
+    root = make_project()
+    config_path = root / "lictor.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["paths"]["protected"].remove("uv.lock")
+    config["paths"]["writable"].append("uv.lock")
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    git(root, "commit", "-qam", "chore: abrir el bloqueo")
+
+    def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        good_impl(task, scenario_id)
+        lock = task.cwd / "uv.lock"
+        lock.write_text(lock.read_text(encoding="utf-8") + "\n# editado\n", encoding="utf-8")
+
+    _assert_rejected_by(lambda: root, Agent(impl=impl), "L0-rutas")
 
 
 def test_symlink_out_of_the_tree_is_rejected(make_project: ProjectFactory) -> None:
