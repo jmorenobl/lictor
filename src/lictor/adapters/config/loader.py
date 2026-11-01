@@ -171,7 +171,6 @@ class ProfileConfigInitializer(ConfigInitializer):
             profile_name=config.profile,
             gitignore_entries=list(config.gitignore),
             config_json=payload,
-            note=profile.init_note,
         )
 
 
@@ -237,13 +236,6 @@ def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerific
             raise ConfigError(msg)
 
 
-def _plugin_env(project: ProjectVerification, profile: ProfileVerification) -> dict[str, str]:
-    plugins = [*profile.plugins, *project.plugins]
-    if plugins and not profile.plugin_variable:
-        raise ConfigError("verification.plugins: el perfil no admite plugins")
-    return {profile.plugin_variable: ",".join(plugins)} if plugins else {}
-
-
 def _profile_files(profile: ProfileVerification, profiles_dir: Path | None) -> list[Path]:
     sources = [_resolve_profiles_dir(profiles_dir) / file for file in profile.files]
     for source in sources:
@@ -261,13 +253,12 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,
             inherit=[*profile.verification.inherit, *project.inherit],
-            env={
-                **project.env,
-                **profile.verification.env,
-                **_plugin_env(project, profile.verification),
-            },
+            env={**project.env, **profile.verification.env},
             files_dir_command=profile.verification.files_dir_command,
             files=_profile_files(profile.verification, profiles_dir),
+            plugin_variable=profile.verification.plugin_variable,
+            plugins=profile.verification.plugins,
+            plugins_command=profile.verification.plugins_command,
         ),
         suppressions=profile.suppressions,
         banned_patterns=profile.banned_patterns,

@@ -1,4 +1,3 @@
 {
-  "profile": "python-uv@0.1",
-  "verification": {"plugins": ["pytest_bdd.plugin"]}
+  "profile": "python-uv@0.1"
 }

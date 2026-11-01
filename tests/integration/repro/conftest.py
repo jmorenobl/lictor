@@ -66,8 +66,6 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         config_path = root / "lictor.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config["backend"]["kind"] = "fake"
-        demo = json.loads((DEMO_IVA_DIR / "lictor.json").read_text(encoding="utf-8"))
-        config["verification"] = demo["verification"]
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "chore: initial commit")

@@ -27,7 +27,6 @@ class InitProjectResult:
     config_path: Path
     profile_name: str
     gitignore_updated: bool
-    note: str = ""
 
 
 class InitProject:
@@ -64,7 +63,6 @@ class InitProject:
             config_path=config_path,
             profile_name=init_data.profile_name,
             gitignore_updated=gitignore_updated,
-            note=init_data.note,
         )
 
     def _update_gitignore(self, project_root: Path, entries: list[str]) -> bool:

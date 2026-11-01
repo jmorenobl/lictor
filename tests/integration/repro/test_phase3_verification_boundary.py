@@ -126,6 +126,15 @@ forbidden_modules = paquete.adaptador
 """
 DIST_METADATA = "Metadata-Version: 2.1\nName: lab-cheat\nVersion: 1.0\n"
 ENTRY_POINTS = "[pytest11]\nlab_cheat = lab_cheat\n"
+_PLANT_FROM_A_CONTROL = (
+    "import site\n"
+    "base = pathlib.Path(site.getsitepackages()[0])\n"
+    f"(base / 'lab_cheat.py').write_text({CHEAT_PLUGIN!r})\n"
+    "info = base / 'lab_cheat-1.0.dist-info'\n"
+    "info.mkdir()\n"
+    f"(info / 'METADATA').write_text({DIST_METADATA!r})\n"
+    f"(info / 'entry_points.txt').write_text({ENTRY_POINTS!r})\n"
+)
 
 FORGE_MODULE_PYC = """
 import pathlib, py_compile, sys
@@ -242,6 +251,52 @@ def test_c3_plugin_in_the_verification_venv_fails_by_hash(make_project: ProjectF
     assert len(tampered) == 1
     assert tampered[0]["data"]["expected"] != tampered[0]["data"]["actual"]
     assert not (planted[0] / "lab_cheat.py").exists(), "la venv debía reconstruirse"
+    built = events_of(root, "env.built")
+    assert [event["data"]["plugins"] for event in built] == [["pytest_bdd.plugin"]] * 2
+
+
+def test_c3_plugin_planted_during_a_command_is_not_loaded_nor_accepted(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """Nothing is discovered at run time: acceptance comes right after the planting control."""
+    planted = tmp_path / "plantado"
+    script = tmp_path / "plantar.py"
+    script.write_text(
+        f"import pathlib\n{_PLANT_FROM_A_CONTROL}pathlib.Path({str(planted)!r}).touch()\n",
+        encoding="utf-8",
+    )
+    control = {
+        "id": "planta",
+        "level": "L2",
+        "run": f"sh -c 'test -e {planted} || uv run python {script}'",
+        "report": "exit-code",
+    }
+    root = make_project(extra_controls=[control])
+
+    def impl(_task: AgentTask, _sid: str, _attempt: int) -> None:
+        """Leave the stub: only the planted plugin could turn it green."""
+
+    run_lictor(root, Agent(impl=impl))
+
+    require(planted.exists(), "el control debía plantar el plugin")
+    assert false_greens(root) == []
+    assert green_ids(root) == []
+    reasons = [event["data"]["failed_at"] for event in events_of(root, "verify.finished")]
+    assert reasons[:2] == ["acceptance", "L0-entorno"]
+
+
+def test_a_plugin_cannot_come_in_through_the_lockfile(make_project: ProjectFactory) -> None:
+    """Whatever `uv.lock` installs now loads: that makes its protection part of this defence."""
+    root = make_project()
+
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        lock = task.cwd / "uv.lock"
+        lock.write_text(lock.read_text(encoding="utf-8") + "\n# nuevo plugin\n", encoding="utf-8")
+
+    _assert_rejected_by(lambda: root, Agent(impl=impl), "L0-rutas")
+    assert [event["data"]["reason"] for event in events_of(root, "env.built")] == [
+        "primera verificación"
+    ]
 
 
 def test_c3_forged_bytecode_in_the_verification_venv_fails_by_hash(
@@ -373,11 +428,7 @@ def test_project_needs_reach_the_commands(
     make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     probe = tmp_path / "sonda"
-    verification = {
-        "plugins": ["pytest_bdd.plugin"],
-        "env": {"MI_FIJA": "1"},
-        "inherit": ["MI_HEREDADA"],
-    }
+    verification = {"env": {"MI_FIJA": "1"}, "inherit": ["MI_HEREDADA"]}
     root = make_project(
         extra_controls=[_probe_control(probe)], config_changes={"verification": verification}
     )
@@ -464,7 +515,24 @@ def test_driver_relying_on_an_ignored_file_is_not_sealed(make_project: ProjectFa
     assert events_of(root, "driver.rejected")
 
 
-def test_declared_plugin_loads_with_autoload_off(make_project: ProjectFactory) -> None:
+def test_installed_plugin_needs_no_declaration(make_project: ProjectFactory) -> None:
+    """The agent's commands autoload `pytest-bdd`; verification must see the same driver pass."""
+
+    def driver(task: AgentTask, _attempt: int) -> None:
+        good_driver(task)
+        write(task.cwd, DRIVER_PATH, BDD_DRIVER)
+
+    agent = Agent(driver=driver)
+    root = make_project(config_changes={"verification": {}})
+
+    assert run_lictor(root, agent) == Outcome(0)
+
+    assert agent.calls.count("driver") == 1
+    assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
+    assert false_greens(root) == []
+
+
+def test_installed_plugin_loads_with_autoload_off(make_project: ProjectFactory) -> None:
     root = make_project()
     needs_plugin = DRIVER.replace(
         "def test_iva_001():\n    assert iva.general(100) == 121",

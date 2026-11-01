@@ -23,6 +23,14 @@ SPEC = VerificationEnvSpec(
 )
 
 
+WITH_PLUGINS = replace(
+    SPEC,
+    plugin_variable="CARGA",
+    plugins=("propio",),
+    plugins_command="plugins {env_dir}",
+)
+
+
 class _Builder(FakeRunner):
     """Stands for the profile's prepare command: fills the directory it is given."""
 
@@ -33,6 +41,8 @@ class _Builder(FakeRunner):
         self.seed: dict[str, str] = {}
         self.answer = ""
         self.answer_returncode = 0
+        self.plugins = "plugin_a\nplugin_b\n"
+        self.plugins_returncode = 0
 
     def run(
         self,
@@ -45,6 +55,8 @@ class _Builder(FakeRunner):
         if cmd[0] == "donde":
             stdout = self.answer.replace("{env_dir}", cmd[1])
             return CommandOutput(self.answer_returncode, stdout=stdout, stderr="sin respuesta")
+        if cmd[0] == "plugins":
+            return CommandOutput(self.plugins_returncode, stdout=self.plugins, stderr="sin lista")
         if cmd[0] != "build":
             return CommandOutput(returncode=0, stdout="", stderr="")
         self.builds += 1
@@ -360,7 +372,157 @@ def test_manifest_records_run_and_hash(tmp_path: Path) -> None:
     assert json.loads(environment.manifest.read_text(encoding="utf-8")) == {
         "run_id": "R",
         "hash": hash_tree(environment.env_dir),
+        "plugins": [],
     }
+
+
+def test_installed_plugins_are_fixed_when_building(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.plugins = "plugin_b\n\nplugin_a\nplugin_b\n"
+    environment, event_log = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    environment.ensure("R")
+
+    assert environment.command_env()["CARGA"] == "propio,plugin_a,plugin_b"
+    manifest = json.loads(environment.manifest.read_text(encoding="utf-8"))
+    assert manifest["plugins"] == ["plugin_a", "plugin_b"]
+    assert event_log.append.call_args.args[0].data["plugins"] == ["plugin_a", "plugin_b"]
+
+
+def test_plugins_are_asked_after_prepare_and_inside_the_environment(tmp_path: Path) -> None:
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    environment.ensure("R")
+
+    assert [call["cmd"][0] for call in runner.calls] == ["build", "plugins"]
+    asked = runner.calls[1]
+    assert asked["cmd"] == ["plugins", str(environment.env_dir)]
+    assert asked["cwd"] == environment.env_dir
+
+
+def test_the_files_exist_before_the_plugins_are_asked_and_both_are_hashed(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.seed = {"lib/x.txt": ""}
+    runner.answer = "{env_dir}/lib"
+    spec = replace(_with_file(tmp_path), plugin_variable="CARGA", plugins_command="plugins x")
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    assert [call["cmd"][0] for call in runner.calls] == ["build", "donde", "plugins"]
+
+
+def test_plugins_survive_into_a_new_process(tmp_path: Path) -> None:
+    """A resumed run has only the manifest, and it trusts it after comparing."""
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+    environment.ensure("R")
+    resumed, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    assert resumed.ensure("R") is None
+
+    assert runner.builds == 1
+    assert resumed.command_env()["CARGA"] == "propio,plugin_a,plugin_b"
+
+
+def test_a_forged_plugin_list_is_tampering(tmp_path: Path) -> None:
+    """The hash stays right: only the list says something the environment doesn't."""
+    runner = _Builder()
+    environment, event_log = _environment(tmp_path, runner, WITH_PLUGINS)
+    environment.ensure("R")
+    recorded = json.loads(environment.manifest.read_text(encoding="utf-8"))
+    recorded["plugins"].append("trampa")
+    environment.manifest.write_text(json.dumps(recorded), encoding="utf-8")
+
+    problem = environment.ensure("R")
+
+    assert problem is not None
+    assert "trampa" in problem
+    assert runner.builds == 2
+    assert _events(event_log).count("lictor.env.tampered.v1") == 1
+    assert "trampa" not in environment.command_env()["CARGA"]
+
+
+def test_the_manifest_is_not_read_between_two_checks(tmp_path: Path) -> None:
+    """Project code runs between commands: what they load can't depend on a file it can reach."""
+    environment, _ = _environment(tmp_path, _Builder(), WITH_PLUGINS)
+    environment.ensure("R")
+    environment.manifest.write_text('{"plugins": ["trampa"]}', encoding="utf-8")
+
+    assert "trampa" not in environment.command_env()["CARGA"]
+
+
+def test_a_tampered_tree_is_not_asked_for_its_plugins(tmp_path: Path) -> None:
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+    environment.ensure("R")
+    (environment.env_dir / "nuevo.py").write_text("x", encoding="utf-8")
+    runner.calls.clear()
+
+    assert environment.ensure("R") is not None
+
+    assert [call["cmd"][0] for call in runner.calls] == ["build", "plugins"]
+
+
+def test_a_rebuild_forgets_the_previous_plugins(tmp_path: Path) -> None:
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+    environment.ensure("R")
+    (environment.env_dir / "nuevo.py").write_text("x", encoding="utf-8")
+    runner.plugins = "plugin_c\n"
+
+    environment.ensure("R")
+
+    assert environment.command_env()["CARGA"] == "propio,plugin_c"
+
+
+def test_failing_to_list_plugins_is_an_environment_failure(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.plugins_returncode = 3
+    environment, event_log = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    with pytest.raises(EnvironmentUnavailableError, match="sin lista"):
+        environment.ensure("R")
+
+    assert _events(event_log) == ["lictor.env.failed.v1"]
+    assert event_log.append.call_args.args[0].data["exit_code"] == 3
+    assert not environment.manifest.exists()
+
+
+@pytest.mark.parametrize("name", ["modulo:objeto", "a,b", "a b", "-p", "../a"])
+def test_a_plugin_that_cannot_be_loaded_by_name_is_refused(tmp_path: Path, name: str) -> None:
+    runner = _Builder()
+    runner.plugins = f"bueno\n{name}\n"
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    with pytest.raises(EnvironmentUnavailableError, match="por nombre") as error:
+        environment.ensure("R")
+
+    assert name in str(error.value)
+    assert not environment.manifest.exists()
+
+
+def test_without_a_plugin_command_only_the_declared_ones_load(tmp_path: Path) -> None:
+    spec = replace(WITH_PLUGINS, plugins_command="")
+    runner = _Builder()
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    assert [call["cmd"][0] for call in runner.calls] == ["build"]
+    assert environment.command_env()["CARGA"] == "propio"
+
+
+def test_no_plugins_means_no_variable(tmp_path: Path) -> None:
+    runner = _Builder()
+    runner.plugins = ""
+    spec = replace(WITH_PLUGINS, plugins=())
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    assert "CARGA" not in environment.command_env()
 
 
 def test_run_injects_the_environment(tmp_path: Path) -> None:

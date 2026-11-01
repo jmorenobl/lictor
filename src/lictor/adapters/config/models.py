@@ -13,8 +13,6 @@ BackendAuth = Literal["subscription", "api_key"]
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
-_MODULE_NAME = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")
-
 _SHORT_MODEL_ALIASES = frozenset(
     {
         "opus",
@@ -126,6 +124,7 @@ class ProfileVerification(BaseModel):
     reserved: list[str] = Field(default_factory=list)
     plugin_variable: str = ""
     plugins: list[str] = Field(default_factory=list)
+    plugins_command: str = ""
     files_dir_command: str = ""
     files: list[str] = Field(default_factory=list)
 
@@ -135,24 +134,20 @@ class ProfileVerification(BaseModel):
             raise ValueError("verification.files necesita files_dir_command")
         return self
 
+    @model_validator(mode="after")
+    def _validate_plugins_have_a_variable(self) -> Self:
+        if (self.plugins or self.plugins_command) and not self.plugin_variable:
+            raise ValueError("verification.plugins necesita plugin_variable")
+        return self
+
 
 class ProjectVerification(BaseModel):
     """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    plugins: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
-
-    @field_validator("plugins")
-    @classmethod
-    def _check_plugin_names(cls, plugins: list[str]) -> list[str]:
-        for plugin in plugins:
-            if not _MODULE_NAME.fullmatch(plugin):
-                msg = f"verification.plugins admite nombres de módulo, no '{plugin}'"
-                raise ValueError(msg)
-        return plugins
 
 
 class ControlConfig(BaseModel):
@@ -234,7 +229,6 @@ class Profile(BaseModel):
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
-    init_note: str = ""
 
     @field_validator("controls")
     @classmethod

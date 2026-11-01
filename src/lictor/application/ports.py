@@ -183,7 +183,6 @@ class ProfileInitConfig:
     profile_name: str
     gitignore_entries: Sequence[str]
     config_json: str
-    note: str = ""
 
 
 @runtime_checkable

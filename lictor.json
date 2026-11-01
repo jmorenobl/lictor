@@ -1,6 +1,5 @@
 {
   "profile": "python-uv@0.1",
-  "verification": {"plugins": ["pytest_cov.plugin", "xdist.plugin"]},
   "controls": [
     {"id": "lint",            "level": "L1", "run": "uv run ruff check .",                "report": "exit-code", "mode": "block"},
     {"id": "format",          "level": "L1", "run": "uv run ruff format --check .",       "report": "exit-code", "mode": "block"},

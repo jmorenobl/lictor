@@ -49,6 +49,7 @@
     },
     "plugin_variable": "PYTEST_PLUGINS",
     "plugins": ["lictor_project_path"],
+    "plugins_command": "{env_dir}/bin/python -I -B -c 'from importlib.metadata import entry_points; print(*(e.value for e in entry_points(group=\"pytest11\")), sep=\"\\n\")'",
     "inherit": [
       "PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME",
       "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR",
@@ -66,6 +67,5 @@
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],
   "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/.",
-  "init_note": "pytest corre sin autoload de plugins: declara los del proyecto en verification.plugins de lictor.json, por ejemplo pytest_bdd.plugin si el driver usa pytest-bdd.",
   "gitignore": ["__pycache__/", "*.pyc", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/"]
 }

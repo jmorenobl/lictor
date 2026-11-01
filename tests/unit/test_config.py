@@ -1,5 +1,7 @@
 import ast
 import json
+import shlex
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -10,7 +12,6 @@ import pytest
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
-    ProfileConfigInitializer,
     build_config_from_profile,
     detect_profile,
     export_config_schema,
@@ -27,6 +28,8 @@ from lictor.adapters.config.models import (
     LictorConfig,
     PathsConfig,
     Profile,
+    ProfileVerification,
+    ProjectVerification,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_project_path
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
@@ -530,7 +533,6 @@ def test_a_project_adds_what_it_needs_on_top_of_the_profile(tmp_path: Path) -> N
         _project(
             tmp_path,
             verification={
-                "plugins": ["pytest_bdd.plugin", "xdist.plugin"],
                 "env": {"MI_BASE": "sqlite://"},
                 "inherit": ["MI_TOKEN"],
             },
@@ -540,38 +542,44 @@ def test_a_project_adds_what_it_needs_on_top_of_the_profile(tmp_path: Path) -> N
 
     spec = resolve_defences(config).verification
 
-    assert spec.env == profile.env | {
-        "MI_BASE": "sqlite://",
-        "PYTEST_PLUGINS": "lictor_project_path,pytest_bdd.plugin,xdist.plugin",
-    }
+    assert spec.env == profile.env | {"MI_BASE": "sqlite://"}
     assert list(spec.inherit) == [*profile.inherit, "MI_TOKEN"]
     assert spec.prepare == profile.prepare
 
 
-def test_a_project_without_plugins_keeps_only_the_profiles(tmp_path: Path) -> None:
+def test_plugins_are_not_a_project_decision(tmp_path: Path) -> None:
+    """They come from what is installed: there is nothing left to declare, or to keep in sync."""
+    with pytest.raises(ConfigError, match="plugins"):
+        load_config(_project(tmp_path, verification={"plugins": ["pytest_bdd.plugin"]}))
+
+
+@pytest.mark.parametrize("field", ["plugins", "plugins_command"])
+def test_plugins_need_a_variable_to_reach_the_tool(field: str) -> None:
+    value: object = ["otro"] if field == "plugins" else "lista"
+
+    with pytest.raises(ValidationError, match="plugin_variable"):
+        ProfileVerification.model_validate({field: value})
+
+
+def test_the_profile_tells_the_environment_how_to_load_plugins(tmp_path: Path) -> None:
+    profile = load_profile("python-uv").verification
+
     spec = resolve_defences(load_config(_project(tmp_path))).verification
 
-    assert spec.env["PYTEST_PLUGINS"] == "lictor_project_path"
+    assert spec.plugin_variable == profile.plugin_variable == "PYTEST_PLUGINS"
+    assert spec.plugins == profile.plugins
+    assert spec.plugins_command == profile.plugins_command
+    assert "PYTEST_PLUGINS" not in spec.env
 
 
-@pytest.mark.parametrize("plugin", ["a,b", "a b", "", "../a", "-p"])
-def test_a_plugin_is_a_module_name(tmp_path: Path, plugin: str) -> None:
-    with pytest.raises(ConfigError, match="plugins"):
-        load_config(_project(tmp_path, verification={"plugins": [plugin]}))
+def test_the_plugins_question_reads_what_is_really_installed() -> None:
+    """Run the profile's command on this very environment: it lists modules, importing none."""
+    command = load_profile("python-uv").verification.plugins_command
+    tokens = shlex.split(command.replace("{env_dir}", sys.prefix))
 
+    listed = subprocess.run(tokens, capture_output=True, text=True, check=True).stdout.split()
 
-def test_plugins_need_a_profile_that_can_load_them(tmp_path: Path) -> None:
-    profiles = tmp_path / "profiles"
-    profiles.mkdir()
-    data = load_profile("python-uv").model_dump(mode="json")
-    data["verification"]["plugin_variable"] = ""
-    (profiles / "python-uv.json").write_text(json.dumps(data), encoding="utf-8")
-    config = load_config(
-        _project(tmp_path, verification={"plugins": ["otro"]}), profiles_dir=profiles
-    )
-
-    with pytest.raises(ConfigError, match="plugins"):
-        resolve_defences(config, profiles)
+    assert {"pytest_cov.plugin", "xdist.plugin"} <= set(listed)
 
 
 def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -> None:
@@ -611,15 +619,14 @@ def test_init_copies_no_defence(tmp_path: Path) -> None:
     init_config_file(tmp_path)
 
     written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
-    assert written["verification"] == {"plugins": [], "env": {}, "inherit": []}
+    assert written["verification"] == {"env": {}, "inherit": []}
     assert not {"suppressions", "banned_patterns", "forbidden_paths"} & set(written)
 
 
-def test_demo_declares_what_is_its_own() -> None:
-    config = load_config(REPO_ROOT / "examples" / "demo-iva" / "lictor.json")
-
-    assert config.verification.plugins == ["pytest_bdd.plugin"]
-    assert resolve_defences(config).verification.env["PYTEST_PLUGINS"].endswith("pytest_bdd.plugin")
+def test_demo_declares_nothing_of_its_own() -> None:
+    assert load_config(REPO_ROOT / "examples" / "demo-iva" / "lictor.json").verification == (
+        ProjectVerification()
+    )
 
 
 def test_profile_no_longer_assumes_a_project_dependency() -> None:
@@ -627,13 +634,6 @@ def test_profile_no_longer_assumes_a_project_dependency() -> None:
 
     assert verification.plugins == ["lictor_project_path"]
     assert "PYTEST_PLUGINS" not in verification.env
-
-
-def test_generated_config_tells_how_to_declare_plugins() -> None:
-    note = ProfileConfigInitializer().generate_config(REPO_ROOT, "python-uv").note
-
-    assert "verification.plugins" in note
-    assert "pytest_bdd.plugin" in note
 
 
 def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:

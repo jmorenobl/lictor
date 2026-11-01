@@ -219,13 +219,6 @@
       "additionalProperties": false,
       "description": "Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.",
       "properties": {
-        "plugins": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Plugins",
-          "type": "array"
-        },
         "env": {
           "additionalProperties": {
             "type": "string"
