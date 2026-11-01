@@ -3,9 +3,11 @@
 import stat
 from pathlib import Path
 
+from lictor.application.run_files import scratch_dir
 from lictor.domain.model import AgentStatus, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
+    DRIVER_PATH,
     GOOD_1,
     MODULE_PATH,
     Agent,
@@ -228,6 +230,43 @@ def test_a_conflict_with_the_user_stops_without_losing_anything(
     assert green_ids(root) == ALL_GREEN
     assert agent.calls[calls:].count("IVA-001") == 0
     assert false_greens(root) == []
+
+
+def test_a_conflict_with_the_driver_stops_without_losing_anything(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    edited = [False]
+
+    def driver(task: AgentTask, attempt: int) -> None:
+        if not edited[0]:
+            edited[0] = True
+            write(root, DRIVER_PATH, "# edición del usuario\n")
+        good_driver(task, attempt)
+
+    agent = Agent(driver=driver)
+    assert run_lictor(root, agent) == Outcome(10)
+
+    assert green_ids(root) == []
+    assert (root / DRIVER_PATH).read_text(encoding="utf-8") == "# edición del usuario\n"
+    assert DRIVER_PATH in events_of(root, "run.stopped")[-1]["data"]["reason"]
+
+    (root / DRIVER_PATH).unlink()
+    assert run_lictor(root, agent) == Outcome(0)
+
+    assert green_ids(root) == ALL_GREEN
+    assert false_greens(root) == []
+
+
+def test_a_new_run_sweeps_what_a_killed_one_left_outside_the_project(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project().resolve()
+
+    with scratch_dir(root, "resto-") as left:
+        assert run_lictor(root, Agent()) == Outcome(0)
+
+        assert not left.exists()
 
 
 def test_the_implementation_of_the_first_scenario_reaches_the_project(

@@ -381,6 +381,20 @@ def test_git_output_that_is_not_utf8_doesnt_break_the_adapter(git_repo: Path) ->
     assert cli.status() == ["binario"]
 
 
+def test_advance_head_refuses_if_the_branch_went_back(git_repo: Path, tmp_path: Path) -> None:
+    """Fast-forwarding would succeed here: only the comparison with `expected` stops it."""
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-m", "base"], cwd=git_repo, check=True)
+    cli = GitCli(repo_dir=git_repo)
+    candidate = _candidate(cli, tmp_path)
+    subprocess.run([GIT_BIN, "reset", "-q", "--hard", "HEAD~1"], cwd=git_repo, check=True)
+    behind = _head(git_repo)
+
+    with pytest.raises(CandidateError):
+        cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == behind
+
+
 def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -395,10 +409,14 @@ def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
     for rel_path in ("config", "hooks/pre-commit", "info/attributes"):
         target = git_repo / ".git" / rel_path
         target.parent.mkdir(exist_ok=True)
+        original = target.read_bytes() if target.exists() else None
         target.write_text("x\n", encoding="utf-8")
         assert cli.fingerprint() != before, rel_path
-        if rel_path != "config":
+        if original is None:
             target.unlink()
+        else:
+            target.write_bytes(original)
+        assert cli.fingerprint() == before, rel_path
 
 
 def test_fingerprint_doesnt_depend_on_refs_or_objects(git_repo: Path) -> None:

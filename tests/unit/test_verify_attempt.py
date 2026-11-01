@@ -24,7 +24,7 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
-from lictor.domain.model import Candidate, CommandOutput, TreeChange
+from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 
 
 class FakeVcs(Vcs):
@@ -36,6 +36,14 @@ class FakeVcs(Vcs):
         self._changed_files = list(changed_files or [])
         self._added = list(added or [])
         self.links: list[str] = []
+        self.moved: list[str] = []
+
+    def pin(self) -> RepoPin:
+        return RepoPin("fake-sha-head")
+
+    def restore(self, pin: RepoPin) -> list[str]:
+        moved, self.moved = self.moved, []
+        return moved
 
     def status(self) -> list[str]:
         return []
@@ -809,6 +817,32 @@ def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Pat
     assert result.failed_at == "L0-estado"
     assert result.control_results["first"].ok is True
     assert result.error_path is not None
+
+
+@pytest.mark.parametrize("command", ["lint", "suite"])
+def test_verify_repository_moved_during_a_command_fails_the_attempt(
+    tmp_path: Path, command: str
+) -> None:
+    class Mover(FakeRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: dict[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == command:
+                assert isinstance(verifier.vcs, FakeVcs)
+                verifier.vcs.moved = ["HEAD"]
+            return CommandOutput(returncode=0, stdout="", stderr="")
+
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    verifier, req = _verify(tmp_path, Mover(), controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-estado"
+    assert "HEAD" in (result.condensed_error or "")
 
 
 def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -> None:

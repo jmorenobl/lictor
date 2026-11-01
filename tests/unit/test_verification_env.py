@@ -275,6 +275,20 @@ def test_prepare_doesnt_share_its_environment_with_the_commands(
     assert prepared["HOME"] != str(Path.home())
 
 
+def test_what_the_profile_fixes_wins_in_prepare_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FIJADA", "heredada")
+    runner = _Builder()
+    spec = replace(SPEC, prepare_inherit=("FIJADA",), env={"FIJADA": "del-perfil"})
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    assert prepared["FIJADA"] == "del-perfil"
+
+
 def test_prepare_reaches_the_files_of_the_real_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

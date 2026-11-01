@@ -265,6 +265,25 @@ def test_g1_config_planted_before_dying_refuses_the_resume_without_running_git(
     assert ".git" in events_of(root, "run.stopped")[-1]["data"]["reason"]
 
 
+def test_g1_config_planted_by_the_driver_refuses_the_resume(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """Before the first seal the only anchor is the one `preflight` set."""
+    root = make_project()
+    marker = tmp_path / "filtro-ejecutado"
+
+    def driver(_task: AgentTask, _attempt: int) -> None:
+        git(root, "config", "filter.mal.clean", f"touch {marker}; cat")
+        raise KeyboardInterrupt
+
+    agent = Agent(driver=driver)
+    require(run_lictor(root, agent).killed, "el agente debía matar la ejecución")
+
+    assert run_lictor(root, agent) == Outcome(10)
+    assert not marker.exists()
+    assert ".git" in events_of(root, "run.stopped")[-1]["data"]["reason"]
+
+
 def test_c7_the_copy_has_no_state_to_tamper_with(make_project: ProjectFactory) -> None:
     root = make_project()
     looked: list[bool] = []

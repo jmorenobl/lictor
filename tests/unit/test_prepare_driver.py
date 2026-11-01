@@ -252,10 +252,11 @@ def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Pa
 
 
 def _execute_driver(
-    tmp_path: Path, agent: AgentResult, agent_failures: int = 0
+    tmp_path: Path, agent: AgentResult, agent_failures: int = 0, moved: tuple[str, ...] = ()
 ) -> tuple[PrepareDriverResult, MagicMock, MagicMock]:
     vcs = MagicMock(spec=Vcs)
     vcs.changes.return_value = []
+    vcs.restore.return_value = list(moved)
     executor = MagicMock(spec=Executor)
     executor.run.return_value = agent
     event_log = MagicMock(spec=EventLog)
@@ -297,6 +298,18 @@ def test_prepare_driver_signal(
     result, _, _ = _execute_driver(tmp_path, AgentResult(status=status), failures)
 
     assert (result.agent_signal, result.driver_attempts, result.agent_failures) == expected
+
+
+def test_prepare_driver_tampering_with_the_repository_is_rejected(tmp_path: Path) -> None:
+    result, _, event_log = _execute_driver(
+        tmp_path, AgentResult(status="ok"), moved=(".git/config",)
+    )
+
+    assert (result.agent_signal, result.driver_attempts) == ("rejected", 2)
+    assert result.tree is None
+    assert ".git/config" in (result.error or "")
+    types = [call_.args[0].type for call_ in event_log.append.call_args_list]
+    assert "lictor.state.tampered.v1" in types
 
 
 def test_prepare_driver_retry_keeps_the_previous_raw_output(tmp_path: Path) -> None:

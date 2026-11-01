@@ -559,6 +559,7 @@ def test_a_project_adds_what_it_needs_on_top_of_the_profile(tmp_path: Path) -> N
             verification={
                 "env": {"MI_BASE": "sqlite://"},
                 "inherit": ["MI_TOKEN"],
+                "prepare_inherit": ["MI_ESPEJO"],
             },
         )
     )
@@ -568,6 +569,7 @@ def test_a_project_adds_what_it_needs_on_top_of_the_profile(tmp_path: Path) -> N
 
     assert spec.env == profile.env | {"MI_BASE": "sqlite://"}
     assert list(spec.inherit) == [*profile.inherit, "MI_TOKEN"]
+    assert list(spec.prepare_inherit) == [*profile.prepare_inherit, "MI_ESPEJO"]
     assert spec.prepare == profile.prepare
 
 

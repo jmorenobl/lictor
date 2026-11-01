@@ -488,6 +488,46 @@ def test_check_red_tampering_is_a_recorded_rejection(tmp_path: Path) -> None:
     assert _rejection(event_log).data["reason"] == "L0-estado"
 
 
+def test_check_red_repository_moved_during_the_suite_is_a_rejection(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_RED, 1)
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.restore.return_value = ["HEAD"]
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert _rejection(event_log).data["reason"] == "L0-estado"
+
+
+def test_check_red_same_run_with_another_tree_is_not_the_committed_driver(tmp_path: Path) -> None:
+    """After a crash the trailer alone doesn't prove HEAD holds the driver being checked."""
+    use_case, request, _, _, _ = _real_check(tmp_path, _REPORT_RED, 1, tree="driver-tree")
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.get_trailers.side_effect = lambda key, commit_ref=None: (
+        ["R"] if key == "Lictor-Run" else []
+    )
+    use_case.vcs.get_tree.return_value = "otro-arbol"
+
+    result = use_case.execute(request)
+
+    assert result.ok is True
+    use_case.vcs.commit_tree.assert_called_once()
+    use_case.vcs.advance_head.assert_called_once_with("sha", expected="parent")
+
+
+def test_check_red_seal_leaves_the_hash_of_its_evidence(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_RED, 1, tree="driver-tree")
+
+    use_case.execute(request)
+
+    sealed = [
+        call_.args[0]
+        for call_ in event_log.append.call_args_list
+        if call_.args[0].type == "lictor.driver.sealed.v1"
+    ]
+    assert sealed[0].data["evidence"]["hash"]
+
+
 def test_check_red_passing_keeps_its_output(tmp_path: Path) -> None:
     use_case, request, _, _, runner = _real_check(tmp_path, _REPORT_RED, 1)
 

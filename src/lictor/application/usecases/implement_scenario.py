@@ -314,7 +314,7 @@ class ImplementScenario:
             prompt_sha=prompt_sha,
             agent_failures=agent_failures,
             attempt_slot=request.attempt + 1,
-            tree=None if agent_signal == "rejected" else outcome.tree,
+            tree=outcome.tree,
             failed_at=outcome.failed_at if agent_signal == "rejected" else None,
             error=outcome.error if agent_signal == "rejected" else None,
         )
