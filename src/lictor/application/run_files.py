@@ -7,14 +7,17 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 
 import contextlib
 import hashlib
+import os
 import shlex
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
+from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
@@ -50,18 +53,53 @@ def _scratch_root(project_root: Path) -> Path:
     return Path(tempfile.gettempdir()) / f"lictor-{digest}"
 
 
+def _check_private(root: Path) -> None:
+    """Refuse a directory someone else could have prepared or can still write into.
+
+    Its name is predictable and the temporary directory may be shared, as `/tmp` is on Linux:
+    another user could create it first and change the tree under verification.
+    """
+    info = os.lstat(root)
+    problem = None
+    if stat.S_ISLNK(info.st_mode):
+        problem = "es un enlace simbólico"
+    elif not stat.S_ISDIR(info.st_mode):
+        problem = "no es un directorio"
+    elif info.st_uid != os.getuid():
+        problem = "pertenece a otro usuario"
+    elif info.st_mode & 0o077:
+        problem = f"tiene permisos para el grupo u otros ({oct(stat.S_IMODE(info.st_mode))})"
+    if problem is not None:
+        raise EnvironmentUnavailableError(
+            f"el directorio temporal {root} {problem}, así que otro usuario podría cambiar lo que "
+            "se verifica. Si es tuyo y nadie más lo usa, bórralo y vuelve a lanzar; si no, apunta "
+            "TMPDIR a un directorio solo tuyo y vuelve a lanzar."
+        )
+
+
+def _private_root(project_root: Path) -> Path:
+    root = _scratch_root(project_root)
+    with contextlib.suppress(FileExistsError):
+        root.mkdir(mode=0o700)
+    _check_private(root)
+    return root
+
+
 @contextlib.contextmanager
 def scratch_dir(project_root: Path, prefix: str) -> Iterator[Path]:
     """Yield an empty directory outside the project, gone afterwards."""
-    root = _scratch_root(project_root)
-    root.mkdir(parents=True, exist_ok=True)
+    root = _private_root(project_root)
     with tempfile.TemporaryDirectory(prefix=prefix, dir=root, ignore_cleanup_errors=True) as tmp:
         yield Path(tmp)
 
 
 def sweep_scratch(project_root: Path) -> None:
     """Remove what a killed run left behind, which nothing else would ever clean."""
-    shutil.rmtree(_scratch_root(project_root), ignore_errors=True)
+    root = _scratch_root(project_root)
+    if not os.path.lexists(root):
+        return
+    _check_private(root)
+    shutil.rmtree(root, ignore_errors=True)
 
 
 @contextlib.contextmanager
