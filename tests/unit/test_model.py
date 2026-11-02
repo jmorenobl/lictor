@@ -12,6 +12,7 @@ from lictor.domain.model import (
     Health,
     Scenario,
     ScenarioId,
+    TestCaseResult,
     Tokens,
     Totals,
 )
@@ -244,3 +245,32 @@ class TestEvent:
 
         restored = Event.from_dict(d)
         assert restored == evt
+
+
+def test_scenario_spec_hash_defaults_to_empty() -> None:
+    scenario = Scenario(id=ScenarioId("IVA-001"), name="General", file="f", line=1)
+    assert scenario.spec_hash == ""
+    hashed = Scenario(ScenarioId("IVA-001"), "G", "f", 1, spec_hash="sha256:x")
+    assert hashed.spec_hash == "sha256:x"
+
+
+def test_test_case_reads_the_properties_lictor_names() -> None:
+    case = TestCaseResult(
+        name="test_iva_001",
+        properties={
+            "lictor.failure": "not_implemented",
+            "lictor.origin": "src/iva/__init__.py",
+            "lictor.scenario": "IVA-001 lento",
+            "lictor.feature": "features/iva.feature",
+        },
+    )
+
+    assert case.failure_kind == "not_implemented"
+    assert case.origin == "src/iva/__init__.py"
+    assert case.scenario_tags == ("IVA-001", "lento")
+    assert case.feature == "features/iva.feature"
+
+
+def test_test_case_without_properties_reports_nothing() -> None:
+    case = TestCaseResult(name="test_iva_001")
+    assert (case.failure_kind, case.origin, case.scenario_tags, case.feature) == ("", "", (), "")

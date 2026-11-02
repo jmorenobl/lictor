@@ -1,7 +1,7 @@
 """Immutable domain models and value objects for Lictor."""
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -71,6 +71,7 @@ class Scenario:
     name: str
     file: str
     line: int
+    spec_hash: str = ""  # what the scenario demands, without names, tags or comments
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, ScenarioId):
@@ -212,6 +213,13 @@ class CommandOutput:
     duration_ms: int = 0
 
 
+# Properties a profile's runner may attach to each test case. Lictor names them, not the tool.
+FAILURE_PROPERTY = "lictor.failure"  # assertion | not_implemented | error
+ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to the project
+SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
+FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
+
+
 @dataclass(frozen=True)
 class TestCaseResult:
     """Outcome of an individual test case."""
@@ -221,6 +229,27 @@ class TestCaseResult:
     status: Literal["passed", "failure", "error", "skipped"] = "passed"
     message: str | None = None
     details: str | None = None
+    properties: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def failure_kind(self) -> str:
+        """What kind of failure the runner saw, or "" if it didn't say."""
+        return self.properties.get(FAILURE_PROPERTY, "")
+
+    @property
+    def origin(self) -> str:
+        """Where the failure was raised, or "" if outside the project or not reported."""
+        return self.properties.get(ORIGIN_PROPERTY, "")
+
+    @property
+    def scenario_tags(self) -> tuple[str, ...]:
+        """Tags of the Gherkin scenario the test executed; empty if it executed none."""
+        return tuple(self.properties.get(SCENARIO_PROPERTY, "").split())
+
+    @property
+    def feature(self) -> str:
+        """Feature file of the scenario the test executed, or ""."""
+        return self.properties.get(FEATURE_PROPERTY, "")
 
 
 @dataclass(frozen=True)
@@ -301,6 +330,8 @@ class VerifyResult:
     error_path: str | None = None
     candidate: Candidate | None = None
     evidence: dict[str, str] = field(default_factory=dict)
+    collateral: tuple[str, ...] = ()  # pending scenarios the candidate also turns green
+    failure: tuple[str, str] | None = None  # kind and origin of the scenario's failed test
 
 
 @dataclass(frozen=True)

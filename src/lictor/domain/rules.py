@@ -3,10 +3,14 @@
 import fnmatch
 import re
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
+
+ScenarioClass = Literal["green", "reopened", "new"]
+MapLink = Literal["name", "scenario"]
 
 AGENT_FAILURE_LIMIT = 2
 _MAX_EXIT_CODE_TAIL_LINES = 40
@@ -17,19 +21,40 @@ _ASSERTION_LINE = re.compile(r"^\s*E\s|\bassert\b|\w*(Error|Exception)\b")
 _CLIPPED = " […] "
 _OMISSION_RESERVE = 60
 _FAILED_STATUSES = ("failure", "error")
+_NOT_IMPLEMENTED = "not_implemented"
+_FEATURES_DIR = "features/"
+SUSPICIOUS_DRIVER = "driver_sospechoso"
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower())
+
+
+def _under(path: str, roots: Sequence[str]) -> bool:
+    """Tell whether a relative path is one of `roots` or inside one of them."""
+    target = path.strip("/")
+    for root in roots:
+        base = root.strip("/")
+        if base and (target == base or target.startswith(f"{base}/")):
+            return True
+    return False
 
 
 def map_test_cases_to_scenarios(
     test_cases: Sequence[TestCaseResult],
     scenario_ids: Sequence[ScenarioId | str],
+    link: MapLink = "name",
 ) -> dict[str, TestCaseResult]:
     """Map test cases to scenario IDs with strict 1:1 validation.
 
-    Each scenario ID is normalized to lowercase alphanumeric with underscores (e.g. 'iva_001').
-    Matching uses boundaries (^|_)norm_id(_|$) against normalized test case name and classname.
+    By `name`, each scenario ID is normalized to lowercase alphanumeric with underscores (e.g.
+    'iva_001') and matched with boundaries (^|_)norm_id(_|$) against the normalized test case name
+    and classname. By `scenario`, a test belongs to the scenario its runner says it executed.
     Raises DriverError if any scenario has zero or multiple matching test cases, or if
     a test case matches multiple scenarios.
     """
+    if link == "scenario":
+        return _map_by_scenario(test_cases, [str(sid) for sid in scenario_ids])
     mapped: dict[str, TestCaseResult] = {}
     matched_tc_indices: set[int] = set()
 
@@ -66,6 +91,240 @@ def map_test_cases_to_scenarios(
         mapped[sid_str] = matched_tc
 
     return mapped
+
+
+def _named_ids(case: TestCaseResult, scenario_ids: Sequence[str]) -> list[str]:
+    """Return the scenarios whose ID the test carries in its name or class."""
+    names = (_normalize(case.name), _normalize(case.classname))
+    found: list[str] = []
+    for sid in scenario_ids:
+        pattern = re.compile(rf"(^|_){re.escape(_normalize(sid).strip('_'))}(_|$)")
+        if any(pattern.search(name) for name in names):
+            found.append(sid)
+    return found
+
+
+def _linked_id(case: TestCaseResult, scenario_ids: Sequence[str]) -> str | None:
+    """Return the scenario a test executed, checking that it agrees with the test's name."""
+    linked = [sid for sid in scenario_ids if sid in case.scenario_tags]
+    named = _named_ids(case, scenario_ids)
+    if not linked:
+        if named:
+            raise DriverError(
+                f"El test {case.name} lleva el ID de {named[0]} en el nombre, pero no ejecuta "
+                "ningún escenario del Gherkin: enlázalo con su escenario"
+            )
+        return None
+    if len(linked) > 1:
+        raise DriverError(f"El test {case.name} ejecuta varios escenarios: {linked}")
+    if named and named != linked:
+        raise DriverError(
+            f"El test {case.name} lleva el ID de {named[0]} en el nombre, "
+            f"pero ejecuta el escenario {linked[0]}"
+        )
+    if not _under(case.feature, [_FEATURES_DIR]):
+        raise DriverError(
+            f"El test {case.name} ejecuta {linked[0]} desde {case.feature or 'un fichero'} "
+            f"fuera de {_FEATURES_DIR}"
+        )
+    return linked[0]
+
+
+def _map_by_scenario(
+    test_cases: Sequence[TestCaseResult], scenario_ids: Sequence[str]
+) -> dict[str, TestCaseResult]:
+    """Map each scenario to the one test that executed it, not to a test that is named after it."""
+    found: dict[str, list[TestCaseResult]] = {sid: [] for sid in scenario_ids}
+    for case in test_cases:
+        sid = _linked_id(case, scenario_ids)
+        if sid is not None:
+            found[sid].append(case)
+    mapped: dict[str, TestCaseResult] = {}
+    for sid, cases in found.items():
+        if not cases:
+            raise DriverError(
+                f"Ningún test ejecuta el escenario '{sid}': cada escenario necesita un test "
+                "enlazado con su escenario del Gherkin"
+            )
+        if len(cases) > 1:
+            names = [case.name for case in cases]
+            raise DriverError(f"Múltiples casos de test ejecutan el escenario '{sid}': {names}")
+        mapped[sid] = cases[0]
+    return mapped
+
+
+def unmapped_cases(
+    test_cases: Sequence[TestCaseResult], mapped: Mapping[str, TestCaseResult]
+) -> list[TestCaseResult]:
+    """Return the test cases that belong to no scenario: the oracle is only the scenarios."""
+    return [case for case in test_cases if not any(case is m for m in mapped.values())]
+
+
+def classify_scenarios(
+    current: Mapping[str, str], recorded: Mapping[str, str | None]
+) -> dict[str, ScenarioClass]:
+    """Say which scenarios are still green, which changed since they were, and which never were.
+
+    `recorded` holds, for each scenario that has a green commit, the hash its specification had in
+    that commit's tree, or None if the scenario wasn't found there.
+    """
+    classes: dict[str, ScenarioClass] = {}
+    for sid, spec_hash in current.items():
+        if sid not in recorded:
+            classes[sid] = "new"
+        elif recorded[sid] == spec_hash:
+            classes[sid] = "green"
+        else:
+            classes[sid] = "reopened"
+    return classes
+
+
+@dataclass(frozen=True)
+class RedOracle:
+    """What a red has to look like: the failure kinds that count, and where code may live."""
+
+    red_kinds: Sequence[str] = ()
+    writable: Sequence[str] = ()
+    driver: Sequence[str] = ()
+
+
+@dataclass(frozen=True)
+class RedVerdict:
+    """What the red run says of each scenario that isn't green."""
+
+    problems: tuple[str, ...] = ()
+    cases: tuple[TestCaseResult, ...] = ()
+    pending: tuple[str, ...] = ()
+    register: tuple[str, ...] = ()  # pass with a validated test: green without the agent
+    unproven: tuple[str, ...] = ()  # pass with a test nobody has validated yet
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def red_failure_problem(case: TestCaseResult, oracle: RedOracle) -> str | None:
+    """Explain why a failed test isn't a valid red, or return None if it is.
+
+    Without `red_kinds` any failure counts, as for a profile whose runner reports no kind.
+    """
+    if not oracle.red_kinds:
+        return None
+    kind, origin = case.failure_kind, case.origin
+    where = f" en {origin}" if origin else ""
+    if kind not in oracle.red_kinds:
+        return f"falla con {kind or 'un fallo sin clasificar'}{where}"
+    if kind == _NOT_IMPLEMENTED and (
+        not _under(origin, oracle.writable) or _under(origin, oracle.driver)
+    ):
+        return (
+            f"lanza NotImplementedError desde {origin or 'fuera del proyecto'}, "
+            f"no desde la interfaz en {', '.join(oracle.writable)}"
+        )
+    return None
+
+
+def judge_red(
+    mapped: Mapping[str, TestCaseResult],
+    classes: Mapping[str, ScenarioClass],
+    oracle: RedOracle,
+    *,
+    driver_fresh: bool,
+) -> RedVerdict:
+    """Judge each scenario of the red run by its class.
+
+    A green must pass. A reopened one may pass, and is registered again, or fail with a valid red.
+    A new one must fail with a valid red, unless the sealed driver already proved its test: then
+    passing makes it a collateral green. With a fresh driver nothing tells it from a vacuous test.
+    """
+    problems: list[str] = []
+    cases: list[TestCaseResult] = []
+    pending: list[str] = []
+    register: list[str] = []
+    unproven: list[str] = []
+    for sid, cls in classes.items():
+        case = mapped.get(sid)
+        if case is None:
+            problems.append(f"El escenario {sid} no tiene resultado")
+        elif cls == "green":
+            if case.status != "passed":
+                problems.append(f"El escenario {sid} estaba en verde y ahora no pasa: {case.name}")
+                cases.append(case)
+        elif case.status == "passed":
+            (register if cls == "reopened" or not driver_fresh else unproven).append(sid)
+        elif case.status not in _FAILED_STATUSES:
+            problems.append(
+                f"El test {case.name} del escenario {sid} debía fallar, "
+                f"pero su estado es {case.status}"
+            )
+        else:
+            reason = red_failure_problem(case, oracle)
+            if reason is None:
+                pending.append(sid)
+            else:
+                problems.append(
+                    f"El test {case.name} del escenario {sid} no falla por un rojo válido: {reason}"
+                )
+                cases.append(case)
+    return RedVerdict(
+        tuple(problems), tuple(cases), tuple(pending), tuple(register), tuple(unproven)
+    )
+
+
+def impostor_source(text: str, pattern: str, replacement: str) -> tuple[str, int]:
+    """Replace every line that matches `pattern` and say how many were replaced."""
+    regex = re.compile(pattern)
+    lines = text.splitlines(keepends=True)
+    replaced = 0
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        if regex.fullmatch(body):
+            lines[index] = regex.sub(replacement, body) + line[len(body) :]
+            replaced += 1
+    return "".join(lines), replaced
+
+
+def impostor_problem(
+    crash: str | None, mapping_error: str | None, test_cases: Sequence[TestCaseResult]
+) -> str | None:
+    """Tell an impostor that can prove nothing: it crashed, didn't map, or kept a stub."""
+    if crash is not None:
+        return crash
+    if mapping_error is not None:
+        return mapping_error
+    kept = [case.name for case in test_cases if case.failure_kind == _NOT_IMPLEMENTED]
+    if kept:
+        return (
+            f"{', '.join(kept)} siguen lanzando NotImplementedError: escribe cada "
+            "`raise NotImplementedError` en una sola línea"
+        )
+    return None
+
+
+def impostor_survivors(scenario_ids: Sequence[str], runs: Sequence[Mapping[str, str]]) -> list[str]:
+    """Return the scenarios whose test passed with every impostor: nothing it asserts can fail."""
+    return [sid for sid in scenario_ids if all(results.get(sid) == "passed" for results in runs)]
+
+
+def collateral_greens(
+    scenario_results: Mapping[str, str], pending_ids: Sequence[str], current: str
+) -> list[str]:
+    """Return the pending scenarios, other than `current`, that the same tree also makes pass."""
+    return [sid for sid in pending_ids if sid != current and scenario_results.get(sid) == "passed"]
+
+
+def suspicious_driver(
+    failures: Sequence[tuple[str, str] | None], driver_paths: Sequence[str]
+) -> bool:
+    """Tell whether every attempt failed with an error raised inside the driver itself.
+
+    It suggests the driver, not the implementation, is wrong; it doesn't prove it. An attempt
+    without a test result (`None`) says nothing, so it rules the suspicion out.
+    """
+    return bool(failures) and all(
+        failure is not None and failure[0] == "error" and _under(failure[1], driver_paths)
+        for failure in failures
+    )
 
 
 def red_rule_offenders(
@@ -282,8 +541,16 @@ def run_outcome(status: dict[str, str], reasons: dict[str, str]) -> tuple[int, s
         )
     quarantined = sorted({sid for sid, st in status.items() if st == "quarantined"} | set(reasons))
     if quarantined:
+        suspicious = sorted(sid for sid, reason in reasons.items() if reason == SUSPICIOUS_DRIVER)
+        note = (
+            f" Posible driver defectuoso en {', '.join(suspicious)}: sus tests fallaron por un "
+            "error del propio driver en cada intento."
+            if suspicious
+            else ""
+        )
         return int(ExitCode.QUARANTINED), (
-            f"Escenarios en cuarentena: {', '.join(quarantined)}. Detalle en .lictor/report.md"
+            f"Escenarios en cuarentena: {', '.join(quarantined)}.{note} "
+            "Detalle en .lictor/report.md"
         )
     greens = sum(1 for st in status.values() if st == "green")
     return int(ExitCode.OK), f"Ejecución completada: {greens} escenarios en verde"
@@ -334,6 +601,24 @@ def count_agent_failures(status: AgentStatus, failures: int) -> int:
 def is_agent_unavailable(status: AgentStatus, failures: int) -> bool:
     """Tell whether the backend is at fault, so that no scenario should pay for it."""
     return status == "auth" or failures >= AGENT_FAILURE_LIMIT
+
+
+def baseline_head_accepted(
+    *,
+    pending_node: str | None,
+    head_parent: str,
+    head_tree: str,
+    anchored_head: str,
+    anchored_tree: str,
+) -> bool:
+    """Accept the commit a red check registers on top of the anchored head, and nothing else.
+
+    It changes no file and the resume repeats the red check, which tests every green again: a
+    trailer forged in that gap is refuted on the spot.
+    """
+    return (
+        pending_node == "red_check" and head_parent == anchored_head and head_tree == anchored_tree
+    )
 
 
 def anchor_problems(
