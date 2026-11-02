@@ -69,9 +69,10 @@ addopts = "-ra"
 # Each repro case holds a whole venv: keeping them all fills the disk, above all with -n auto.
 tmp_path_retention_policy = "failed"
 tmp_path_retention_count = 1
-# A hung test fails with its traceback instead of stalling the suite. The slowest case takes about
-# a minute; mutmut kills its own mutants by CPU time well before this.
-timeout = 300
+# A hung test fails with its traceback instead of stalling the suite. The slowest case takes 84 s
+# locally with coverage and CI runners are up to ~2.6 times slower; mutmut kills its own mutants
+# by CPU time well before this.
+timeout = 600
 timeout_method = "signal"
 markers = [
     "repro: audit reproduction cases run against a real uv project (slow)",
