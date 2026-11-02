@@ -364,3 +364,26 @@ def test_report_lists_skipped_controls_with_the_reason(tmp_path: Path) -> None:
 
 def test_report_says_when_no_control_was_skipped(tmp_path: Path) -> None:
     assert "*Ningún control omitido.*" in _report(tmp_path, [_verify_event({})])
+
+
+def test_report_lists_reopened_and_reregistered_scenarios(tmp_path: Path) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-001", "name": "General"}]})
+    reopened = _event("lictor.scenario.reopened.v1", {"commit": "a" * 40}, "IVA-001")
+    again = _event("lictor.scenario.reregistered.v1", {"commit": "b" * 40}, "IVA-001")
+
+    report = _report(tmp_path, [loaded, reopened, again])
+
+    section = report.split("## Escenarios reabiertos")[1].split("##")[0]
+    assert f"- **IVA-001**: su especificación cambió desde el verde de `{'a' * 12}`" in section
+    section = report.split("## Verdes registrados de nuevo")[1].split("##")[0]
+    assert (
+        "- **IVA-001**: sigue pasando con la especificación nueva; "
+        f"registrado sin agente en `{'b' * 12}`" in section
+    )
+    assert "| IVA-001 | General | green | 0 |" in report
+
+
+def test_report_says_when_nothing_was_reopened_or_reregistered(tmp_path: Path) -> None:
+    report = _report(tmp_path, [])
+    assert "*Ningún escenario reabierto.*" in report
+    assert "*Ningún verde registrado de nuevo.*" in report

@@ -118,6 +118,8 @@ class BuildReport:
             "measures": [],
             "skipped_controls": [],
             "rejected_drivers": [],
+            "reopened": [],
+            "reregistered": [],
         }
 
         for ev in events:
@@ -136,6 +138,8 @@ class BuildReport:
             "lictor.run.finished.v1": self._on_run_finished,
             "lictor.run.stopped.v1": self._on_run_stopped,
             "lictor.driver.rejected.v1": self._on_driver_rejected,
+            "lictor.scenario.reopened.v1": self._on_scenario_reopened,
+            "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
         }
         handler = handlers.get(ev.type)
         if handler is not None:
@@ -196,6 +200,23 @@ class BuildReport:
         info["rejected_drivers"].append(
             f"- Intento {ev.data.get('attempt')}: {ev.data.get('reason')} "
             f"(`{ev.data.get('error_path')}`)"
+        )
+
+    def _on_scenario_reopened(self, ev: Event, info: dict[str, Any]) -> None:
+        info["reopened"].append(
+            f"- **{ev.scenarioid}**: su especificación cambió desde el verde de "
+            f"`{str(ev.data.get('commit', ''))[:12]}`"
+        )
+
+    def _on_scenario_reregistered(self, ev: Event, info: dict[str, Any]) -> None:
+        sid = ev.scenarioid
+        commit = str(ev.data.get("commit", "-"))
+        if sid and sid in info["scenarios"]:
+            info["scenarios"][sid]["status"] = "green"
+            info["scenarios"][sid]["commit"] = commit
+        info["reregistered"].append(
+            f"- **{sid}**: sigue pasando con la especificación nueva; registrado sin agente "
+            f"en `{commit[:12]}`"
         )
 
     def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
@@ -311,6 +332,12 @@ class BuildReport:
                     lines.append("  ```")
                     lines.append(f"  {q_data['last_error']}")
                     lines.append("  ```")
+
+        lines.extend(["", "## Escenarios reabiertos"])
+        lines.extend(info["reopened"] or ["- *Ningún escenario reabierto.*"])
+
+        lines.extend(["", "## Verdes registrados de nuevo"])
+        lines.extend(info["reregistered"] or ["- *Ningún verde registrado de nuevo.*"])
 
         lines.extend(["", "## Intentos fallidos por nivel"])
         if not info["failed_by_level"]:

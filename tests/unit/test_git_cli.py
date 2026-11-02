@@ -587,3 +587,38 @@ def test_export_tree_is_independent_of_the_user_configuration(
     GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
 
     assert b"\r" not in (dest / "README.md").read_bytes()
+
+
+def test_trailer_commits_list_every_value_newest_first(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    first = cli.commit_tree(cli.get_tree("HEAD"), "a", {"Scenario": "A-1"}, empty=True)
+    cli.advance_head(first.sha, expected=first.parent)
+    plain = cli.commit_tree(cli.get_tree("HEAD"), "sin trailer", empty=True)
+    cli.advance_head(plain.sha, expected=plain.parent)
+    both = cli.commit_tree(
+        cli.get_tree("HEAD"), "b", {"Scenario": ["A-2", "A-3"], "Otro": "x"}, empty=True
+    )
+    cli.advance_head(both.sha, expected=both.parent)
+
+    assert cli.trailer_commits("Scenario") == [(both.sha, ["A-2", "A-3"]), (first.sha, ["A-1"])]
+    assert cli.parent_of(both.sha) == plain.sha
+
+
+def test_list_and_read_files_of_an_older_commit(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "features").mkdir()
+    (workdir / "features" / "a.feature").write_text("viejo\r\n", encoding="utf-8")
+    (workdir / "features" / "sub").mkdir()
+    (workdir / "features" / "sub" / "b.feature").write_text("b", encoding="utf-8")
+    old = cli.commit_tree(cli.capture(workdir), "con features")
+    cli.advance_head(old.sha, expected=old.parent)
+    (git_repo / "features" / "a.feature").write_text("nuevo", encoding="utf-8")
+
+    assert sorted(cli.list_files(old.sha, "features")) == [
+        "features/a.feature",
+        "features/sub/b.feature",
+    ]
+    assert cli.list_files(old.parent, "features") == []
+    # Line endings read as `Path.read_text` reads the working tree, so both hash the same text.
+    assert cli.read_file(old.sha, "features/a.feature") == "viejo\n"

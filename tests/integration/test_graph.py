@@ -18,6 +18,7 @@ from lictor.adapters.store.clock import FixedClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import AuditSink, SpecSource
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
@@ -172,13 +173,14 @@ Característica: IVA de facturas
         event_log=event_log,
         clock=clock,
     )
+    spec_history = SpecHistory(vcs, spec_source)
     check_red = CheckRed(
         environment=VerificationEnvironment(
             vcs, runner, AuditSink(event_log, clock), tmp_path, VerificationEnvSpec()
         ),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=spec_history,
         audit=AuditSink(event_log=event_log, clock=clock),
     )
     implement_scenario = ImplementScenario(
@@ -232,6 +234,7 @@ Característica: IVA de facturas
         commit_green=commit_green,
         quarantine=quarantine,
         spec_source=spec_source,
+        spec_history=spec_history,
         vcs=vcs,
         executor=executor,
         event_log=event_log,

@@ -30,6 +30,7 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_project import CheckProject
 from lictor.application.usecases.check_red import CheckRed
@@ -141,11 +142,12 @@ def bootstrap_runtime(
     )
 
     acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
+    spec_history = SpecHistory(vcs, spec_source)
     check_red_uc = CheckRed(
         environment=environment,
         reader=acceptance_reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=spec_history,
         audit=audit_sink,
     )
 
@@ -203,6 +205,7 @@ def bootstrap_runtime(
         commit_green=commit_green_uc,
         quarantine=quarantine_uc,
         spec_source=spec_source,
+        spec_history=spec_history,
         vcs=vcs,
         executor=executor,
         event_log=active_event_log,

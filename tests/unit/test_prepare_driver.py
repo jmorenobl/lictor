@@ -1,4 +1,6 @@
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -13,6 +15,7 @@ from lictor.domain.errors import CandidateError
 from lictor.domain.model import (
     AgentResult,
     AgentStatus,
+    AgentTask,
     Event,
     Health,
     PermissionDenial,
@@ -252,7 +255,11 @@ def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Pa
 
 
 def _execute_driver(
-    tmp_path: Path, agent: AgentResult, agent_failures: int = 0, moved: tuple[str, ...] = ()
+    tmp_path: Path,
+    agent: AgentResult,
+    agent_failures: int = 0,
+    moved: tuple[str, ...] = (),
+    **overrides: Any,
 ) -> tuple[PrepareDriverResult, MagicMock, MagicMock]:
     vcs = MagicMock(spec=Vcs)
     vcs.changes.return_value = []
@@ -279,7 +286,7 @@ def _execute_driver(
         driver_attempts=1,
         agent_failures=agent_failures,
     )
-    return use_case.execute(request), executor, event_log
+    return use_case.execute(replace(request, **overrides)), executor, event_log
 
 
 @pytest.mark.parametrize(
@@ -415,3 +422,29 @@ def test_prepare_driver_reads_nothing_after_a_rate_limit(tmp_path: Path) -> None
 
     vcs.capture.assert_not_called()
     assert result.tree is None
+
+
+def _prompt(executor: MagicMock) -> str:
+    task: AgentTask = executor.run.call_args.args[0]
+    return task.prompt
+
+
+def test_driver_prompt_names_greens_and_reopened_scenarios(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), green_ids=["IVA-002"], reopened_ids=["IVA-001"]
+    )
+
+    lines = _prompt(executor).splitlines()
+    assert any("IVA-002 ya funcionan" in line for line in lines)
+    reopened = [line for line in lines if "cambiaron desde que se implementaron" in line]
+    assert reopened == [
+        "- Los escenarios IVA-001 cambiaron desde que se implementaron: "
+        "actualiza sus tests para que comprueben lo que piden ahora."
+    ]
+
+
+def test_driver_prompt_without_reopened_scenarios_says_nothing_of_them(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(tmp_path, AgentResult(status="ok"))
+    prompt = _prompt(executor)
+    assert "cambiaron desde" not in prompt
+    assert "{reabiertos}" not in prompt

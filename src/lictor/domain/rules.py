@@ -327,56 +327,6 @@ def suspicious_driver(
     )
 
 
-def red_rule_offenders(
-    scenario_results: dict[str, str],
-    green_scenario_ids: Sequence[str] | set[str],
-) -> list[str]:
-    """Return the scenarios that break the red rule, and only those.
-
-    A green scenario must be present and passed; any other scenario must have failed.
-    """
-    green_set = set(green_scenario_ids)
-    offenders = [sid for sid in sorted(green_set) if scenario_results.get(sid) != "passed"]
-    offenders.extend(
-        sid
-        for sid, status in scenario_results.items()
-        if sid not in green_set and status not in _FAILED_STATUSES
-    )
-    return offenders
-
-
-def check_red_rule(
-    scenario_results: dict[str, str],
-    green_scenario_ids: Sequence[str] | set[str],
-) -> bool:
-    """Verify red rule: green scenarios must pass, all other scenarios must fail."""
-    return not red_rule_offenders(scenario_results, green_scenario_ids)
-
-
-def describe_red_violation(
-    mapped: dict[str, TestCaseResult],
-    green_scenario_ids: Sequence[str] | set[str],
-) -> tuple[str, tuple[TestCaseResult, ...]]:
-    """Explain a broken red rule, leaving out the pending scenarios that fail as expected."""
-    results = {sid: str(tc.status) for sid, tc in mapped.items()}
-    green_set = set(green_scenario_ids)
-    reasons: list[str] = []
-    cases: list[TestCaseResult] = []
-    for sid in red_rule_offenders(results, green_set):
-        case = mapped.get(sid)
-        if sid not in green_set and case is not None:
-            reasons.append(
-                f"El test {case.name} del escenario {sid} debía fallar, "
-                f"pero su estado es {case.status}"
-            )
-        elif case is not None:
-            reasons.append(f"El escenario {sid} estaba en verde y ahora no pasa: {case.name}")
-            cases.append(case)
-        else:
-            reasons.append(f"El escenario {sid} estaba en verde y no tiene resultado")
-    return "\n".join(reasons), tuple(cases)
-
-
 def acceptance_failure(
     scenario_id: str,
     green_scenario_ids: Sequence[str],

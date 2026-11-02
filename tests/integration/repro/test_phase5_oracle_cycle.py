@@ -120,7 +120,6 @@ def test_d17_new_run_registers_collateral_green_in_baseline(make_project: Projec
     assert second.exit_code != 10, second
 
 
-@pending(5, "M3")
 def test_d28_driver_prompt_lists_existing_greens(make_project: ProjectFactory) -> None:
     root = make_project()
     require(run_lictor(root, Agent()) == Outcome(0), "la primera pasada debía quedar verde")
@@ -141,7 +140,6 @@ def test_d28_driver_prompt_lists_existing_greens(make_project: ProjectFactory) -
     assert "IVA-001" in line, line
 
 
-@pending(5, "M3")
 def test_d28_changing_a_green_scenario_reopens_it(make_project: ProjectFactory) -> None:
     root = make_project()
     require(run_lictor(root, Agent()) == Outcome(0), "la primera pasada debía quedar verde")
@@ -178,3 +176,35 @@ def test_d12_missing_unit_dir_does_not_block_an_honest_agent(make_project: Proje
 
     assert outcome == Outcome(0), events_of(root, "verify.finished")[:1]
     assert len(green_ids(root)) == 3
+
+
+def test_reopened_green_that_still_passes_is_registered_again_without_the_agent(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    require(run_lictor(root, Agent()) == Outcome(0), "la primera pasada debía quedar verde")
+    feature = root / "features" / "iva.feature"
+    feature.write_text(
+        feature.read_text(encoding="utf-8").replace(
+            "Escenario: IVA reducido\n    Dado una factura con importe 100\n",
+            "Escenario: IVA reducido\n    Dado una factura con importe 100\n"
+            "    Y la factura es nacional\n",
+        ),
+        encoding="utf-8",
+    )
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "spec: un paso más en un verde")
+    agent = Agent(driver=lambda task, _attempt: write(task.cwd, DRIVER_PATH, DRIVER))
+
+    outcome = run_lictor(root, agent)
+
+    assert outcome == Outcome(0), agent.calls
+    assert agent.calls == ["driver"]
+    assert [event["scenarioid"] for event in events_of(root, "scenario.reopened")] == ["IVA-002"]
+    [again] = events_of(root, "scenario.reregistered")
+    assert again["scenarioid"] == "IVA-002"
+    assert git(root, "rev-parse", "HEAD").strip() == again["data"]["commit"]
+    assert green_ids(root).count("IVA-002") == 2
+    assert false_greens(root) == []
+    report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
+    assert "registrado sin agente" in report.split("## Verdes registrados de nuevo")[1]

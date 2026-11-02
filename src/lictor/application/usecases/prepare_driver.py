@@ -43,6 +43,7 @@ class PrepareDriverRequest:
     hints: str
     green_ids: Sequence[str]
     driver_attempts: int
+    reopened_ids: Sequence[str] = ()
     last_error: str | None = None
     prompt_template: str | None = None
     agent_failures: int = 0
@@ -82,6 +83,15 @@ def _extract_cli_version(executor: Executor) -> str:
         with contextlib.suppress(Exception):
             return str(health_fn().cli_version)
     return ""
+
+
+def _reopened_line(reopened_ids: Sequence[str]) -> str:
+    if not reopened_ids:
+        return ""
+    return (
+        f"- Los escenarios {', '.join(reopened_ids)} cambiaron desde que se implementaron: "
+        "actualiza sus tests para que comprueben lo que piden ahora."
+    )
 
 
 def _collect_features_text(features_dir: Path) -> str:
@@ -154,6 +164,7 @@ class PrepareDriver:
             "{writable}": ", ".join(request.paths_writable),
             "{protected_sin_driver}": ", ".join(protected_without_driver),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,
             "{hints}": request.hints,
             "{bloque_de_error}": error_block,

@@ -135,6 +135,22 @@ class Vcs(Protocol):
         """Get trailer values for the given key from git log, optionally limited to a commit."""
         ...
 
+    def trailer_commits(self, key: str) -> list[tuple[str, list[str]]]:
+        """Return each commit with trailer `key`, newest first, with all its values."""
+        ...
+
+    def list_files(self, rev: str, directory: str) -> list[str]:
+        """Return the paths of the files under `directory` in the tree of `rev`."""
+        ...
+
+    def read_file(self, rev: str, path: str) -> str:
+        """Return the content of a file in the tree of `rev`."""
+        ...
+
+    def parent_of(self, rev: str) -> str:
+        """Return the first parent of a commit."""
+        ...
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         ...
@@ -180,6 +196,10 @@ class SpecSource(Protocol):
 
     def load(self, features_dir: Path) -> list[Scenario]:
         """Load and validate all scenarios from the given directory."""
+        ...
+
+    def spec_hashes(self, text: str) -> dict[str, str]:
+        """Hash each tagged scenario of a feature's text; what can't be read is left out."""
         ...
 
     def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:

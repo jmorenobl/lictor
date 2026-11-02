@@ -16,6 +16,7 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
@@ -34,6 +35,16 @@ def _environment(
 ) -> VerificationEnvironment:
     audit = AuditSink(event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock))
     return VerificationEnvironment(vcs, runner, audit, tmp_path, spec or VerificationEnvSpec())
+
+
+def _history(spec_source: MagicMock, greens: Sequence[str] = ()) -> MagicMock:
+    """Git's say on each scenario: green if a green commit's spec matches, new otherwise."""
+    history = MagicMock(spec=SpecHistory)
+    history.spec_source = spec_source
+    history.classify.side_effect = lambda current: {
+        sid: "green" if sid in greens else "new" for sid in current
+    }
+    return history
 
 
 def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
@@ -68,7 +79,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
         environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
 
@@ -114,10 +125,10 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
     reader = MagicMock(spec=ResultReader)
-    # Both pass (IVA-002 should have failed, so red rule fails!)
-    tc1 = TestCaseResult(name="test_iva_001", status="passed")
-    tc2 = TestCaseResult(name="test_iva_002", status="passed")
-    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
+    # IVA-001 is green and fails now: the red rule breaks and the agent may fix the driver.
+    tc1 = TestCaseResult(name="test_iva_001", status="failure")
+    tc2 = TestCaseResult(name="test_iva_002", status="failure")
+    reader.read.return_value = ControlResult(ok=False, test_cases=(tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -129,7 +140,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
         environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
 
@@ -156,9 +167,9 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
     reader = MagicMock(spec=ResultReader)
-    tc1 = TestCaseResult(name="test_iva_001", status="passed")
-    tc2 = TestCaseResult(name="test_iva_002", status="passed")
-    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
+    tc1 = TestCaseResult(name="test_iva_001", status="failure")
+    tc2 = TestCaseResult(name="test_iva_002", status="failure")
+    reader.read.return_value = ControlResult(ok=False, test_cases=(tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -170,7 +181,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
         environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
 
@@ -186,7 +197,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
         all_scenario_ids=[ScenarioId("IVA-001"), ScenarioId("IVA-002")],
     )
 
-    with pytest.raises(DriverError) as exc_info:
+    with pytest.raises(DriverError, match="tras 2 intentos") as exc_info:
         use_case.execute(req)
     assert exc_info.value.exit_code == 10
 
@@ -221,7 +232,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
         environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
 
@@ -272,7 +283,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
         environment=_environment(runner, vcs, tmp_path),
         reader=reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
 
@@ -302,6 +313,8 @@ _REPORT_OFFENDER = (
     '<testsuite><testcase name="test_iva_001"><failure message="NotImplementedError"/></testcase>'
     '<testcase name="test_iva_002"/></testsuite>'
 )
+# IVA-002 is green and its test fails now: a violation the driver's agent can fix.
+_BROKEN_GREEN = {"report": _REPORT_RED, "greens": ("IVA-002",)}
 
 
 class _SuiteRunner(FakeRunner):
@@ -332,7 +345,7 @@ class _SuiteRunner(FakeRunner):
 
 
 def _real_check(
-    tmp_path: Path, report: str, code: int, **overrides: Any
+    tmp_path: Path, report: str, code: int, greens: Sequence[str] = (), **overrides: Any
 ) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock, _SuiteRunner]:
     runner = _SuiteRunner(report, code)
     vcs = MagicMock(spec=Vcs)
@@ -347,7 +360,7 @@ def _real_check(
         environment=_environment(runner, vcs, tmp_path),
         reader=JUnitReader(),
         vcs=vcs,
-        spec_source=spec_source,
+        history=_history(spec_source, greens),
         audit=AuditSink(event_log=event_log, clock=clock),
     )
     fields: dict[str, Any] = {
@@ -433,7 +446,7 @@ def test_check_red_mapping_failure_is_recorded(tmp_path: Path) -> None:
 
 
 def test_check_red_violation_names_only_the_offender(tmp_path: Path) -> None:
-    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_OFFENDER, 1)
+    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **_BROKEN_GREEN)
 
     result = use_case.execute(request)
 
@@ -445,7 +458,7 @@ def test_check_red_violation_names_only_the_offender(tmp_path: Path) -> None:
 
 
 def test_check_red_full_error_keeps_the_legitimate_reds(tmp_path: Path) -> None:
-    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_OFFENDER, 1)
+    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **_BROKEN_GREEN)
 
     use_case.execute(request)
 
@@ -457,7 +470,7 @@ def test_check_red_full_error_keeps_the_legitimate_reds(tmp_path: Path) -> None:
 
 def test_check_red_exhausted_attempts_carry_the_reason(tmp_path: Path) -> None:
     use_case, request, event_log, _, _ = _real_check(
-        tmp_path, _REPORT_OFFENDER, 1, driver_attempts=2, max_driver_attempts=2
+        tmp_path, code=1, driver_attempts=2, max_driver_attempts=2, **_BROKEN_GREEN
     )
 
     with pytest.raises(DriverError, match="test_iva_002"):
@@ -467,7 +480,7 @@ def test_check_red_exhausted_attempts_carry_the_reason(tmp_path: Path) -> None:
 
 def test_check_red_sealed_driver_failure_carries_the_reason(tmp_path: Path) -> None:
     use_case, request, event_log, _, _ = _real_check(
-        tmp_path, _REPORT_OFFENDER, 1, driver_fresh=False, driver_attempts=0
+        tmp_path, code=1, driver_fresh=False, driver_attempts=0, **_BROKEN_GREEN
     )
 
     with pytest.raises(DriverError, match="test_iva_002"):
@@ -638,3 +651,99 @@ def test_check_red_driver_that_changes_nothing_seals_head_without_a_commit(
     vcs.advance_head.assert_not_called()
     assert vcs.export_tree.call_args.args[0] == "HEAD"
     spec_source.write_seal.assert_called_once()
+
+
+def _events(event_log: MagicMock, kind: str) -> list[Event]:
+    return [c.args[0] for c in event_log.append.call_args_list if c.args[0].type == kind]
+
+
+def test_check_red_new_scenario_passing_with_a_fresh_driver_stops_without_retrying(
+    tmp_path: Path,
+) -> None:
+    """Nothing tells an already implemented scenario from a test that checks nothing."""
+    use_case, request, event_log, spec_source, _ = _real_check(tmp_path, _REPORT_OFFENDER, 1)
+
+    with pytest.raises(DriverError, match="IVA-002 ya pasan con un driver nuevo") as raised:
+        use_case.execute(request)
+
+    assert "--allow-empty" in str(raised.value)
+    assert "no comprueba nada" in str(raised.value)
+    assert _rejection(event_log).data["final"] is True
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_reopened_scenario_that_passes_is_registered_again_on_the_driver(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path, _REPORT_OFFENDER, 1, tree="driver-tree"
+    )
+    use_case.history.classify.side_effect = lambda current: {
+        "IVA-001": "new",
+        "IVA-002": "reopened",
+    }
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.commit_tree.side_effect = [
+        Candidate("driver", "driver-tree", "head"),
+        Candidate("registro", "driver-tree", "driver"),
+    ]
+
+    result = use_case.execute(request)
+
+    assert result.scenario_status == {"IVA-001": "pending", "IVA-002": "green"}
+    assert result.commit_sha == "driver"
+    registered = vcs.commit_tree.call_args_list[1]
+    assert registered.args[0] == "driver-tree"
+    assert registered.kwargs["trailers"] == {"Scenario": ["IVA-002"], "Lictor-Run": "R"}
+    assert registered.kwargs["parent"] == "driver"
+    assert registered.kwargs["empty"] is True
+    vcs.advance_head.assert_called_once_with("registro", expected="head")
+    [event] = _events(event_log, "lictor.scenario.reregistered.v1")
+    assert (event.scenarioid, event.data["commit"]) == ("IVA-002", "registro")
+
+
+def test_check_red_reopened_scenario_registers_on_head_with_a_sealed_driver(
+    tmp_path: Path,
+) -> None:
+    use_case, request, _, spec_source, _ = _real_check(
+        tmp_path, _REPORT_OFFENDER, 1, driver_fresh=False, driver_attempts=0
+    )
+    use_case.history.classify.side_effect = lambda current: {
+        "IVA-001": "new",
+        "IVA-002": "reopened",
+    }
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.get_head_sha.return_value = "head"
+    vcs.get_tree.return_value = "head-tree"
+    vcs.commit_tree.return_value = Candidate("registro", "head-tree", "head")
+
+    assert use_case.execute(request).ok is True
+
+    assert vcs.commit_tree.call_args.kwargs["parent"] == "head"
+    vcs.advance_head.assert_called_once_with("registro", expected="head")
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_reopened_scenario_that_fails_stays_pending(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_RED, 1)
+    use_case.history.classify.side_effect = lambda current: {
+        "IVA-001": "reopened",
+        "IVA-002": "new",
+    }
+
+    result = use_case.execute(request)
+
+    assert result.scenario_status == {"IVA-001": "pending", "IVA-002": "pending"}
+    assert _events(event_log, "lictor.scenario.reregistered.v1") == []
+
+
+def test_check_red_classifies_with_the_hashes_of_the_request(tmp_path: Path) -> None:
+    use_case, request, _, _, _ = _real_check(
+        tmp_path, _REPORT_RED, 1, scenario_hashes={"IVA-001": "h1"}
+    )
+
+    use_case.execute(request)
+
+    use_case.history.classify.assert_called_once_with({"IVA-001": "h1", "IVA-002": ""})

@@ -465,3 +465,130 @@ def test_write_seal_hashes_the_given_tree_but_stores_in_the_project(tmp_path: Pa
 
     assert read_seal(project) == data
     assert data["files"]["features/a.feature"] == hash_file(verified / "features" / "a.feature")
+
+
+_BASE_FEATURE = """# language: es
+Característica: IVA
+
+  Antecedentes:
+    Dado una tasa base del 21%
+
+  @IVA-001
+  Escenario: IVA general
+    Dado una factura con importe 100
+    Y otra factura
+    Cuando calculo el IVA general
+    Entonces el total es 121
+      | a | b |
+      | 1 | 2 |
+
+  @IVA-002
+  Escenario: IVA reducido
+    Dado una factura con importe 100
+    Entonces el total es 110
+"""
+
+
+def _hashes(text: str) -> dict[str, str]:
+    return GherkinSource().spec_hashes(text)
+
+
+def test_spec_hashes_name_every_scenario_by_its_id() -> None:
+    hashes = _hashes(_BASE_FEATURE)
+
+    assert set(hashes) == {"IVA-001", "IVA-002"}
+    assert all(value.startswith("sha256:") for value in hashes.values())
+    assert hashes["IVA-001"] != hashes["IVA-002"]
+
+
+def test_load_fills_the_same_hash_as_spec_hashes(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "iva.feature").write_text(_BASE_FEATURE, encoding="utf-8")
+
+    loaded = {s.id.value: s.spec_hash for s in GherkinSource().load(tmp_path / "features")}
+
+    assert loaded == _hashes(_BASE_FEATURE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("Escenario: IVA general", "Escenario: IVA general renombrado"),
+        ("Característica: IVA", "Característica: Otro nombre"),
+        ("  @IVA-001\n", "  # un comentario\n  @IVA-001\n"),
+        ("    Cuando calculo", "        Cuando   calculo"),
+        ("    Y otra factura", "    Dado otra factura"),
+        (
+            "# language: es\nCaracterística: IVA",
+            "# language: es\nCaracterística: IVA\n  Texto libre",
+        ),
+    ],
+)
+def test_spec_hash_ignores_what_demands_nothing(old: str, new: str) -> None:
+    assert old in _BASE_FEATURE
+    changed = _BASE_FEATURE.replace(old, new, 1)
+    assert _hashes(changed)["IVA-001"] == _hashes(_BASE_FEATURE)["IVA-001"]
+
+
+def test_spec_hash_ignores_the_language_of_the_keywords() -> None:
+    spanish = "# language: es\nCaracterística: X\n  @A-1\n  Escenario: S\n    Dado algo\n"
+    english = "Feature: X\n  @A-1\n  Scenario: S\n    Given algo\n"
+    assert _hashes(spanish) == _hashes(english)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("el total es 121", "el total es 122"),
+        ("      | 1 | 2 |", "      | 1 | 3 |"),
+        ("Dado una tasa base del 21%", "Dado una tasa base del 10%"),
+        ("    Cuando calculo el IVA general", "    Entonces calculo el IVA general"),
+        ("    Y otra factura", "    Entonces otra factura"),
+        ("    Entonces el total es 121\n", "    Entonces el total es 121\n    Y nada más\n"),
+    ],
+)
+def test_spec_hash_changes_with_what_the_scenario_demands(old: str, new: str) -> None:
+    assert old in _BASE_FEATURE
+    changed = _BASE_FEATURE.replace(old, new, 1)
+    assert _hashes(changed)["IVA-001"] != _hashes(_BASE_FEATURE)["IVA-001"]
+
+
+def test_spec_hash_includes_the_doc_string() -> None:
+    def with_doc(body: str) -> str:
+        doc = f'      """\n      {body}\n      """\n'
+        return f"Feature: X\n  @A-1\n  Scenario: S\n    Given algo\n{doc}"
+
+    assert _hashes(with_doc("uno")) != _hashes(with_doc("dos"))
+
+
+def test_spec_hash_includes_the_background_of_the_rule() -> None:
+    def with_rule(step: str) -> str:
+        return (
+            "Feature: X\n  Rule: R\n    Background:\n"
+            f"      Given {step}\n    @A-1\n    Scenario: S\n      Given algo\n"
+        )
+
+    assert _hashes(with_rule("uno")) != _hashes(with_rule("dos"))
+    assert set(_hashes(with_rule("uno"))) == {"A-1"}
+
+
+def test_spec_hashes_of_an_old_tree_tolerate_what_load_would_reject() -> None:
+    """An old commit's features are read only to compare; a broken one just isn't found."""
+    assert _hashes("esto no es gherkin @@@\n  Scenario") == {}
+    untagged = "Feature: X\n  Scenario: S\n    Given algo\n  @A-1\n  Scenario: T\n    Given b\n"
+    assert set(_hashes(untagged)) == {"A-1"}
+    outline = (
+        "Feature: X\n  @A-1\n  Scenario Outline: S\n    Given <n>\n"
+        "    Examples:\n      | n |\n      | 1 |\n"
+    )
+    other = outline.replace("| 1 |", "| 2 |")
+    assert _hashes(outline)["A-1"] != _hashes(other)["A-1"]
+
+
+def test_a_rule_without_scenarios_still_cannot_carry_a_scenario_id(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "r.feature").write_text(
+        "Feature: X\n  @A-1\n  Rule: R\n", encoding="utf-8"
+    )
+    with pytest.raises(SpecError, match="nivel Rule"):
+        GherkinSource().load(tmp_path / "features")

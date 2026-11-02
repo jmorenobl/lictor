@@ -15,13 +15,11 @@ from lictor.domain.rules import (
     anchor_problems,
     banned_matches,
     baseline_head_accepted,
-    check_red_rule,
     classify_scenarios,
     collateral_greens,
     condense_error,
     control_path_status,
     count_agent_failures,
-    describe_red_violation,
     forbidden_paths,
     impostor_problem,
     impostor_source,
@@ -30,7 +28,6 @@ from lictor.domain.rules import (
     judge_red,
     map_test_cases_to_scenarios,
     red_failure_problem,
-    red_rule_offenders,
     render_full_error,
     run_outcome,
     suite_crash_reason,
@@ -107,42 +104,6 @@ def test_map_test_cases_same_test_for_multiple_scenarios_raises_driver_error() -
 
     with pytest.raises(DriverError):
         map_test_cases_to_scenarios(test_cases, scenario_ids)
-
-
-def test_check_red_rule_all_valid() -> None:
-    scenario_results = {
-        "IVA-001": "passed",
-        "IVA-002": "failure",
-        "IVA-003": "error",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is True
-
-
-def test_check_red_rule_green_scenario_regression() -> None:
-    scenario_results = {
-        "IVA-001": "failure",
-        "IVA-002": "failure",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
-
-
-def test_check_red_rule_green_scenario_missing() -> None:
-    scenario_results = {
-        "IVA-002": "failure",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
-
-
-def test_check_red_rule_pending_scenario_passed_fails_red() -> None:
-    scenario_results = {
-        "IVA-001": "passed",
-        "IVA-002": "passed",  # Pending scenario passed before implementation!
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
 
 
 def test_condense_error_exit_code_tail_lines() -> None:
@@ -403,66 +364,6 @@ def test_full_error_skips_cases_that_did_not_fail() -> None:
     full = render_full_error("x", "m", [TestCaseResult("test_ok", status="passed")])
     assert "test_ok" not in full
     assert "Salida:" not in full
-
-
-def test_red_rule_offender_is_the_pending_that_passed() -> None:
-    results = {"IVA-001": "failure", "IVA-002": "passed", "IVA-003": "error"}
-    assert red_rule_offenders(results, []) == ["IVA-002"]
-
-
-def test_red_rule_offender_is_the_green_that_failed() -> None:
-    results = {"IVA-001": "failure", "IVA-002": "failure"}
-    assert red_rule_offenders(results, ["IVA-001"]) == ["IVA-001"]
-
-
-def test_red_rule_offender_includes_a_green_without_result() -> None:
-    assert red_rule_offenders({}, ["IVA-001"]) == ["IVA-001"]
-
-
-def test_red_rule_offender_includes_a_skipped_pending() -> None:
-    assert red_rule_offenders({"IVA-001": "skipped"}, []) == ["IVA-001"]
-
-
-def test_red_rule_has_no_offenders_when_it_holds() -> None:
-    assert red_rule_offenders({"IVA-001": "passed", "IVA-002": "error"}, ["IVA-001"]) == []
-
-
-def test_red_rule_violation_names_only_the_offender() -> None:
-    bad = TestCaseResult("test_iva_003", status="passed")
-    mapped = {"IVA-001": TestCaseResult("test_iva_001", status="failure"), "IVA-003": bad}
-    reason, cases = describe_red_violation(mapped, [])
-    assert "test_iva_003" in reason
-    assert "IVA-003" in reason
-    assert "debía fallar" in reason
-    assert "test_iva_001" not in reason
-    assert cases == ()
-
-
-def test_red_rule_violation_lists_one_offender_per_line() -> None:
-    mapped = {
-        "IVA-001": TestCaseResult("test_iva_001", status="passed"),
-        "IVA-002": TestCaseResult("test_iva_002", status="skipped"),
-    }
-    reason, _ = describe_red_violation(mapped, [])
-    assert reason == (
-        "El test test_iva_001 del escenario IVA-001 debía fallar, pero su estado es passed\n"
-        "El test test_iva_002 del escenario IVA-002 debía fallar, pero su estado es skipped"
-    )
-
-
-def test_red_rule_violation_keeps_the_failure_of_a_green() -> None:
-    broken = TestCaseResult("test_iva_001", status="failure", message="m")
-    reason, cases = describe_red_violation({"IVA-001": broken}, ["IVA-001"])
-    assert "IVA-001" in reason
-    assert "verde" in reason
-    assert "test_iva_001" in reason
-    assert cases == (broken,)
-
-
-def test_red_rule_violation_with_a_green_without_test() -> None:
-    reason, cases = describe_red_violation({}, ["IVA-001"])
-    assert "IVA-001" in reason
-    assert cases == ()
 
 
 def test_acceptance_failure_is_none_when_current_and_greens_pass() -> None:
@@ -1059,3 +960,13 @@ def test_baseline_head_is_refused_otherwise() -> None:
     assert _baseline(pending_node=None) is False
     assert _baseline(head_parent="otro") is False
     assert _baseline(head_tree="x") is False
+
+
+def test_judge_red_lists_each_offender_once_in_the_order_of_the_scenarios() -> None:
+    mapped = {"A": _case("failure"), "B": _case("passed"), "C": _case("skipped")}
+    classes: dict[str, ScenarioClass] = {"C": "new", "A": "green", "B": "green"}
+
+    verdict = judge_red(mapped, classes, RedOracle(), driver_fresh=True)
+
+    assert [problem.split()[2] for problem in verdict.problems] == ["t_skipped", "A"]
+    assert verdict.cases == (mapped["A"],)

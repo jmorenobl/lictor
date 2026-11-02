@@ -16,6 +16,7 @@ from langgraph.types import interrupt
 
 from lictor.application.anchor import observe_anchor
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
@@ -108,6 +109,7 @@ class GraphState(TypedDict, total=False):
     spec_conflict: str | None
     seal_ok: bool
     resume_to: str | None
+    reopened: list[str]
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ class GraphContext:
     commit_green: CommitGreen
     quarantine: Quarantine
     spec_source: SpecSource
+    spec_history: SpecHistory
     vcs: Vcs
     executor: Executor
     event_log: EventLog
@@ -242,6 +245,11 @@ class _GraphNodes:
             return {**self._finish(state, int(ExitCode.PRECONDITION), reason), "seal_ok": False}
 
         seal_ok = self.ctx.spec_source.verify_seal(self.ctx.project_root, self.ctx.paths_driver)
+        records = self.ctx.spec_history.records()
+        classes = self.ctx.spec_history.classify({s.id.value: s.spec_hash for s in scenarios})
+        reopened = [sid for sid, cls in classes.items() if cls == "reopened"]
+        for sid in reopened:
+            self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
 
         event = Event(
             id=uuid.uuid4().hex,
@@ -261,12 +269,35 @@ class _GraphNodes:
 
         return {
             "scenarios": [
-                {"id": s.id.value, "name": s.name, "file": s.file, "line": s.line}
+                {
+                    "id": s.id.value,
+                    "name": s.name,
+                    "file": s.file,
+                    "line": s.line,
+                    "spec_hash": s.spec_hash,
+                }
                 for s in scenarios
             ],
+            "status": {
+                sid: "green" if cls == "green" else "pending" for sid, cls in classes.items()
+            },
+            "reopened": reopened,
             "seal_ok": seal_ok,
             "driver_fresh": not seal_ok,
         }
+
+    def _scenario_event(self, state: GraphState, kind: str, sid: str, commit: str) -> None:
+        self.ctx.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type=kind,
+                source="lictor/0.1.0",
+                time=self.ctx.clock.now_iso(),
+                runid=state["run_id"],
+                scenarioid=sid,
+                data={"commit": commit},
+            )
+        )
 
     def build_driver(self, state: GraphState) -> dict[str, Any]:
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
@@ -284,6 +315,7 @@ class _GraphNodes:
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
                 green_ids=green_ids,
+                reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
                 agent_failures=state.get("agent_failures", 0),
@@ -337,6 +369,9 @@ class _GraphNodes:
                     error_max_chars=self.ctx.error_max_chars,
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                     tree=state.get("attempt_tree"),
+                    scenario_hashes={
+                        s["id"]: s.get("spec_hash", "") for s in state.get("scenarios", [])
+                    },
                 )
             )
         except DriverError as exc:

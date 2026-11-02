@@ -1,7 +1,7 @@
 """CheckRed use case for verifying acceptance test driver against red rule."""
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
@@ -20,14 +20,17 @@ from lictor.application.run_files import (
     verification_tree,
     write_text,
 )
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.verify_attempt import IntegritySnapshot, describe_tampering
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
 from lictor.domain.model import Candidate, CommandOutput, Event, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
-    check_red_rule,
+    MapLink,
+    RedOracle,
+    RedVerdict,
     condense_error,
-    describe_red_violation,
+    judge_red,
     map_test_cases_to_scenarios,
     render_full_error,
     suite_crash_reason,
@@ -35,9 +38,10 @@ from lictor.domain.rules import (
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
-_COLLATERAL_HINT = (
-    " Si el escenario ya pasa por un commit anterior, regístralo y relanza: "
-    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>"'
+_REGISTER_HINT = (
+    "Si el escenario ya está implementado por un commit anterior, regístralo y relanza: "
+    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>". '
+    "Si no, su test no comprueba nada: corrígelo."
 )
 
 RejectionKind = Literal["L0-estado", "L0-entorno", "suite_caida", "mapeo", "regla_del_rojo"]
@@ -60,6 +64,9 @@ class CheckRedRequest:
     error_max_chars: int = 4000
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     tree: str | None = None
+    scenario_hashes: Mapping[str, str] = field(default_factory=dict)
+    oracle: RedOracle = field(default_factory=RedOracle)
+    link: MapLink = "name"
 
 
 @dataclass(frozen=True)
@@ -91,13 +98,14 @@ class CheckRed:
         environment: VerificationEnvironment,
         reader: ResultReader,
         vcs: Vcs,
-        spec_source: SpecSource,
+        history: SpecHistory,
         audit: AuditSink,
     ) -> None:
         self.environment = environment
         self.reader = reader
         self.vcs = vcs
-        self.spec_source = spec_source
+        self.history = history
+        self.spec_source: SpecSource = history.spec_source
         self.event_log = audit.event_log
         self.clock = audit.clock
 
@@ -115,8 +123,8 @@ class CheckRed:
         candidate = self._create_candidate(request)
         rev = candidate.sha if candidate else "HEAD"
         with verification_tree(self.vcs, rev, request.project_root) as tree:
-            result, sealable = self._check_tree(request, step_dir, tree)
-            if not result.ok:
+            result, verdict = self._check_tree(request, step_dir, tree)
+            if not result.ok or verdict is None:
                 return result
 
             # Project code just ran, and it can reach the environment as well.
@@ -126,8 +134,9 @@ class CheckRed:
                 return self._reject_or_raise(request, step_dir, rejection)
 
             commit_sha: str | None = None
-            if sealable:
-                commit_sha = self._seal_and_advance(request, tree, candidate, step_dir)
+            if request.driver_fresh:
+                commit_sha = self._seal(request, tree, candidate, step_dir)
+            self._advance(request, candidate, verdict)
         return replace(result, commit_sha=commit_sha)
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
@@ -150,7 +159,7 @@ class CheckRed:
         request: CheckRedRequest,
         step_dir: Path,
         tree: Path,
-    ) -> tuple[CheckRedResult, bool]:
+    ) -> tuple[CheckRedResult, RedVerdict | None]:
         out_file = step_dir / "acceptance.xml"
         output, tampered = self._run_acceptance_suite(request, out_file, tree)
         save_output(step_dir / "acceptance.log", output)
@@ -159,7 +168,7 @@ class CheckRed:
             if not request.driver_fresh:
                 self._reject(request, step_dir, _Rejection("L0-estado", reason), final=True)
                 raise DriverError(f"{reason} Ocurrió durante la aceptación.")
-            return self._reject(request, step_dir, _Rejection("L0-estado", reason)), False
+            return self._reject(request, step_dir, _Rejection("L0-estado", reason)), None
 
         content = ""
         if request.acceptance_report == "junit" and out_file.is_file():
@@ -183,45 +192,42 @@ class CheckRed:
                 control_res.test_cases,
                 output=raw_output,
             )
-            return self._reject_or_raise(request, step_dir, rejection), False
+            return self._reject_or_raise(request, step_dir, rejection), None
 
+        ids = [_scenario_str(sid) for sid in request.all_scenario_ids]
         try:
-            mapped = map_test_cases_to_scenarios(
-                control_res.test_cases,
-                request.all_scenario_ids,
-            )
+            mapped = map_test_cases_to_scenarios(control_res.test_cases, ids, request.link)
         except DriverError as exc:
             rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
-            return self._reject_or_raise(request, step_dir, rejection), False
+            return self._reject_or_raise(request, step_dir, rejection), None
 
-        scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
-        trailers = set(self.vcs.get_trailers("Scenario"))
-        green_ids = [
-            str(sid.value if isinstance(sid, ScenarioId) else sid)
-            for sid in request.all_scenario_ids
-            if str(sid.value if isinstance(sid, ScenarioId) else sid) in trailers
-        ]
-
-        if not check_red_rule(scenario_results, green_ids):
-            reason, offenders = describe_red_violation(mapped, green_ids)
+        # Git says what was green, and for which specification: the checkpoint has no say.
+        classes = self.history.classify({sid: request.scenario_hashes.get(sid, "") for sid in ids})
+        verdict = judge_red(mapped, classes, request.oracle, driver_fresh=request.driver_fresh)
+        if not verdict.ok:
             rejection = _Rejection(
                 "regla_del_rojo",
-                reason,
-                offenders,
+                "\n".join(verdict.problems),
+                verdict.cases,
                 all_cases=control_res.test_cases,
                 output=raw_output,
             )
-            return self._reject_or_raise(request, step_dir, rejection), False
-
-        scenario_status = {
-            str(sid.value if isinstance(sid, ScenarioId) else sid): (
-                "green"
-                if str(sid.value if isinstance(sid, ScenarioId) else sid) in green_ids
-                else "pending"
+            return self._reject_or_raise(request, step_dir, rejection), None
+        if verdict.unproven:
+            reason = (
+                f"Los escenarios {', '.join(verdict.unproven)} ya pasan con un driver nuevo: "
+                f"nada distingue su test de uno que no comprueba nada. {_REGISTER_HINT}"
             )
-            for sid in request.all_scenario_ids
-        }
-        return CheckRedResult(ok=True, scenario_status=scenario_status), request.driver_fresh
+            self._reject(request, step_dir, _Rejection("regla_del_rojo", reason), final=True)
+            raise DriverError(reason)
+        collateral = [sid for sid in verdict.register if classes[sid] == "new"]
+        if collateral:
+            reason = f"Los escenarios {', '.join(collateral)} ya pasan. {_REGISTER_HINT}"
+            self._reject(request, step_dir, _Rejection("regla_del_rojo", reason), final=True)
+            raise DriverError(f"El driver sellado no es válido. {reason}")
+
+        scenario_status = {sid: "pending" if sid in verdict.pending else "green" for sid in ids}
+        return CheckRedResult(ok=True, scenario_status=scenario_status), verdict
 
     def _run_acceptance_suite(
         self,
@@ -248,8 +254,7 @@ class CheckRed:
         final = not request.driver_fresh or exhausted
         result = self._reject(request, step_dir, rejection, final=final)
         if not request.driver_fresh:
-            hint = _COLLATERAL_HINT if rejection.kind == "regla_del_rojo" else ""
-            raise DriverError(f"El driver sellado no es válido.{hint}\n{result.last_error}")
+            raise DriverError(f"El driver sellado no es válido.\n{result.last_error}")
         if exhausted:
             raise DriverError(
                 f"Driver rechazado tras {request.driver_attempts} intentos.\n{result.last_error}"
@@ -297,7 +302,42 @@ class CheckRed:
         )
         return CheckRedResult(ok=False, last_error=condensed)
 
-    def _seal_and_advance(
+    def _advance(
+        self, request: CheckRedRequest, candidate: Candidate | None, verdict: RedVerdict
+    ) -> None:
+        """Move the branch once: to the driver, and to what re-registers on top of it."""
+        target = candidate
+        if verdict.register:
+            base = candidate or Candidate(
+                self.vcs.get_head_sha(), self.vcs.get_tree("HEAD"), self.vcs.get_head_sha()
+            )
+            registered = self.vcs.commit_tree(
+                base.tree,
+                message=f"test({', '.join(verdict.register)}): volver a registrar sin agente",
+                trailers={"Scenario": list(verdict.register), "Lictor-Run": request.run_id},
+                parent=base.sha,
+                empty=True,
+            )
+            target = Candidate(registered.sha, registered.tree, base.parent)
+            for sid in verdict.register:
+                self._event(request, "lictor.scenario.reregistered.v1", sid, registered.sha)
+        if target is not None:
+            self.vcs.advance_head(target.sha, expected=target.parent)
+
+    def _event(self, request: CheckRedRequest, kind: str, sid: str, commit: str) -> None:
+        self.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type=kind,
+                source="lictor/0.1.0",
+                time=self.clock.now_iso(),
+                runid=request.run_id,
+                scenarioid=sid,
+                data={"commit": commit},
+            )
+        )
+
+    def _seal(
         self,
         request: CheckRedRequest,
         tree: Path,
@@ -311,12 +351,7 @@ class CheckRed:
             driver_paths=request.driver_paths,
             source_root=tree,
         )
-
-        if candidate is None:
-            commit_sha = self.vcs.get_head_sha()
-        else:
-            self.vcs.advance_head(candidate.sha, expected=candidate.parent)
-            commit_sha = candidate.sha
+        commit_sha = candidate.sha if candidate is not None else self.vcs.get_head_sha()
 
         event = Event(
             id=uuid.uuid4().hex,
@@ -333,3 +368,7 @@ class CheckRed:
         )
         self.event_log.append(event)
         return commit_sha
+
+
+def _scenario_str(sid: ScenarioId | str) -> str:
+    return str(sid.value if isinstance(sid, ScenarioId) else sid)
