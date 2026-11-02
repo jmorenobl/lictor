@@ -167,7 +167,7 @@ For behaviour the modes can't express, pass `FakeExecutor(effect=fn)`: `fn(task,
 
 The suite runs under `pytest-xdist` (`-n auto`), which is not in `addopts` because `mutmut` runs pytest without it. Each worker builds its own `template` under its own `tmp_path_factory` base, every case works in its `tmp_path`, and no test opens a port; `test_each_worker_builds_its_own_template` holds the first. The only thing workers share is the `uv` cache, which locks itself.
 
-Every test has a `timeout` of 600 s (`pytest-timeout`, method `signal`, in `[tool.pytest.ini_options]`): the slowest case takes 84 s locally with coverage and CI runners are up to about 2.6 times slower, so 300 s left too little margin. a test that hangs fails with its traceback instead of stalling the suite. Keep the slowest case well below it. `mutmut` isn't affected: it kills its mutants by CPU time, far sooner.
+Every test has a `timeout` of 600 s (`pytest-timeout`, method `signal`, in `[tool.pytest.ini_options]`): the slowest case takes 84 s locally with coverage and CI runners are up to about 2.6 times slower, so 300 s left too little margin. A test that hangs fails with its traceback instead of stalling the suite. Keep the slowest case well below it. `mutmut` isn't affected: it kills its mutants by CPU time, far sooner.
 
 `tests/conftest.py` clears the variables of a verification that may be running the suite, test by test: left in place, a nested `uv sync` would rewrite the verification environment and a nested pytest would load its plugins. It can't happen at startup, because xdist workers inherit them. A test that launches an interpreter with an exact environment needs `-B`, or its bytecode lands in that environment and fails the hash.
 
