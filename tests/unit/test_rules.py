@@ -970,3 +970,75 @@ def test_judge_red_lists_each_offender_once_in_the_order_of_the_scenarios() -> N
 
     assert [problem.split()[2] for problem in verdict.problems] == ["t_skipped", "A"]
     assert verdict.cases == (mapped["A"],)
+
+
+def test_map_by_scenario_says_exactly_what_is_missing() -> None:
+    with pytest.raises(DriverError) as unlinked:
+        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario")
+    assert str(unlinked.value) == (
+        "El test test_iva_001 lleva el ID de IVA-001 en el nombre, pero no ejecuta "
+        "ningún escenario del Gherkin: enlázalo con su escenario"
+    )
+    with pytest.raises(DriverError) as missing:
+        map_test_cases_to_scenarios([_linked("a", "IVA-001")], IDS, link="scenario")
+    assert str(missing.value) == (
+        "Ningún test ejecuta el escenario 'IVA-002': cada escenario necesita un test "
+        "enlazado con su escenario del Gherkin"
+    )
+    with pytest.raises(DriverError) as outside:
+        map_test_cases_to_scenarios(
+            [_linked("a", "IVA-001", ""), _linked("b", "IVA-002")], IDS, link="scenario"
+        )
+    assert str(outside.value) == "El test a ejecuta IVA-001 desde un fichero fuera de features/"
+
+
+def test_map_by_scenario_tells_ids_apart_by_their_letters() -> None:
+    """`test_abc_001` carries no ID of these scenarios, whatever its digits."""
+    other = _linked("test_abc_001", "IVA-002")
+    first = _linked("test_iva_001", "IVA-001")
+    assert map_test_cases_to_scenarios([first, other], IDS, link="scenario")["IVA-002"] is other
+
+
+def test_under_keeps_every_character_of_the_root_but_its_slashes() -> None:
+    oracle = RedOracle(("not_implemented",), writable=("srcX/",), driver=("tests/X",))
+    assert red_failure_problem(_failed("not_implemented", "srcX/iva.py"), oracle) is None
+    assert red_failure_problem(_failed("not_implemented", "src/iva.py"), oracle) is not None
+    assert control_path_status("unitX/", in_tree=False, deleted=["unitX/a.py"]) == "removed"
+    assert control_path_status("Xunit", in_tree=False, deleted=["Xunit/a.py"]) == "removed"
+
+
+def test_invalid_red_names_every_writable_root() -> None:
+    oracle = RedOracle(("not_implemented",), writable=("src/", "lib/"), driver=("tests/",))
+    assert red_failure_problem(_failed("not_implemented", "tests/x.py"), oracle) == (
+        "lanza NotImplementedError desde tests/x.py, no desde la interfaz en src/, lib/"
+    )
+
+
+def test_impostor_source_drops_the_trailing_spaces_of_the_line_it_replaces() -> None:
+    result, count = impostor_source(
+        "    raise NotImplementedError  \n", r"^(\s*)raise\b.*$", r"\1x"
+    )
+    assert (result, count) == ("    x\n", 1)
+
+
+def test_impostor_problem_says_exactly_how_to_write_a_stub() -> None:
+    def stub(name: str) -> TestCaseResult:
+        return TestCaseResult(
+            name=name, status="failure", properties={"lictor.failure": "not_implemented"}
+        )
+
+    assert impostor_problem(None, None, [stub("t1"), stub("t2")]) == (
+        "t1, t2 siguen lanzando NotImplementedError: escribe cada "
+        "`raise NotImplementedError` en una sola línea"
+    )
+
+
+def test_run_outcome_suspicion_message_is_exact() -> None:
+    _, reason = run_outcome(
+        {"A-1": "quarantined", "A-2": "quarantined"},
+        {"A-1": SUSPICIOUS_DRIVER, "A-2": SUSPICIOUS_DRIVER},
+    )
+    assert reason == (
+        "Escenarios en cuarentena: A-1, A-2. Posible driver defectuoso en A-1, A-2: sus tests "
+        "fallaron por un error del propio driver en cada intento. Detalle en .lictor/report.md"
+    )

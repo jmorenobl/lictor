@@ -32,10 +32,9 @@ def _normalize(text: str) -> str:
 
 def _under(path: str, roots: Sequence[str]) -> bool:
     """Tell whether a relative path is one of `roots` or inside one of them."""
-    target = path.strip("/")
     for root in roots:
         base = root.strip("/")
-        if base and (target == base or target.startswith(f"{base}/")):
+        if base and (path == base or path.startswith(f"{base}/")):
             return True
     return False
 
@@ -53,7 +52,7 @@ def map_test_cases_to_scenarios(
     Raises DriverError if any scenario has zero or multiple matching test cases, or if
     a test case matches multiple scenarios.
     """
-    if link == "scenario":
+    if link != "name":
         return _map_by_scenario(test_cases, [str(sid) for sid in scenario_ids])
     mapped: dict[str, TestCaseResult] = {}
     matched_tc_indices: set[int] = set()
@@ -98,7 +97,7 @@ def _named_ids(case: TestCaseResult, scenario_ids: Sequence[str]) -> list[str]:
     names = (_normalize(case.name), _normalize(case.classname))
     found: list[str] = []
     for sid in scenario_ids:
-        pattern = re.compile(rf"(^|_){re.escape(_normalize(sid).strip('_'))}(_|$)")
+        pattern = re.compile(rf"(^|_){re.escape(_normalize(sid))}(_|$)")
         if any(pattern.search(name) for name in names):
             found.append(sid)
     return found
