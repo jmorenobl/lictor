@@ -687,6 +687,11 @@ def test_anchor_reports_a_moved_head_with_both_values() -> None:
     assert problems == [f"HEAD está en {'b' * 12} y la ejecución lo dejó en {'a' * 12}"]
 
 
+def test_anchor_reports_a_head_that_could_not_be_read() -> None:
+    problems = anchor_problems(_ANCHOR, {"seal": _ANCHOR["seal"]}, {"a" * 40})
+    assert problems == [f"HEAD está en  y la ejecución lo dejó en {'a' * 12}"]
+
+
 def test_anchor_reports_a_forged_seal() -> None:
     observed = {**_ANCHOR, "seal": "sha256:otro"}
     assert anchor_problems(_ANCHOR, observed, {"a" * 40}) == [
