@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from lictor.application.run_files import _scratch_root
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     events_of,
@@ -90,8 +91,8 @@ def _environment() -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
 
 
-def _kill_at(root: Path, tmp_path: Path, mode: str, point: str, marker: Path) -> None:
-    command = _command(root, tmp_path, mode, point, str(marker))
+def _stop_at(command: list[str], point: str, marker: Path) -> subprocess.Popen[bytes]:
+    """Launch a run and return once it stands still at `point`."""
     process = subprocess.Popen(
         command, env=_environment(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -102,6 +103,11 @@ def _kill_at(root: Path, tmp_path: Path, mode: str, point: str, marker: Path) ->
             process.kill()
             raise AssertionError(f"el proceso no llegó a {point}: {output}")
         time.sleep(0.02)
+    return process
+
+
+def _kill_at(root: Path, tmp_path: Path, mode: str, point: str, marker: Path) -> None:
+    process = _stop_at(_command(root, tmp_path, mode, point, str(marker)), point, marker)
     os.kill(process.pid, signal.SIGKILL)
     process.wait(timeout=30)
     require(
@@ -202,3 +208,38 @@ def test_a_lock_left_by_a_killed_git_stops_and_explains(
     lock.unlink()
     assert _relaunch(root, tmp_path, "verde")[0] == 0
     assert green_ids(root) == ALL_GREEN
+
+
+def test_a_second_run_is_refused_without_touching_the_first(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """Without a lock the second one swept the copy and the clone the first one was using."""
+    root = make_project()
+    marker = tmp_path / "alcanzado"
+    release = tmp_path / "suelta"
+    point = "implement:durante"
+    command = _command(root, tmp_path, "verde", point, str(marker), str(release))
+    first = _stop_at(command, point, marker)
+    try:
+        journal = (root / ".lictor" / "journal.jsonl").read_bytes()
+        second = subprocess.run(
+            _command(root, tmp_path, "verde"),
+            env=_environment(),
+            capture_output=True,
+            text=True,
+            timeout=RESUME_TIMEOUT_S,
+            check=False,
+        )
+
+        assert second.returncode == 10, second.stdout + second.stderr
+        assert "otra ejecución" in second.stderr
+        assert list(_scratch_root(root).glob("work-*")), "la copia del agente debía seguir ahí"
+        assert (root / ".lictor" / "journal.jsonl").read_bytes() == journal
+    finally:
+        release.touch()
+    output, _ = first.communicate(timeout=RESUME_TIMEOUT_S)
+
+    assert first.returncode == 0, output.decode()
+    assert green_ids(root) == ALL_GREEN
+    assert false_greens(root) == []
+    assert not events_of(root, "state.tampered")

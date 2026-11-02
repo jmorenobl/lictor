@@ -1,10 +1,11 @@
 """Run `lictor run` in a process of its own, standing still at one point until it gets killed.
 
-Usage: python kill_runner.py <project> <profiles> <mode> <flags dir> [<point> <marker>]
+Usage: python kill_runner.py <project> <profiles> <mode> <flags dir> [<point> <marker> [<release>]]
 
 A point is `<node>:antes`, `<node>:durante` or `<node>:despues`. On reaching it the process creates
-the marker and sleeps, so the test can send a real SIGKILL at exactly that moment. Without a point
-it runs to the end: that is the resume.
+the marker and sleeps, so the test can send a real SIGKILL at exactly that moment. With a release
+file it goes on as soon as that file exists. Without a point it runs to the end: that is the
+resume.
 """
 
 import sys
@@ -46,16 +47,19 @@ _STALL_S = 600
 class _Stall:
     """Stops the process the first time it reaches the point it was given."""
 
-    def __init__(self, point: str | None, marker: Path | None) -> None:
+    def __init__(self, point: str | None, marker: Path | None, release: Path | None) -> None:
         self.point = point
         self.marker = marker
+        self.release = release
         self.done = False
 
     def at(self, point: str) -> None:
         if point == self.point and not self.done and self.marker is not None:
             self.done = True
             self.marker.touch()
-            time.sleep(_STALL_S)
+            deadline = time.monotonic() + _STALL_S
+            while time.monotonic() < deadline and not (self.release and self.release.exists()):
+                time.sleep(0.05)
 
 
 def _around(owner: Any, name: str, before: Callable[[], None], after: Callable[[], None]) -> None:
@@ -119,7 +123,11 @@ def _agent(mode: str, flags: Path, stall: _Stall) -> Agent:
 def main(args: list[str]) -> int:
     root, profiles, mode, flags = Path(args[0]), Path(args[1]), args[2], Path(args[3])
     point = args[4] if len(args) > 4 else None
-    stall = _Stall(point, Path(args[5]) if len(args) > 5 else None)
+    stall = _Stall(
+        point,
+        Path(args[5]) if len(args) > 5 else None,
+        Path(args[6]) if len(args) > 6 else None,
+    )
     loader.DEFAULT_PROFILES_DIR = profiles
     agent = _agent(mode, flags, stall)
     _install(stall)

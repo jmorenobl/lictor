@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.application.run_files import exclusive_run
 from lictor.cli import app
 from lictor.domain.model import Health
 
@@ -210,3 +211,18 @@ def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:
     doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
     assert doc_res.exit_code == 10
     assert "no está disponible o no es ejecutable" in doc_res.output
+
+
+@pytest.mark.parametrize("command", [["run"], ["init", "--force"]])
+def test_cli_refuses_while_another_run_holds_the_project(
+    tmp_path: Path, command: list[str]
+) -> None:
+    (tmp_path / "lictor.json").write_text("{}", encoding="utf-8")
+
+    with exclusive_run(tmp_path, "lictor run"):
+        result = runner.invoke(app, [*command, "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 10, result.output
+    assert "otra ejecución" in result.output
+    assert (tmp_path / "lictor.json").read_text(encoding="utf-8") == "{}"
+    assert sorted(p.name for p in (tmp_path / ".lictor").iterdir()) == ["run.lock"]

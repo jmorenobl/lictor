@@ -6,6 +6,7 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 """
 
 import contextlib
+import fcntl
 import hashlib
 import os
 import shlex
@@ -17,10 +18,11 @@ from pathlib import Path
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
-from lictor.domain.errors import EnvironmentUnavailableError
+from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
+RUN_LOCK = "run.lock"
 
 
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
@@ -100,6 +102,32 @@ def sweep_scratch(project_root: Path) -> None:
         return
     _check_private(root)
     shutil.rmtree(root, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
+    """Hold the project for one command, or refuse at once if another one holds it.
+
+    Without it a second `lictor run` swept the copy and the clone of the first one midway. The
+    kernel drops the lock with the process, so a kill leaves nothing to clean, and the descriptor
+    isn't inherited, so a command left orphaned doesn't keep it. The file is not state of the run:
+    neither `IntegritySnapshot` nor the anchor read it.
+    """
+    lictor_dir = project_root / ".lictor"
+    lictor_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lictor_dir / RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as err:
+            raise RunInProgressError(
+                "otra ejecución de Lictor está en curso en este proyecto (tiene el cerrojo "
+                f".lictor/{RUN_LOCK}). No se ha tocado nada: espera a que termine o detenla, y "
+                f"vuelve a lanzar `{command}`."
+            ) from err
+        yield
+    finally:
+        os.close(fd)
 
 
 @contextlib.contextmanager

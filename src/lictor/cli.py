@@ -14,7 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from lictor.application.anchor import observe_anchor
-from lictor.application.run_files import sweep_scratch
+from lictor.application.run_files import exclusive_run, sweep_scratch
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -90,15 +90,17 @@ def init(
     """Inicializa la configuración de Lictor en el repositorio."""
 
     def _execute() -> int:
-        init_uc = bootstrap_init(cwd)
-        res = init_uc.execute(
-            InitProjectRequest(
-                project_root=cwd,
-                profile_name=profile,
-                model=model,
-                force=force,
+        # It rewrites `lictor.json`, which a run in progress guards as its own state.
+        with exclusive_run(cwd, "lictor init"):
+            init_uc = bootstrap_init(cwd)
+            res = init_uc.execute(
+                InitProjectRequest(
+                    project_root=cwd,
+                    profile_name=profile,
+                    model=model,
+                    force=force,
+                )
             )
-        )
         typer.echo(f"Configuración inicializada en '{res.config_path}'.")
         return 0
 
@@ -478,9 +480,18 @@ def _start_new_run(
 
 
 def _execute_run(cwd: Path, force_new: bool) -> int:
+    """Run or resume, holding the project: another run would sweep this one's copy and clone.
+
+    A refusal writes nothing: the journal and `current_run` belong to the run in progress, which
+    would read any change to them as tampering.
+    """
     resolved_cwd = cwd.resolve()
+    with exclusive_run(resolved_cwd, "lictor run"):
+        return _run_holding_project(resolved_cwd, force_new)
+
+
+def _run_holding_project(resolved_cwd: Path, force_new: bool) -> int:
     lictor_dir = resolved_cwd / ".lictor"
-    lictor_dir.mkdir(parents=True, exist_ok=True)
     current_run_file = lictor_dir / "current_run"
     db_path = lictor_dir / "checkpoints.sqlite"
 

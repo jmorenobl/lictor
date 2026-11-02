@@ -10,6 +10,7 @@ import pytest
 from lictor.application.run_files import (
     _scratch_root,
     attempt_prefix,
+    exclusive_run,
     new_step_dir,
     relative_to_project,
     save_output,
@@ -17,7 +18,8 @@ from lictor.application.run_files import (
     sweep_scratch,
     unused_path,
 )
-from lictor.domain.errors import EnvironmentUnavailableError, ExitCode
+from lictor.application.usecases.verify_attempt import IntegritySnapshot
+from lictor.domain.errors import EnvironmentUnavailableError, ExitCode, RunInProgressError
 from lictor.domain.model import CommandOutput
 
 
@@ -176,3 +178,43 @@ def test_a_scratch_root_that_is_not_a_directory_is_refused(
 
     assert "no es un directorio" in err.value.message
     assert root.is_file()
+
+
+def test_a_second_run_lock_is_refused_while_the_first_is_held(tmp_path: Path) -> None:
+    with (
+        exclusive_run(tmp_path, "lictor run"),
+        pytest.raises(RunInProgressError) as err,
+        exclusive_run(tmp_path, "lictor init"),
+    ):
+        pass
+
+    assert err.value.exit_code == ExitCode.PRECONDITION
+    assert ".lictor/run.lock" in err.value.message
+    assert "`lictor init`" in err.value.message
+
+
+def test_the_run_lock_is_released_afterwards(tmp_path: Path) -> None:
+    with exclusive_run(tmp_path, "lictor run"):
+        pass
+
+    with exclusive_run(tmp_path, "lictor run"):
+        assert (tmp_path / ".lictor" / "run.lock").is_file()
+
+
+def test_the_run_lock_is_released_when_the_run_fails(tmp_path: Path) -> None:
+    with pytest.raises(EnvironmentUnavailableError), exclusive_run(tmp_path, "lictor run"):
+        raise EnvironmentUnavailableError("fallo")
+
+    with exclusive_run(tmp_path, "lictor run"):
+        pass
+
+
+def test_the_run_lock_is_not_state_the_integrity_snapshot_guards(tmp_path: Path) -> None:
+    lictor_dir = tmp_path / ".lictor"
+    lictor_dir.mkdir()
+    snapshot = IntegritySnapshot(lictor_dir, tmp_path)
+
+    with exclusive_run(tmp_path, "lictor run"):
+        pass
+
+    assert snapshot.verify_and_restore()
