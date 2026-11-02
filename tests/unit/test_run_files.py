@@ -134,8 +134,10 @@ def test_a_scratch_root_of_another_user_is_refused(
 def test_a_scratch_root_that_is_a_symlink_is_refused(
     project: Path, tmp_path: Path, use: Callable[[Path], None]
 ) -> None:
+    """The target would pass as left by an older version: it must not be made private through it."""
     target = tmp_path / "ajeno"
-    target.mkdir(mode=0o700)
+    target.mkdir()
+    target.chmod(0o755)
     (target / "plantado").write_text("x", encoding="utf-8")
     root = _scratch_root(project)
     root.symlink_to(target)
@@ -147,23 +149,75 @@ def test_a_scratch_root_that_is_a_symlink_is_refused(
     assert "enlace simbólico" in err.value.message
     assert (target / "plantado").exists()
     assert root.is_symlink()
+    assert os.lstat(target).st_mode & 0o777 == 0o755
 
 
+@pytest.mark.parametrize("mode", [0o777, 0o775, 0o757], ids=oct)
 @pytest.mark.parametrize("use", SCRATCH_USERS)
-def test_a_scratch_root_open_to_others_is_refused(
-    project: Path, use: Callable[[Path], None]
+def test_a_scratch_root_others_can_write_into_is_refused(
+    project: Path, use: Callable[[Path], None], mode: int
 ) -> None:
+    """Someone else may already have planted something in it: making it private now is too late."""
     root = _scratch_root(project)
     root.mkdir()
-    root.chmod(0o777)
+    root.chmod(mode)
     (root / "plantado").write_text("x", encoding="utf-8")
 
     with pytest.raises(EnvironmentUnavailableError) as err:
         use(project)
 
     assert str(root) in err.value.message
-    assert "0o777" in err.value.message
+    assert oct(mode) in err.value.message
+    assert "escritura" in err.value.message
     assert (root / "plantado").exists()
+    assert os.lstat(root).st_mode & 0o777 == mode
+
+
+@pytest.mark.parametrize("use", SCRATCH_USERS)
+def test_a_scratch_root_that_cannot_be_opened_is_refused(
+    project: Path, use: Callable[[Path], None]
+) -> None:
+    root = _scratch_root(project)
+    root.mkdir()
+    root.chmod(0o000)
+    try:
+        with pytest.raises(EnvironmentUnavailableError) as err:
+            use(project)
+    finally:
+        root.chmod(0o700)
+
+    assert err.value.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
+    assert "no se puede abrir" in err.value.message
+
+
+OLDER_MODES = [0o755, 0o750, 0o711]
+
+
+@pytest.mark.parametrize("mode", OLDER_MODES, ids=oct)
+def test_a_scratch_root_left_by_an_older_version_is_made_private(project: Path, mode: int) -> None:
+    """An older version created it `0o755`: nobody else could write into it, so it can be kept."""
+    root = _scratch_root(project)
+    root.mkdir()
+    root.chmod(mode)
+    (root / "anterior").write_text("x", encoding="utf-8")
+
+    with scratch_dir(project, "x-") as tmp:
+        assert tmp.parent == root
+        assert os.lstat(root).st_mode & 0o777 == 0o700
+
+    assert (root / "anterior").exists()
+
+
+@pytest.mark.parametrize("mode", OLDER_MODES, ids=oct)
+def test_a_scratch_root_left_by_an_older_version_is_swept(project: Path, mode: int) -> None:
+    root = _scratch_root(project)
+    root.mkdir()
+    root.chmod(mode)
+    (root / "anterior").write_text("x", encoding="utf-8")
+
+    sweep_scratch(project)
+
+    assert not os.path.lexists(root)
 
 
 @pytest.mark.parametrize("use", SCRATCH_USERS)

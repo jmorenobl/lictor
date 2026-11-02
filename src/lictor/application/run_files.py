@@ -15,6 +15,7 @@ import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
@@ -23,6 +24,7 @@ from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
 RUN_LOCK = "run.lock"
+PRIVATE_MODE = 0o700
 
 
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
@@ -56,33 +58,53 @@ def _scratch_root(project_root: Path) -> Path:
 
 
 def _check_private(root: Path) -> None:
-    """Refuse a directory someone else could have prepared or can still write into.
+    """Refuse a directory someone else could have prepared or written into, and close the rest.
 
     Its name is predictable and the temporary directory may be shared, as `/tmp` is on Linux:
-    another user could create it first and change the tree under verification.
+    another user could create it first and change the tree under verification. One of the current
+    user's that nobody else could write into, as older versions left it (`0o755`), is only made
+    private: nothing in it can come from someone else, and an unprivileged user can't give a file
+    away. The checks and the `chmod` go through one descriptor, so the path can't change between.
     """
-    info = os.lstat(root)
-    problem = None
-    if stat.S_ISLNK(info.st_mode):
-        problem = "es un enlace simbólico"
-    elif not stat.S_ISDIR(info.st_mode):
-        problem = "no es un directorio"
-    elif info.st_uid != os.getuid():
-        problem = "pertenece a otro usuario"
-    elif info.st_mode & 0o077:
-        problem = f"tiene permisos para el grupo u otros ({oct(stat.S_IMODE(info.st_mode))})"
-    if problem is not None:
-        raise EnvironmentUnavailableError(
-            f"el directorio temporal {root} {problem}, así que otro usuario podría cambiar lo que "
-            "se verifica. Si es tuyo y nadie más lo usa, bórralo y vuelve a lanzar; si no, apunta "
-            "TMPDIR a un directorio solo tuyo y vuelve a lanzar."
-        )
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as err:
+        _refuse(root, _why_unopenable(root, err))
+    try:
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if info.st_uid != os.getuid():
+            _refuse(root, "pertenece a otro usuario")
+        if mode & 0o022:
+            _refuse(root, f"tiene escritura para el grupo u otros ({oct(mode)})")
+        if mode != PRIVATE_MODE:
+            os.fchmod(fd, PRIVATE_MODE)
+    finally:
+        os.close(fd)
+
+
+def _why_unopenable(root: Path, err: OSError) -> str:
+    with contextlib.suppress(OSError):
+        mode = os.lstat(root).st_mode
+        if stat.S_ISLNK(mode):
+            return "es un enlace simbólico"
+        if not stat.S_ISDIR(mode):
+            return "no es un directorio"
+    return f"no se puede abrir ({err.strerror})"
+
+
+def _refuse(root: Path, problem: str) -> NoReturn:
+    raise EnvironmentUnavailableError(
+        f"el directorio temporal {root} {problem}, así que otro usuario podría cambiar lo que "
+        "se verifica. Si es tuyo y nadie más lo usa, bórralo y vuelve a lanzar; si no, apunta "
+        "TMPDIR a un directorio solo tuyo y vuelve a lanzar."
+    )
 
 
 def _private_root(project_root: Path) -> Path:
     root = _scratch_root(project_root)
     with contextlib.suppress(FileExistsError):
-        root.mkdir(mode=0o700)
+        root.mkdir(mode=PRIVATE_MODE)
     _check_private(root)
     return root
 
