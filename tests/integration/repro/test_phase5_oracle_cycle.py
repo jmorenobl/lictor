@@ -10,7 +10,9 @@ from tests.integration.repro.harness import (
     GOOD_2,
     GOOD_3,
     MODULE_PATH,
+    NEGATIVE_CHECK,
     STUB,
+    TOTAL_CHECK,
     Agent,
     Outcome,
     events_of,
@@ -26,20 +28,27 @@ from tests.integration.repro.harness import (
     write,
 )
 
+# Its own step: with "calculo el IVA general" the existing code would already pass it.
 NEW_SCENARIO = (
     "\n  @IVA-004\n  Escenario: Cero\n    Dado una factura con importe 0\n"
-    "    Cuando calculo el IVA general\n    Entonces el total es 0\n"
+    "    Cuando calculo el IVA nuevo\n    Entonces el total es 0\n"
 )
-NEW_FUNCTION = '\n\ndef nuevo(x: float) -> float:\n    """N."""\n    return x\n'
-VACUOUS_DRIVER = (
-    "import iva\n\n\ndef test_iva_001():\n    iva.general(100)\n\n\n"
-    "def test_iva_002():\n    iva.reducido(100)\n\n\n"
-    "def test_iva_003():\n    iva.negativo(-5)\n"
+NEW_STUB = '\n\ndef nuevo(importe: float) -> float:\n    """N."""\n    raise NotImplementedError\n'
+NEW_FUNCTION = NEW_STUB.replace("raise NotImplementedError", "return importe")
+NEW_STEPS = (
+    '\n\n@scenario(FEATURE, "Cero")\ndef test_iva_004():\n    pass\n\n\n'
+    '@when("calculo el IVA nuevo", target_fixture="calculo")\n'
+    "def nuevo(importe):\n    return lambda: iva.nuevo(importe)\n"
+)
+# Every step runs, none asserts anything.
+VACUOUS_DRIVER = DRIVER.replace(TOTAL_CHECK, "calculo()").replace(
+    NEGATIVE_CHECK, "iva.negativo(importe)"
 )
 
 
 def _write_extended_driver(task: AgentTask) -> None:
-    write(task.cwd, DRIVER_PATH, f"{DRIVER}\n\ndef test_iva_004():\n    assert iva.nuevo(0) == 0\n")
+    write(task.cwd, MODULE_PATH, GOOD_3 + NEW_STUB)
+    write(task.cwd, DRIVER_PATH, DRIVER + NEW_STEPS)
 
 
 def _write_extended_module(task: AgentTask, content: str = GOOD_3) -> None:
@@ -151,7 +160,8 @@ def test_d28_changing_a_green_scenario_reopens_it(make_project: ProjectFactory) 
     git(root, "commit", "-q", "-m", "spec: cambia un verde")
 
     def driver(task: AgentTask, _attempt: int) -> None:
-        write(task.cwd, DRIVER_PATH, DRIVER.replace("== 121", "== 122"))
+        # The steps read the total from the Gherkin: the driver needs no change.
+        write(task.cwd, DRIVER_PATH, DRIVER)
 
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
         write(task.cwd, MODULE_PATH, GOOD_3.replace("1.21", "1.22"))
@@ -193,7 +203,8 @@ def test_reopened_green_that_still_passes_is_registered_again_without_the_agent(
     )
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "spec: un paso más en un verde")
-    agent = Agent(driver=lambda task, _attempt: write(task.cwd, DRIVER_PATH, DRIVER))
+    step = '\n\n@given("la factura es nacional")\ndef nacional():\n    pass\n'
+    agent = Agent(driver=lambda task, _attempt: write(task.cwd, DRIVER_PATH, DRIVER + step))
 
     outcome = run_lictor(root, agent)
 

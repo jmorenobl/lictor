@@ -42,12 +42,29 @@ STUB = (
     '    """Negativo."""\n'
     "    raise NotImplementedError\n"
 )
+# The steps read their values from the Gherkin: a change of number in the spec needs no new code.
+# A `when` step returns the operation and a `then` step runs it, so each scenario reaches exactly
+# the function its outcome is about.
 DRIVER = (
-    "import iva\n\n\n"
-    "def test_iva_001():\n    assert iva.general(100) == 121\n\n\n"
-    "def test_iva_002():\n    assert iva.reducido(100) == 110\n\n\n"
-    "def test_iva_003():\n    assert iva.negativo(-5) is True\n"
+    "import iva\n"
+    "from pytest_bdd import given, parsers, scenario, then, when\n\n"
+    'FEATURE = "../../features/iva.feature"\n\n\n'
+    '@scenario(FEATURE, "IVA general")\ndef test_iva_001():\n    pass\n\n\n'
+    '@scenario(FEATURE, "IVA reducido")\ndef test_iva_002():\n    pass\n\n\n'
+    '@scenario(FEATURE, "Importe negativo")\ndef test_iva_003():\n    pass\n\n\n'
+    '@given(parsers.parse("una factura con importe {importe:d}"), target_fixture="importe")\n'
+    "def factura(importe):\n    return importe\n\n\n"
+    '@when("calculo el IVA general", target_fixture="calculo")\n'
+    "def general(importe):\n    return lambda: iva.general(importe)\n\n\n"
+    '@when("calculo el IVA reducido", target_fixture="calculo")\n'
+    "def reducido(importe):\n    return lambda: iva.reducido(importe)\n\n\n"
+    '@then(parsers.parse("el total es {esperado:d}"))\n'
+    "def total_es(calculo, esperado):\n    assert calculo() == esperado\n\n\n"
+    '@then("se rechaza por importe no válido")\n'
+    "def rechazado(importe):\n    assert iva.negativo(importe) is True\n"
 )
+TOTAL_CHECK = "assert calculo() == esperado"
+NEGATIVE_CHECK = "assert iva.negativo(importe) is True"
 GOOD_1 = STUB.replace("raise NotImplementedError", "return round(importe * 1.21, 2)", 1)
 GOOD_2 = GOOD_1.replace("raise NotImplementedError", "return round(importe * 1.10, 2)", 1)
 GOOD_3 = GOOD_2.replace("raise NotImplementedError", "return importe < 0", 1)

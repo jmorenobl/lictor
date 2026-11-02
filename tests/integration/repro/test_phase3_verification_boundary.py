@@ -551,10 +551,9 @@ def test_installed_plugin_needs_no_declaration(make_project: ProjectFactory) -> 
 def test_installed_plugin_loads_with_autoload_off(make_project: ProjectFactory) -> None:
     root = make_project()
     needs_plugin = DRIVER.replace(
-        "def test_iva_001():\n    assert iva.general(100) == 121",
+        "def test_iva_001():\n    pass",
         "def test_iva_001(pytestconfig):\n"
-        '    assert pytestconfig.pluginmanager.get_plugin("pytest_bdd.plugin")\n'
-        "    assert iva.general(100) == 121",
+        '    assert pytestconfig.pluginmanager.get_plugin("pytest_bdd.plugin")',
     )
     require(needs_plugin != DRIVER, "el driver debía cambiar")
 

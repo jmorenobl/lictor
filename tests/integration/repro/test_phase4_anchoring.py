@@ -19,7 +19,9 @@ from tests.integration.repro.harness import (
     DRIVER,
     DRIVER_PATH,
     MODULE_PATH,
+    NEGATIVE_CHECK,
     STUB,
+    TOTAL_CHECK,
     Agent,
     Outcome,
     error_block,
@@ -117,10 +119,7 @@ def test_d34_rename_cannot_remove_a_protected_file(make_project: ProjectFactory)
 
 
 def _weak_driver() -> str:
-    weak = DRIVER
-    for check in ("iva.general(100) == 121", "iva.reducido(100) == 110"):
-        weak = weak.replace(f"assert {check}", "assert True")
-    return weak.replace("assert iva.negativo(-5) is True", "assert True")
+    return DRIVER.replace(TOTAL_CHECK, "assert True").replace(NEGATIVE_CHECK, "assert True")
 
 
 def _forge_seal(root: Path) -> None:
