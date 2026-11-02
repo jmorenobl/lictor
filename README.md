@@ -71,7 +71,7 @@ Para profundizar en el concepto:
 
 ## ✨ Características Principales
 
-- 🔴🟢 **Ciclo Rojo → Verde Determinista:** Generación asistida del *driver* de aceptación (`pytest-bdd`), comprobación automática de la regla del rojo y sellado criptográfico en `.lictor/seal.json`.
+- 🔴🟢 **Ciclo Rojo → Verde Determinista:** Generación asistida del *driver* de aceptación (`pytest-bdd`), comprobación automática de la regla del rojo y sellado criptográfico en `.lictor/seal.json`. Un rojo solo vale si cada test ejecuta su escenario y falla por una aserción o por la interfaz sin implementar, y si deja de pasar cuando la interfaz devuelve una constante.
 - 🛡️ **Defensa en Profundidad (`L0`–`L5`):** Tubería secuencial desde integridad del arnés (`L0`), análisis estático y tipos estrictos (`L1`), tests unitarios (`L2`), aceptación sin regresiones (`L3`), arquitectura y seguridad (`L4`), hasta pruebas de mutación (`L5`).
 - 🧬 **Aislamiento, Commits Atómicos y Cuarentena:** Cada escenario verificado produce un `git commit` limpio. Si un escenario agota sus intentos o el agente declara conflicto de especificación (`LICTOR: SPEC_CONFLICT`), Lictor hace `git reset` al último estado verde, pone el escenario en **cuarentena** y continúa con el resto.
 - 📊 **Trazabilidad CloudEvents 1.0 e Informes Ejecutivos:** Bitácora append-only en `.lictor/journal.jsonl` y generación automática de `.lictor/report.md` con métricas de tokens, coste en USD, duración de agente vs. verificación y commits por escenario.
@@ -283,7 +283,7 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 | **`1`** | `INTERNAL_ERROR` | Error interno inesperado del runtime. |
 | **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
 | **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
-| **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. |
+| **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. Si todos sus intentos fallaron por un error del propio driver, el motivo es `driver_sospechoso`. |
 | **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde, o no se pudo preparar el entorno de verificación. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
 | **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
 
@@ -297,6 +297,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 
 | Nivel | Puerta | Qué verifica | Modo |
 | :---: | :--- | :--- | :---: |
+| **L0** | `L0-sin-cambios` | Un intento cuyo árbol es igual a HEAD falla antes de ejecutar nada. | `block` |
 | **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas o en `forbidden_paths`, un borrado incluido, y cualquier enlace simbólico o repositorio anidado, falla el intento; lo que hizo el agente se descarta con su copia. | `block` |
 | **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
 | **L0** | `L0-supresiones` | Analiza las líneas que añade el resultado del agente, también en binarios, bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
@@ -304,7 +305,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L0** | `L0-entorno` | Compara el hash del entorno de verificación, con todos sus ficheros, antes y después de ejecutar los comandos. Si no coincide, falla el intento, reconstruye el entorno y deja el evento `lictor.env.tampered.v1`. | `block` |
 | **L1** | Análisis estático | Linter (`ruff check`), formato (`ruff format --check`) y chequeo estricto de tipos (`mypy --strict`). | `block` |
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
-| **L3** | Aceptación y no regresión | Mapea cada test del reporte JUnit a su `@ID-NNN`: exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. | `block` |
+| **L3** | Aceptación y no regresión | Enlaza cada test con el escenario de Gherkin que ejecutó (en `python-uv`, el que informa el plugin del perfil; sin él, por el `@ID-NNN` del nombre): exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. Los pendientes que el mismo árbol también hace pasar se registran como verdes colaterales sin llamar al agente. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
 | **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Hoy solo registra resultado y salida: `mutmut` termina con 0 aunque queden supervivientes, y Lictor aún no lee la puntuación. | `measure` |
 
@@ -354,7 +355,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
+    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true, "when_exists": "tests/unit"}
   ],
   "verification": {"env": {}, "inherit": [], "prepare_inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
@@ -366,7 +367,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
 
@@ -376,7 +377,21 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Tu árbol de trabajo es tuyo.** El agente no trabaja en él, y Lictor solo lo toca al guardar un commit verde, con un *fast-forward*: tus ediciones sobreviven y, si un commit pisaría una, se para con exit 10 sin perder nada. `lictor run` lo reanuda cuando lo resuelvas, sin repetir el trabajo verificado. El agente recibe una copia de HEAD sin ficheros ignorados, así que no ve un `.env` ni datos locales; tampoco los verá la verificación.
 
-**Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. Si un escenario quedó en verde colateralmente y `lictor run --new` lo rechaza, el mensaje indica cómo registrarlo a mano.
+**Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. La única excepción al HEAD registrado es el commit vacío con el que el rojo registra verdes sin agente, si la ejecución murió justo después: se acepta solo con el rojo pendiente, sobre la cabeza registrada y con su mismo árbol, y el rojo repetido vuelve a probar cada verde.
+
+**Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` mira el árbol de trabajo. Así un proyecto sin `tests/unit` no bloquea al agente.
+
+### El oráculo y el ciclo de escenarios
+
+El driver sellado es el oráculo: lo que decide si un escenario está en verde. El perfil declara qué lo hace válido en su bloque `oracle`, que ningún `lictor.json` toca.
+
+- **Enlace con el escenario (`link: "scenario"`).** Cada test de escenario tiene que ejecutar su escenario de Gherkin (`@scenario` de `pytest-bdd`). Un test que lleva el id en el nombre sin ejecutarlo, o que ejecuta otro, rechaza el driver, y también un driver nuevo con tests que no son de ningún escenario.
+- **Rojo válido (`red_kinds`).** Un pendiente falla por una aserción o por `NotImplementedError` lanzado desde `paths.writable`, fuera del driver. Un error del propio test se rechaza. El plugin `lictor_outcome` del perfil informa la clase y el origen de cada fallo como propiedades del JUnit, por la clase de la excepción y nunca por el texto.
+- **Impostores (`impostors`).** Antes de sellar un driver nuevo, Lictor repite la aceptación en clones donde cada `raise NotImplementedError` de una línea se sustituye por `return None` y por `return True`. Cada escenario nuevo tiene que fallar con alguno de los dos: si pasa con ambos, su test no comprueba el resultado.
+
+Un escenario está en verde mientras lo que exige no cambie: Lictor calcula una huella de sus pasos, tablas, docstrings, antecedentes y ejemplos (sin nombres, tags, comentarios, espacios ni idioma) en el árbol de su commit verde y la compara con la actual. Si difiere, el escenario se **reabre**: el driver se reconstruye con esa indicación y, si su test sigue pasando, se vuelve a registrar sin agente con un commit vacío; si falla como un rojo válido, vuelve a implementarse. Un pendiente que el driver sellado ya hace pasar se registra como verde colateral (trailer `Lictor-Collateral`). Si todos los intentos de un escenario fallan con un error del propio driver, la cuarentena lo dice: posible driver defectuoso, sin asegurarlo (exit 30).
+
+`Scenario Outline` no se admite: `lictor run` lo rechaza al cargar la especificación (exit 10). Cada escenario necesita exactamente un test, y un esquema genera uno por fila de sus ejemplos.
 
 **`paths.protected` es decisión del proyecto.** `lictor init` escribe la lista del perfil como punto de partida, pero `paths` sustituye a ese valor, así que un `lictor.json` puede quitar entradas. `uv.lock` es la excepción: lo que el bloqueo instala es lo que entra en el entorno de verificación, y un plugin instalado se carga, así que también está en `forbidden_paths` y el agente no puede cambiarlo aunque el proyecto lo quite de esa lista. `forbidden_paths` y `IntegritySnapshot` cubren parte del resto, pero no sustituyen a `paths.protected`.
 
@@ -472,6 +487,7 @@ flowchart TB
 - 📌 **[ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md):** El estado vive en `.lictor/`, dentro del repositorio e ignorado por git.
 - 📌 **[ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
 - 📌 **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
+- 📌 **[ADR-0004](docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
 
 ---
 
