@@ -1,5 +1,6 @@
 import dataclasses
 import subprocess
+import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,12 +25,14 @@ from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
     DURABILITY,
     GraphContext,
     GraphState,
     _GraphNodes,
+    _holding_checkpoint_writes,
     create_graph,
     get_sqlite_saver,
 )
@@ -601,3 +604,58 @@ def test_build_driver_hands_the_forbidden_paths_to_the_use_case() -> None:
     _GraphNodes(context).build_driver(cast(GraphState, {"run_id": "R"}))
 
     assert context.prepare_driver.execute.call_args.args[0].forbidden_paths == ("*.pth",)
+
+
+NODE_JOIN_S = 5.0
+
+
+def test_a_node_holding_checkpoint_writes_fails_if_it_uses_the_saver(tmp_path: Path) -> None:
+    """The saver's lock isn't reentrant: without the guard, this node waited for itself forever."""
+    saver = get_sqlite_saver(tmp_path / "checkpoints.sqlite")
+    config: Any = {"configurable": {"thread_id": "t"}}
+
+    def node(_state: GraphState) -> dict[str, Any]:
+        saver.get_tuple(config)
+        return {}
+
+    _holding_checkpoint_writes(saver)
+    wrapped = _holding_checkpoint_writes(saver)(node)
+    errors: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            wrapped(cast(GraphState, {}))
+        except BaseException as err:
+            errors.append(err)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(timeout=NODE_JOIN_S)
+
+    assert not worker.is_alive(), "el nodo se bloqueó esperándose a sí mismo"
+    assert len(errors) == 1
+    assert isinstance(errors[0], InternalLictorError)
+    assert "checkpoint" in str(errors[0])
+    assert saver.get_tuple(config) is None, "el nodo debía soltar el cerrojo al fallar"
+
+
+def test_a_checkpoint_write_from_another_thread_waits_for_the_node(tmp_path: Path) -> None:
+    saver = get_sqlite_saver(tmp_path / "checkpoints.sqlite")
+    config: Any = {"configurable": {"thread_id": "t"}}
+    finished: list[bool] = []
+    waited: list[bool] = []
+    writer = threading.Thread(
+        target=lambda: finished.append(saver.get_tuple(config) is None), daemon=True
+    )
+
+    def node(_state: GraphState) -> dict[str, Any]:
+        writer.start()
+        writer.join(timeout=0.2)
+        waited.append(writer.is_alive())
+        return {}
+
+    _holding_checkpoint_writes(saver)(node)(cast(GraphState, {}))
+    writer.join(timeout=NODE_JOIN_S)
+
+    assert waited == [True], "otro hilo no debe escribir mientras el nodo corre"
+    assert finished == [True], "y debe seguir en cuanto el nodo termina"

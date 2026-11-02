@@ -1,11 +1,13 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
+import threading
 import uuid
-from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import TracebackType
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -34,6 +36,7 @@ from lictor.domain.errors import (
     CandidateError,
     DriverError,
     ExitCode,
+    InternalLictorError,
     SealTamperedError,
     SpecError,
 )
@@ -640,6 +643,46 @@ class _Node(Protocol):
     def __call__(self, state: GraphState) -> dict[str, Any]: ...
 
 
+class _NodeLock:
+    """The saver's lock, which refuses the node holding it instead of making it wait for itself.
+
+    `SqliteSaver` takes `lock` for every read and write, and it isn't reentrant: a node that used
+    the checkpointer while holding it would block forever. Other threads still wait as before.
+    """
+
+    def __init__(self, lock: threading.Lock) -> None:
+        self._lock = lock
+        self._node_thread: int | None = None
+
+    @contextmanager
+    def for_node(self) -> Iterator[None]:
+        with self._lock:
+            self._node_thread = threading.get_ident()
+            try:
+                yield
+            finally:
+                self._node_thread = None
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def __enter__(self) -> None:
+        if self._node_thread == threading.get_ident():
+            raise InternalLictorError(
+                "un nodo que retiene las escrituras del checkpoint intentó usar el checkpoint: "
+                "se habría bloqueado para siempre esperándose a sí mismo"
+            )
+        self._lock.acquire()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._lock.release()
+
+
 def _holding_checkpoint_writes(
     checkpointer: BaseCheckpointSaver[Any] | None,
 ) -> Callable[[_Node], _Node]:
@@ -650,12 +693,20 @@ def _holding_checkpoint_writes(
     the WAL halfway through it would restore a torn file. The saver takes this lock for every
     write, so one in progress ends before the node starts and one not started waits for it to end.
     Nothing is lost if the run dies meanwhile: the checkpoint after those writes is already stored.
+    The node itself can't use the saver: it fails at once instead of waiting for itself.
     """
-    lock = checkpointer.lock if isinstance(checkpointer, SqliteSaver) else nullcontext()
+    hold: Callable[[], AbstractContextManager[None]] = nullcontext
+    if isinstance(checkpointer, SqliteSaver):
+        # Typed as a plain Lock, so the guard takes its place through the instance's dict.
+        lock = vars(checkpointer)["lock"]
+        if not isinstance(lock, _NodeLock):
+            lock = _NodeLock(lock)
+            vars(checkpointer)["lock"] = lock
+        hold = lock.for_node
 
     def holding(node: _Node) -> _Node:
         def run(state: GraphState) -> dict[str, Any]:
-            with lock:
+            with hold():
                 return node(state)
 
         return run
