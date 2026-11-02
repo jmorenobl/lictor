@@ -3,11 +3,16 @@
 import hashlib
 import json
 import sqlite3
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
+from langgraph.checkpoint.sqlite import SqliteSaver
 
+from lictor import cli
 from lictor.application.usecases.commit_green import CommitGreen
+from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.model import AgentStatus, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
@@ -32,6 +37,7 @@ from tests.integration.repro.harness import (
 )
 
 FSMONITOR_HOOK = '#!/bin/sh\necho "{\\"forjado\\":\\"fsmonitor\\"}" >> "$1"\nexit 1\n'
+LATE_WRITE_WAIT_S = 0.5
 ATTACKER_IDENTITY = ("-c", "user.name=a", "-c", "user.email=a@b")
 
 
@@ -283,6 +289,78 @@ def test_g1_config_planted_by_the_driver_refuses_the_resume(
     assert run_lictor(root, agent) == Outcome(10)
     assert not marker.exists()
     assert ".git" in events_of(root, "run.stopped")[-1]["data"]["reason"]
+
+
+def _late_checkpoint_writes(monkeypatch: pytest.MonkeyPatch) -> Agent:
+    """Force LangGraph's background writes into the agent's window, on any Python.
+
+    `put_writes` leaves its thread after the node before has ended, and it may not have started
+    when the next node takes its snapshot. An honest run may not read as tampering.
+    """
+    agent_running = threading.Event()
+    written = threading.Event()
+    original = SqliteSaver.put_writes
+
+    def late(self: SqliteSaver, *args: Any, **kwargs: Any) -> None:
+        agent_running.wait(LATE_WRITE_WAIT_S)
+        original(self, *args, **kwargs)
+        written.set()
+
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> None:
+        agent_running.set()
+        written.wait(LATE_WRITE_WAIT_S)
+        good_impl(task, scenario_id, attempt)
+
+    monkeypatch.setattr(SqliteSaver, "put_writes", late)
+    return Agent(impl=impl)
+
+
+def test_a_late_checkpoint_write_is_not_tampering(
+    make_project: ProjectFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project()
+
+    assert run_lictor(root, _late_checkpoint_writes(monkeypatch)) == Outcome(0)
+
+    assert not events_of(root, "state.tampered")
+    assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
+
+
+def test_every_node_that_runs_untrusted_code_holds_the_checkpoint_lock(
+    make_project: ProjectFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write already running ends before the snapshot; one not started waits for the node."""
+    root = make_project()
+    savers: list[SqliteSaver] = []
+    held: dict[str, list[bool]] = {"driver": [], "impl": [], "comandos": []}
+    open_saver = cli.get_sqlite_saver
+    run_command = VerificationEnvironment.run
+
+    def recording_saver(path: Path) -> SqliteSaver:
+        savers.append(open_saver(path))
+        return savers[-1]
+
+    def recording_run(self: VerificationEnvironment, *args: Any, **kwargs: Any) -> Any:
+        held["comandos"].append(savers[-1].lock.locked())
+        return run_command(self, *args, **kwargs)
+
+    def driver(task: AgentTask, attempt: int) -> None:
+        held["driver"].append(savers[-1].lock.locked())
+        good_driver(task, attempt)
+
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> None:
+        held["impl"].append(savers[-1].lock.locked())
+        good_impl(task, scenario_id, attempt)
+
+    monkeypatch.setattr(cli, "get_sqlite_saver", recording_saver)
+    monkeypatch.setattr(VerificationEnvironment, "run", recording_run)
+
+    assert run_lictor(root, Agent(driver=driver, impl=impl)) == Outcome(0)
+
+    assert held["driver"] == [True]
+    assert held["impl"] == [True, True, True]
+    assert len(held["comandos"]) > 3
+    assert all(held["comandos"])
 
 
 def test_c7_the_copy_has_no_state_to_tamper_with(make_project: ProjectFactory) -> None:

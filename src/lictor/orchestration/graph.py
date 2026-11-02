@@ -2,10 +2,11 @@
 
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -633,6 +634,35 @@ def get_sqlite_saver(db_path: Path) -> SqliteSaver:
     return saver
 
 
+class _Node(Protocol):
+    """A graph node; LangGraph calls `state` by name, which a plain Callable can't say."""
+
+    def __call__(self, state: GraphState) -> dict[str, Any]: ...
+
+
+def _holding_checkpoint_writes(
+    checkpointer: BaseCheckpointSaver[Any] | None,
+) -> Callable[[_Node], _Node]:
+    """Keep the saver from writing while a node runs code that isn't trusted.
+
+    `DURABILITY` waits for checkpoints, but not for `put_writes`, which LangGraph leaves to a thread
+    of its own. Inside a node's `IntegritySnapshot` that write would read as tampering, and copying
+    the WAL halfway through it would restore a torn file. The saver takes this lock for every
+    write, so one in progress ends before the node starts and one not started waits for it to end.
+    Nothing is lost if the run dies meanwhile: the checkpoint after those writes is already stored.
+    """
+    lock = checkpointer.lock if isinstance(checkpointer, SqliteSaver) else nullcontext()
+
+    def holding(node: _Node) -> _Node:
+        def run(state: GraphState) -> dict[str, Any]:
+            with lock:
+                return node(state)
+
+        return run
+
+    return holding
+
+
 def create_graph(
     context: GraphContext,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
@@ -663,15 +693,16 @@ def create_graph(
     def route_verify_edge(state: GraphState) -> str:
         return route_verify(state, max_attempts=context.max_attempts)
 
+    untrusted = _holding_checkpoint_writes(checkpointer)
     builder = StateGraph(GraphState)
 
     builder.add_node("preflight", nodes.preflight)
     builder.add_node("load_spec", nodes.load_spec)
-    builder.add_node("build_driver", nodes.build_driver)
-    builder.add_node("red_check", nodes.red_check)
+    builder.add_node("build_driver", untrusted(nodes.build_driver))
+    builder.add_node("red_check", untrusted(nodes.red_check))
     builder.add_node("pick_next", nodes.pick_next)
-    builder.add_node("implement", nodes.implement)
-    builder.add_node("verify", nodes.verify)
+    builder.add_node("implement", untrusted(nodes.implement))
+    builder.add_node("verify", untrusted(nodes.verify))
     builder.add_node("commit", nodes.commit)
     builder.add_node("quarantine", nodes.quarantine)
     builder.add_node("pause", nodes.pause)
