@@ -44,6 +44,11 @@ MEASURE_CONTROL = {
     "report": "exit-code",
     "mode": "measure",
 }
+# IVA-003 has a test, but it executes no scenario: nothing runs that scenario's steps.
+UNLINKED_DRIVER = DRIVER.replace(
+    '@scenario(FEATURE, "Importe negativo")\ndef test_iva_003', "def test_otro"
+)
+MISSING = "Ningún test ejecuta el escenario 'IVA-003'"
 
 
 def test_d11_rejected_driver_is_told_which_test_is_missing(make_project: ProjectFactory) -> None:
@@ -52,13 +57,13 @@ def test_d11_rejected_driver_is_told_which_test_is_missing(make_project: Project
     def driver(task: AgentTask, attempt: int) -> None:
         good_driver(task)
         if attempt == 1:
-            write(task.cwd, DRIVER_PATH, DRIVER.replace("test_iva_003", "test_otro"))
+            write(task.cwd, DRIVER_PATH, UNLINKED_DRIVER)
 
     agent = Agent(driver=driver)
     run_lictor(root, agent)
 
     require(len(agent.prompts["driver"]) > 1, "el driver debía reintentarse")
-    assert "No se encontró" in error_block(agent.prompts["driver"][1])
+    assert MISSING in error_block(agent.prompts["driver"][1])
 
 
 def test_e11_red_rule_names_the_offender_and_only_it(make_project: ProjectFactory) -> None:
@@ -161,7 +166,7 @@ def test_m4_rejected_driver_leaves_an_event_and_the_full_error(
     def driver(task: AgentTask, attempt: int) -> None:
         good_driver(task)
         if attempt == 1:
-            write(task.cwd, DRIVER_PATH, DRIVER.replace("test_iva_003", "test_otro"))
+            write(task.cwd, DRIVER_PATH, UNLINKED_DRIVER)
 
     run_lictor(root, Agent(driver=driver))
 
@@ -169,8 +174,8 @@ def test_m4_rejected_driver_leaves_an_event_and_the_full_error(
     require(len(rejected) == 1, f"se esperaba un rechazo: {rejected}")
     data = rejected[0]["data"]
     assert data["attempt"] == 1
-    assert "No se encontró" in data["error"]
-    assert "No se encontró" in (root / data["error_path"]).read_text(encoding="utf-8")
+    assert MISSING in data["error"]
+    assert MISSING in (root / data["error_path"]).read_text(encoding="utf-8")
 
 
 def test_m4_every_attempt_keeps_its_own_report(make_project: ProjectFactory) -> None:
@@ -258,14 +263,14 @@ def test_m4_exhausted_driver_explains_the_exit(
 
     def driver(task: AgentTask, _attempt: int) -> None:
         good_driver(task)
-        write(task.cwd, DRIVER_PATH, DRIVER.replace("test_iva_003", "test_otro"))
+        write(task.cwd, DRIVER_PATH, UNLINKED_DRIVER)
 
     outcome = run_lictor(root, Agent(driver=driver))
 
     require(outcome == Outcome(10), f"se esperaba exit 10: {outcome}")
     data = _stop_reason(root)
     assert data["exit_code"] == 10
-    assert "No se encontró" in data["reason"]
+    assert MISSING in data["reason"]
     assert data["reason"] in capsys.readouterr().err
     assert data["reason"] in (root / ".lictor" / "report.md").read_text(encoding="utf-8")
 

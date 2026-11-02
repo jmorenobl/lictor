@@ -271,6 +271,14 @@ def judge_red(
     )
 
 
+@dataclass(frozen=True)
+class Impostors:
+    """How to turn a stub into a constant: the profile knows its language's stubs."""
+
+    pattern: str
+    replacements: tuple[str, ...]
+
+
 def impostor_source(text: str, pattern: str, replacement: str) -> tuple[str, int]:
     """Replace every line that matches `pattern` and say how many were replaced."""
     regex = re.compile(pattern)

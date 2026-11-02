@@ -165,13 +165,21 @@ out = source.parent / "__pycache__" / name
 out.parent.mkdir(exist_ok=True)
 out.write_bytes(header + marshal.dumps(code))
 """
+# It forges what the profile's plugin would write too: both come from the same process.
+FORGED_CASE = (
+    '<testcase classname="t" name="test_iva_00{i}"><properties>'
+    '<property name="lictor.scenario" value="IVA-00{i}"/>'
+    '<property name="lictor.feature" value="features/iva.feature"/>'
+    "</properties></testcase>"
+)
 FORGE_JUNIT = (
     '"""Interfaz."""\nimport os\nimport sys\n\n'
+    f"CASE = {FORGED_CASE!r}\n\n"
     'if any("acceptance" in a for a in sys.argv):\n'
     '    out = sys.argv[sys.argv.index("--junitxml") + 1]\n'
     '    with open(out, "w", encoding="utf-8") as f:\n'
     "        f.write('<testsuite>' + ''.join("
-    'f\'<testcase classname="t" name="test_iva_00{i}"/>\' for i in (1, 2, 3))'
+    "CASE.format(i=i) for i in (1, 2, 3))"
     " + '</testsuite>')\n"
     "    os._exit(0)\n"
 ) + STUB.split('"""Interfaz."""')[1]
@@ -454,7 +462,7 @@ def test_project_needs_reach_the_commands(
 
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert {"MI_FIJA=1", "MI_HEREDADA=2"} <= set(seen)
-    assert "PYTEST_PLUGINS=lictor_project_path,pytest_bdd.plugin" in seen
+    assert "PYTEST_PLUGINS=lictor_project_path,lictor_outcome,pytest_bdd.plugin" in seen
 
 
 @pytest.mark.parametrize(
@@ -466,8 +474,9 @@ def test_project_needs_reach_the_commands(
         {"verification": {"prepare": "true"}},
         {"forbidden_paths": []},
         {"banned_patterns": []},
+        {"oracle": {}},
     ],
-    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones"],
+    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones", "oraculo"],
 )
 def test_lictor_json_cannot_weaken_the_profile(
     make_project: ProjectFactory, changes: dict[str, Any]

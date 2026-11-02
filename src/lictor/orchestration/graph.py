@@ -4,7 +4,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
@@ -47,7 +47,7 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
-from lictor.domain.rules import run_outcome
+from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -152,6 +152,9 @@ class GraphContext:
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
+    oracle: RedOracle = field(default_factory=RedOracle)
+    map_link: MapLink = "name"
+    impostors: Impostors | None = None
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -372,6 +375,9 @@ class _GraphNodes:
                     scenario_hashes={
                         s["id"]: s.get("spec_hash", "") for s in state.get("scenarios", [])
                     },
+                    oracle=self.ctx.oracle,
+                    link=self.ctx.map_link,
+                    impostors=self.ctx.impostors,
                 )
             )
         except DriverError as exc:
@@ -557,6 +563,7 @@ class _GraphNodes:
                 forbidden_paths=self.ctx.forbidden_paths,
                 banned_patterns=self.ctx.banned_patterns,
                 tree=state.get("attempt_tree"),
+                link=self.ctx.map_link,
             )
         )
 

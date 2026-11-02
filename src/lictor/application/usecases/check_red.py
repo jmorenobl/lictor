@@ -26,13 +26,18 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
 from lictor.domain.model import Candidate, CommandOutput, Event, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
+    Impostors,
     MapLink,
     RedOracle,
     condense_error,
+    impostor_problem,
+    impostor_source,
+    impostor_survivors,
     judge_red,
     map_test_cases_to_scenarios,
     render_full_error,
     suite_crash_reason,
+    unmapped_cases,
 )
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
@@ -43,7 +48,9 @@ _REGISTER_HINT = (
     "Si no, su test no comprueba nada: corrígelo."
 )
 
-RejectionKind = Literal["L0-estado", "L0-entorno", "suite_caida", "mapeo", "regla_del_rojo"]
+RejectionKind = Literal[
+    "L0-estado", "L0-entorno", "suite_caida", "mapeo", "sin_escenario", "regla_del_rojo", "impostor"
+]
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,7 @@ class CheckRedRequest:
     scenario_hashes: Mapping[str, str] = field(default_factory=dict)
     oracle: RedOracle = field(default_factory=RedOracle)
     link: MapLink = "name"
+    impostors: Impostors | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +93,7 @@ class _Registration:
 
     reopened: tuple[str, ...] = ()
     collateral: tuple[str, ...] = ()
+    new_pending: tuple[str, ...] = ()  # nothing has proved their tests yet
 
     @property
     def subject(self) -> str:
@@ -147,6 +156,13 @@ class CheckRed:
             if env_problem:
                 rejection = _Rejection("L0-entorno", env_problem)
                 return self._reject_or_raise(request, step_dir, rejection)
+
+            if request.driver_fresh and request.impostors and registration.new_pending:
+                impostor = self._check_impostors(
+                    request, step_dir, rev, request.impostors, registration.new_pending
+                )
+                if impostor is not None:
+                    return self._reject_or_raise(request, step_dir, impostor)
 
             commit_sha: str | None = None
             if request.driver_fresh:
@@ -216,6 +232,13 @@ class CheckRed:
             rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
             return self._reject_or_raise(request, step_dir, rejection), None
 
+        extra = unmapped_cases(control_res.test_cases, mapped)
+        if request.driver_fresh and extra:
+            names = ", ".join(case.name for case in extra)
+            reason = f"El driver tiene tests que no son de ningún escenario: {names}"
+            rejection = _Rejection("sin_escenario", reason, extra, output=raw_output)
+            return self._reject_or_raise(request, step_dir, rejection), None
+
         # Git says what was green, and for which specification: the checkpoint has no say.
         classes = self.history.classify({sid: request.scenario_hashes.get(sid, "") for sid in ids})
         verdict = judge_red(mapped, classes, request.oracle, driver_fresh=request.driver_fresh)
@@ -238,9 +261,89 @@ class CheckRed:
         registration = _Registration(
             reopened=tuple(sid for sid in verdict.register if classes[sid] == "reopened"),
             collateral=tuple(sid for sid in verdict.register if classes[sid] == "new"),
+            new_pending=tuple(sid for sid in verdict.pending if classes[sid] == "new"),
         )
         scenario_status = {sid: "pending" if sid in verdict.pending else "green" for sid in ids}
         return CheckRedResult(ok=True, scenario_status=scenario_status), registration
+
+    def _check_impostors(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        impostors: Impostors,
+        new_pending: Sequence[str],
+    ) -> _Rejection | None:
+        """Prove each new test asserts something: with stubs turned into constants, it must fail.
+
+        Two opposite constants, because a legitimate test may pass with one of them. A run that
+        crashed, didn't map or kept a stub proves nothing, and doesn't count.
+        """
+        runs: list[dict[str, str]] = []
+        for index, replacement in enumerate(impostors.replacements, start=1):
+            run_dir = step_dir / f"impostor-{index}"
+            run_dir.mkdir()
+            with verification_tree(self.vcs, rev, request.project_root) as clone:
+                self._impersonate(clone, request.oracle, impostors.pattern, replacement)
+                output, tampered = self._run_acceptance_suite(
+                    request, run_dir / "acceptance.xml", clone
+                )
+            save_output(run_dir / "acceptance.log", output)
+            if tampered:
+                return _Rejection("L0-estado", describe_tampering(tampered))
+            env_problem = self.environment.ensure(request.run_id)
+            if env_problem:
+                return _Rejection("L0-entorno", env_problem)
+            results, problem = self._impostor_results(request, run_dir, output)
+            if problem is not None:
+                reason = f"No se pudo construir el impostor {replacement!r}: {problem}"
+                return _Rejection("impostor", reason, output=format_output(output))
+            runs.append(results)
+        survivors = impostor_survivors(list(new_pending), runs)
+        if not survivors:
+            return None
+        constants = ", ".join(repr(r) for r in impostors.replacements)
+        return _Rejection(
+            "impostor",
+            f"Los tests de {', '.join(survivors)} pasan aunque la interfaz devuelva siempre "
+            f"una constante ({constants}): no comprueban su resultado con ninguna aserción.",
+        )
+
+    def _impersonate(self, clone: Path, oracle: RedOracle, pattern: str, replacement: str) -> None:
+        """Replace the stubs in the code the agent may write, never in the driver."""
+        for root in oracle.writable:
+            for path in sorted((clone / root).rglob("*")):
+                rel = path.relative_to(clone).as_posix()
+                if not path.is_file() or path.is_symlink() or _inside(rel, oracle.driver):
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                changed, count = impostor_source(text, pattern, replacement)
+                if count:
+                    path.write_text(changed, encoding="utf-8")
+
+    def _impostor_results(
+        self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
+    ) -> tuple[dict[str, str], str | None]:
+        report = run_dir / "acceptance.xml"
+        content = report.read_text(encoding="utf-8", errors="replace") if report.is_file() else ""
+        cases = self.reader.read(
+            output=content or output.stdout,
+            exit_code=output.returncode,
+            duration_ms=output.duration_ms,
+            allow_empty=False,
+        ).test_cases
+        crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
+        try:
+            mapped = map_test_cases_to_scenarios(
+                cases, [_scenario_str(s) for s in request.all_scenario_ids], request.link
+            )
+        except DriverError as exc:
+            return {}, impostor_problem(crash, str(exc), cases)
+        problem = impostor_problem(crash, None, cases)
+        return {sid: str(case.status) for sid, case in mapped.items()}, problem
 
     def _run_acceptance_suite(
         self,
@@ -400,3 +503,7 @@ class CheckRed:
 
 def _scenario_str(sid: ScenarioId | str) -> str:
     return str(sid.value if isinstance(sid, ScenarioId) else sid)
+
+
+def _inside(path: str, roots: Sequence[str]) -> bool:
+    return any(path == r.strip("/") or path.startswith(f"{r.strip('/')}/") for r in roots)

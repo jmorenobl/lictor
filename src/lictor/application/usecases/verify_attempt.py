@@ -37,6 +37,7 @@ from lictor.domain.model import (
     VerifyResult,
 )
 from lictor.domain.rules import (
+    MapLink,
     acceptance_failure,
     banned_matches,
     collateral_greens,
@@ -119,6 +120,7 @@ class VerifyAttemptRequest:
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
     tree: str | None = None
+    link: MapLink = "name"
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
     tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
@@ -666,7 +668,7 @@ class VerifyAttempt:
 
         # Map test cases to scenario IDs
         try:
-            mapped = map_test_cases_to_scenarios(acc_res.test_cases, req.all_scenario_ids)
+            mapped = map_test_cases_to_scenarios(acc_res.test_cases, req.all_scenario_ids, req.link)
         except DriverError as exc:
             return self._fail(
                 req,

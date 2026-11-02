@@ -8,6 +8,8 @@ ControlLevel = Literal["L1", "L2", "L4", "L5"]
 ReportFormat = Literal["exit-code", "junit"]
 ControlMode = Literal["block", "measure"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
+RedKind = Literal["assertion", "not_implemented", "error"]
+MapLinkKind = Literal["name", "scenario"]
 BackendKind = Literal["claude-cli", "fake"]
 BackendAuth = Literal["subscription", "api_key"]
 
@@ -144,6 +146,30 @@ class ProfileVerification(BaseModel):
         return self
 
 
+class ImpostorConfig(BaseModel):
+    """Lines that mark a stub, and the constants that replace them to prove a test asserts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pattern: str = Field(min_length=1)
+    replacements: list[str] = Field(min_length=1)
+
+    @field_validator("pattern")
+    @classmethod
+    def _check_pattern(cls, pattern: str) -> str:
+        return _validate_regexes([pattern])[0]
+
+
+class ProfileOracle(BaseModel):
+    """What makes the sealed driver a valid oracle: only the profile declares it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    link: MapLinkKind = "name"
+    red_kinds: list[RedKind] = Field(default_factory=list)
+    impostors: ImpostorConfig | None = None
+
+
 class ProjectVerification(BaseModel):
     """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada."""
 
@@ -241,6 +267,7 @@ class Profile(BaseModel):
     banned_patterns: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
     verification: ProfileVerification = Field(default_factory=ProfileVerification)
+    oracle: ProfileOracle = Field(default_factory=ProfileOracle)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""

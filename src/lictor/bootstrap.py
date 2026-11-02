@@ -42,6 +42,7 @@ from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import ConfigError
+from lictor.domain.rules import RedOracle
 from lictor.orchestration.graph import GraphContext
 
 
@@ -215,6 +216,13 @@ def bootstrap_runtime(
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
         forbidden_paths=defences.forbidden_paths,
         banned_patterns=defences.banned_patterns,
+        oracle=RedOracle(
+            red_kinds=defences.red_kinds,
+            writable=active_config.paths.writable,
+            driver=active_config.paths.driver,
+        ),
+        map_link=defences.map_link,
+        impostors=defences.impostors,
     )
 
     return BootstrapResult(

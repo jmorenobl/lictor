@@ -21,7 +21,6 @@ from tests.integration.repro.harness import (
     good_driver,
     good_impl,
     green_ids,
-    pending,
     quarantined,
     require,
     run_lictor,
@@ -62,7 +61,6 @@ def _add_new_scenario(root: Path) -> None:
     git(root, "commit", "-q", "-m", "spec: escenario nuevo")
 
 
-@pending(5, "A2")
 def test_f30_driver_without_assertions_is_rejected(make_project: ProjectFactory) -> None:
     root = make_project()
 
@@ -80,7 +78,6 @@ def test_f30_driver_without_assertions_is_rejected(make_project: ProjectFactory)
     assert false_greens(root) == []
 
 
-@pending(5, "A2")
 def test_d10_broken_driver_is_not_blamed_on_the_scenario(make_project: ProjectFactory) -> None:
     root = make_project()
 

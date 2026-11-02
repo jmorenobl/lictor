@@ -28,6 +28,7 @@ from lictor.domain.model import (
     ScenarioId,
     TestCaseResult,
 )
+from lictor.domain.rules import Impostors, RedOracle
 
 
 def _environment(
@@ -833,3 +834,181 @@ def test_check_red_reregistration_alone_carries_no_collateral_trailer(tmp_path: 
     use_case.execute(request)
 
     assert "Lictor-Collateral" not in vcs.commit_tree.call_args.kwargs["trailers"]
+
+
+_ORACLE = RedOracle(
+    red_kinds=("assertion", "not_implemented"), writable=("src/",), driver=("tests/acceptance/",)
+)
+_IMPOSTORS = Impostors(
+    r"^(\s*)raise NotImplementedError\b.*$", (r"\1return None", r"\1return True")
+)
+_STUB = "def general():\n    raise NotImplementedError\n"
+
+
+def _case_xml(name: str, failure: str = "") -> str:
+    if not failure:
+        return f'<testcase name="{name}"/>'
+    props = f'<properties><property name="lictor.failure" value="{failure}"/>'
+    props += '<property name="lictor.origin" value="src/iva.py"/></properties>'
+    return f'<testcase name="{name}">{props}<failure message="m"/></testcase>'
+
+
+class _ImpostorRunner(_SuiteRunner):
+    """Reports by what the clone holds: the stub, `return None` or `return True`."""
+
+    def __init__(self, reports: dict[str, tuple[str, int]]) -> None:
+        super().__init__("", 1)
+        self.reports = reports
+        self.sources: list[str] = []
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandOutput:
+        source = (cwd / "src" / "iva.py").read_text(encoding="utf-8")
+        self.sources.append(source)
+        driver = (cwd / "tests" / "acceptance" / "test_iva.py").read_text(encoding="utf-8")
+        assert "raise NotImplementedError" in driver, "el driver no se toca"
+        key = next(k for k in self.reports if k in source)
+        self.report, self.code = self.reports[key]
+        return super().run(cmd, cwd, timeout_s, env)
+
+
+def _impostor_check(
+    tmp_path: Path, reports: dict[str, tuple[str, int]], **overrides: Any
+) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock, _ImpostorRunner]:
+    use_case, request, event_log, spec_source, _ = _real_check(
+        tmp_path, "", 1, oracle=_ORACLE, impostors=_IMPOSTORS, **overrides
+    )
+    runner = _ImpostorRunner(reports)
+    use_case.environment.runner = runner
+
+    def export(_rev: str, dest: Path) -> None:
+        (dest / "src").mkdir(parents=True)
+        (dest / "src" / "iva.py").write_text(_STUB, encoding="utf-8")
+        (dest / "tests" / "acceptance").mkdir(parents=True)
+        (dest / "tests" / "acceptance" / "test_iva.py").write_text(
+            "def stub():\n    raise NotImplementedError\n", encoding="utf-8"
+        )
+
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.export_tree.side_effect = export
+    return use_case, request, event_log, spec_source, runner
+
+
+_RED = "".join(
+    [_case_xml("test_iva_001", "not_implemented"), _case_xml("test_iva_002", "not_implemented")]
+)
+
+
+def _suite(*cases: str) -> str:
+    return f"<testsuite>{''.join(cases)}</testsuite>"
+
+
+def test_check_red_seals_a_driver_whose_new_tests_fail_with_some_impostor(tmp_path: Path) -> None:
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")),
+            1,
+        ),
+        "return True": (
+            _suite(_case_xml("test_iva_001"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, _, spec_source, runner = _impostor_check(tmp_path, reports)
+
+    result = use_case.execute(request)
+
+    assert result.ok is True
+    assert runner.sources == [
+        _STUB,
+        _STUB.replace("raise NotImplementedError", "return None"),
+        _STUB.replace("raise NotImplementedError", "return True"),
+    ]
+    spec_source.write_seal.assert_called_once()
+    step = runner.paths[0].parent
+    assert (step / "impostor-1" / "acceptance.log").is_file()
+    assert (step / "impostor-2" / "acceptance.xml").is_file()
+
+
+def test_check_red_rejects_a_new_test_that_passes_with_every_impostor(tmp_path: Path) -> None:
+    passing = (_suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")), 1)
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": passing}
+    use_case, request, event_log, spec_source, _ = _impostor_check(tmp_path, reports)
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    rejection = _rejection(event_log)
+    assert rejection.data["reason"] == "impostor"
+    assert "Los tests de IVA-002 pasan aunque la interfaz devuelva siempre" in str(
+        rejection.data["error"]
+    )
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_an_impostor_that_keeps_a_stub_proves_nothing(tmp_path: Path) -> None:
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": (_suite(_RED), 1)}
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    use_case.execute(request)
+
+    error = str(_rejection(event_log).data["error"])
+    assert "No se pudo construir el impostor" in error
+    assert "una sola línea" in error
+
+
+def test_check_red_an_impostor_that_crashes_proves_nothing(tmp_path: Path) -> None:
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": ("", 2)}
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    use_case.execute(request)
+
+    assert "No se pudo construir el impostor" in str(_rejection(event_log).data["error"])
+
+
+def test_check_red_runs_no_impostor_for_a_sealed_driver(tmp_path: Path) -> None:
+    reports = {"raise NotImplementedError": (_suite(_RED), 1)}
+    use_case, request, _, _, runner = _impostor_check(
+        tmp_path, reports, driver_fresh=False, driver_attempts=0
+    )
+
+    assert use_case.execute(request).ok is True
+    assert len(runner.sources) == 1
+
+
+def test_check_red_rejects_a_red_that_fails_with_an_error(tmp_path: Path) -> None:
+    error = _suite(_case_xml("test_iva_001", "error"), _case_xml("test_iva_002", "not_implemented"))
+    use_case, request, event_log, _, runner = _impostor_check(
+        tmp_path, {"raise NotImplementedError": (error, 1)}
+    )
+
+    use_case.execute(request)
+
+    assert "no falla por un rojo válido" in str(_rejection(event_log).data["error"])
+    assert len(runner.sources) == 1
+
+
+def test_check_red_rejects_a_fresh_driver_with_tests_of_no_scenario(tmp_path: Path) -> None:
+    report = _suite(_RED, _case_xml("test_ayuda", "assertion"))
+    use_case, request, event_log, spec_source, _ = _real_check(tmp_path, report, 1)
+
+    use_case.execute(request)
+
+    event = _rejection(event_log)
+    assert event.data["reason"] == "sin_escenario"
+    assert "no son de ningún escenario: test_ayuda" in str(event.data["error"])
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_a_sealed_driver_may_keep_tests_of_no_scenario(tmp_path: Path) -> None:
+    report = _suite(_RED, _case_xml("test_ayuda", "assertion"))
+    use_case, request, _, _, _ = _real_check(
+        tmp_path, report, 1, driver_fresh=False, driver_attempts=0
+    )
+    assert use_case.execute(request).ok is True
