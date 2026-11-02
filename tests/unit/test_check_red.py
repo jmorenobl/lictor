@@ -619,3 +619,22 @@ def test_check_red_rerun_after_a_crash_verifies_the_driver_already_committed(
     vcs.commit_tree.assert_not_called()
     vcs.advance_head.assert_not_called()
     spec_source.write_seal.assert_called_once()
+
+
+def test_check_red_driver_that_changes_nothing_seals_head_without_a_commit(
+    tmp_path: Path,
+) -> None:
+    """A rebuilt driver may need no change, as when a step's wording changed and the test didn't."""
+    use_case, request, _, spec_source, _ = _real_check(tmp_path, _REPORT_RED, 1, tree="same")
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.get_tree.return_value = "same"
+    vcs.get_head_sha.return_value = "head"
+
+    result = use_case.execute(request)
+
+    assert result.commit_sha == "head"
+    vcs.commit_tree.assert_not_called()
+    vcs.advance_head.assert_not_called()
+    assert vcs.export_tree.call_args.args[0] == "HEAD"
+    spec_source.write_seal.assert_called_once()

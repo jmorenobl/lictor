@@ -225,14 +225,36 @@ def test_commit_tree_carries_author_and_trailers_without_moving_the_branch(
     assert author == "Lictor <lictor@localhost>"
 
 
-def test_commit_tree_allows_an_empty_change(git_repo: Path) -> None:
+def test_commit_tree_refuses_an_empty_change_unless_asked(git_repo: Path) -> None:
+    """An attempt that changes nothing is not a candidate; only a registration may be empty."""
     cli = GitCli(repo_dir=git_repo)
     head = _head(git_repo)
 
-    candidate = cli.commit_tree(cli.get_tree("HEAD"), "m")
+    with pytest.raises(CandidateError, match="no cambia nada"):
+        cli.commit_tree(cli.get_tree("HEAD"), "m")
+    candidate = cli.commit_tree(cli.get_tree("HEAD"), "m", empty=True)
 
     assert candidate.parent == head
     assert candidate.sha != head
+
+
+def test_commit_tree_chains_on_a_given_parent(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "file_a.txt").write_text("encadenado", encoding="utf-8")
+    first = cli.commit_tree(cli.capture(workdir), "primero")
+
+    second = cli.commit_tree(
+        first.tree, "segundo", {"Scenario": ["IVA-002", "IVA-003"]}, parent=first.sha, empty=True
+    )
+
+    assert _head(git_repo) == head
+    assert second.parent == first.sha
+    assert cli.get_tree(second.sha) == first.tree
+    assert cli.get_trailers("Scenario", commit_ref=second.sha) == ["IVA-002", "IVA-003"]
+    with pytest.raises(CandidateError):
+        cli.commit_tree(first.tree, "vacío", parent=first.sha)
 
 
 def _tree_files(repo: Path, rev: str) -> list[str]:

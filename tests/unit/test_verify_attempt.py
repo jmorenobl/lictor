@@ -1199,3 +1199,21 @@ def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -
     assert "elimina tests/unit" in (result.condensed_error or "")
     assert runner.calls == []
     assert result.control_results["unit"].skipped is None
+
+
+def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
+    tmp_path: Path,
+) -> None:
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs._changed_files = []
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "L0-sin-cambios"
+    assert "no cambia nada" in (result.condensed_error or "")
+    assert runner.calls == []
+    assert result.candidate is None

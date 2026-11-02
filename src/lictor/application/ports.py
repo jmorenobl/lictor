@@ -92,9 +92,15 @@ class Vcs(Protocol):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
-        """Build a commit of `tree` on top of HEAD, leaving the branch alone."""
+        """Build a commit of `tree` on `parent`, or HEAD, leaving the branch alone.
+
+        A commit that changes nothing over its parent is refused unless `empty` says it registers.
+        """
         ...
 
     def export_tree(self, rev: str, dest: Path) -> None:

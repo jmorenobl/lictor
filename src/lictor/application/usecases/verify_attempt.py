@@ -315,6 +315,9 @@ class VerifyAttempt:
 
     def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run L0 over what the agent left: the tree read from its copy, before any project code."""
+        if not self.vcs.changes(self._tree(req)):
+            return self._fail(req, _Failure("L0-sin-cambios", "El intento no cambia nada"))
+
         routes_res = self._check_routes(req)
         if not routes_res.ok:
             return routes_res

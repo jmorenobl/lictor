@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import Vcs
@@ -198,11 +198,20 @@ class GitCli(Vcs):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
         """Build a commit with author Lictor; nothing points to it until the branch advances."""
-        parent = self.get_head_sha()
-        lines = [f"{key}: {val}" for key, val in (trailers or {}).items()]
+        parent = parent or self.get_head_sha()
+        if not empty and self.get_tree(parent) == tree:
+            raise CandidateError(f"El commit sobre {parent[:12]} no cambia nada")
+        lines = [
+            f"{key}: {value}"
+            for key, values in (trailers or {}).items()
+            for value in ([values] if isinstance(values, str) else values)
+        ]
         full_message = "\n\n".join([message, "\n".join(lines)]) if lines else message
         sha = self._run_git(
             ["commit-tree", tree, "-p", parent, "-m", full_message],

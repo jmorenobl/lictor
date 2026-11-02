@@ -131,12 +131,13 @@ class CheckRed:
         return replace(result, commit_sha=commit_sha)
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
-        """Take the fresh driver from what the agent left, unless a crash left it committed."""
+        """Take the fresh driver from what the agent left, unless HEAD already holds it.
+
+        That is the case after a crash that left it committed, and when the driver needed no change.
+        """
         if not request.driver_fresh or request.tree is None:
             return None
-        head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
-        committed = head_runs and head_runs[0] == request.run_id
-        if committed and self.vcs.get_tree("HEAD") == request.tree:
+        if self.vcs.get_tree("HEAD") == request.tree:
             return None
         return self.vcs.commit_tree(
             request.tree,
