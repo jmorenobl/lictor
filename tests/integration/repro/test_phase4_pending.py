@@ -15,7 +15,6 @@ from tests.integration.repro.harness import (
     Outcome,
     events_of,
     false_greens,
-    git,
     good_impl,
     green_ids,
     known_limitation,
@@ -63,17 +62,17 @@ def test_new_run_after_a_profile_change_gets_through(
     assert false_greens(root) == []
 
 
-def test_new_run_blocked_by_a_collateral_green_says_how_to_go_on(
+def test_new_run_after_a_collateral_green_needs_no_trailer_by_hand(
     make_project: ProjectFactory, tmp_path: Path
 ) -> None:
-    """Phase 5 records these by itself (D5); until then the way out has to be in the message."""
+    """Phase 4 left the way out in the message; Phase 5 (D5) records the collateral by itself."""
     root = make_project()
 
     def impl(task: AgentTask, scenario_id: str, attempt: int) -> AgentStatus | None:
         if scenario_id == "IVA-001":
             write(task.cwd, MODULE_PATH, GOOD_2)
             return None
-        if scenario_id == "IVA-002":
+        if scenario_id == "IVA-003":
             return "rate_limited"
         good_impl(task, scenario_id, attempt)
         return None
@@ -83,14 +82,9 @@ def test_new_run_blocked_by_a_collateral_green_says_how_to_go_on(
     _edit_profile(tmp_path)
     require(run_lictor(root, agent) == Outcome(10), "reanudar debía rechazarse")
 
-    assert run_lictor(root, agent, new=True) == Outcome(10)
+    assert run_lictor(root, Agent(), new=True) == Outcome(0)
 
-    reason = events_of(root, "run.finished")[-1]["data"]["reason"]
-    assert "--allow-empty" in reason
-    assert "IVA-002" in reason
-
-    git(root, "commit", "-q", "--allow-empty", "-m", "registro", "--trailer", "Scenario: IVA-002")
-    assert run_lictor(root, agent, new=True) == Outcome(0)
+    assert "IVA-002" not in agent.calls
     assert green_ids(root) == ["IVA-001", "IVA-002", "IVA-003"]
     assert false_greens(root) == []
 

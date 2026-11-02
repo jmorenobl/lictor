@@ -66,8 +66,9 @@ def test_e11_red_rule_names_the_offender_and_only_it(make_project: ProjectFactor
     def driver(task: AgentTask, attempt: int) -> None:
         good_driver(task)
         if attempt == 1:
-            passing = DRIVER.replace("assert iva.negativo(-5) is True", "assert True")
-            write(task.cwd, DRIVER_PATH, passing)
+            # Skipped, not failed: the agent can fix it, so the driver is retried.
+            skipped = DRIVER.replace("assert iva.negativo(-5) is True", 'pytest.skip("pendiente")')
+            write(task.cwd, DRIVER_PATH, f"import pytest\n{skipped}")
 
     agent = Agent(driver=driver)
     run_lictor(root, agent)
