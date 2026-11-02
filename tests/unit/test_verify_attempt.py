@@ -1304,3 +1304,21 @@ def test_verify_records_no_failure_when_the_scenario_passed(tmp_path: Path) -> N
 
     assert result.failed_at == "acceptance"
     assert result.failure is None
+
+
+def test_verify_maps_by_the_scenario_each_test_executed(tmp_path: Path) -> None:
+    linked = (
+        '<testsuite><testcase name="test_uno"><properties>'
+        '<property name="lictor.scenario" value="IVA-001"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties></testcase>'
+        '<testcase name="test_dos"><properties>'
+        '<property name="lictor.scenario" value="IVA-002"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties>'
+        '<failure message="pendiente"/></testcase></testsuite>'
+    )
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (linked, 1)}), link="scenario")
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.scenario_results == {"IVA-001": "passed", "IVA-002": "failure"}

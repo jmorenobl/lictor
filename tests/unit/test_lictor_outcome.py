@@ -23,6 +23,11 @@ def roto():
     raise RuntimeError("fixture rota")
 
 
+@pytest.fixture
+def sin_hacer():
+    raise NotImplementedError
+
+
 def test_assertion():
     assert 1 == 2
 
@@ -41,6 +46,10 @@ def test_attribute_error():
 
 
 def test_setup(roto):
+    pass
+
+
+def test_setup_not_implemented(sin_hacer):
     pass
 
 
@@ -102,6 +111,7 @@ def cases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, TestCaseResult]
         ("test_driver_raises_not_implemented", "not_implemented", "tests/test_x.py"),
         ("test_attribute_error", "error", "tests/test_x.py"),
         ("test_setup", "error", "tests/test_x.py"),
+        ("test_setup_not_implemented", "error", "tests/test_x.py"),
         ("test_did_not_raise", "assertion", ""),
         ("test_fail", "assertion", ""),
         ("test_library", "error", ""),

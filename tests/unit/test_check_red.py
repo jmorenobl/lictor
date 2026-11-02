@@ -881,7 +881,7 @@ def _impostor_check(
     tmp_path: Path, reports: dict[str, tuple[str, int]], **overrides: Any
 ) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock, _ImpostorRunner]:
     use_case, request, event_log, spec_source, _ = _real_check(
-        tmp_path, "", 1, oracle=_ORACLE, impostors=_IMPOSTORS, **overrides
+        tmp_path, "", 1, **{"oracle": _ORACLE, "impostors": _IMPOSTORS, **overrides}
     )
     runner = _ImpostorRunner(reports)
     use_case.environment.runner = runner
@@ -1012,3 +1012,19 @@ def test_check_red_a_sealed_driver_may_keep_tests_of_no_scenario(tmp_path: Path)
         tmp_path, report, 1, driver_fresh=False, driver_attempts=0
     )
     assert use_case.execute(request).ok is True
+
+
+def test_check_red_impostors_never_touch_the_driver_even_inside_writable(tmp_path: Path) -> None:
+    """The configuration keeps them apart; the impostor doesn't rely on it."""
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return": (_suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")), 1),
+    }
+    nested = RedOracle(
+        _ORACLE.red_kinds, writable=("src/", "tests/"), driver=("tests/acceptance/",)
+    )
+    use_case, request, _, _, runner = _impostor_check(tmp_path, reports, oracle=nested)
+
+    use_case.execute(request)
+
+    assert len(runner.sources) == 3, "el driver intacto en cada impostor"
