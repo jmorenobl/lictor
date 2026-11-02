@@ -37,6 +37,8 @@ class FakeVcs(Vcs):
         self._added = list(added or [])
         self.links: list[str] = []
         self.moved: list[str] = []
+        self.exported: list[str] = []
+        self.deleted: list[str] = []
 
     def pin(self) -> RepoPin:
         """Pin what is there now: a move nobody caught stops being a change, as in a real repo."""
@@ -54,10 +56,11 @@ class FakeVcs(Vcs):
         return "fake-tree"
 
     def changes(self, tree: str) -> list[TreeChange]:
-        return [
+        found = [
             TreeChange(path, "120000" if path in self.links else "100644")
             for path in self._changed_files
         ]
+        return found + [TreeChange(path, "000000") for path in self.deleted]
 
     def added_lines(self, tree: str) -> list[str]:
         return list(self._added)
@@ -74,6 +77,9 @@ class FakeVcs(Vcs):
 
     def export_tree(self, rev: str, dest: Path) -> None:
         dest.mkdir(parents=True)
+        for rel_path in self.exported:
+            (dest / rel_path).parent.mkdir(parents=True, exist_ok=True)
+            (dest / rel_path).write_text("x", encoding="utf-8")
 
     def export_copy(self, rev: str, dest: Path) -> None:
         dest.mkdir(parents=True)
@@ -1137,3 +1143,59 @@ def test_every_verification_records_its_evidence(tmp_path: Path) -> None:
 
     assert result.evidence["path"] == f".lictor/runs/{req.run_id}/IVA-001/002-verify"
     assert result.evidence["hash"] == hash_tree(tmp_path / result.evidence["path"])
+
+
+_UNIT_WHEN_EXISTS = VerificationControl(
+    id="unit",
+    level="L2",
+    run="unit --junitxml {out}",
+    report="junit",
+    when_exists="tests/unit",
+)
+
+
+def test_verify_skips_a_control_whose_path_neither_tree_has(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,))
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["suite"]
+    skipped = result.control_results["unit"]
+    assert skipped.ok is True
+    assert skipped.skipped is not None
+    assert "tests/unit" in skipped.skipped
+    assert control_summaries(result)["unit"]["skipped"] == skipped.skipped
+
+
+def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "unit": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.exported = ["tests/unit/test_smoke.py"]
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["unit", "suite"]
+    assert result.control_results["unit"].skipped is None
+    assert control_summaries(result)["unit"]["skipped"] is None
+
+
+def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -> None:
+    """Deleting the unit tests must not turn L2 into a skipped control."""
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(
+        tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,), paths_writable=("src/", "tests/unit/")
+    )
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.deleted = ["tests/unit/test_smoke.py"]
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "unit"
+    assert "elimina tests/unit" in (result.condensed_error or "")
+    assert runner.calls == []
+    assert result.control_results["unit"].skipped is None

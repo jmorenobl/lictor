@@ -234,6 +234,7 @@ class ControlResult:
     exit_code: int | None = None
     mode: str = "block"
     output_path: str | None = None
+    skipped: str | None = None  # why the control didn't run, when it didn't
 
 
 @dataclass(frozen=True)

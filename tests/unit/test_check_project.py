@@ -155,3 +155,37 @@ def test_check_project_records_the_output_of_a_measure_control(tmp_path: Path) -
     assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
     assert measured.output_path is not None
     assert "salida de medida" in (tmp_path / measured.output_path).read_text(encoding="utf-8")
+
+
+def test_check_project_skips_a_control_whose_path_the_working_tree_lacks(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    use_case = CheckProject(runner=runner, readers={"junit": JUnitReader()})
+    unit = CheckControlSpec(
+        id="unit",
+        level="L2",
+        run="pytest tests/unit --junitxml {out}",
+        report="junit",
+        when_exists="tests/unit",
+    )
+
+    res = use_case.execute(CheckProjectRequest(project_root=tmp_path, controls=[unit]))
+
+    assert res.ok is True
+    assert runner.calls == []
+    assert "tests/unit" in (res.control_results["unit"].skipped or "")
+
+
+def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    runner = FakeRunner()
+    runner.set_response("lint", CommandOutput(returncode=0, stdout="", stderr=""))
+    use_case = CheckProject(runner=runner, readers={"exit-code": ExitCodeReader()})
+    lint = CheckControlSpec(
+        id="lint", level="L1", run="lint tests/unit", report="exit-code", when_exists="tests/unit"
+    )
+
+    res = use_case.execute(CheckProjectRequest(project_root=tmp_path, controls=[lint]))
+
+    assert res.ok is True
+    assert len(runner.calls) == 1
+    assert res.control_results["lint"].skipped is None

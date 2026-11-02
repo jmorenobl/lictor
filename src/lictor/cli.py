@@ -209,6 +209,7 @@ def check(
                 mode=c.mode,
                 allow_empty=c.allow_empty,
                 timeout_s=c.timeout_s,
+                when_exists=c.when_exists,
             )
             for c in runtime.config.controls
         ]
@@ -236,6 +237,9 @@ def check(
         )
 
         for name, cr in res.control_results.items():
+            if cr.skipped:
+                typer.echo(f"- {name} omitido: {cr.skipped}")
+                continue
             status_char = "✓" if cr.ok else "✗"
             typer.echo(f"{status_char} {name} ({cr.duration_ms}ms)")
             if not cr.ok and cr.output_path:

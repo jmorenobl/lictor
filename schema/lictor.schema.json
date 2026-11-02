@@ -141,6 +141,18 @@
           "exclusiveMinimum": 0,
           "title": "Timeout S",
           "type": "integer"
+        },
+        "when_exists": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "When Exists"
         }
       },
       "required": [

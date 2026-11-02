@@ -11,6 +11,7 @@ from lictor.domain.rules import (
     banned_matches,
     check_red_rule,
     condense_error,
+    control_path_status,
     count_agent_failures,
     describe_red_violation,
     forbidden_paths,
@@ -710,3 +711,22 @@ def test_anchor_before_sealing_ignores_the_seal() -> None:
 
 def test_anchor_of_a_run_that_recorded_nothing_has_no_problems() -> None:
     assert anchor_problems({}, _ANCHOR, set()) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "in_tree", "deleted", "expected"),
+    [
+        ("tests/unit", True, [], "present"),
+        ("tests/unit", True, ["tests/unit/test_a.py"], "present"),
+        ("tests/unit", False, [], "absent"),
+        ("tests/unit", False, ["tests/unit/test_a.py"], "removed"),
+        ("tests/unit/", False, ["tests/unit/test_a.py"], "removed"),
+        ("tests/unit", False, ["tests/unit"], "removed"),
+        ("tests/unit", False, ["tests/unittest/test_a.py", "src/tests/unit/x.py"], "absent"),
+    ],
+)
+def test_control_path_status_tells_absent_from_removed(
+    path: str, in_tree: bool, deleted: list[str], expected: str
+) -> None:
+    """Only a path the base never had lets a control be skipped; removing one fails it."""
+    assert control_path_status(path, in_tree=in_tree, deleted=deleted) == expected

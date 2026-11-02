@@ -166,6 +166,7 @@ class ControlConfig(BaseModel):
     mode: ControlMode = "block"
     allow_empty: bool = False
     timeout_s: int = Field(default=600, gt=0)
+    when_exists: str | None = None
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
@@ -173,6 +174,17 @@ class ControlConfig(BaseModel):
             msg = f"El control '{self.id}' con report='junit' debe incluir '{{out}}' en run"
             raise ValueError(msg)
         return self
+
+    @field_validator("when_exists")
+    @classmethod
+    def _validate_when_exists(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = PurePosixPath(value.strip())
+        if not value.strip() or path.is_absolute() or ".." in path.parts:
+            msg = f"when_exists debe ser una ruta relativa dentro del proyecto: '{value}'"
+            raise ValueError(msg)
+        return path.as_posix()
 
 
 class BackendConfig(BaseModel):

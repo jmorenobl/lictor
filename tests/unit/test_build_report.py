@@ -347,3 +347,20 @@ def test_report_counts_discarded_lines_by_kind(tmp_path: Path) -> None:
     assert "**Líneas descartadas**: 7" in report
     assert "(escritura cortada o edición): 2" in report
     assert "(forjadas): 5" in report
+
+
+def test_report_lists_skipped_controls_with_the_reason(tmp_path: Path) -> None:
+    controls: dict[str, object] = {
+        "unit": {"ok": True, "mode": "block", "skipped": "no existe tests/unit"},
+        "lint": {"ok": True, "mode": "block", "skipped": None},
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Controles omitidos")[1].split("##")[0]
+    assert "- **unit** (IVA-001, intento 1): no existe tests/unit" in section
+    assert "lint" not in section
+
+
+def test_report_says_when_no_control_was_skipped(tmp_path: Path) -> None:
+    assert "*Ningún control omitido.*" in _report(tmp_path, [_verify_event({})])

@@ -808,3 +808,16 @@ def test_profile_agent_commands_include_the_acceptance_suite() -> None:
     target = profile.acceptance.run.split(" --")[0]
 
     assert target in profile.agent_commands
+
+
+def test_python_uv_unit_control_runs_only_where_its_tests_exist() -> None:
+    unit = next(c for c in load_profile("python-uv").controls if c.id == "unit")
+    assert unit.when_exists == "tests/unit"
+
+
+@pytest.mark.parametrize("path", ["", "/abs/tests", "../fuera", "tests/../../fuera"])
+def test_control_when_exists_must_stay_inside_the_project(path: str) -> None:
+    with pytest.raises(ValidationError, match="when_exists"):
+        ControlConfig.model_validate(
+            {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code", "when_exists": path}
+        )

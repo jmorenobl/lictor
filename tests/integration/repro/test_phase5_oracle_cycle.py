@@ -166,7 +166,6 @@ def test_d28_changing_a_green_scenario_reopens_it(make_project: ProjectFactory) 
     assert "IVA-001" in agent.calls
 
 
-@pending(5, "A7")
 def test_d12_missing_unit_dir_does_not_block_an_honest_agent(make_project: ProjectFactory) -> None:
     root = make_project()
 

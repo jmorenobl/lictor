@@ -116,6 +116,7 @@ class BuildReport:
             "failed_by_level": defaultdict(int),
             "attempts": [],
             "measures": [],
+            "skipped_controls": [],
             "rejected_drivers": [],
         }
 
@@ -253,6 +254,11 @@ class BuildReport:
 
         controls = ev.data.get("controls")
         for control_id, control in controls.items() if isinstance(controls, dict) else ():
+            if isinstance(control, dict) and control.get("skipped"):
+                info["skipped_controls"].append(
+                    f"- **{control_id}** ({sid}, intento {attempt}): {control['skipped']}"
+                )
+                continue
             if isinstance(control, dict) and control.get("mode") == "measure":
                 result = "correcto" if control.get("ok") else "fallo"
                 info["measures"].append(
@@ -320,6 +326,9 @@ class BuildReport:
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
+
+        lines.extend(["", "## Controles omitidos"])
+        lines.extend(info["skipped_controls"] or ["- *Ningún control omitido.*"])
 
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])

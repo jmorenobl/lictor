@@ -4,6 +4,7 @@ Includes ADR-0001 integrity snapshot for state protection.
 """
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -39,6 +40,7 @@ from lictor.domain.rules import (
     acceptance_failure,
     banned_matches,
     condense_error,
+    control_path_status,
     forbidden_paths,
     map_test_cases_to_scenarios,
     render_full_error,
@@ -48,6 +50,7 @@ from lictor.domain.rules import (
 RoleKind = Literal["implement", "driver"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
+_DELETED_MODE = "000000"
 
 
 class VerificationControlProtocol(Protocol):
@@ -74,6 +77,9 @@ class VerificationControlProtocol(Protocol):
     @property
     def timeout_s(self) -> int: ...
 
+    @property
+    def when_exists(self) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class VerificationControl:
@@ -86,6 +92,7 @@ class VerificationControl:
     mode: str = "block"
     allow_empty: bool = False
     timeout_s: int = 600
+    when_exists: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +154,7 @@ def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
             "exit_code": control.exit_code,
             "duration_ms": control.duration_ms,
             "output": control.output_path,
+            "skipped": control.skipped,
         }
         for control_id, control in result.control_results.items()
     }
@@ -343,7 +351,7 @@ class VerifyAttempt:
     def _run_commands(self, req: VerifyAttemptRequest) -> VerifyResult:
         control_results: dict[str, ControlResult] = {}
         for ctrl in req.controls:
-            ctrl_run = self._run_single_control(ctrl, req)
+            ctrl_run = self._run_present_control(ctrl, req)
             control_results[ctrl.id] = ctrl_run.result
             if ctrl_run.tampered:
                 return self._fail(
@@ -497,6 +505,30 @@ class VerifyAttempt:
             return self._fail(req, _Failure("L0-supresiones", err))
 
         return VerifyResult(ok=True)
+
+    def _run_present_control(
+        self, ctrl: VerificationControlProtocol, req: VerifyAttemptRequest
+    ) -> _ControlRun:
+        """Skip a control whose path neither HEAD nor the candidate has; fail one removed."""
+        if ctrl.when_exists is None:
+            return self._run_single_control(ctrl, req)
+        in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
+        deleted = [
+            change.path
+            for change in self.vcs.changes(self._tree(req))
+            if change.mode == _DELETED_MODE
+        ]
+        status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
+        if status == "absent":
+            reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
+            return _ControlRun(ControlResult(ok=True, mode=ctrl.mode, skipped=reason))
+        if status == "removed":
+            reason = (
+                f"El intento elimina {ctrl.when_exists}, que existía: "
+                f"el control {ctrl.id} ya no puede ejecutarse"
+            )
+            return _ControlRun(ControlResult(ok=False, mode=ctrl.mode, error=reason))
+        return self._run_single_control(ctrl, req)
 
     def _run_single_control(
         self,

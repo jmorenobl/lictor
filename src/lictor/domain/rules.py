@@ -3,6 +3,7 @@
 import fnmatch
 import re
 from collections.abc import Collection, Mapping, Sequence
+from typing import Literal
 
 from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
@@ -286,6 +287,23 @@ def run_outcome(status: dict[str, str], reasons: dict[str, str]) -> tuple[int, s
         )
     greens = sum(1 for st in status.values() if st == "green")
     return int(ExitCode.OK), f"Ejecución completada: {greens} escenarios en verde"
+
+
+ControlPathStatus = Literal["present", "absent", "removed"]
+
+
+def control_path_status(path: str, *, in_tree: bool, deleted: Sequence[str]) -> ControlPathStatus:
+    """Tell whether a control's path is there, was never there, or the attempt removed it.
+
+    Only a path that neither the base nor the candidate has lets the control be skipped: removing
+    it would otherwise turn a failing control into a skipped one.
+    """
+    if in_tree:
+        return "present"
+    root = path.strip("/")
+    if any(gone == root or gone.startswith(f"{root}/") for gone in deleted):
+        return "removed"
+    return "absent"
 
 
 def forbidden_paths(paths: Sequence[str], patterns: Sequence[str]) -> list[str]:
