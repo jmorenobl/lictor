@@ -119,6 +119,15 @@ def good_driver(task: AgentTask, _attempt: int = 1) -> None:
     write(task.cwd, "tests/unit/test_smoke.py", UNIT_TEST)
 
 
+def no_op_change(task: AgentTask) -> None:
+    """Change the tree without changing behaviour: an attempt with no change stops at L0.
+
+    Attacks that only reach ignored files or paths outside the copy need it to get to the gate
+    they are about.
+    """
+    write(task.cwd, MODULE_PATH, f"{STUB}\n# intento sin efecto\n")
+
+
 def good_impl(task: AgentTask, scenario_id: str, _attempt: int = 1) -> None:
     write(task.cwd, MODULE_PATH, GOOD_BY_SCENARIO[scenario_id])
 
