@@ -188,6 +188,9 @@ def test_a_scratch_root_that_cannot_be_opened_is_refused(
 
     assert err.value.exit_code == ExitCode.ENVIRONMENT_UNAVAILABLE
     assert "no se puede abrir" in err.value.message
+    # Nobody else is involved: the remedy is the user's own permissions, not someone else's.
+    assert "otro usuario" not in err.value.message
+    assert "chmod 700" in err.value.message
 
 
 OLDER_MODES = [0o755, 0o750, 0o711]
