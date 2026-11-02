@@ -313,8 +313,9 @@ class GitCli(Vcs):
         return self._run_git(["cat-file", "blob", f"{rev}:{path}"]).stdout
 
     def parent_of(self, rev: str) -> str:
-        """Return the first parent of a commit."""
-        return self._run_git(["rev-parse", f"{rev}^"]).stdout.strip()
+        """Return the first parent of a commit, or "" for a root commit."""
+        found = self._run_git(["rev-parse", "--verify", "--quiet", f"{rev}^"], check=False)
+        return found.stdout.strip() if found.returncode == 0 else ""
 
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""

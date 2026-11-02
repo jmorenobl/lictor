@@ -2,10 +2,11 @@
 
 Usage: python kill_runner.py <project> <profiles> <mode> <flags dir> [<point> <marker> [<release>]]
 
-A point is `<node>:antes`, `<node>:durante` or `<node>:despues`. On reaching it the process creates
-the marker and sleeps, so the test can send a real SIGKILL at exactly that moment. With a release
-file it goes on as soon as that file exists. Without a point it runs to the end: that is the
-resume.
+A point is `<node>:antes`, `<node>:durante` or `<node>:despues`, or `red_check:registro`: the
+branch has advanced inside the red check and the checkpoint doesn't know it yet. On reaching it
+the process creates the marker and sleeps, so the test can send a real SIGKILL at exactly that
+moment. With a release file it goes on as soon as that file exists. Without a point it runs to
+the end: that is the resume.
 """
 
 import sys
@@ -52,6 +53,15 @@ class _Stall:
         self.marker = marker
         self.release = release
         self.done = False
+        self.node = ""
+
+    def enter(self, node: str) -> None:
+        self.node = node
+        self.at(f"{node}:antes")
+
+    def advanced(self) -> None:
+        if self.node == "red_check":
+            self.at("red_check:registro")
 
     def at(self, point: str) -> None:
         if point == self.point and not self.done and self.marker is not None:
@@ -84,7 +94,7 @@ def _install(stall: _Stall) -> None:
         _around(
             _GraphNodes,
             node,
-            partial(stall.at, f"{node}:antes"),
+            partial(stall.enter, node),
             partial(stall.at, f"{node}:despues"),
         )
     # Each one is the moment when that node has done something and hasn't recorded it.
@@ -100,6 +110,7 @@ def _install(stall: _Stall) -> None:
         hit = partial(stall.at, f"{node}:durante")
         _around(owner, name, hit if first else _nothing, _nothing if first else hit)
     _around(cli, "_paused_exit_code", partial(stall.at, "pause:durante"), _nothing)
+    _around(GitCli, "advance_head", _nothing, stall.advanced)
 
 
 def _agent(mode: str, flags: Path, stall: _Stall) -> Agent:

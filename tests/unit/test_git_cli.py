@@ -622,3 +622,15 @@ def test_list_and_read_files_of_an_older_commit(git_repo: Path, tmp_path: Path) 
     assert cli.list_files(old.parent, "features") == []
     # Line endings read as `Path.read_text` reads the working tree, so both hash the same text.
     assert cli.read_file(old.sha, "features/a.feature") == "viejo\n"
+
+
+def test_parent_of_a_root_commit_is_empty(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    root = subprocess.run(
+        [GIT_BIN, "rev-list", "--max-parents=0", "HEAD"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()[0]
+    assert cli.parent_of(root) == ""

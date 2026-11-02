@@ -39,6 +39,7 @@ from lictor.domain.model import (
 from lictor.domain.rules import (
     acceptance_failure,
     banned_matches,
+    collateral_greens,
     condense_error,
     control_path_status,
     forbidden_paths,
@@ -110,6 +111,7 @@ class VerifyAttemptRequest:
     acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
+    pending_scenario_ids: Sequence[str] = field(default_factory=tuple)
     all_scenario_ids: Sequence[str | ScenarioId] = field(default_factory=tuple)
     error_max_chars: int = 4000
     attempt: int = 1
@@ -311,7 +313,30 @@ class VerifyAttempt:
                 req,
                 _Failure("L0-entorno", env_problem, control_results=result.control_results),
             )
-        return replace(result, candidate=candidate)
+        collateral = collateral_greens(result.scenario_results, req.pending_scenario_ids, scenario)
+        if collateral:
+            candidate = self._chain_collateral(req, candidate, collateral)
+        return replace(result, candidate=candidate, collateral=tuple(collateral))
+
+    def _chain_collateral(
+        self, req: VerifyAttemptRequest, candidate: Candidate, collateral: Sequence[str]
+    ) -> Candidate:
+        """Register on top of the candidate what the same tree also turns green.
+
+        The branch then moves to both at once: no state in between can be left by a crash.
+        """
+        chained = self.vcs.commit_tree(
+            candidate.tree,
+            message=f"test({', '.join(collateral)}): verde colateral",
+            trailers={
+                "Scenario": list(collateral),
+                "Lictor-Collateral": candidate.sha,
+                "Lictor-Run": req.run_id,
+            },
+            parent=candidate.sha,
+            empty=True,
+        )
+        return Candidate(chained.sha, candidate.tree, candidate.parent)
 
     def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run L0 over what the agent left: the tree read from its copy, before any project code."""

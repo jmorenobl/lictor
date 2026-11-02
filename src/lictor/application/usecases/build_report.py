@@ -120,6 +120,7 @@ class BuildReport:
             "rejected_drivers": [],
             "reopened": [],
             "reregistered": [],
+            "collateral": [],
         }
 
         for ev in events:
@@ -171,10 +172,14 @@ class BuildReport:
 
     def _on_scenario_green(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
+        if ev.data.get("collateral"):
+            info["collateral"].append(
+                f"- **{sid}**: pasó sin llamar al agente en `{str(ev.data.get('commit', ''))[:12]}`"
+            )
         if sid and sid in info["scenarios"]:
             info["scenarios"][sid]["status"] = "green"
             info["scenarios"][sid]["commit"] = str(ev.data.get("commit", "-"))
-            raw_attempts = ev.data.get("attempt") or ev.data.get("attempts", 1)
+            raw_attempts = ev.data.get("attempt", ev.data.get("attempts", 1))
             if isinstance(raw_attempts, (int, str)):
                 info["scenarios"][sid]["attempts"] = max(
                     info["scenarios"][sid]["attempts"], int(raw_attempts)
@@ -338,6 +343,9 @@ class BuildReport:
 
         lines.extend(["", "## Verdes registrados de nuevo"])
         lines.extend(info["reregistered"] or ["- *Ningún verde registrado de nuevo.*"])
+
+        lines.extend(["", "## Verdes colaterales"])
+        lines.extend(info["collateral"] or ["- *Ningún verde colateral.*"])
 
         lines.extend(["", "## Intentos fallidos por nivel"])
         if not info["failed_by_level"]:

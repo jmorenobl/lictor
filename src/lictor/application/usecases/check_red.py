@@ -28,7 +28,6 @@ from lictor.domain.model import Candidate, CommandOutput, Event, ScenarioId, Tes
 from lictor.domain.rules import (
     MapLink,
     RedOracle,
-    RedVerdict,
     condense_error,
     judge_red,
     map_test_cases_to_scenarios,
@@ -81,6 +80,22 @@ class _Rejection:
 
 
 @dataclass(frozen=True)
+class _Registration:
+    """What the red check turns green without the agent."""
+
+    reopened: tuple[str, ...] = ()
+    collateral: tuple[str, ...] = ()
+
+    @property
+    def subject(self) -> str:
+        if not self.reopened:
+            return "verde colateral"
+        if not self.collateral:
+            return "volver a registrar sin agente"
+        return "registrar sin agente"
+
+
+@dataclass(frozen=True)
 class CheckRedResult:
     """Result of CheckRed use case."""
 
@@ -123,8 +138,8 @@ class CheckRed:
         candidate = self._create_candidate(request)
         rev = candidate.sha if candidate else "HEAD"
         with verification_tree(self.vcs, rev, request.project_root) as tree:
-            result, verdict = self._check_tree(request, step_dir, tree)
-            if not result.ok or verdict is None:
+            result, registration = self._check_tree(request, step_dir, tree)
+            if not result.ok or registration is None:
                 return result
 
             # Project code just ran, and it can reach the environment as well.
@@ -136,7 +151,7 @@ class CheckRed:
             commit_sha: str | None = None
             if request.driver_fresh:
                 commit_sha = self._seal(request, tree, candidate, step_dir)
-            self._advance(request, candidate, verdict)
+            self._advance(request, candidate, registration)
         return replace(result, commit_sha=commit_sha)
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
@@ -159,7 +174,7 @@ class CheckRed:
         request: CheckRedRequest,
         step_dir: Path,
         tree: Path,
-    ) -> tuple[CheckRedResult, RedVerdict | None]:
+    ) -> tuple[CheckRedResult, _Registration | None]:
         out_file = step_dir / "acceptance.xml"
         output, tampered = self._run_acceptance_suite(request, out_file, tree)
         save_output(step_dir / "acceptance.log", output)
@@ -220,14 +235,12 @@ class CheckRed:
             )
             self._reject(request, step_dir, _Rejection("regla_del_rojo", reason), final=True)
             raise DriverError(reason)
-        collateral = [sid for sid in verdict.register if classes[sid] == "new"]
-        if collateral:
-            reason = f"Los escenarios {', '.join(collateral)} ya pasan. {_REGISTER_HINT}"
-            self._reject(request, step_dir, _Rejection("regla_del_rojo", reason), final=True)
-            raise DriverError(f"El driver sellado no es válido. {reason}")
-
+        registration = _Registration(
+            reopened=tuple(sid for sid in verdict.register if classes[sid] == "reopened"),
+            collateral=tuple(sid for sid in verdict.register if classes[sid] == "new"),
+        )
         scenario_status = {sid: "pending" if sid in verdict.pending else "green" for sid in ids}
-        return CheckRedResult(ok=True, scenario_status=scenario_status), verdict
+        return CheckRedResult(ok=True, scenario_status=scenario_status), registration
 
     def _run_acceptance_suite(
         self,
@@ -303,28 +316,43 @@ class CheckRed:
         return CheckRedResult(ok=False, last_error=condensed)
 
     def _advance(
-        self, request: CheckRedRequest, candidate: Candidate | None, verdict: RedVerdict
+        self, request: CheckRedRequest, candidate: Candidate | None, registration: _Registration
     ) -> None:
-        """Move the branch once: to the driver, and to what re-registers on top of it."""
+        """Move the branch once: to the driver, and to what registers on top of it.
+
+        A sealed driver was proved when it was sealed, so a new scenario its test now passes is a
+        collateral green. Either way the commit changes no file and the next red check, on a resume
+        too, tests it as a green.
+        """
         target = candidate
-        if verdict.register:
-            base = candidate or Candidate(
-                self.vcs.get_head_sha(), self.vcs.get_tree("HEAD"), self.vcs.get_head_sha()
-            )
+        names = (*registration.reopened, *registration.collateral)
+        if names:
+            head = self.vcs.get_head_sha()
+            base = candidate or Candidate(head, self.vcs.get_tree("HEAD"), head)
+            trailers: dict[str, str | list[str]] = {"Scenario": list(names)}
+            if registration.collateral:
+                trailers["Lictor-Collateral"] = base.sha
+            trailers["Lictor-Run"] = request.run_id
             registered = self.vcs.commit_tree(
                 base.tree,
-                message=f"test({', '.join(verdict.register)}): volver a registrar sin agente",
-                trailers={"Scenario": list(verdict.register), "Lictor-Run": request.run_id},
+                message=f"test({', '.join(names)}): {registration.subject}",
+                trailers=trailers,
                 parent=base.sha,
                 empty=True,
             )
             target = Candidate(registered.sha, registered.tree, base.parent)
-            for sid in verdict.register:
+            for sid in registration.reopened:
                 self._event(request, "lictor.scenario.reregistered.v1", sid, registered.sha)
+            for sid in registration.collateral:
+                self._event(
+                    request, "lictor.scenario.green.v1", sid, registered.sha, collateral=True
+                )
         if target is not None:
             self.vcs.advance_head(target.sha, expected=target.parent)
 
-    def _event(self, request: CheckRedRequest, kind: str, sid: str, commit: str) -> None:
+    def _event(
+        self, request: CheckRedRequest, kind: str, sid: str, commit: str, **data: object
+    ) -> None:
         self.event_log.append(
             Event(
                 id=uuid.uuid4().hex,
@@ -333,7 +361,7 @@ class CheckRed:
                 time=self.clock.now_iso(),
                 runid=request.run_id,
                 scenarioid=sid,
-                data={"commit": commit},
+                data={"commit": commit, **data},
             )
         )
 

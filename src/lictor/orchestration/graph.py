@@ -531,8 +531,10 @@ class _GraphNodes:
         if not current_id:
             return {}
 
-        green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
+        status = state.get("status", {})
+        green_ids = [sid for sid, st in status.items() if st == "green"]
         all_sids = [s["id"] for s in state.get("scenarios", [])]
+        pending_ids = [sid for sid in all_sids if status.get(sid, "pending") == "pending"]
 
         res = self.ctx.verify_attempt.execute(
             VerifyAttemptRequest(
@@ -547,6 +549,7 @@ class _GraphNodes:
                 acceptance_report=self.ctx.acceptance_report,
                 acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                 green_scenario_ids=green_ids,
+                pending_scenario_ids=pending_ids,
                 all_scenario_ids=all_sids,
                 error_max_chars=self.ctx.error_max_chars,
                 attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
@@ -578,6 +581,7 @@ class _GraphNodes:
                 "evidence": res.evidence,
                 "candidate": res.candidate.sha if res.candidate else None,
                 "tree": res.candidate.tree if res.candidate else None,
+                "collateral": list(res.collateral),
             },
         )
         self.ctx.event_log.append(event)
@@ -587,6 +591,7 @@ class _GraphNodes:
                 "failed_at": res.failed_at,
                 "condensed_error": res.condensed_error,
                 "candidate": asdict(res.candidate) if res.candidate else None,
+                "collateral": list(res.collateral),
             },
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
@@ -603,7 +608,9 @@ class _GraphNodes:
         if not current_id:
             return {}
 
-        verified = (state.get("last_verify") or {}).get("candidate")
+        last_verify = state.get("last_verify") or {}
+        verified = last_verify.get("candidate")
+        collateral = list(last_verify.get("collateral") or [])
         try:
             self.ctx.commit_green.execute(
                 CommitGreenRequest(
@@ -611,11 +618,13 @@ class _GraphNodes:
                     run_id=state["run_id"],
                     attempt=state.get("attempt", 1),
                     candidate=Candidate(**verified) if verified else None,
+                    collateral=collateral,
                 )
             )
         except CandidateError as exc:
             return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "commit"}
-        return {"status": {current_id: "green"}, "agent_signal": None, "anchor": self._anchor()}
+        greens = dict.fromkeys([current_id, *collateral], "green")
+        return {"status": greens, "agent_signal": None, "anchor": self._anchor()}
 
     def quarantine(self, state: GraphState) -> dict[str, Any]:
         current_id = state.get("current")

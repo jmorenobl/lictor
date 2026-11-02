@@ -197,7 +197,8 @@ def green_commits(root: Path) -> list[tuple[str, str]]:
         "--format=%H %(trailers:key=Scenario,valueonly,separator=%x2C)",
     )
     pairs = [line.partition(" ") for line in log.splitlines()]
-    return [(sha, scenario_id) for sha, _, scenario_id in pairs if scenario_id]
+    # A registration without the agent may name several scenarios in one commit.
+    return [(sha, sid) for sha, _, ids in pairs for sid in ids.split(",") if sid]
 
 
 def green_ids(root: Path) -> list[str]:

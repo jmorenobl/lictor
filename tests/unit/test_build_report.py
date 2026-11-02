@@ -387,3 +387,19 @@ def test_report_says_when_nothing_was_reopened_or_reregistered(tmp_path: Path) -
     report = _report(tmp_path, [])
     assert "*Ningún escenario reabierto.*" in report
     assert "*Ningún verde registrado de nuevo.*" in report
+
+
+def test_report_lists_collateral_greens(tmp_path: Path) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-002", "name": "R"}]})
+    green = _event(
+        "lictor.scenario.green.v1",
+        {"commit": "c" * 40, "attempt": 0, "collateral": True},
+        "IVA-002",
+    )
+
+    report = _report(tmp_path, [loaded, green])
+
+    section = report.split("## Verdes colaterales")[1].split("##")[0]
+    assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
+    assert "| IVA-002 | R | green | 0 |" in report
+    assert "*Ningún verde colateral.*" in _report(tmp_path, [])

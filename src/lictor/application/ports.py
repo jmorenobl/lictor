@@ -148,7 +148,7 @@ class Vcs(Protocol):
         ...
 
     def parent_of(self, rev: str) -> str:
-        """Return the first parent of a commit."""
+        """Return the first parent of a commit, or "" for a root commit."""
         ...
 
     def get_head_sha(self) -> str:

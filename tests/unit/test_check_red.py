@@ -747,3 +747,89 @@ def test_check_red_classifies_with_the_hashes_of_the_request(tmp_path: Path) -> 
     use_case.execute(request)
 
     use_case.history.classify.assert_called_once_with({"IVA-001": "h1", "IVA-002": ""})
+
+
+def _sealed_with_registration(
+    tmp_path: Path, classes: dict[str, str]
+) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock]:
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path, _REPORT_OFFENDER, 1, driver_fresh=False, driver_attempts=0
+    )
+    assert isinstance(use_case.history, MagicMock)
+    use_case.history.classify.side_effect = lambda current: classes
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.get_head_sha.return_value = "head"
+    vcs.get_tree.return_value = "head-tree"
+    vcs.commit_tree.return_value = Candidate("registro", "head-tree", "head")
+    return use_case, request, event_log, vcs
+
+
+def test_check_red_sealed_driver_registers_a_collateral_green_in_the_baseline(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, vcs = _sealed_with_registration(
+        tmp_path, {"IVA-001": "new", "IVA-002": "new"}
+    )
+
+    result = use_case.execute(request)
+
+    assert result.scenario_status == {"IVA-001": "pending", "IVA-002": "green"}
+    call = vcs.commit_tree.call_args
+    assert call.kwargs["message"] == "test(IVA-002): verde colateral"
+    assert call.kwargs["trailers"] == {
+        "Scenario": ["IVA-002"],
+        "Lictor-Collateral": "head",
+        "Lictor-Run": "R",
+    }
+    assert (call.kwargs["parent"], call.kwargs["empty"]) == ("head", True)
+    vcs.advance_head.assert_called_once_with("registro", expected="head")
+    [green] = _events(event_log, "lictor.scenario.green.v1")
+    assert (green.scenarioid, green.data) == ("IVA-002", {"commit": "registro", "collateral": True})
+    assert _events(event_log, "lictor.driver.rejected.v1") == []
+
+
+def test_check_red_registers_reopened_and_collateral_in_one_commit(tmp_path: Path) -> None:
+    report = (
+        '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/>'
+        '<testcase name="test_iva_003"><failure message="x"/></testcase></testsuite>'
+    )
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path,
+        report,
+        1,
+        driver_fresh=False,
+        driver_attempts=0,
+        all_scenario_ids=[ScenarioId("IVA-001"), ScenarioId("IVA-002"), ScenarioId("IVA-003")],
+    )
+    assert isinstance(use_case.history, MagicMock)
+    use_case.history.classify.side_effect = lambda current: {
+        "IVA-001": "reopened",
+        "IVA-002": "new",
+        "IVA-003": "new",
+    }
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.get_head_sha.return_value = "head"
+    vcs.commit_tree.return_value = Candidate("registro", "t", "head")
+
+    use_case.execute(request)
+
+    vcs.commit_tree.assert_called_once()
+    call = vcs.commit_tree.call_args
+    assert call.kwargs["message"] == "test(IVA-001, IVA-002): registrar sin agente"
+    assert call.kwargs["trailers"]["Scenario"] == ["IVA-001", "IVA-002"]
+    assert [e.scenarioid for e in _events(event_log, "lictor.scenario.reregistered.v1")] == [
+        "IVA-001"
+    ]
+    assert [e.scenarioid for e in _events(event_log, "lictor.scenario.green.v1")] == ["IVA-002"]
+
+
+def test_check_red_reregistration_alone_carries_no_collateral_trailer(tmp_path: Path) -> None:
+    use_case, request, _, vcs = _sealed_with_registration(
+        tmp_path, {"IVA-001": "new", "IVA-002": "reopened"}
+    )
+
+    use_case.execute(request)
+
+    assert "Lictor-Collateral" not in vcs.commit_tree.call_args.kwargs["trailers"]

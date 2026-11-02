@@ -69,8 +69,14 @@ class FakeVcs(Vcs):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
+        if parent is not None:
+            self.chained = (tree, message, trailers, parent, empty)
+            return Candidate(sha="fake-colateral", tree=tree, parent=parent)
         self.candidate_tree = tree
         self.candidate_trailers = trailers
         return Candidate(sha="fake-candidate", tree="fake-tree", parent="fake-sha-head")
@@ -1217,3 +1223,53 @@ def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
     assert "no cambia nada" in (result.condensed_error or "")
     assert runner.calls == []
     assert result.candidate is None
+
+
+_THREE_REPORT = (
+    '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/>'
+    '<testcase name="test_iva_003"><failure message="pendiente">traza</failure></testcase>'
+    "</testsuite>"
+)
+
+
+def test_verify_chains_the_pending_scenarios_the_candidate_also_turns_green(
+    tmp_path: Path,
+) -> None:
+    runner = _PlantingRunner({"suite": (_THREE_REPORT, 1)})
+    verifier, req = _verify(
+        tmp_path,
+        runner,
+        all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+        pending_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+    )
+    assert isinstance(verifier.vcs, FakeVcs)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.collateral == ("IVA-002",)
+    assert result.candidate == Candidate("fake-colateral", "fake-tree", "fake-sha-head")
+    tree, message, trailers, parent, empty = verifier.vcs.chained
+    assert (tree, parent, empty) == ("fake-tree", "fake-candidate", True)
+    assert message == "test(IVA-002): verde colateral"
+    assert trailers == {
+        "Scenario": ["IVA-002"],
+        "Lictor-Collateral": "fake-candidate",
+        "Lictor-Run": req.run_id,
+    }
+
+
+def test_verify_without_collateral_leaves_the_candidate_alone(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_THREE_REPORT, 1)})
+    verifier, req = _verify(
+        tmp_path,
+        runner,
+        all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+        green_scenario_ids=("IVA-002",),
+        pending_scenario_ids=("IVA-001", "IVA-003"),
+    )
+
+    result = verifier.execute(req)
+
+    assert result.collateral == ()
+    assert result.candidate == Candidate("fake-candidate", "fake-tree", "fake-sha-head")

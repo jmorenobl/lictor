@@ -17,6 +17,7 @@ from tests.integration.repro.harness import (
     false_greens,
     git,
     good_driver,
+    good_impl,
     green_ids,
     pending,
     quarantined,
@@ -85,7 +86,6 @@ def test_d10_broken_driver_is_not_blamed_on_the_scenario(make_project: ProjectFa
     assert "IVA-001" not in quarantined(root)
 
 
-@pending(5, "M2")
 def test_d17_collateral_green_skips_the_agent(make_project: ProjectFactory) -> None:
     root = make_project()
 
@@ -103,7 +103,6 @@ def test_d17_collateral_green_skips_the_agent(make_project: ProjectFactory) -> N
     assert "Lictor-Collateral" in git(root, "log", "--format=%B")
 
 
-@pending(5, "M2")
 def test_d17_new_run_registers_collateral_green_in_baseline(make_project: ProjectFactory) -> None:
     root = make_project()
 
@@ -208,3 +207,31 @@ def test_reopened_green_that_still_passes_is_registered_again_without_the_agent(
     assert false_greens(root) == []
     report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
     assert "registrado sin agente" in report.split("## Verdes registrados de nuevo")[1]
+
+
+def test_baseline_registers_a_green_the_user_implemented_by_hand(
+    make_project: ProjectFactory,
+) -> None:
+    """With a sealed driver, a pending test that passes was proved when the driver was sealed."""
+    root = make_project()
+
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> None:
+        if scenario_id != "IVA-001":
+            raise KeyboardInterrupt
+        good_impl(task, scenario_id, attempt)
+
+    require(run_lictor(root, Agent(impl=impl)).killed, "la ejecución debía morir tras IVA-001")
+    require(green_ids(root) == ["IVA-001"], "solo IVA-001 debía estar en verde")
+    write(root, MODULE_PATH, GOOD_2)
+    git(root, "commit", "-q", "-am", "feat: IVA reducido a mano")
+
+    agent = Agent()
+    outcome = run_lictor(root, agent, new=True)
+
+    assert outcome == Outcome(0), agent.calls
+    assert agent.calls == ["IVA-003"]
+    [collateral] = [e for e in events_of(root, "scenario.green") if e["data"].get("collateral")]
+    assert collateral["scenarioid"] == "IVA-002"
+    message = git(root, "log", "-1", "--format=%B", collateral["data"]["commit"])
+    assert "Lictor-Collateral:" in message
+    assert false_greens(root) == []
