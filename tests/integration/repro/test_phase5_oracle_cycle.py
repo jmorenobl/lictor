@@ -243,3 +243,30 @@ def test_baseline_registers_a_green_the_user_implemented_by_hand(
     message = git(root, "log", "-1", "--format=%B", collateral["data"]["commit"])
     assert "Lictor-Collateral:" in message
     assert false_greens(root) == []
+
+
+def test_a_driver_that_errors_on_every_attempt_is_named_as_suspicious(
+    make_project: ProjectFactory,
+) -> None:
+    """It fails the red properly and with both impostors, but no implementation can pass it."""
+    root = make_project()
+    broken = DRIVER.replace(TOTAL_CHECK, "assert calculo().total == esperado")
+
+    def driver(task: AgentTask, attempt: int) -> None:
+        good_driver(task, attempt)
+        write(task.cwd, DRIVER_PATH, broken)
+
+    agent = Agent(driver=driver)
+    outcome = run_lictor(root, agent)
+
+    require(events_of(root, "driver.sealed"), "el driver debía sellarse")
+    assert outcome == Outcome(30), agent.calls
+    reasons = {
+        e["scenarioid"]: e["data"]["reason"] for e in events_of(root, "scenario.quarantined")
+    }
+    assert reasons == {"IVA-001": "driver_sospechoso", "IVA-002": "driver_sospechoso"}
+    assert green_ids(root) == ["IVA-003"], "IVA-003 no usa el paso roto"
+    finished = events_of(root, "run.finished")[-1]["data"]["reason"]
+    assert "Posible driver defectuoso en IVA-001, IVA-002" in finished
+    report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
+    assert "Posible driver defectuoso, no seguro" in report

@@ -1273,3 +1273,34 @@ def test_verify_without_collateral_leaves_the_candidate_alone(tmp_path: Path) ->
 
     assert result.collateral == ()
     assert result.candidate == Candidate("fake-candidate", "fake-tree", "fake-sha-head")
+
+
+def test_verify_records_how_the_scenario_failed(tmp_path: Path) -> None:
+    report = (
+        '<testsuite><testcase name="test_iva_001"><properties>'
+        '<property name="lictor.failure" value="error"/>'
+        '<property name="lictor.origin" value="tests/acceptance/test_iva.py"/>'
+        '</properties><failure message="m"/></testcase><testcase name="test_iva_002"/></testsuite>'
+    )
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (report, 1)}))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "acceptance"
+    assert result.failure == ("error", "tests/acceptance/test_iva.py")
+
+
+def test_verify_records_no_failure_when_the_scenario_passed(tmp_path: Path) -> None:
+    """A broken green is not this scenario's failure."""
+    report = (
+        '<testsuite><testcase name="test_iva_001"/>'
+        '<testcase name="test_iva_002"><failure message="m"/></testcase></testsuite>'
+    )
+    verifier, req = _verify(
+        tmp_path, _PlantingRunner({"suite": (report, 1)}), green_scenario_ids=("IVA-002",)
+    )
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "acceptance"
+    assert result.failure is None

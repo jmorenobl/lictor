@@ -138,6 +138,7 @@ class _Failure:
     control_results: dict[str, ControlResult] = field(default_factory=dict)
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = ()
+    failure: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -434,6 +435,7 @@ class VerifyAttempt:
             scenario_results=failure.scenario_results,
             reverted_files=failure.reverted_files,
             error_path=relative_to_project(error_path, self.project_root),
+            failure=failure.failure,
         )
 
     def _tree(self, req: VerifyAttemptRequest) -> str:
@@ -683,9 +685,11 @@ class VerifyAttempt:
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
 
+        current = mapped.get(_scenario_str(req.scenario_id))
         failure = acceptance_failure(_scenario_str(req.scenario_id), req.green_scenario_ids, mapped)
         if failure is not None:
             reason, relevant_cases = failure
+            failed = current is not None and current.status != "passed"
             return self._fail(
                 req,
                 _Failure(
@@ -696,6 +700,7 @@ class VerifyAttempt:
                     output=output,
                     control_results=control_results,
                     scenario_results=scenario_results,
+                    failure=(current.failure_kind, current.origin) if failed and current else None,
                 ),
             )
 

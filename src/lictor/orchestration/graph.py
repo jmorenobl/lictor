@@ -25,7 +25,11 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
 )
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
-from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
+from lictor.application.usecases.quarantine import (
+    Quarantine,
+    QuarantineReason,
+    QuarantineRequest,
+)
 from lictor.application.usecases.verify_attempt import (
     VerifyAttempt,
     VerifyAttemptRequest,
@@ -47,7 +51,7 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
-from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome
+from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome, suspicious_driver
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -110,6 +114,7 @@ class GraphState(TypedDict, total=False):
     seal_ok: bool
     resume_to: str | None
     reopened: list[str]
+    failures: list[list[str] | None]
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,11 @@ class GraphContext:
 # checkpoint while the agent runs: a kill loses it, and `IntegritySnapshot` sees it as tampering.
 DURABILITY: Literal["sync"] = "sync"
 
+_SUSPICIOUS_DRIVER = (
+    "Posible driver defectuoso, no seguro: en cada intento el test de {sid} falló con un error "
+    "lanzado desde el propio driver ({origin}), no desde la implementación. Revisa el driver; "
+    "al cambiarlo y confirmarlo, la siguiente ejecución lo reconstruye y lo vuelve a validar."
+)
 _PAUSE_REASONS = {"rate_limited": "rate_limited", "blocked": "branch_blocked"}
 
 
@@ -411,6 +421,7 @@ class _GraphNodes:
                 return {
                     "current": sid,
                     "attempt": 0,
+                    "failures": [],
                     "last_error": None,
                     "last_failed_at": None,
                     "last_agent_status": None,
@@ -530,6 +541,7 @@ class _GraphNodes:
             "last_verify": {"ok": False, "failed_at": failed_at, "condensed_error": error},
             "last_error": error,
             "last_failed_at": failed_at,
+            "failures": [*state.get("failures", []), None],
         }
 
     def verify(self, state: GraphState) -> dict[str, Any]:
@@ -602,6 +614,7 @@ class _GraphNodes:
             },
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
+            "failures": [*state.get("failures", []), list(res.failure) if res.failure else None],
             "totals": {
                 "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
                 "cost_usd": 0.0,
@@ -639,10 +652,15 @@ class _GraphNodes:
             return {}
 
         conflict = state.get("agent_signal") == "spec_conflict"
-        reason: Literal["intentos agotados", "spec_conflict"] = (
-            "spec_conflict" if conflict else "intentos agotados"
-        )
-        details = (state.get("spec_conflict") if conflict else state.get("last_error")) or ""
+        failures = [(f[0], f[1]) if f else None for f in state.get("failures", [])]
+        reason: QuarantineReason = "intentos agotados"
+        details = state.get("last_error") or ""
+        if conflict:
+            reason, details = "spec_conflict", state.get("spec_conflict") or ""
+        elif suspicious_driver(failures, self.ctx.paths_driver):
+            reason = "driver_sospechoso"
+            origin = next(f[1] for f in reversed(failures) if f is not None)
+            details = f"{_SUSPICIOUS_DRIVER.format(sid=current_id, origin=origin)}\n{details}"
 
         self.ctx.quarantine.execute(
             QuarantineRequest(
