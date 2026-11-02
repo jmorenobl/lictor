@@ -3,7 +3,9 @@
 import json
 from pathlib import Path
 
-from lictor.domain.model import Event
+from lictor.domain.model import Event, JournalDamage
+
+_OWN_SOURCE = "lictor/"
 
 
 class JsonlEventLog:
@@ -24,19 +26,36 @@ class JsonlEventLog:
 
         A line that isn't an event is skipped: it must not cost the record of everything else.
         """
+        events, _ = self._read()
+        return [event for event in events if run_id is None or event.runid == run_id]
+
+    def damage(self) -> JournalDamage:
+        """Count what `events` skips, so that skipping it never goes unnoticed."""
+        return self._read()[1]
+
+    def _read(self) -> tuple[list[Event], JournalDamage]:
         if not self._path.exists():
-            return []
+            return [], JournalDamage()
 
         result: list[Event] = []
+        corrupt = foreign = 0
         with open(self._path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 stripped = line.strip()
                 if not stripped:
                     continue
                 try:
-                    event = Event.from_dict(json.loads(stripped))
-                except (json.JSONDecodeError, KeyError, AttributeError):
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    corrupt += 1
                     continue
-                if run_id is None or event.runid == run_id:
-                    result.append(event)
-        return result
+                try:
+                    event = Event.from_dict(parsed)
+                except (KeyError, AttributeError, TypeError):
+                    foreign += 1
+                    continue
+                if not event.source.startswith(_OWN_SOURCE):
+                    foreign += 1
+                    continue
+                result.append(event)
+        return result, JournalDamage(corrupt=corrupt, foreign=foreign)

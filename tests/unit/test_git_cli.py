@@ -8,6 +8,7 @@ import pytest
 
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.domain.errors import CandidateError
+from lictor.domain.model import Candidate
 
 GIT_BIN = shutil.which("git") or "git"
 
@@ -57,114 +58,180 @@ def test_status_porcelain_detects_changes(git_repo: Path) -> None:
     assert "src/main.py" in status
 
 
-def test_reset_to_head_preserves_ignored_files(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-
-    # Modify tracked file
-    (git_repo / "README.md").write_text("# Broken\n", encoding="utf-8")
-
-    # Create untracked file
-    (git_repo / "untracked.txt").write_text("trash", encoding="utf-8")
-
-    # Create ignored directories and files
-    venv_file = git_repo / ".venv" / "bin" / "python"
-    venv_file.parent.mkdir(parents=True, exist_ok=True)
-    venv_file.write_text("fake binary", encoding="utf-8")
-
-    lictor_state = git_repo / ".lictor" / "state.json"
-    lictor_state.parent.mkdir(parents=True, exist_ok=True)
-    lictor_state.write_text('{"ok": true}', encoding="utf-8")
-
-    cli.reset_to_head()
-
-    # Tracked file restored
-    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
-    # Untracked file removed
-    assert not (git_repo / "untracked.txt").exists()
-    # Ignored files preserved!
-    assert venv_file.exists()
-    assert lictor_state.exists()
-
-
 def _head(repo: Path) -> str:
     return subprocess.run(
         [GIT_BIN, "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
-def test_candidate_carries_author_and_trailers_without_moving_the_branch(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "file_a.txt").write_text("content", encoding="utf-8")
-    head = _head(git_repo)
+def _copy(cli: GitCli, tmp_path: Path) -> Path:
+    # `tmp_path` is the repository of these tests, and a copy inside would count as its changes.
+    workdir = tmp_path.with_name(f"{tmp_path.name}-copia")
+    cli.export_copy("HEAD", workdir)
+    return workdir
 
-    candidate = cli.create_candidate(
-        message="feat: implement iva_001",
-        trailers={"Scenario": "IVA-001", "Lictor-Run": "run-1234", "Lictor-Attempts": "1"},
-    )
+
+def test_export_copy_has_the_files_and_no_repository(git_repo: Path, tmp_path: Path) -> None:
+    (git_repo / "x.ignored").write_text("ignorado", encoding="utf-8")
+    cli = GitCli(repo_dir=git_repo)
+
+    workdir = _copy(cli, tmp_path)
+
+    assert sorted(p.name for p in workdir.iterdir()) == [".gitignore", "README.md"]
+
+
+def test_capture_reads_additions_edits_and_deletions(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "nuevo.txt").write_text("n\n", encoding="utf-8")
+    (workdir / "README.md").unlink()
+
+    tree = cli.capture(workdir)
+
+    assert sorted((c.path, c.mode) for c in cli.changes(tree)) == [
+        ("README.md", "000000"),
+        ("nuevo.txt", "100644"),
+    ]
+    assert cli.status() == [], "capturar no toca el proyecto"
+
+
+def test_capture_leaves_what_git_ignores_out(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "x.ignored").write_text("i", encoding="utf-8")
+    (workdir / ".venv").mkdir()
+    (workdir / ".venv" / "bin").write_text("b", encoding="utf-8")
+
+    assert cli.changes(cli.capture(workdir)) == []
+
+
+def test_capture_skips_paths_back_to_their_version_in_head(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").write_text("cambiado", encoding="utf-8")
+    (workdir / "nuevo.txt").write_text("n", encoding="utf-8")
+    (workdir / "fuera.txt").write_text("f", encoding="utf-8")
+
+    tree = cli.capture(workdir, skip=["README.md", "fuera.txt"])
+
+    assert [c.path for c in cli.changes(tree)] == ["nuevo.txt"]
+
+
+def test_capture_keeps_links_visible(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "enlace").symlink_to("/etc/hosts")
+
+    changes = cli.changes(cli.capture(workdir))
+
+    assert [(c.path, c.is_link) for c in changes] == [("enlace", True)]
+
+
+def test_capture_sees_a_nested_repository_as_a_link(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    nested = workdir / "anidado"
+    nested.mkdir()
+    subprocess.run([GIT_BIN, "init", "-q"], cwd=nested, check=True)
+    (nested / "a").write_text("a", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=nested, check=True)
+    identity = ["-c", "user.name=a", "-c", "user.email=a@b"]
+    subprocess.run([GIT_BIN, *identity, "commit", "-qm", "x"], cwd=nested, check=True)
+
+    changes = cli.changes(cli.capture(workdir))
+
+    assert [(c.path, c.mode, c.is_link) for c in changes] == [("anidado", "160000", True)]
+
+
+def test_capture_that_git_cant_read_is_a_candidate_error(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    nested = workdir / "vacio"
+    nested.mkdir()
+    subprocess.run([GIT_BIN, "init", "-q"], cwd=nested, check=True)
+
+    with pytest.raises(CandidateError, match=r"^No se pudo leer"):
+        cli.capture(workdir)
+
+
+def test_capture_ignores_the_user_configuration(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A global `core.excludesFile` must not decide what the agent's result holds."""
+    excludes = tmp_path / "excludes"
+    excludes.write_text("*.txt\n", encoding="utf-8")
+    config = tmp_path / "gitconfig"
+    config.write_text(f"[core]\n\texcludesFile = {excludes}\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "nuevo.txt").write_text("n", encoding="utf-8")
+
+    assert [c.path for c in cli.changes(cli.capture(workdir))] == ["nuevo.txt"]
+
+
+def test_changes_report_a_rename_as_deletion_and_addition(git_repo: Path, tmp_path: Path) -> None:
+    """A rename must not hide the path it took the file from."""
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").rename(workdir / "LEEME.md")
+
+    assert sorted(c.path for c in cli.changes(cli.capture(workdir))) == ["LEEME.md", "README.md"]
+
+
+def test_added_lines_come_only_from_what_the_tree_adds(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").write_text("# Test Repo\nañadida\n++ con signos\n", encoding="utf-8")
+    (workdir / "nuevo.txt").write_text("del nuevo\n", encoding="utf-8")
+
+    added = cli.added_lines(cli.capture(workdir))
+
+    assert sorted(added) == ["++ con signos", "añadida", "del nuevo"]
+
+
+def test_added_lines_see_through_binary_files(git_repo: Path, tmp_path: Path) -> None:
+    """A NUL or invalid UTF-8 must neither hide a banned line nor break the run."""
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "datos.py").write_bytes(b"\x00\xff\xfe\nx = 1  # noqa\n")
+
+    assert "x = 1  # noqa" in cli.added_lines(cli.capture(workdir))
+
+
+def test_commit_tree_carries_author_and_trailers_without_moving_the_branch(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "file_a.txt").write_text("hello", encoding="utf-8")
+    tree = cli.capture(workdir)
+
+    candidate = cli.commit_tree(tree, "feat: test", {"Scenario": "IVA-001", "Lictor-Run": "r"})
 
     assert _head(git_repo) == head
-    assert cli.status() == ["file_a.txt"]
-    assert cli.get_tree(candidate.sha) == candidate.tree
+    assert candidate.parent == head
+    assert candidate.tree == tree
+    assert cli.get_tree(candidate.sha) == tree
     assert cli.get_trailers("Scenario", commit_ref=candidate.sha) == ["IVA-001"]
-    assert cli.get_trailers("Lictor-Run", commit_ref=candidate.sha) == ["run-1234"]
     author = subprocess.run(
         [GIT_BIN, "log", "-1", "--format=%an <%ae>", candidate.sha],
         cwd=git_repo,
         check=True,
         capture_output=True,
         text=True,
-    )
-    assert author.stdout.strip() == "Lictor <lictor@localhost>"
+    ).stdout.strip()
+    assert author == "Lictor <lictor@localhost>"
 
 
-def test_candidate_does_not_touch_the_index(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "file_a.txt").write_text("content", encoding="utf-8")
-
-    cli.create_candidate(message="m")
-
-    staged = subprocess.run(
-        [GIT_BIN, "diff", "--cached", "--name-only"],
-        cwd=git_repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert staged.stdout == ""
-
-
-def test_candidate_only_takes_the_given_paths(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "src").mkdir()
-    (git_repo / "src" / "code.py").write_text("print(1)\n", encoding="utf-8")
-    (git_repo / "leak.txt").write_text("fuera\n", encoding="utf-8")
-
-    candidate = cli.create_candidate(message="m", paths=["src/", "falta/"])
-
-    files = _tree_files(git_repo, candidate.sha)
-    assert "src/code.py" in files
-    assert "leak.txt" not in files
-
-
-def test_candidate_without_paths_takes_everything_but_ignored_files(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "nuevo.txt").write_text("x\n", encoding="utf-8")
-    (git_repo / "oculto.ignored").write_text("x\n", encoding="utf-8")
-
-    candidate = cli.create_candidate(message="m")
-
-    files = _tree_files(git_repo, candidate.sha)
-    assert "nuevo.txt" in files
-    assert "oculto.ignored" not in files
-
-
-def test_candidate_allows_empty_changes(git_repo: Path) -> None:
+def test_commit_tree_allows_an_empty_change(git_repo: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
     head = _head(git_repo)
 
-    candidate = cli.create_candidate(message="m", trailers={"Scenario": "IVA-003"})
+    candidate = cli.commit_tree(cli.get_tree("HEAD"), "m")
 
-    assert candidate.tree == cli.get_tree(head)
+    assert candidate.parent == head
     assert candidate.sha != head
 
 
@@ -183,7 +250,7 @@ def test_export_tree_has_the_commit_and_nothing_ignored(git_repo: Path, tmp_path
     (git_repo / "nuevo.txt").write_text("x\n", encoding="utf-8")
     (git_repo / "oculto.ignored").write_text("x\n", encoding="utf-8")
     (git_repo / ".lictor").mkdir()
-    candidate = cli.create_candidate(message="m")
+    candidate = cli.commit_tree(cli.capture(git_repo), "m")
     dest = tmp_path.parent / f"{tmp_path.name}-export"
 
     cli.export_tree(candidate.sha, dest)
@@ -223,103 +290,278 @@ def test_export_tree_ignores_the_git_template(
     assert not (dest / ".git" / "info" / "exclude").exists()
 
 
-def test_advance_head_moves_the_branch_to_the_exact_commit(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "file_a.txt").write_text("verificado", encoding="utf-8")
-    head = _head(git_repo)
-    candidate = cli.create_candidate(message="m", trailers={"Scenario": "IVA-001"})
-    (git_repo / "file_a.txt").write_text("cambiado después", encoding="utf-8")
+def _candidate(cli: GitCli, tmp_path: Path, content: str = "verificado") -> Candidate:
+    workdir = tmp_path.with_name(f"{tmp_path.name}-candidata")
+    cli.export_copy("HEAD", workdir)
+    (workdir / "file_a.txt").write_text(content, encoding="utf-8")
+    candidate = cli.commit_tree(cli.capture(workdir), "m", {"Scenario": "IVA-001"})
+    shutil.rmtree(workdir)
+    return candidate
 
-    cli.advance_head(candidate.sha, expected=head)
+
+def test_advance_head_brings_the_commit_to_the_working_tree(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    candidate = _candidate(cli, tmp_path)
+
+    cli.advance_head(candidate.sha, expected=candidate.parent)
 
     assert _head(git_repo) == candidate.sha
-    shown = subprocess.run(
-        [GIT_BIN, "show", "HEAD:file_a.txt"],
-        cwd=git_repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert shown.stdout == "verificado"
-    assert cli.status() == ["file_a.txt"], "el cambio posterior no debe entrar ni perderse"
-
-
-def test_advance_head_leaves_the_tree_clean_when_nothing_changed(git_repo: Path) -> None:
-    cli = GitCli(repo_dir=git_repo)
-    (git_repo / "file_a.txt").write_text("x", encoding="utf-8")
-    head = _head(git_repo)
-    candidate = cli.create_candidate(message="m")
-
-    cli.advance_head(candidate.sha, expected=head)
-
+    assert (git_repo / "file_a.txt").read_text(encoding="utf-8") == "verificado"
     assert cli.status() == []
 
 
-def test_advance_head_refuses_if_the_branch_moved(git_repo: Path) -> None:
+def test_advance_head_keeps_edits_the_commit_doesnt_touch(git_repo: Path, tmp_path: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
-    head = _head(git_repo)
-    candidate = cli.create_candidate(message="m")
+    candidate = _candidate(cli, tmp_path)
+    (git_repo / "README.md").write_text("del usuario", encoding="utf-8")
+    (git_repo / "notas.txt").write_text("sin versionar", encoding="utf-8")
+
+    cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == candidate.sha
+    assert (git_repo / "README.md").read_text(encoding="utf-8") == "del usuario"
+    assert (git_repo / "notas.txt").read_text(encoding="utf-8") == "sin versionar"
+
+
+@pytest.mark.parametrize("tracked", [True, False], ids=["versionado", "sin-versionar"])
+def test_advance_head_refuses_to_overwrite_an_edit(
+    git_repo: Path, tmp_path: Path, tracked: bool
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    if tracked:
+        (git_repo / "file_a.txt").write_text("base", encoding="utf-8")
+        subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+        subprocess.run([GIT_BIN, "commit", "-qm", "base"], cwd=git_repo, check=True)
+    candidate = _candidate(cli, tmp_path)
+    (git_repo / "file_a.txt").write_text("del usuario", encoding="utf-8")
+
+    with pytest.raises(CandidateError, match=r"file_a\.txt"):
+        cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == candidate.parent
+    assert (git_repo / "file_a.txt").read_text(encoding="utf-8") == "del usuario"
+
+
+def test_advance_head_refuses_if_the_branch_moved(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    candidate = _candidate(cli, tmp_path)
     subprocess.run([GIT_BIN, "commit", "--allow-empty", "-m", "otro"], cwd=git_repo, check=True)
     moved = _head(git_repo)
 
     with pytest.raises(CandidateError):
-        cli.advance_head(candidate.sha, expected=head)
+        cli.advance_head(candidate.sha, expected=candidate.parent)
 
     assert _head(git_repo) == moved
 
 
-def test_revert_paths_selective(git_repo: Path) -> None:
+def test_advance_head_refuses_a_sha_that_is_not_a_fast_forward(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+    candidate = _candidate(cli, tmp_path)
+    cli.advance_head(candidate.sha, expected=head)
+    other = _candidate(cli, tmp_path, "otro")
+    subprocess.run([GIT_BIN, "reset", "-q", "--hard", head], cwd=git_repo, check=True)
+    (git_repo / "aparte.txt").write_text("a", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "rama"], cwd=git_repo, check=True)
+    diverged = _head(git_repo)
+
+    with pytest.raises(CandidateError):
+        cli.advance_head(other.sha, expected=diverged)
+
+    assert _head(git_repo) == diverged
+
+
+def test_git_output_that_is_not_utf8_doesnt_break_the_adapter(git_repo: Path) -> None:
+    (git_repo / "binario").write_bytes(b"\xff\xfe")
     cli = GitCli(repo_dir=git_repo)
 
-    # Valid change
-    valid = git_repo / "src" / "valid.py"
-    valid.parent.mkdir(parents=True, exist_ok=True)
-    valid.write_text("valid = True\n", encoding="utf-8")
-
-    # Invalid modification to tracked file
-    (git_repo / "README.md").write_text("# Modified by mistake\n", encoding="utf-8")
-
-    # Invalid untracked file
-    forbidden = git_repo / "forbidden.txt"
-    forbidden.write_text("forbidden\n", encoding="utf-8")
-
-    # Revert only forbidden files
-    cli.revert_paths(["README.md", "forbidden.txt"])
-
-    # README.md reverted
-    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
-    # forbidden.txt deleted
-    assert not forbidden.exists()
-    # valid.py preserved
-    assert valid.exists()
-    assert "src/valid.py" in cli.status()
+    assert cli.status() == ["binario"]
 
 
-def test_diff_shows_changes(git_repo: Path) -> None:
+def test_advance_head_runs_no_hook_of_the_repository(git_repo: Path, tmp_path: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
-    (git_repo / "README.md").write_text("# Test Repo\n+ new line\n", encoding="utf-8")
-    diff = cli.diff()
-    assert "+ new line" in diff
+    candidate = _candidate(cli, tmp_path)
+    marker = tmp_path / "hook-ejecutado"
+    hook = git_repo / ".git" / "hooks" / "post-merge"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == candidate.sha
+    assert not marker.exists()
 
 
-def test_revert_paths_removes_broken_symlinks(git_repo: Path) -> None:
+def test_advance_head_refuses_if_the_branch_went_back(git_repo: Path, tmp_path: Path) -> None:
+    """Fast-forwarding would succeed here: only the comparison with `expected` stops it."""
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-m", "base"], cwd=git_repo, check=True)
     cli = GitCli(repo_dir=git_repo)
-    broken_symlink = git_repo / "features" / "broken.feature"
-    broken_symlink.parent.mkdir(parents=True, exist_ok=True)
-    broken_symlink.symlink_to(git_repo / "nonexistent_target_file")
-    assert broken_symlink.is_symlink()
-    assert not broken_symlink.exists()
+    candidate = _candidate(cli, tmp_path)
+    subprocess.run([GIT_BIN, "reset", "-q", "--hard", "HEAD~1"], cwd=git_repo, check=True)
+    behind = _head(git_repo)
 
-    cli.revert_paths(["features/broken.feature"])
-    assert not broken_symlink.is_symlink()
-    assert not broken_symlink.exists()
+    with pytest.raises(CandidateError):
+        cli.advance_head(candidate.sha, expected=candidate.parent)
+
+    assert _head(git_repo) == behind
 
 
-def test_reset_to_head_clears_staged_changes(git_repo: Path) -> None:
+def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cli = GitCli(repo_dir=git_repo)
-    (git_repo / "README.md").write_text("# Modified and staged\n", encoding="utf-8")
-    subprocess.run([GIT_BIN, "add", "README.md"], cwd=git_repo, check=True)
+    before = cli.fingerprint()
+    assert cli.fingerprint() == before
 
-    cli.reset_to_head()
-    assert cli.status() == []
-    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
+    def no_git(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no debe ejecutarse git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    for rel_path in ("config", "hooks/pre-commit", "info/attributes"):
+        target = git_repo / ".git" / rel_path
+        target.parent.mkdir(exist_ok=True)
+        original = target.read_bytes() if target.exists() else None
+        target.write_text("x\n", encoding="utf-8")
+        assert cli.fingerprint() != before, rel_path
+        if original is None:
+            target.unlink()
+        else:
+            target.write_bytes(original)
+        assert cli.fingerprint() == before, rel_path
+
+
+def test_fingerprint_doesnt_depend_on_refs_or_objects(git_repo: Path) -> None:
+    """Advancing the branch is Lictor's own job: only control files count here."""
+    cli = GitCli(repo_dir=git_repo)
+    before = cli.fingerprint()
+
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "x"], cwd=git_repo, check=True)
+
+    assert cli.fingerprint() == before
+
+
+def test_restore_brings_back_control_files_and_removes_planted_ones(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    config = git_repo / ".git" / "config"
+    original = config.read_bytes()
+    pin = cli.pin()
+    config.write_text("[core]\n\tfsmonitor = /x\n", encoding="utf-8")
+    hook = git_repo / ".git" / "hooks" / "post-merge"
+    hook.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    changed = cli.restore(pin)
+
+    assert sorted(changed) == [".git/config", ".git/hooks/post-merge"]
+    assert config.read_bytes() == original
+    assert not hook.exists()
+    assert cli.restore(pin) == []
+
+
+def test_restore_replaces_a_link_instead_of_writing_through_it(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    outside = tmp_path.with_name(f"{tmp_path.name}-fuera")
+    outside.write_text("ajeno", encoding="utf-8")
+    config = git_repo / ".git" / "config"
+    config.unlink()
+    config.symlink_to(outside)
+
+    cli.restore(pin)
+
+    assert outside.read_text(encoding="utf-8") == "ajeno"
+    assert not config.is_symlink()
+
+
+def test_restore_undoes_a_commit_and_keeps_unrelated_edits(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    (git_repo / "README.md").write_text("# Editado\n", encoding="utf-8")
+    pin = cli.pin()
+    (git_repo / "otro.txt").write_text("x", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "otro.txt"], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "ajeno"], cwd=git_repo, check=True)
+
+    assert cli.restore(pin) == ["HEAD"]
+
+    assert _head(git_repo) == pin.head
+    assert not (git_repo / "otro.txt").exists()
+    assert (git_repo / "README.md").read_text(encoding="utf-8") == "# Editado\n"
+
+
+def test_restore_moves_head_even_if_the_tree_cant_follow(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    (git_repo / "README.md").write_text("cambiado", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "ajeno"], cwd=git_repo, check=True)
+    (git_repo / "README.md").write_text("sin confirmar", encoding="utf-8")
+
+    assert cli.restore(pin) == ["HEAD"]
+
+    assert _head(git_repo) == pin.head
+
+
+def test_a_worktree_finds_its_repository_by_reading(git_repo: Path, tmp_path: Path) -> None:
+    other = tmp_path.with_name(f"{tmp_path.name}-worktree")
+    subprocess.run(
+        [GIT_BIN, "worktree", "add", "-q", "-b", "w", str(other)], cwd=git_repo, check=True
+    )
+
+    assert GitCli(repo_dir=other).pin().files["HEAD"].startswith(b"ref:")
+
+
+def test_every_call_is_hardened_against_the_repository_config(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    marker = tmp_path.with_name(f"{tmp_path.name}-marca")
+    hook = git_repo / ".git" / "evil.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run([GIT_BIN, "config", "core.fsmonitor", str(hook)], cwd=git_repo, check=True)
+    (git_repo / "README.md").write_text("x", encoding="utf-8")
+    cli = GitCli(repo_dir=git_repo)
+
+    cli.status()
+    cli.get_head_sha()
+    cli.get_trailers("Scenario")
+
+    assert not marker.exists()
+
+
+def test_inherited_git_locations_dont_redirect_the_adapter(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launched from a git hook, GIT_DIR points wherever that hook ran."""
+    head = _head(git_repo)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path.with_name("no-existe")))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path.with_name("no-existe-index")))
+
+    assert GitCli(repo_dir=git_repo).get_head_sha() == head
+
+
+def test_replaced_objects_are_ignored(git_repo: Path) -> None:
+    head = _head(git_repo)
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "b"], cwd=git_repo, check=True)
+    other = _head(git_repo)
+    subprocess.run([GIT_BIN, "replace", other, head], cwd=git_repo, check=True)
+
+    assert GitCli(repo_dir=git_repo).get_head_message() == "b"
+
+
+def test_export_tree_is_independent_of_the_user_configuration(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A global `core.autocrlf` would rewrite the tree under test on that machine alone."""
+    config = tmp_path.with_name(f"{tmp_path.name}-gitconfig")
+    config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    dest = tmp_path.with_name(f"{tmp_path.name}-exportado")
+
+    GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
+
+    assert b"\r" not in (dest / "README.md").read_bytes()

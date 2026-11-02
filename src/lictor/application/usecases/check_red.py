@@ -16,10 +16,11 @@ from lictor.application.run_files import (
     new_step_dir,
     relative_to_project,
     save_output,
+    step_evidence,
     verification_tree,
     write_text,
 )
-from lictor.application.usecases.verify_attempt import IntegritySnapshot
+from lictor.application.usecases.verify_attempt import IntegritySnapshot, describe_tampering
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
 from lictor.domain.model import Candidate, CommandOutput, Event, ScenarioId, TestCaseResult
@@ -33,7 +34,11 @@ from lictor.domain.rules import (
 )
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
-_STATE_TAMPERED = "El estado en .lictor/ fue modificado indebidamente"
+
+_COLLATERAL_HINT = (
+    " Si el escenario ya pasa por un commit anterior, regístralo y relanza: "
+    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>"'
+)
 
 RejectionKind = Literal["L0-estado", "L0-entorno", "suite_caida", "mapeo", "regla_del_rojo"]
 
@@ -54,6 +59,7 @@ class CheckRedRequest:
     acceptance_timeout_s: int = 600
     error_max_chars: int = 4000
     acceptance_failure_exit_codes: Sequence[int] = (1,)
+    tree: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,7 +113,8 @@ class CheckRed:
             return self._reject_or_raise(request, step_dir, _Rejection("L0-entorno", env_problem))
 
         candidate = self._create_candidate(request)
-        with verification_tree(self.vcs, candidate.sha if candidate else "HEAD") as tree:
+        rev = candidate.sha if candidate else "HEAD"
+        with verification_tree(self.vcs, rev, request.project_root) as tree:
             result, sealable = self._check_tree(request, step_dir, tree)
             if not result.ok:
                 return result
@@ -120,17 +127,19 @@ class CheckRed:
 
             commit_sha: str | None = None
             if sealable:
-                commit_sha = self._seal_and_advance(request, tree, candidate)
+                commit_sha = self._seal_and_advance(request, tree, candidate, step_dir)
         return replace(result, commit_sha=commit_sha)
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
-        """Take the fresh driver from the working tree, unless a crash left it committed."""
-        if not request.driver_fresh:
+        """Take the fresh driver from what the agent left, unless a crash left it committed."""
+        if not request.driver_fresh or request.tree is None:
             return None
         head_runs = self.vcs.get_trailers("Lictor-Run", commit_ref="HEAD")
-        if not self.vcs.status() and head_runs and head_runs[0] == request.run_id:
+        committed = head_runs and head_runs[0] == request.run_id
+        if committed and self.vcs.get_tree("HEAD") == request.tree:
             return None
-        return self.vcs.create_candidate(
+        return self.vcs.commit_tree(
+            request.tree,
             message=DRIVER_COMMIT_MESSAGE,
             trailers={"Lictor-Run": request.run_id},
         )
@@ -142,15 +151,14 @@ class CheckRed:
         tree: Path,
     ) -> tuple[CheckRedResult, bool]:
         out_file = step_dir / "acceptance.xml"
-        output, integrity_ok = self._run_acceptance_suite(request, out_file, tree)
+        output, tampered = self._run_acceptance_suite(request, out_file, tree)
         save_output(step_dir / "acceptance.log", output)
-        if not integrity_ok:
+        if tampered:
+            reason = describe_tampering(tampered)
             if not request.driver_fresh:
-                self._reject(
-                    request, step_dir, _Rejection("L0-estado", _STATE_TAMPERED), final=True
-                )
-                raise DriverError(f"{_STATE_TAMPERED} durante la aceptación")
-            return self._reject(request, step_dir, _Rejection("L0-estado", _STATE_TAMPERED)), False
+                self._reject(request, step_dir, _Rejection("L0-estado", reason), final=True)
+                raise DriverError(f"{reason} Ocurrió durante la aceptación.")
+            return self._reject(request, step_dir, _Rejection("L0-estado", reason)), False
 
         content = ""
         if request.acceptance_report == "junit" and out_file.is_file():
@@ -219,12 +227,14 @@ class CheckRed:
         request: CheckRedRequest,
         out_file: Path,
         tree: Path,
-    ) -> tuple[CommandOutput, bool]:
+    ) -> tuple[CommandOutput, list[str]]:
         cmd_args = fill_report_path(request.acceptance_run, out_file)
 
-        snapshot = IntegritySnapshot(request.project_root / ".lictor", request.project_root)
+        lictor_dir = request.project_root / ".lictor"
+        snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
         output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s)
-        return output, snapshot.verify_and_restore()
+        snapshot.verify_and_restore()
+        return output, snapshot.changes
 
     def _reject_or_raise(
         self,
@@ -237,7 +247,8 @@ class CheckRed:
         final = not request.driver_fresh or exhausted
         result = self._reject(request, step_dir, rejection, final=final)
         if not request.driver_fresh:
-            raise DriverError(f"El driver sellado no es válido.\n{result.last_error}")
+            hint = _COLLATERAL_HINT if rejection.kind == "regla_del_rojo" else ""
+            raise DriverError(f"El driver sellado no es válido.{hint}\n{result.last_error}")
         if exhausted:
             raise DriverError(
                 f"Driver rechazado tras {request.driver_attempts} intentos.\n{result.last_error}"
@@ -279,6 +290,7 @@ class CheckRed:
                     "final": final,
                     "error": condensed,
                     "error_path": relative_to_project(error_path, request.project_root),
+                    "evidence": step_evidence(step_dir, request.project_root),
                 },
             )
         )
@@ -289,6 +301,7 @@ class CheckRed:
         request: CheckRedRequest,
         tree: Path,
         candidate: Candidate | None,
+        step_dir: Path,
     ) -> str:
         """Seal what was verified, not what the working tree holds now."""
         seal_data = self.spec_source.write_seal(
@@ -314,6 +327,7 @@ class CheckRed:
             data={
                 "commit": commit_sha,
                 "files": seal_data.get("files", {}),
+                "evidence": step_evidence(step_dir, request.project_root),
             },
         )
         self.event_log.append(event)

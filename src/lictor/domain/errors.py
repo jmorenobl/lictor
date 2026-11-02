@@ -55,6 +55,10 @@ class CandidateError(PreconditionError):
     """El commit verificado ya no puede convertirse en verde (código 10)."""
 
 
+class RunInProgressError(PreconditionError):
+    """Otra ejecución de Lictor tiene el proyecto (código 10)."""
+
+
 class EnvironmentUnavailableError(LictorError):
     """No se pudo preparar el entorno de verificación (código 40)."""
 

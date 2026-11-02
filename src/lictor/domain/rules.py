@@ -2,7 +2,7 @@
 
 import fnmatch
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
@@ -316,3 +316,23 @@ def count_agent_failures(status: AgentStatus, failures: int) -> int:
 def is_agent_unavailable(status: AgentStatus, failures: int) -> bool:
     """Tell whether the backend is at fault, so that no scenario should pay for it."""
     return status == "auth" or failures >= AGENT_FAILURE_LIMIT
+
+
+def anchor_problems(
+    anchor: Mapping[str, str],
+    observed: Mapping[str, str],
+    accepted_heads: Collection[str],
+) -> list[str]:
+    """Say what differs from what a run recorded, the only thing a resume can trust.
+
+    `seal` is compared only once there is one: before sealing nothing is anchored to it.
+    """
+    problems: list[str] = []
+    if anchor.get("head") and observed.get("head") not in accepted_heads:
+        problems.append(
+            f"HEAD está en {observed.get('head', '')[:12]} y la ejecución lo dejó en "
+            f"{anchor['head'][:12]}"
+        )
+    if anchor.get("seal") and observed.get("seal") != anchor["seal"]:
+        problems.append(".lictor/seal.json no es el que escribió la ejecución")
+    return problems

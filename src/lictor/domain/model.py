@@ -237,12 +237,54 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class JournalDamage:
+    """Lines of the journal that were skipped when reading it.
+
+    `corrupt` lines aren't JSON: a write cut short, or an edit. `foreign` lines are JSON that no
+    Lictor event looks like, which only someone else can have written. A forged line with the exact
+    shape of an event can't be told apart here, and is in neither count.
+    """
+
+    corrupt: int = 0
+    foreign: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.corrupt + self.foreign
+
+
+@dataclass(frozen=True)
+class RepoPin:
+    """What a repository holds before untrusted code runs: its HEAD and its control files."""
+
+    head: str
+    files: dict[str, bytes] = field(default_factory=dict)
+
+
+_SYMLINK_MODE = "120000"
+_GITLINK_MODE = "160000"
+
+
+@dataclass(frozen=True)
 class Candidate:
     """A commit outside the branch: only what passes verification becomes green."""
 
     sha: str
     tree: str
     parent: str
+
+
+@dataclass(frozen=True)
+class TreeChange:
+    """A path that differs from HEAD in a tree, with the mode it has there."""
+
+    path: str
+    mode: str
+
+    @property
+    def is_link(self) -> bool:
+        """Tell links and nested repositories: what they point to is not in the commit."""
+        return self.mode in (_SYMLINK_MODE, _GITLINK_MODE)
 
 
 @dataclass(frozen=True)
@@ -257,6 +299,7 @@ class VerifyResult:
     reverted_files: tuple[str, ...] = field(default_factory=tuple)
     error_path: str | None = None
     candidate: Candidate | None = None
+    evidence: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

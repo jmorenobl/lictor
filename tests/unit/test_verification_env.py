@@ -1,7 +1,7 @@
 """Unit tests for the verification environment: hash, rebuild and failure to prepare."""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -16,6 +16,8 @@ from lictor.application.seal import hash_tree
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput
+
+COMMAND_HOME = Path("/casa-de-la-verificacion")
 
 SPEC = VerificationEnvSpec(
     prepare="build --into {env_dir}",
@@ -43,20 +45,25 @@ class _Builder(FakeRunner):
         self.answer_returncode = 0
         self.plugins = "plugin_a\nplugin_b\n"
         self.plugins_returncode = 0
+        self.on_run: Callable[[Sequence[str], Path, Mapping[str, str]], None] | None = None
 
     def run(
         self,
         cmd: Sequence[str],
         cwd: Path,
         timeout_s: int | None = None,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
         super().run(cmd, cwd, timeout_s, env)
+        if self.on_run is not None and env is not None:
+            self.on_run(cmd, cwd, env)
         if cmd[0] == "donde":
             stdout = self.answer.replace("{env_dir}", cmd[1])
             return CommandOutput(self.answer_returncode, stdout=stdout, stderr="sin respuesta")
         if cmd[0] == "plugins":
             return CommandOutput(self.plugins_returncode, stdout=self.plugins, stderr="sin lista")
+        if cmd[0] == "pregunta":
+            return CommandOutput(self.answer_returncode, stdout=self.answer, stderr="no sé")
         if cmd[0] != "build":
             return CommandOutput(returncode=0, stdout="", stderr="")
         self.builds += 1
@@ -188,7 +195,7 @@ def test_only_declared_variables_are_inherited_and_fixed_ones_win(
     spec = VerificationEnvSpec(inherit=("DECLARADA", "FIJADA", "AUSENTE"), env={"FIJADA": "1"})
     environment, _ = _environment(tmp_path, FakeRunner(), spec)
 
-    assert environment.command_env() == {"DECLARADA": "x", "FIJADA": "1"}
+    assert environment.command_env(COMMAND_HOME) == {"DECLARADA": "x", "FIJADA": "1"}
 
 
 def test_inherit_names_are_exact_not_patterns(
@@ -199,7 +206,7 @@ def test_inherit_names_are_exact_not_patterns(
     spec = VerificationEnvSpec(inherit=("DECLARADA", "DECLARADA_*"))
     environment, _ = _environment(tmp_path, FakeRunner(), spec)
 
-    assert environment.command_env() == {}
+    assert environment.command_env(COMMAND_HOME) == {}
 
 
 def test_commands_run_with_the_exact_environment(
@@ -207,13 +214,150 @@ def test_commands_run_with_the_exact_environment(
 ) -> None:
     monkeypatch.setenv("DECLARADA", "x")
     runner = _Builder()
-    spec = VerificationEnvSpec(prepare=SPEC.prepare, inherit=("DECLARADA",))
+    spec = VerificationEnvSpec(
+        prepare=SPEC.prepare, inherit=("DECLARADA",), prepare_inherit=("DECLARADA",)
+    )
     environment, _ = _environment(tmp_path, runner, spec)
 
     environment.ensure("R")
     environment.run(["control"], tmp_path, 1)
 
     assert [call["env"] for call in runner.calls] == [{"DECLARADA": "x"}] * 2
+
+
+def test_each_command_lives_in_a_new_home_outside_the_project(tmp_path: Path) -> None:
+    """What one control writes in its home can't configure the next one."""
+    runner = _Builder()
+    spec = VerificationEnvSpec(env={"HOME": "{home_dir}"})
+    environment, _ = _environment(tmp_path, runner, spec)
+    seen: list[Path] = []
+
+    def remember(_cmd: Sequence[str], _cwd: Path, env: Mapping[str, str]) -> None:
+        home = Path(env["HOME"])
+        assert home.is_dir()
+        assert list(home.iterdir()) == []
+        (home / ".config").mkdir()
+        seen.append(home)
+
+    runner.on_run = remember
+    environment.run(["control"], tmp_path, 1)
+    environment.run(["control"], tmp_path, 1)
+
+    assert seen[0] != seen[1]
+    assert not any(home.exists() for home in seen)
+    assert not any(home.is_relative_to(tmp_path) for home in seen)
+
+
+def test_prepare_doesnt_share_its_environment_with_the_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CREDENCIAL", "secreta")
+    monkeypatch.setenv("COMUN", "x")
+    runner = _Builder()
+    spec = replace(
+        SPEC,
+        prepare_inherit=("CREDENCIAL", "COMUN"),
+        inherit=("COMUN",),
+        env={"HOME": "{home_dir}", "FIJADA": "1"},
+    )
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+    environment.run(["control"], tmp_path, 1)
+
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    command = next(call for call in runner.calls if call["cmd"] == ["control"])["env"]
+    assert prepared["CREDENCIAL"] == "secreta"
+    assert (prepared["COMUN"], prepared["FIJADA"]) == ("x", "1")
+    assert "CREDENCIAL" not in command
+    assert (command["COMUN"], command["FIJADA"]) == ("x", "1")
+    assert prepared["HOME"] != command["HOME"]
+    assert prepared["HOME"] != str(Path.home())
+
+
+def test_what_the_profile_fixes_wins_in_prepare_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FIJADA", "heredada")
+    runner = _Builder()
+    spec = replace(SPEC, prepare_inherit=("FIJADA",), env={"FIJADA": "del-perfil"})
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    assert prepared["FIJADA"] == "del-perfil"
+
+
+def test_prepare_reaches_the_files_of_the_real_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_home = tmp_path / "usuario"
+    user_home.mkdir()
+    (user_home / ".netrc").write_text("machine x\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.delenv("NETRC", raising=False)
+    runner = _Builder()
+    spec = replace(
+        SPEC,
+        prepare_inherit=("NETRC",),
+        prepare_home_files={"NETRC": ".netrc", "AUSENTE": ".no-existe"},
+    )
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    assert prepared["NETRC"] == str(user_home / ".netrc")
+    assert "AUSENTE" not in prepared
+
+
+def test_a_declared_location_wins_over_the_file_of_the_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".netrc").write_text("machine x\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("NETRC", "/otra/ruta")
+    runner = _Builder()
+    spec = replace(SPEC, prepare_inherit=("NETRC",), prepare_home_files={"NETRC": ".netrc"})
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    assert prepared["NETRC"] == "/otra/ruta"
+
+
+def test_prepare_asks_the_tool_with_the_callers_environment(tmp_path: Path) -> None:
+    """Asked inside the empty home, the answer would be a location that holds nothing."""
+    runner = _Builder()
+    runner.answer = "/interpretes\n"
+    spec = replace(SPEC, prepare_ask={"DONDE_ESTAN": "pregunta interpretes"})
+    environment, _ = _environment(tmp_path, runner, spec)
+
+    environment.ensure("R")
+
+    asked = next(call for call in runner.calls if call["cmd"][0] == "pregunta")
+    prepared = next(call for call in runner.calls if call["cmd"][0] == "build")["env"]
+    assert asked["env"] is None
+    assert prepared["DONDE_ESTAN"] == "/interpretes"
+
+
+@pytest.mark.parametrize(("answer", "returncode"), [("", 0), ("/x", 3)])
+def test_a_tool_that_cant_answer_is_an_environment_failure(
+    tmp_path: Path, answer: str, returncode: int
+) -> None:
+    runner = _Builder()
+    runner.answer = answer
+    runner.answer_returncode = returncode
+    spec = replace(SPEC, prepare_ask={"DONDE_ESTAN": "pregunta interpretes"})
+    environment, event_log = _environment(tmp_path, runner, spec)
+
+    with pytest.raises(EnvironmentUnavailableError, match="DONDE_ESTAN"):
+        environment.ensure("R")
+
+    assert _events(event_log) == ["lictor.env.failed.v1"]
+    assert runner.builds == 0
 
 
 def test_forgetting_a_variable_a_tool_needs_stops_visibly(tmp_path: Path) -> None:
@@ -350,7 +494,7 @@ def test_project_without_prepare_has_nothing_to_check(tmp_path: Path) -> None:
 
     assert runner.calls == []
     event_log.append.assert_not_called()
-    assert environment.command_env() == {"A": "1"}
+    assert environment.command_env(COMMAND_HOME) == {"A": "1"}
 
 
 def test_invalid_manifest_means_building_again(tmp_path: Path) -> None:
@@ -383,7 +527,7 @@ def test_installed_plugins_are_fixed_when_building(tmp_path: Path) -> None:
 
     environment.ensure("R")
 
-    assert environment.command_env()["CARGA"] == "propio,plugin_a,plugin_b"
+    assert environment.command_env(COMMAND_HOME)["CARGA"] == "propio,plugin_a,plugin_b"
     manifest = json.loads(environment.manifest.read_text(encoding="utf-8"))
     assert manifest["plugins"] == ["plugin_a", "plugin_b"]
     assert event_log.append.call_args.args[0].data["plugins"] == ["plugin_a", "plugin_b"]
@@ -443,7 +587,7 @@ def test_plugins_survive_into_a_new_process(tmp_path: Path) -> None:
     assert resumed.ensure("R") is None
 
     assert runner.builds == 1
-    assert resumed.command_env()["CARGA"] == "propio,plugin_a,plugin_b"
+    assert resumed.command_env(COMMAND_HOME)["CARGA"] == "propio,plugin_a,plugin_b"
 
 
 def test_a_forged_plugin_list_is_tampering(tmp_path: Path) -> None:
@@ -461,7 +605,7 @@ def test_a_forged_plugin_list_is_tampering(tmp_path: Path) -> None:
     assert "trampa" in problem
     assert runner.builds == 2
     assert _events(event_log).count("lictor.env.tampered.v1") == 1
-    assert "trampa" not in environment.command_env()["CARGA"]
+    assert "trampa" not in environment.command_env(COMMAND_HOME)["CARGA"]
 
 
 def test_the_manifest_is_not_read_between_two_checks(tmp_path: Path) -> None:
@@ -470,7 +614,7 @@ def test_the_manifest_is_not_read_between_two_checks(tmp_path: Path) -> None:
     environment.ensure("R")
     environment.manifest.write_text('{"plugins": ["trampa"]}', encoding="utf-8")
 
-    assert "trampa" not in environment.command_env()["CARGA"]
+    assert "trampa" not in environment.command_env(COMMAND_HOME)["CARGA"]
 
 
 def test_a_tampered_tree_is_not_asked_for_its_plugins(tmp_path: Path) -> None:
@@ -494,7 +638,7 @@ def test_a_rebuild_forgets_the_previous_plugins(tmp_path: Path) -> None:
 
     environment.ensure("R")
 
-    assert environment.command_env()["CARGA"] == "propio,plugin_c"
+    assert environment.command_env(COMMAND_HOME)["CARGA"] == "propio,plugin_c"
 
 
 def test_failing_to_list_plugins_is_an_environment_failure(tmp_path: Path) -> None:
@@ -531,7 +675,7 @@ def test_without_a_plugin_command_only_the_declared_ones_load(tmp_path: Path) ->
     environment.ensure("R")
 
     assert [call["cmd"][0] for call in runner.calls] == ["build"]
-    assert environment.command_env()["CARGA"] == "propio"
+    assert environment.command_env(COMMAND_HOME)["CARGA"] == "propio"
 
 
 def test_no_plugins_means_no_variable(tmp_path: Path) -> None:
@@ -542,7 +686,7 @@ def test_no_plugins_means_no_variable(tmp_path: Path) -> None:
 
     environment.ensure("R")
 
-    assert "CARGA" not in environment.command_env()
+    assert "CARGA" not in environment.command_env(COMMAND_HOME)
 
 
 def test_run_injects_the_environment(tmp_path: Path) -> None:
@@ -551,7 +695,7 @@ def test_run_injects_the_environment(tmp_path: Path) -> None:
 
     environment.run(["suite"], tmp_path, 5)
 
-    assert runner.calls[0]["env"] == environment.command_env()
+    assert runner.calls[0]["env"] == {"ENV_AT": f"{environment.env_dir}/bin", "PLAIN": "1"}
     assert runner.calls[0]["timeout_s"] == 5
 
 

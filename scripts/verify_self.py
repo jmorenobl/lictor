@@ -77,7 +77,7 @@ def main(selected: Sequence[str]) -> int:
     run_id = f"self-{int(time.time())}"
     environment.ensure(run_id)
     failed: list[str] = []
-    with verification_tree(vcs, "HEAD") as tree:
+    with verification_tree(vcs, "HEAD", REPO_ROOT) as tree:
         for control in _specs(selected):
             started = time.monotonic()
             result = check.execute(CheckProjectRequest(project_root=tree, controls=[control]))

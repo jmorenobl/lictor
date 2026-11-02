@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -9,6 +9,7 @@ from lictor.application.usecases.prepare_driver import (
     PrepareDriverRequest,
     PrepareDriverResult,
 )
+from lictor.domain.errors import CandidateError
 from lictor.domain.model import (
     AgentResult,
     AgentStatus,
@@ -16,7 +17,30 @@ from lictor.domain.model import (
     Health,
     PermissionDenial,
     Tokens,
+    TreeChange,
 )
+
+
+def _changed(path: str) -> TreeChange:
+    return TreeChange(path, "100644")
+
+
+def _driver_request(tmp_path: Path) -> PrepareDriverRequest:
+    return PrepareDriverRequest(
+        project_root=tmp_path,
+        run_id="R",
+        model="m",
+        allowed_tools=[],
+        max_turns=1,
+        timeout_s=1,
+        paths_writable=["src/"],
+        paths_driver=["tests/acceptance/"],
+        paths_protected=[],
+        driver_hints="",
+        hints="",
+        green_ids=[],
+        driver_attempts=0,
+    )
 
 
 def test_prepare_driver_executes_task_and_emits_event(tmp_path: Path) -> None:
@@ -26,7 +50,7 @@ def test_prepare_driver_executes_task_and_emits_event(tmp_path: Path) -> None:
     (features_dir / "test.feature").write_text("Feature: Test\n", encoding="utf-8")
 
     vcs = MagicMock(spec=Vcs)
-    vcs.status.return_value = ["tests/acceptance/test_foo.py", "src/foo.py"]
+    vcs.changes.return_value = [_changed("tests/acceptance/test_foo.py"), _changed("src/foo.py")]
 
     executor = MagicMock(spec=Executor)
     agent_result = AgentResult(
@@ -68,7 +92,6 @@ def test_prepare_driver_executes_task_and_emits_event(tmp_path: Path) -> None:
 
     result = use_case.execute(req)
 
-    vcs.reset_to_head.assert_called_once()
     executor.run.assert_called_once()
     task = executor.run.call_args[0][0]
     assert task.role == "driver"
@@ -93,9 +116,9 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
 
     vcs = MagicMock(spec=Vcs)
     # Status includes unauthorized file modified by agent
-    vcs.status.return_value = [
-        "tests/acceptance/test_foo.py",
-        "pyproject.toml",  # unauthorized outside paths.driver + paths.writable
+    vcs.changes.return_value = [
+        _changed("tests/acceptance/test_foo.py"),
+        _changed("pyproject.toml"),
     ]
 
     executor = MagicMock(spec=Executor)
@@ -131,7 +154,8 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
 
     result = use_case.execute(req)
 
-    vcs.revert_paths.assert_called_once_with(["pyproject.toml"])
+    workspace = executor.run.call_args.args[0].cwd
+    assert vcs.capture.call_args_list == [call(workspace), call(workspace, skip=["pyproject.toml"])]
     assert result.reverted_files == ("pyproject.toml",)
     assert event_log.append.call_args_list[0].args[0].data["reverted_files"] == ["pyproject.toml"]
 
@@ -142,7 +166,7 @@ def test_prepare_driver_does_not_increment_attempts_on_rate_limit(tmp_path: Path
     (features_dir / "test.feature").write_text("Feature: Test\n", encoding="utf-8")
 
     vcs = MagicMock(spec=Vcs)
-    vcs.status.return_value = []
+    vcs.changes.return_value = []
 
     executor = MagicMock(spec=Executor)
     executor.run.return_value = AgentResult(status="rate_limited")
@@ -186,7 +210,7 @@ def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Pa
     (features_dir / "test.feature").write_text("Feature: Test\n", encoding="utf-8")
 
     vcs = MagicMock(spec=Vcs)
-    vcs.status.return_value = []
+    vcs.changes.return_value = []
 
     executor = MagicMock(spec=Executor)
     executor.run.return_value = AgentResult(status="ok")
@@ -228,10 +252,11 @@ def test_prepare_driver_handles_curly_braces_in_hints_and_templates(tmp_path: Pa
 
 
 def _execute_driver(
-    tmp_path: Path, agent: AgentResult, agent_failures: int = 0
+    tmp_path: Path, agent: AgentResult, agent_failures: int = 0, moved: tuple[str, ...] = ()
 ) -> tuple[PrepareDriverResult, MagicMock, MagicMock]:
     vcs = MagicMock(spec=Vcs)
-    vcs.status.return_value = []
+    vcs.changes.return_value = []
+    vcs.restore.return_value = list(moved)
     executor = MagicMock(spec=Executor)
     executor.run.return_value = agent
     event_log = MagicMock(spec=EventLog)
@@ -275,6 +300,18 @@ def test_prepare_driver_signal(
     assert (result.agent_signal, result.driver_attempts, result.agent_failures) == expected
 
 
+def test_prepare_driver_tampering_with_the_repository_is_rejected(tmp_path: Path) -> None:
+    result, _, event_log = _execute_driver(
+        tmp_path, AgentResult(status="ok"), moved=(".git/config",)
+    )
+
+    assert (result.agent_signal, result.driver_attempts) == ("rejected", 2)
+    assert result.tree is None
+    assert ".git/config" in (result.error or "")
+    types = [call_.args[0].type for call_ in event_log.append.call_args_list]
+    assert "lictor.state.tampered.v1" in types
+
+
 def test_prepare_driver_retry_keeps_the_previous_raw_output(tmp_path: Path) -> None:
     _, executor, _ = _execute_driver(tmp_path, AgentResult(status="error"), 1)
 
@@ -300,7 +337,11 @@ def test_prepare_driver_records_denials(tmp_path: Path) -> None:
 def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) -> None:
     (tmp_path / "features").mkdir()
     vcs = MagicMock(spec=Vcs)
-    vcs.status.return_value = ["src/evil.pth", "tests/acceptance/conftest.py", "src/iva.py"]
+    vcs.changes.return_value = [
+        _changed("src/evil.pth"),
+        _changed("tests/acceptance/conftest.py"),
+        _changed("src/iva.py"),
+    ]
     executor = MagicMock(spec=Executor)
     executor.run.return_value = AgentResult(status="ok")
     use_case = PrepareDriver(
@@ -327,3 +368,50 @@ def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) 
     )
 
     assert result.reverted_files == ("src/evil.pth",)
+
+
+def test_prepare_driver_discards_links_even_in_its_own_paths(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    vcs = MagicMock(spec=Vcs)
+    vcs.changes.return_value = [TreeChange("tests/acceptance/enlace.py", "120000")]
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+    use_case = PrepareDriver(
+        vcs=vcs, executor=executor, event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock)
+    )
+
+    result = use_case.execute(_driver_request(tmp_path))
+
+    assert result.reverted_files == ("tests/acceptance/enlace.py",)
+
+
+def test_prepare_driver_with_an_unreadable_result_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    vcs = MagicMock(spec=Vcs)
+    vcs.capture.side_effect = CandidateError("repositorio anidado")
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="ok")
+    use_case = PrepareDriver(
+        vcs=vcs, executor=executor, event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock)
+    )
+
+    result = use_case.execute(_driver_request(tmp_path))
+
+    assert result.agent_signal == "rejected"
+    assert result.error == "repositorio anidado"
+    assert result.driver_attempts == 1
+
+
+def test_prepare_driver_reads_nothing_after_a_rate_limit(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    vcs = MagicMock(spec=Vcs)
+    executor = MagicMock(spec=Executor)
+    executor.run.return_value = AgentResult(status="rate_limited")
+    use_case = PrepareDriver(
+        vcs=vcs, executor=executor, event_log=MagicMock(spec=EventLog), clock=MagicMock(spec=Clock)
+    )
+
+    result = use_case.execute(_driver_request(tmp_path))
+
+    vcs.capture.assert_not_called()
+    assert result.tree is None

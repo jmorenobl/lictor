@@ -119,6 +119,9 @@ class ProfileVerification(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     prepare: str = ""
+    prepare_inherit: list[str] = Field(default_factory=list)
+    prepare_ask: dict[str, str] = Field(default_factory=dict)
+    prepare_home_files: dict[str, str] = Field(default_factory=dict)
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
     reserved: list[str] = Field(default_factory=list)
@@ -148,6 +151,7 @@ class ProjectVerification(BaseModel):
 
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
+    prepare_inherit: list[str] = Field(default_factory=list)
 
 
 class ControlConfig(BaseModel):

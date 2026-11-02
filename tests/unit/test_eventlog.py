@@ -1,13 +1,16 @@
 """Unit tests for Clock and JsonlEventLog store adapters."""
 
+import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from lictor.adapters.store.clock import FixedClock, SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.application.ports import Clock, EventLog
-from lictor.domain.model import Event
+from lictor.domain.model import Event, JournalDamage
 
 
 class TestClocks:
@@ -105,10 +108,10 @@ class TestJournalTolerance:
     def _log_with(self, tmp_path: Path, text: str) -> JsonlEventLog:
         path = tmp_path / "journal.jsonl"
         good = JsonlEventLog(path)
-        good.append(Event(id="1", type="t", source="s", time="now", data={}))
+        good.append(Event(id="1", type="t", source="lictor/0.1.0", time="now", data={}))
         with open(path, "a", encoding="utf-8") as journal:
             journal.write(text)
-        good.append(Event(id="2", type="t", source="s", time="now", data={}))
+        good.append(Event(id="2", type="t", source="lictor/0.1.0", time="now", data={}))
         return good
 
     def test_invalid_lines_do_not_lose_the_rest(self, tmp_path: Path) -> None:
@@ -120,3 +123,42 @@ class TestJournalTolerance:
         with open(tmp_path / "journal.jsonl", "ab") as journal:
             journal.write(b"\xff\xfe\n")
         assert [event.id for event in log.events()] == ["1", "2"]
+
+
+def _event_line(source: str = "lictor/0.1.0") -> str:
+    event = Event(id="1", type="t", source=source, time="2026-10-30T10:00:00Z", runid="r", data={})
+    return json.dumps(event.to_dict())
+
+
+def _damage(tmp_path: Path, *lines: str) -> JournalDamage:
+    path = tmp_path / "journal.jsonl"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return JsonlEventLog(path).damage()
+
+
+def test_damage_of_a_missing_journal_is_none(tmp_path: Path) -> None:
+    assert JsonlEventLog(tmp_path / "no-existe.jsonl").damage() == JournalDamage()
+
+
+def test_damage_of_a_healthy_journal_is_none(tmp_path: Path) -> None:
+    assert _damage(tmp_path, _event_line(), "", _event_line()).total == 0
+
+
+def test_a_line_cut_short_is_corrupt(tmp_path: Path) -> None:
+    damage = _damage(tmp_path, _event_line(), _event_line()[:20])
+
+    assert damage == JournalDamage(corrupt=1, foreign=0)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['{"forjado":true}', "[1, 2]", "7", '"texto"', _event_line(source="otro/1.0")],
+    ids=["objeto", "lista", "numero", "cadena", "otra-fuente"],
+)
+def test_json_that_is_no_event_of_lictor_is_foreign(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "journal.jsonl"
+    path.write_text(f"{_event_line()}\n{line}\n", encoding="utf-8")
+    log = JsonlEventLog(path)
+
+    assert log.damage() == JournalDamage(corrupt=0, foreign=1)
+    assert len(log.events()) == 1

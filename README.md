@@ -36,7 +36,7 @@
 ---
 
 > [!WARNING]
-> **El verde todavía no resiste a un agente adversario.** Hoy significa que ese commit exacto pasó los controles y la aceptación en un clon limpio, con un entorno comprobado por hash. Pero `.git`, `.lictor/` y ese entorno están al alcance del agente, que corre con tus permisos, y el clon parte de un `.git` que aún puede alterar. Eso sigue así hasta cerrar la Fase 4 del plan de corrección. Además hay una limitación conocida de la v0.1 que ninguna fase de este plan cierra: cualquier código del proyecto que se importe durante los tests corre en el mismo proceso que el runner, así que puede alterar el runner o forjar el informe de aceptación. Basta con que `src/` registre un plugin al importarse. Se cerrará con el sandbox del incremento 4. Hasta entonces el verde no resiste a un adversario, y `forbidden_paths` y `banned_patterns` son heurísticas: encarecen la trampa, no la impiden.
+> **El verde todavía no resiste a un agente adversario.** Hoy significa que ese commit exacto pasó los controles y la aceptación en un clon limpio, con un entorno comprobado por hash y sin configuración de usuario. El agente trabaja en una copia sin `.git` ni `.lictor/`, pero corre con tus permisos, así que por ruta absoluta sigue alcanzando `.git`, `.lictor/`, el entorno de verificación y `~/.netrc`. Esas escrituras se detectan y se deshacen mientras Lictor está vivo, y tras una muerte impiden reanudar, salvo que se reescriba también el checkpoint. Dos limitaciones de la v0.1 no las cierra ninguna fase de este plan: cualquier código del proyecto que se importe durante los tests corre en el mismo proceso que el runner, así que puede alterar el runner o forjar el informe de aceptación (basta con que `src/` registre un plugin al importarse); y un proceso que el agente deje vivo puede plantar en el entorno entre `prepare` y su hash, que entonces lo da por bueno. Se cerrarán con el sandbox del incremento 4. Hasta entonces el verde no resiste a un adversario, y `forbidden_paths` y `banned_patterns` son heurísticas: encarecen la trampa, no la impiden.
 >
 > Lo que sí está cerrado son vías concretas de carga antes de los tests: `src/` no entra en el arranque de Python, de modo que un `sitecustomize.py` no se ejecuta ni en `mypy` ni en `pytest`; un paquete en `src/` no sustituye a una dependencia, porque `src` va al final de la ruta; y las variables heredadas que cargan código (`PYTHONPATH`, `PYTHONSTARTUP`, `PYTEST_ADDOPTS` y similares) se limpian.
 
@@ -297,10 +297,10 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 
 | Nivel | Puerta | Qué verifica | Modo |
 | :---: | :--- | :--- | :---: |
-| **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas, en `forbidden_paths` o que sea un enlace simbólico se revierte automáticamente y falla el intento. | `block` |
+| **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas o en `forbidden_paths`, un borrado incluido, y cualquier enlace simbólico o repositorio anidado, falla el intento; lo que hizo el agente se descarta con su copia. | `block` |
 | **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
-| **L0** | `L0-supresiones` | Analiza las líneas añadidas en el diff y archivos nuevos bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
-| **L0** | `L0-estado` | Toma una instantánea en memoria de `.lictor/` y `lictor.json` antes y después de cada comando; si detecta manipulación, restaura y aborta ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
+| **L0** | `L0-supresiones` | Analiza las líneas que añade el resultado del agente, también en binarios, bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
+| **L0** | `L0-estado` | Guarda en memoria el estado de `.lictor/` (con el WAL del checkpoint), `lictor.json`, HEAD y los ficheros de control de `.git` antes de cada ventana del agente y cada comando. Si algo cambió, lo restaura y falla el intento sin verificarlo, con el evento `lictor.state.tampered.v1` ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
 | **L0** | `L0-entorno` | Compara el hash del entorno de verificación, con todos sus ficheros, antes y después de ejecutar los comandos. Si no coincide, falla el intento, reconstruye el entorno y deja el evento `lictor.env.tampered.v1`. | `block` |
 | **L1** | Análisis estático | Linter (`ruff check`), formato (`ruff format --check`) y chequeo estricto de tipos (`mypy --strict`). | `block` |
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
@@ -356,7 +356,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
   ],
-  "verification": {"env": {}, "inherit": []},
+  "verification": {"env": {}, "inherit": [], "prepare_inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
 }
@@ -366,13 +366,17 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
-| Proyecto | `verification.env`, `verification.inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths` | Ningún proyecto los cambia ni los quita |
+| Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
 
-El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
+El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Cada comando tiene además un `HOME` vacío y nuevo, fuera del proyecto, así que tu configuración de usuario (`~/.config/ruff`, `~/.config/mypy`, `~/.config/uv`) no decide ningún control. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
 
-**Reanudar comprueba la configuración resuelta.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`. Si cambió cualquiera de ellos, sale con exit 10 y explica el motivo. Un cambio solo de formato en `lictor.json` no cuenta.
+**`prepare` tiene su propio entorno.** La red y las credenciales pasan por `prepare_inherit`, que los comandos no ven. También usa un `HOME` vacío: el intérprete se pregunta a `uv` (`prepare_ask`) y `~/.netrc` se le indica por `NETRC` (`prepare_home_files`). Usa `--no-cache`, porque una entrada envenenada de la caché compartida de `uv` llegaba al entorno y el hash la daba por buena. A cambio, cada construcción descarga contra los hashes de `uv.lock`, una vez por ejecución: sin red, exit 40. Un proyecto que necesite otra variable en `prepare`, como `PYENV_ROOT`, la declara en `verification.prepare_inherit`.
+
+**Tu árbol de trabajo es tuyo.** El agente no trabaja en él, y Lictor solo lo toca al guardar un commit verde, con un *fast-forward*: tus ediciones sobreviven y, si un commit pisaría una, se para con exit 10 sin perder nada. `lictor run` lo reanuda cuando lo resuelvas, sin repetir el trabajo verificado. El agente recibe una copia de HEAD sin ficheros ignorados, así que no ve un `.env` ni datos locales; tampoco los verá la verificación.
+
+**Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. Si un escenario quedó en verde colateralmente y `lictor run --new` lo rechaza, el mensaje indica cómo registrarlo a mano.
 
 **`paths.protected` es decisión del proyecto.** `lictor init` escribe la lista del perfil como punto de partida, pero `paths` sustituye a ese valor, así que un `lictor.json` puede quitar entradas. `uv.lock` es la excepción: lo que el bloqueo instala es lo que entra en el entorno de verificación, y un plugin instalado se carga, así que también está en `forbidden_paths` y el agente no puede cambiarlo aunque el proyecto lo quite de esa lista. `forbidden_paths` y `IntegritySnapshot` cubren parte del resto, pero no sustituyen a `paths.protected`.
 
@@ -380,10 +384,10 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Índice privado.** `verification.prepare` usa `--frozen`, de modo que las URL salen de `uv.lock` y solo faltan las credenciales. `UV_INDEX_<NOMBRE>_USERNAME` y `_PASSWORD` funcionan en `uv`, pero quedan fuera por lo anterior. Hay dos vías, sin ninguna contraseña en `lictor.json` ni en `uv.lock`:
 
-- `~/.netrc`, que llega porque `HOME` se hereda.
-- Un fichero netrc en otra ruta, con `"verification": {"inherit": ["NETRC"]}`.
+- `~/.netrc`, que `prepare` recibe por `NETRC` aunque su `HOME` esté vacío.
+- Un fichero netrc en otra ruta, con la variable `NETRC`.
 
-Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación básica sobre HTTP: sin credenciales, `prepare` falla (exit 40 en Lictor) y con ellas instala. No se han probado contra un índice real ni con `keyring`. Las credenciales quedan al alcance del código del proyecto, que corre con el mismo usuario y el mismo entorno que `prepare`.
+Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación básica sobre HTTP: sin credenciales, `prepare` falla (exit 40 en Lictor) y con ellas instala. No se han probado contra un índice real ni con `keyring`. Ni la variable ni la ruta llegan a los comandos, pero el código del proyecto corre con tu usuario y puede leer `~/.netrc` si conoce la ruta: eso solo lo cierra el sandbox.
 
 ### Artefactos internos en `.lictor/` (ignorados por git)
 

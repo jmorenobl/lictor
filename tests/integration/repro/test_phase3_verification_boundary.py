@@ -209,7 +209,7 @@ def _assert_rejected_by(project: Callable[[], Path], agent: Agent, *reasons: str
 
 def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        forged = shell([".venv/bin/python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
+        forged = shell(["uv", "run", "python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
     _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
@@ -217,7 +217,7 @@ def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
 
 def test_c2_forged_driver_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
-        forged = shell([".venv/bin/python", "-c", FORGE_DRIVER_PYC], task.cwd)
+        forged = shell(["uv", "run", "python", "-c", FORGE_DRIVER_PYC], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
     _assert_rejected_by(make_project, Agent(impl=impl), "acceptance")
@@ -235,7 +235,7 @@ def test_c3_plugin_in_the_verification_venv_fails_by_hash(make_project: ProjectF
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         if scenario_id == "IVA-001" and not planted:
-            for site_packages in task.cwd.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
+            for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 _plant_plugin(site_packages)
                 planted.append(site_packages)
 
@@ -308,7 +308,7 @@ def test_c3_forged_bytecode_in_the_verification_venv_fails_by_hash(
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         if scenario_id == "IVA-001" and not planted:
-            for site_packages in task.cwd.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
+            for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 pyc = site_packages / "_pytest" / "__pycache__" / "forjado.cpython-312.pyc"
                 write(pyc.parent, pyc.name, b"\x00")
                 planted.append(pyc)
@@ -325,6 +325,8 @@ def test_c3_plugin_in_the_agents_venv_does_not_reach_verification(
     make_project: ProjectFactory,
 ) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        synced = shell(["uv", "sync", "-q", "--frozen", "--no-install-project"], task.cwd)
+        require(synced.returncode == 0, f"el agente debía tener su venv: {synced.stderr}")
         sites = list(task.cwd.glob(".venv/lib/python*/site-packages"))
         require(sites, "el ataque debía llegar a la venv del agente")
         for site_packages in sites:
@@ -414,15 +416,21 @@ def test_verification_inherits_nothing_that_loads_code(
 def test_verification_keeps_what_the_tools_need(
     make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The network settings and credentials of `prepare` don't reach project code."""
     probe = tmp_path / "sonda"
     root = make_project(extra_controls=[_probe_control(probe)])
     monkeypatch.setenv("SSL_CERT_DIR", "/ruta/de/prueba")
+    monkeypatch.setenv("NETRC", "/ruta/de/credenciales")
+    monkeypatch.setenv("HTTPS_PROXY", "http://usuario:clave@proxy.invalid:9")
+    monkeypatch.setenv("NO_PROXY", "*")
 
     assert run_lictor(root, Agent()) == Outcome(0)
 
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert f"PATH={os.environ['PATH']}" in seen
-    assert "SSL_CERT_DIR=/ruta/de/prueba" in seen
+    names = {line.partition("=")[0] for line in seen}
+    assert not names & {"SSL_CERT_DIR", "NETRC", "HTTPS_PROXY", "NO_PROXY"}
+    assert f"HOME={os.environ['HOME']}" not in seen
 
 
 def test_project_needs_reach_the_commands(
@@ -943,7 +951,7 @@ def test_resume_refuses_a_changed_profile(
     make_project: ProjectFactory, tmp_path: Path, change: Callable[[dict[str, Any]], None]
 ) -> None:
     """The defences live in the profile, so `lictor.json` alone can't vouch for a resume."""
-    root = make_project(own_profiles=True)
+    root = make_project()
     agent = Agent(impl=_limited)
     require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
     calls = len(agent.calls)
@@ -960,7 +968,7 @@ def test_resume_refuses_a_changed_profile(
 def test_resume_refuses_a_changed_profile_file(
     make_project: ProjectFactory, tmp_path: Path
 ) -> None:
-    root = make_project(own_profiles=True)
+    root = make_project()
     agent = Agent(impl=_limited)
     require(run_lictor(root, agent) == Outcome(50), "la ejecución debía quedar pausada")
 
@@ -972,7 +980,7 @@ def test_resume_refuses_a_changed_profile_file(
 
 
 def test_resume_goes_on_when_nothing_changed(make_project: ProjectFactory, tmp_path: Path) -> None:
-    root = make_project(own_profiles=True)
+    root = make_project()
     limited = [True]
 
     def impl(task: AgentTask, scenario_id: str, attempt: int) -> AgentStatus | None:

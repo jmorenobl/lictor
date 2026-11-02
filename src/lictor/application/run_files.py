@@ -6,15 +6,25 @@ never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 """
 
 import contextlib
+import fcntl
+import hashlib
+import os
 import shlex
+import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 from lictor.application.ports import Vcs
+from lictor.application.seal import hash_tree
+from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
+RUN_LOCK = "run.lock"
+PRIVATE_MODE = 0o700
 
 
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
@@ -41,13 +51,127 @@ def new_step_dir(path: Path) -> Path:
     return step_dir
 
 
+def _scratch_root(project_root: Path) -> Path:
+    """Return where this project's temporary directories live, outside the project."""
+    digest = hashlib.sha256(str(project_root.resolve()).encode()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"lictor-{digest}"
+
+
+def _check_private(root: Path) -> None:
+    """Refuse a directory someone else could have prepared or written into, and close the rest.
+
+    Its name is predictable and the temporary directory may be shared, as `/tmp` is on Linux:
+    another user could create it first and change the tree under verification. One of the current
+    user's that nobody else could write into, as older versions left it (`0o755`), is only made
+    private: nothing in it can come from someone else, and an unprivileged user can't give a file
+    away. The checks and the `chmod` go through one descriptor, so the path can't change between.
+    """
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as err:
+        _refuse(root, _why_unopenable(root, err))
+    try:
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if info.st_uid != os.getuid():
+            _refuse(root, "pertenece a otro usuario")
+        if mode & 0o022:
+            _refuse(root, f"tiene escritura para el grupo u otros ({oct(mode)})")
+        if mode != PRIVATE_MODE:
+            os.fchmod(fd, PRIVATE_MODE)
+    finally:
+        os.close(fd)
+
+
+def _why_unopenable(root: Path, err: OSError) -> str:
+    with contextlib.suppress(OSError):
+        mode = os.lstat(root).st_mode
+        if stat.S_ISLNK(mode):
+            return "es un enlace simbólico"
+        if not stat.S_ISDIR(mode):
+            return "no es un directorio"
+    return f"no se puede abrir ({err.strerror})"
+
+
+def _refuse(root: Path, problem: str) -> NoReturn:
+    raise EnvironmentUnavailableError(
+        f"el directorio temporal {root} {problem}, así que otro usuario podría cambiar lo que "
+        "se verifica. Si es tuyo y nadie más lo usa, bórralo y vuelve a lanzar; si no, apunta "
+        "TMPDIR a un directorio solo tuyo y vuelve a lanzar."
+    )
+
+
+def _private_root(project_root: Path) -> Path:
+    root = _scratch_root(project_root)
+    with contextlib.suppress(FileExistsError):
+        root.mkdir(mode=PRIVATE_MODE)
+    _check_private(root)
+    return root
+
+
 @contextlib.contextmanager
-def verification_tree(vcs: Vcs, rev: str) -> Iterator[Path]:
+def scratch_dir(project_root: Path, prefix: str) -> Iterator[Path]:
+    """Yield an empty directory outside the project, gone afterwards."""
+    root = _private_root(project_root)
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=root, ignore_cleanup_errors=True) as tmp:
+        yield Path(tmp)
+
+
+def sweep_scratch(project_root: Path) -> None:
+    """Remove what a killed run left behind, which nothing else would ever clean."""
+    root = _scratch_root(project_root)
+    if not os.path.lexists(root):
+        return
+    _check_private(root)
+    shutil.rmtree(root, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
+    """Hold the project for one command, or refuse at once if another one holds it.
+
+    Without it a second `lictor run` swept the copy and the clone of the first one midway. The
+    kernel drops the lock with the process, so a kill leaves nothing to clean, and the descriptor
+    isn't inherited, so a command left orphaned doesn't keep it. The file is not state of the run:
+    neither `IntegritySnapshot` nor the anchor read it.
+    """
+    lictor_dir = project_root / ".lictor"
+    lictor_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lictor_dir / RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as err:
+            raise RunInProgressError(
+                "otra ejecución de Lictor está en curso en este proyecto (tiene el cerrojo "
+                f".lictor/{RUN_LOCK}). No se ha tocado nada: espera a que termine o detenla, y "
+                f"vuelve a lanzar `{command}`."
+            ) from err
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def verification_tree(vcs: Vcs, rev: str, project_root: Path) -> Iterator[Path]:
     """Yield a clean clone of `rev`, outside the project, gone afterwards."""
-    with tempfile.TemporaryDirectory(prefix="lictor-verify-", ignore_cleanup_errors=True) as tmp:
-        tree = Path(tmp) / "tree"
+    with scratch_dir(project_root, "verify-") as tmp:
+        tree = tmp / "tree"
         vcs.export_tree(rev, tree)
         yield tree
+
+
+@contextlib.contextmanager
+def agent_workspace(vcs: Vcs, project_root: Path) -> Iterator[Path]:
+    """Yield a copy of HEAD for the agent, with no repository, no state and no project around it.
+
+    Named after the project, as the prompt calls it. It is gone afterwards: its result is what
+    `Vcs.capture` reads from it, and nothing of an attempt reaches the next one.
+    """
+    with scratch_dir(project_root, "work-") as tmp:
+        workspace = tmp / project_root.name
+        vcs.export_copy("HEAD", workspace)
+        yield workspace
 
 
 def fill_report_path(command: str, report: Path) -> list[str]:
@@ -79,6 +203,15 @@ def describe_crash(crash: str, control: ControlResult, output: str) -> str:
     """Put what the report itself says on the first line: it survives any condensing."""
     first_line = crash if control.test_cases or not control.error else f"{crash}: {control.error}"
     return f"{first_line}\n{output}".strip()
+
+
+def step_evidence(step_dir: Path, project_root: Path) -> dict[str, str]:
+    """Describe a finished step for the journal, which is protected where `runs/` isn't.
+
+    `runs/` grows without limit and no decision reads it once a step is over, so it stays out of
+    `IntegritySnapshot`. Its hash in the journal makes a later change visible in the report.
+    """
+    return {"path": relative_to_project(step_dir, project_root), "hash": hash_tree(step_dir)}
 
 
 def relative_to_project(path: Path, project_root: Path) -> str:

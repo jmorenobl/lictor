@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, Final
 
 from lictor.application.ports import EventLog
-from lictor.domain.model import Event
+from lictor.application.seal import hash_tree
+from lictor.domain.model import Event, JournalDamage
 
 _MS_PER_SECOND: Final[int] = 1000
 
@@ -41,6 +42,30 @@ class BuildReportResult:
     content: str
 
 
+def _journal_lines(damage: JournalDamage) -> list[str]:
+    if damage.total == 0:
+        return ["- *Ninguna línea descartada.*"]
+    return [
+        f"- **Líneas descartadas**: {damage.total}",
+        f"  - Corruptas, que no son JSON (escritura cortada o edición): {damage.corrupt}",
+        f"  - Ajenas, JSON que no es un evento de Lictor (forjadas): {damage.foreign}",
+        "- Una línea forjada con la forma exacta de un evento no se distingue y no cuenta aquí.",
+    ]
+
+
+def _altered_evidence(events: list[Event], project_root: Path) -> list[str]:
+    """List the steps in `runs/` that no longer hold what the journal recorded."""
+    altered: list[str] = []
+    for event in events:
+        evidence = event.data.get("evidence")
+        if not isinstance(evidence, dict) or "path" not in evidence:
+            continue
+        step_dir = project_root / str(evidence["path"])
+        if not step_dir.is_dir() or hash_tree(step_dir) != evidence.get("hash"):
+            altered.append(str(evidence["path"]))
+    return sorted(set(altered))
+
+
 class BuildReport:
     """Use case to aggregate journal events and write report.md."""
 
@@ -52,7 +77,7 @@ class BuildReport:
         raw_events = self.event_log.events(run_id=req.run_id)
         deduped = self._deduplicate_events(raw_events)
 
-        report_md = self._render_report(deduped)
+        report_md = self._render_report(deduped, req.project_root)
 
         lictor_dir = req.project_root / ".lictor"
         lictor_dir.mkdir(parents=True, exist_ok=True)
@@ -70,8 +95,10 @@ class BuildReport:
             seen[key] = ev
         return list(seen.values())
 
-    def _render_report(self, events: list[Event]) -> str:
+    def _render_report(self, events: list[Event], project_root: Path) -> str:
         data = self._aggregate_metrics(events)
+        data["altered_evidence"] = _altered_evidence(events, project_root)
+        data["journal_damage"] = self.event_log.damage()
         return self._format_markdown(data)
 
     def _aggregate_metrics(self, events: list[Event]) -> dict[str, Any]:
@@ -296,6 +323,15 @@ class BuildReport:
 
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])
+
+        lines.extend(["", "## Integridad de la bitácora"])
+        lines.extend(_journal_lines(info["journal_damage"]))
+
+        lines.extend(["", "## Integridad de la evidencia"])
+        lines.extend(
+            [f"- **Alterada tras registrarse**: `{path}`" for path in info["altered_evidence"]]
+            or ["- *`runs/` coincide con lo registrado en la bitácora.*"]
+        )
 
         lines.extend(
             [

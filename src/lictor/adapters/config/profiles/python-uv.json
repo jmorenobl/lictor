@@ -35,8 +35,17 @@
     "ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", "sitecustomize.py", "usercustomize.py", "uv.lock"
   ],
   "verification": {
-    "prepare": "uv sync --frozen --no-install-project",
+    "prepare": "uv sync --frozen --no-install-project --no-cache",
+    "prepare_inherit": [
+      "PATH", "TMPDIR", "NETRC",
+      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+      "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_SYSTEM_CERTS", "REQUESTS_CA_BUNDLE"
+    ],
+    "prepare_ask": {"UV_PYTHON_INSTALL_DIR": "uv python dir"},
+    "prepare_home_files": {"NETRC": ".netrc"},
     "env": {
+      "HOME": "{home_dir}",
       "UV_PROJECT_ENVIRONMENT": "{env_dir}",
       "UV_LINK_MODE": "copy",
       "UV_NO_SYNC": "1",
@@ -50,13 +59,7 @@
     "plugin_variable": "PYTEST_PLUGINS",
     "plugins": ["lictor_project_path"],
     "plugins_command": "{env_dir}/bin/python -I -B -c 'from importlib.metadata import entry_points; print(*(e.value for e in entry_points(group=\"pytest11\")), sep=\"\\n\")'",
-    "inherit": [
-      "PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME",
-      "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR",
-      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-      "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-      "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_SYSTEM_CERTS", "REQUESTS_CA_BUNDLE"
-    ],
+    "inherit": ["PATH", "TMPDIR"],
     "reserved": [
       "PYTHON*", "PYTEST*", "UV_*", "VIRTUAL_ENV", "COV_CORE_*", "COVERAGE_*", "MYPY*", "RUFF_*",
       "LD_*", "DYLD_*", "BASH_ENV", "ENV"

@@ -232,6 +232,13 @@
           },
           "title": "Inherit",
           "type": "array"
+        },
+        "prepare_inherit": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prepare Inherit",
+          "type": "array"
         }
       },
       "title": "ProjectVerification",

@@ -75,12 +75,20 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         yield root
 
 
-def _profiles_without(forbidden: tuple[str, ...], dest: Path) -> Path:
-    """Copy the profiles, dropping heuristics a case must prove it doesn't depend on."""
+def _case_profiles(forbidden: tuple[str, ...], dest: Path, *, downloads: bool) -> Path:
+    """Copy the profiles, dropping heuristics a case must prove it doesn't depend on.
+
+    Without `downloads`, `prepare` uses the shared cache: downloading a whole environment per case
+    would take the network and many gigabytes, and only a case about the cache needs it.
+    """
     shutil.copytree(loader.DEFAULT_PROFILES_DIR, dest, ignore=shutil.ignore_patterns("__pycache__"))
     path = dest / "python-uv.json"
     profile = json.loads(path.read_text(encoding="utf-8"))
     profile["forbidden_paths"] = [p for p in profile["forbidden_paths"] if p not in forbidden]
+    if not downloads:
+        verification = profile["verification"]
+        verification["prepare"] = verification["prepare"].replace(" --no-cache", "")
+        verification["prepare_ask"]["UV_CACHE_DIR"] = "uv cache dir"
     path.write_text(json.dumps(profile), encoding="utf-8")
     return dest
 
@@ -95,13 +103,12 @@ def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch
         extra_controls: list[dict[str, Any]] | None = None,
         allowed_paths: tuple[str, ...] = (),
         config_changes: dict[str, Any] | None = None,
-        own_profiles: bool = False,
+        downloads: bool = False,
     ) -> Path:
         root = tmp_path / "demo-iva"
         copy_project(template, root)
-        if allowed_paths or own_profiles:
-            profiles = _profiles_without(allowed_paths, tmp_path / "perfiles")
-            monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
+        profiles = _case_profiles(allowed_paths, tmp_path / "perfiles", downloads=downloads)
+        monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
         if extra_controls or config_changes:
             config_path = root / "lictor.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))

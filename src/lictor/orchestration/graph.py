@@ -2,10 +2,11 @@
 
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -13,6 +14,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
+from lictor.application.anchor import observe_anchor
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
@@ -28,9 +30,16 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
-from lictor.domain.errors import DriverError, ExitCode, SealTamperedError, SpecError
+from lictor.domain.errors import (
+    CandidateError,
+    DriverError,
+    ExitCode,
+    SealTamperedError,
+    SpecError,
+)
 from lictor.domain.model import AgentStatus, Candidate, Event, Scenario, ScenarioId
 from lictor.domain.routing import (
+    route_commit,
     route_implement,
     route_load_spec,
     route_pause,
@@ -87,6 +96,8 @@ class GraphState(TypedDict, total=False):
     last_error: str | None
     last_failed_at: str | None
     last_verify: dict[str, Any] | None
+    attempt_tree: str | None
+    anchor: dict[str, str]
     agent_signal: str | None
     agent_failures: int
     last_agent_status: AgentStatus | None
@@ -138,6 +149,13 @@ class GraphContext:
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
+
+
+# Each step is on disk before the next one starts. With the default, a background thread writes the
+# checkpoint while the agent runs: a kill loses it, and `IntegritySnapshot` sees it as tampering.
+DURABILITY: Literal["sync"] = "sync"
+
+_PAUSE_REASONS = {"rate_limited": "rate_limited", "blocked": "branch_blocked"}
 
 
 class _GraphNodes:
@@ -204,7 +222,10 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
-        return {}
+        return {"anchor": self._anchor()}
+
+    def _anchor(self) -> dict[str, str]:
+        return observe_anchor(self.ctx.vcs, self.ctx.project_root)
 
     def load_spec(self, state: GraphState) -> dict[str, Any]:
         features_dir = self.ctx.project_root / "features"
@@ -270,7 +291,16 @@ class _GraphNodes:
             )
         )
 
+        rejected: dict[str, Any] = {}
+        if res.agent_signal == "rejected":
+            rejected["last_error"] = res.error
+            if res.driver_attempts >= self.ctx.max_driver_attempts:
+                reason = f"Driver rechazado tras {res.driver_attempts} intentos: {res.error}"
+                rejected.update(self._finish(state, int(ExitCode.PRECONDITION), reason))
+
         return {
+            **rejected,
+            "attempt_tree": res.tree,
             "driver_attempts": res.driver_attempts,
             "agent_signal": res.agent_signal,
             "agent_failures": res.agent_failures,
@@ -306,6 +336,7 @@ class _GraphNodes:
                     acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                     error_max_chars=self.ctx.error_max_chars,
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
+                    tree=state.get("attempt_tree"),
                 )
             )
         except DriverError as exc:
@@ -313,6 +344,8 @@ class _GraphNodes:
                 **self._finish(state, int(ExitCode.PRECONDITION), str(exc)),
                 "last_verify": {"ok": False},
             }
+        except CandidateError as exc:
+            return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "red_check"}
 
         if res.ok:
             return {
@@ -320,6 +353,8 @@ class _GraphNodes:
                 "status": res.scenario_status,
                 "last_error": None,
                 "seal_ok": True,
+                "agent_signal": None,
+                "anchor": self._anchor(),
             }
         return {
             "last_verify": {"ok": False},
@@ -396,7 +431,13 @@ class _GraphNodes:
         except SealTamperedError as exc:
             return self._finish(state, int(ExitCode.PRECONDITION), str(exc))
 
+        rejected: dict[str, Any] = {}
+        if res.agent_signal == "rejected":
+            rejected = self._reject_attempt(state, res.attempt, res.failed_at, res.error)
+
         return {
+            **rejected,
+            "attempt_tree": res.tree,
             "attempt": res.attempt,
             "attempt_slot": res.attempt_slot,
             "agent_signal": res.agent_signal,
@@ -416,6 +457,38 @@ class _GraphNodes:
                 "verify_duration_ms": 0,
             },
             "resume_to": "implement",
+        }
+
+    def _reject_attempt(
+        self, state: GraphState, attempt: int, failed_at: str | None, error: str | None
+    ) -> dict[str, Any]:
+        """Fail an attempt that can't even be verified, leaving the same record as verify."""
+        self.ctx.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type="lictor.verify.finished.v1",
+                source="lictor/0.1.0",
+                time=self.ctx.clock.now_iso(),
+                runid=state["run_id"],
+                scenarioid=state.get("current"),
+                data={
+                    "attempt": attempt,
+                    "ok": False,
+                    "failed_at": failed_at,
+                    "control_durations": {},
+                    "controls": {},
+                    "reverted_files": [],
+                    "error": error,
+                    "error_path": None,
+                    "candidate": None,
+                    "tree": None,
+                },
+            )
+        )
+        return {
+            "last_verify": {"ok": False, "failed_at": failed_at, "condensed_error": error},
+            "last_error": error,
+            "last_failed_at": failed_at,
         }
 
     def verify(self, state: GraphState) -> dict[str, Any]:
@@ -445,6 +518,7 @@ class _GraphNodes:
                 acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                 forbidden_paths=self.ctx.forbidden_paths,
                 banned_patterns=self.ctx.banned_patterns,
+                tree=state.get("attempt_tree"),
             )
         )
 
@@ -466,6 +540,7 @@ class _GraphNodes:
                 "reverted_files": list(res.reverted_files),
                 "error": res.condensed_error,
                 "error_path": res.error_path,
+                "evidence": res.evidence,
                 "candidate": res.candidate.sha if res.candidate else None,
                 "tree": res.candidate.tree if res.candidate else None,
             },
@@ -494,15 +569,18 @@ class _GraphNodes:
             return {}
 
         verified = (state.get("last_verify") or {}).get("candidate")
-        self.ctx.commit_green.execute(
-            CommitGreenRequest(
-                scenario_id=current_id,
-                run_id=state["run_id"],
-                attempt=state.get("attempt", 1),
-                candidate=Candidate(**verified) if verified else None,
+        try:
+            self.ctx.commit_green.execute(
+                CommitGreenRequest(
+                    scenario_id=current_id,
+                    run_id=state["run_id"],
+                    attempt=state.get("attempt", 1),
+                    candidate=Candidate(**verified) if verified else None,
+                )
             )
-        )
-        return {"status": {current_id: "green"}}
+        except CandidateError as exc:
+            return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "commit"}
+        return {"status": {current_id: "green"}, "agent_signal": None, "anchor": self._anchor()}
 
     def quarantine(self, state: GraphState) -> dict[str, Any]:
         current_id = state.get("current")
@@ -529,8 +607,7 @@ class _GraphNodes:
         }
 
     def pause(self, state: GraphState) -> dict[str, Any]:
-        signal = state.get("agent_signal")
-        reason = "rate_limited" if signal == "rate_limited" else "agent_unavailable"
+        reason = _PAUSE_REASONS.get(state.get("agent_signal") or "", "agent_unavailable")
         interrupt(
             {
                 "reason": reason,
@@ -538,7 +615,7 @@ class _GraphNodes:
                 "detail": state.get("agent_detail", ""),
             }
         )
-        return {"agent_failures": 0}
+        return {"agent_failures": 0, "agent_signal": None}
 
     def report(self, state: GraphState) -> dict[str, Any]:
         exit_val = state.get("exit_code")
@@ -557,6 +634,35 @@ def get_sqlite_saver(db_path: Path) -> SqliteSaver:
     return saver
 
 
+class _Node(Protocol):
+    """A graph node; LangGraph calls `state` by name, which a plain Callable can't say."""
+
+    def __call__(self, state: GraphState) -> dict[str, Any]: ...
+
+
+def _holding_checkpoint_writes(
+    checkpointer: BaseCheckpointSaver[Any] | None,
+) -> Callable[[_Node], _Node]:
+    """Keep the saver from writing while a node runs code that isn't trusted.
+
+    `DURABILITY` waits for checkpoints, but not for `put_writes`, which LangGraph leaves to a thread
+    of its own. Inside a node's `IntegritySnapshot` that write would read as tampering, and copying
+    the WAL halfway through it would restore a torn file. The saver takes this lock for every
+    write, so one in progress ends before the node starts and one not started waits for it to end.
+    Nothing is lost if the run dies meanwhile: the checkpoint after those writes is already stored.
+    """
+    lock = checkpointer.lock if isinstance(checkpointer, SqliteSaver) else nullcontext()
+
+    def holding(node: _Node) -> _Node:
+        def run(state: GraphState) -> dict[str, Any]:
+            with lock:
+                return node(state)
+
+        return run
+
+    return holding
+
+
 def create_graph(
     context: GraphContext,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
@@ -570,9 +676,14 @@ def create_graph(
         return "load_spec"
 
     def route_build_driver_edge(state: GraphState) -> str:
+        if state.get("exit_code") is not None:
+            return END
         if state.get("agent_signal") in ("rate_limited", "unavailable"):
             return "pause"
-        return "red_check"
+        return "build_driver" if state.get("agent_signal") == "rejected" else "red_check"
+
+    def route_implement_edge(state: GraphState) -> str:
+        return route_implement(state, max_attempts=context.max_attempts)
 
     def route_pick_next_edge(state: GraphState) -> str:
         if state.get("current") is None:
@@ -582,15 +693,16 @@ def create_graph(
     def route_verify_edge(state: GraphState) -> str:
         return route_verify(state, max_attempts=context.max_attempts)
 
+    untrusted = _holding_checkpoint_writes(checkpointer)
     builder = StateGraph(GraphState)
 
     builder.add_node("preflight", nodes.preflight)
     builder.add_node("load_spec", nodes.load_spec)
-    builder.add_node("build_driver", nodes.build_driver)
-    builder.add_node("red_check", nodes.red_check)
+    builder.add_node("build_driver", untrusted(nodes.build_driver))
+    builder.add_node("red_check", untrusted(nodes.red_check))
     builder.add_node("pick_next", nodes.pick_next)
-    builder.add_node("implement", nodes.implement)
-    builder.add_node("verify", nodes.verify)
+    builder.add_node("implement", untrusted(nodes.implement))
+    builder.add_node("verify", untrusted(nodes.verify))
     builder.add_node("commit", nodes.commit)
     builder.add_node("quarantine", nodes.quarantine)
     builder.add_node("pause", nodes.pause)
@@ -611,12 +723,12 @@ def create_graph(
     builder.add_conditional_edges(
         "build_driver",
         route_build_driver_edge,
-        {"pause": "pause", "red_check": "red_check"},
+        {"pause": "pause", "red_check": "red_check", "build_driver": "build_driver", END: END},
     )
     builder.add_conditional_edges(
         "red_check",
         route_red_check,
-        {"build_driver": "build_driver", "pick_next": "pick_next", END: END},
+        {"build_driver": "build_driver", "pick_next": "pick_next", "pause": "pause", END: END},
     )
     builder.add_conditional_edges(
         "pick_next",
@@ -625,20 +737,35 @@ def create_graph(
     )
     builder.add_conditional_edges(
         "implement",
-        route_implement,
-        {"pause": "pause", "quarantine": "quarantine", "verify": "verify", END: END},
+        route_implement_edge,
+        {
+            "pause": "pause",
+            "quarantine": "quarantine",
+            "verify": "verify",
+            "implement": "implement",
+            END: END,
+        },
     )
     builder.add_conditional_edges(
         "verify",
         route_verify_edge,
         {"commit": "commit", "implement": "implement", "quarantine": "quarantine"},
     )
-    builder.add_edge("commit", "pick_next")
+    builder.add_conditional_edges(
+        "commit",
+        route_commit,
+        {"pick_next": "pick_next", "pause": "pause"},
+    )
     builder.add_edge("quarantine", "pick_next")
     builder.add_conditional_edges(
         "pause",
         route_pause,
-        {"implement": "implement", "build_driver": "build_driver"},
+        {
+            "implement": "implement",
+            "build_driver": "build_driver",
+            "commit": "commit",
+            "red_check": "red_check",
+        },
     )
     builder.add_edge("report", END)
 

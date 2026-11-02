@@ -12,16 +12,18 @@ from typing import Literal
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
+    agent_workspace,
     attempt_prefix,
     relative_to_project,
     unused_path,
 )
-from lictor.application.usecases.agent_events import denial_event, denial_targets
-from lictor.application.usecases.verify_attempt import IntegritySnapshot
-from lictor.domain.model import AgentResult, AgentTask, Event
+from lictor.application.usecases.agent_events import denial_event, denial_targets, tamper_event
+from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
+from lictor.domain.errors import CandidateError
+from lictor.domain.model import AgentResult, AgentTask, Event, TreeChange
 from lictor.domain.rules import count_agent_failures, forbidden_paths, is_agent_unavailable
 
-DriverSignal = Literal["ok", "rate_limited", "unavailable", "error"]
+DriverSignal = Literal["ok", "rate_limited", "unavailable", "error", "rejected"]
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ class PrepareDriverResult:
     reverted_files: tuple[str, ...] = ()
     agent_signal: DriverSignal = "ok"
     agent_failures: int = 0
+    tree: str | None = None
+    error: str | None = None
 
 
 def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
@@ -89,6 +93,22 @@ def _collect_features_text(features_dir: Path) -> str:
     return "\n\n".join(feature_texts)
 
 
+def _discarded_paths(changes: Sequence[TreeChange], request: PrepareDriverRequest) -> list[str]:
+    """Return what the driver may not write: L0-rutas, allowing paths.driver and paths.writable."""
+    allowed_paths = tuple(request.paths_driver) + tuple(request.paths_writable)
+    changed = [change.path for change in changes]
+    forbidden = set(forbidden_paths(changed, request.forbidden_paths))
+    discarded: list[str] = []
+    for change in changes:
+        # The driver may need its own config; what it writes in project code may not.
+        in_project_code = change.path in forbidden and not _is_path_allowed(
+            change.path, request.paths_driver
+        )
+        if change.is_link or in_project_code or not _is_path_allowed(change.path, allowed_paths):
+            discarded.append(change.path)
+    return discarded
+
+
 class PrepareDriver:
     """Use case to call agent for building or extending acceptance driver."""
 
@@ -105,9 +125,7 @@ class PrepareDriver:
         self.clock = clock
 
     def execute(self, request: PrepareDriverRequest) -> PrepareDriverResult:
-        """Reset repo, prepare driver task, invoke agent with integrity snapshot, and enforce L0."""
-        self.vcs.reset_to_head()
-
+        """Run the agent on a copy of HEAD with integrity snapshot and keep what L0 allows."""
         raw_template = (
             request.prompt_template
             if request.prompt_template is not None
@@ -144,7 +162,6 @@ class PrepareDriver:
         for k, v in replacements.items():
             prompt = prompt.replace(k, v)
 
-        lictor_dir = request.project_root / ".lictor"
         prefix = attempt_prefix(
             request.project_root, request.run_id, DRIVER_OWNER, request.driver_attempts + 1
         )
@@ -164,37 +181,25 @@ class PrepareDriver:
             timeout_s=request.timeout_s,
             raw_path=raw_path,
         )
-
-        snapshot = IntegritySnapshot(lictor_dir, request.project_root)
-        agent_result = self.executor.run(task)
-        integrity_ok = snapshot.verify_and_restore()
-
-        # L0-rutas enforcement: allowed are paths.driver + paths.writable
-        allowed_paths = tuple(request.paths_driver) + tuple(request.paths_writable)
-        reverted: list[str] = []
-        status_files = self.vcs.status()
-        forbidden = set(forbidden_paths(status_files, request.forbidden_paths))
-        for f in status_files:
-            # The driver may need its own config; what it writes in project code may not.
-            in_project_code = f in forbidden and not _is_path_allowed(f, request.paths_driver)
-            if in_project_code or not _is_path_allowed(f, allowed_paths):
-                reverted.append(f)
-
-        if reverted:
-            self.vcs.revert_paths(reverted)
+        outcome = self._run_in_copy(task, request)
+        agent_result = outcome.agent_result
+        reverted = list(outcome.reverted)
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
-        if not integrity_ok and agent_result.status == "ok":
-            agent_result = replace(agent_result, status="error")
 
         agent_signal: DriverSignal
         new_attempts = request.driver_attempts
-        if agent_result.status == "rate_limited":
+        if outcome.tampered:
+            agent_signal = "rejected"
+            new_attempts = request.driver_attempts + 1
+        elif agent_result.status == "rate_limited":
             agent_signal = "rate_limited"
         elif is_agent_unavailable(agent_result.status, agent_failures):
             agent_signal = "unavailable"
         else:
             agent_signal = "ok" if agent_result.status == "ok" else "error"
+            if outcome.unreadable is not None:
+                agent_signal = "rejected"
             new_attempts = request.driver_attempts + 1
 
         rel_raw = relative_to_project(raw_path, request.project_root)
@@ -239,6 +244,8 @@ class PrepareDriver:
         self.event_log.append(event)
         if agent_result.permission_denials:
             self.event_log.append(denial_event(agent_result, event))
+        if outcome.tampered:
+            self.event_log.append(tamper_event(event, outcome.tampered))
 
         return PrepareDriverResult(
             agent_result=agent_result,
@@ -247,4 +254,25 @@ class PrepareDriver:
             reverted_files=tuple(reverted),
             agent_signal=agent_signal,
             agent_failures=agent_failures,
+            tree=outcome.tree,
+            error=outcome.error if agent_signal == "rejected" else None,
         )
+
+    def _run_in_copy(self, task: AgentTask, request: PrepareDriverRequest) -> AgentCopyOutcome:
+        lictor_dir = request.project_root / ".lictor"
+        snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
+        with agent_workspace(self.vcs, request.project_root) as workspace:
+            agent_result = self.executor.run(replace(task, cwd=workspace))
+            snapshot.verify_and_restore()
+            if snapshot.changes:
+                return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
+            if agent_result.status == "rate_limited":
+                return AgentCopyOutcome(agent_result)
+            try:
+                tree = self.vcs.capture(workspace)
+                reverted = _discarded_paths(self.vcs.changes(tree), request)
+                if reverted:
+                    tree = self.vcs.capture(workspace, skip=reverted)
+            except CandidateError as exc:
+                return AgentCopyOutcome(agent_result, unreadable=str(exc))
+        return AgentCopyOutcome(agent_result, tree=tree, reverted=tuple(reverted))

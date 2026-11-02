@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from lictor.application.ports import Clock, EventLog, Vcs
+from lictor.application.ports import Clock, EventLog
 from lictor.domain.model import Event, ScenarioId
 
 QuarantineReason = Literal["intentos agotados", "spec_conflict"]
@@ -29,17 +29,14 @@ class QuarantineResult:
 
 
 class Quarantine:
-    """Use case to safely quarantine a scenario and reset working tree."""
+    """Use case to quarantine a scenario, whose attempts never reached the project."""
 
-    def __init__(self, vcs: Vcs, event_log: EventLog, clock: Clock) -> None:
-        self.vcs = vcs
+    def __init__(self, event_log: EventLog, clock: Clock) -> None:
         self.event_log = event_log
         self.clock = clock
 
     def execute(self, request: QuarantineRequest) -> QuarantineResult:
-        """Reset working tree to HEAD, append CloudEvent, and return result."""
-        self.vcs.reset_to_head()
-
+        """Append CloudEvent and return result."""
         sid_str = (
             request.scenario_id.value
             if isinstance(request.scenario_id, ScenarioId)

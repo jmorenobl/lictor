@@ -1,5 +1,6 @@
 import dataclasses
 import subprocess
+import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,9 +27,11 @@ from lictor.application.usecases.verify_attempt import VerificationControl, Veri
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.model import CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
+    DURABILITY,
     GraphContext,
     GraphState,
     _GraphNodes,
+    _holding_checkpoint_writes,
     create_graph,
     get_sqlite_saver,
 )
@@ -89,7 +92,7 @@ class DynamicTestRunner(FakeRunner):
                 return CommandOutput(returncode=0, stdout="OK", stderr="", duration_ms=10)
 
             # Check implementation in src/
-            iva_code = self.repo_dir / "src" / "iva.py"
+            iva_code = cwd / "src" / "iva.py"
             code_content = iva_code.read_text(encoding="utf-8") if iva_code.is_file() else ""
 
             # Check if IVA-001 or IVA-002 are implemented
@@ -192,7 +195,7 @@ Característica: IVA de facturas
         project_root=tmp_path,
     )
     commit_green = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
-    quarantine = Quarantine(vcs=vcs, event_log=event_log, clock=clock)
+    quarantine = Quarantine(event_log=event_log, clock=clock)
 
     return GraphContext(
         project_root=tmp_path,
@@ -268,7 +271,7 @@ def test_graph_mode_good(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0001"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 0
     assert final_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
@@ -310,7 +313,7 @@ def test_graph_mode_fail(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0002"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 30
     assert final_state.get("status") == {"IVA-001": "quarantined", "IVA-002": "quarantined"}
@@ -350,7 +353,7 @@ def test_graph_mode_cheat(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0003"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 30
     assert final_state.get("status", {}).get("IVA-001") == "quarantined"
@@ -383,7 +386,7 @@ def test_graph_mode_conflict(tmp_path: Path) -> None:
     }
 
     config = {"configurable": {"thread_id": "20261030-150000-0004"}}
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     assert final_state.get("exit_code") == 11
     assert final_state.get("status", {}).get("IVA-001") == "quarantined"
@@ -417,7 +420,7 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
 
     config = {"configurable": {"thread_id": "20261030-150000-0005"}}
     # First invocation hits rate_limit in build_driver and triggers interrupt in pause node
-    graph.invoke(initial_state, config=config)
+    graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     # Check thread state shows pause interrupt
     state_snap = graph.get_state(config)
@@ -440,7 +443,7 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
     }
 
     # Resume the interrupted execution
-    resumed_state = graph.invoke(Command(resume=True), config=config)
+    resumed_state = graph.invoke(Command(resume=True), config=config, durability=DURABILITY)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
     assert resumed_state.get("driver_attempts") == 1
@@ -476,7 +479,7 @@ def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
     config = {"configurable": {"thread_id": "20261030-150000-0006"}}
 
     with pytest.raises(RuntimeError, match="Simulated FakeExecutor crash on scenario IVA-001"):
-        graph.invoke(initial_state, config=config)
+        graph.invoke(initial_state, config=config, durability=DURABILITY)
 
     # Working tree may be dirty from interrupted run; fix executor and resume from checkpoint!
     executor.crash_on_scenario = None
@@ -494,7 +497,7 @@ def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:
     }
 
     # Resume with invoke(None)
-    resumed_state = graph.invoke(None, config=config)
+    resumed_state = graph.invoke(None, config=config, durability=DURABILITY)
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
 
@@ -555,7 +558,7 @@ def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path:
     context = dataclasses.replace(context, spec_source=_TamperSpecSource(context.spec_source))
     graph = create_graph(context, checkpointer=saver)
 
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
     assert final_state.get("exit_code") == 10
     # verify must NOT have run or set last_verify
     assert final_state.get("last_verify") == {"ok": True}
@@ -600,3 +603,28 @@ def test_build_driver_hands_the_forbidden_paths_to_the_use_case() -> None:
     _GraphNodes(context).build_driver(cast(GraphState, {"run_id": "R"}))
 
     assert context.prepare_driver.execute.call_args.args[0].forbidden_paths == ("*.pth",)
+
+
+NODE_JOIN_S = 5.0
+
+
+def test_a_checkpoint_write_from_another_thread_waits_for_the_node(tmp_path: Path) -> None:
+    saver = get_sqlite_saver(tmp_path / "checkpoints.sqlite")
+    config: Any = {"configurable": {"thread_id": "t"}}
+    finished: list[bool] = []
+    waited: list[bool] = []
+    writer = threading.Thread(
+        target=lambda: finished.append(saver.get_tuple(config) is None), daemon=True
+    )
+
+    def node(_state: GraphState) -> dict[str, Any]:
+        writer.start()
+        writer.join(timeout=0.2)
+        waited.append(writer.is_alive())
+        return {}
+
+    _holding_checkpoint_writes(saver)(node)(cast(GraphState, {}))
+    writer.join(timeout=NODE_JOIN_S)
+
+    assert waited == [True], "otro hilo no debe escribir mientras el nodo corre"
+    assert finished == [True], "y debe seguir en cuanto el nodo termina"

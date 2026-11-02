@@ -1,6 +1,7 @@
 from lictor.domain.model import VerifyResult
 from lictor.domain.routing import (
     END,
+    route_commit,
     route_implement,
     route_load_spec,
     route_pause,
@@ -123,3 +124,46 @@ def test_route_pause_returns_resume_to() -> None:
 
 def test_route_implement_unavailable_agent_pauses() -> None:
     assert route_implement({"agent_signal": "unavailable"}) == "pause"
+
+
+def test_route_implement_rejected_retries_like_a_failed_verification() -> None:
+    state = {"agent_signal": "rejected", "attempt": 1}
+    assert route_implement(state, max_attempts=3) == "implement"
+
+
+def test_route_implement_rejected_quarantines_when_attempts_run_out() -> None:
+    state = {"agent_signal": "rejected", "attempt": 3}
+    assert route_implement(state, max_attempts=3) == "quarantine"
+
+
+def test_route_implement_rejected_obeys_the_given_limit_over_the_default() -> None:
+    state = {"agent_signal": "rejected", "attempt": 2}
+    assert route_implement(state, max_attempts=2) == "quarantine"
+
+
+def test_route_verify_obeys_the_given_limit_over_the_default() -> None:
+    last_verify = VerifyResult(ok=False)
+    assert route_verify({"last_verify": last_verify, "attempt": 2}, max_attempts=2) == "quarantine"
+
+
+def test_route_verify_obeys_the_limit_in_the_state_over_the_default() -> None:
+    last_verify = VerifyResult(ok=False)
+    state = {"last_verify": last_verify, "attempt": 2, "max_attempts": 2}
+    assert route_verify(state) == "quarantine"
+
+
+def test_route_verify_without_attempts_counts_from_zero() -> None:
+    assert route_verify({"last_verify": VerifyResult(ok=False)}, max_attempts=1) == "implement"
+
+
+def test_route_red_check_blocked_waits_for_the_user() -> None:
+    state = {"agent_signal": "blocked", "last_verify": {"ok": False}}
+    assert route_red_check(state) == "pause"
+
+
+def test_route_commit_blocked_waits_for_the_user() -> None:
+    assert route_commit({"agent_signal": "blocked"}) == "pause"
+
+
+def test_route_commit_goes_on_otherwise() -> None:
+    assert route_commit({"agent_signal": None}) == "pick_next"

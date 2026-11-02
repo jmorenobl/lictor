@@ -14,7 +14,10 @@ from lictor.domain.model import (
     ControlResult,
     Event,
     Health,
+    JournalDamage,
+    RepoPin,
     Scenario,
+    TreeChange,
 )
 
 
@@ -43,6 +46,10 @@ class EventLog(Protocol):
         """Retrieve all recorded events, optionally filtered by run ID."""
         ...
 
+    def damage(self) -> JournalDamage:
+        """Count the lines that reading the journal has to skip."""
+        ...
+
 
 @runtime_checkable
 class Clock(Protocol):
@@ -69,25 +76,49 @@ class Vcs(Protocol):
         """Return modified or untracked file paths."""
         ...
 
-    def reset_to_head(self) -> None:
-        """Discard all uncommitted changes and clean untracked files."""
+    def capture(self, workdir: Path, skip: Sequence[str] = ()) -> str:
+        """Return the tree of HEAD with what `workdir` holds, leaving the paths in `skip` alone."""
         ...
 
-    def create_candidate(
+    def changes(self, tree: str) -> list[TreeChange]:
+        """Return every path of `tree` that differs from HEAD, deleted ones included."""
+        ...
+
+    def added_lines(self, tree: str) -> list[str]:
+        """Return the lines that `tree` adds over HEAD."""
+        ...
+
+    def commit_tree(
         self,
+        tree: str,
         message: str,
         trailers: dict[str, str] | None = None,
-        paths: Sequence[str] | None = None,
     ) -> Candidate:
-        """Build a commit from the working tree on top of HEAD, leaving the branch alone."""
+        """Build a commit of `tree` on top of HEAD, leaving the branch alone."""
         ...
 
     def export_tree(self, rev: str, dest: Path) -> None:
         """Materialize a commit in a clean clone at `dest`, with nothing ignored or untracked."""
         ...
 
+    def export_copy(self, rev: str, dest: Path) -> None:
+        """Materialize a commit at `dest` as plain files, with no repository around them."""
+        ...
+
     def advance_head(self, sha: str, expected: str) -> None:
-        """Move the branch to `sha` only if it is still at `expected`, without adding anything."""
+        """Fast-forward from `expected` to `sha`, refusing to overwrite what the user changed."""
+        ...
+
+    def pin(self) -> RepoPin:
+        """Record HEAD and the repository's control files before untrusted code runs."""
+        ...
+
+    def restore(self, pin: RepoPin) -> list[str]:
+        """Bring back what changed since `pin`, control files first, and say what it was."""
+        ...
+
+    def fingerprint(self) -> str:
+        """Hash the repository's control files without running git, which would obey them."""
         ...
 
     def get_tree(self, rev: str) -> str:
@@ -104,14 +135,6 @@ class Vcs(Protocol):
 
     def get_head_message(self) -> str:
         """Return the subject line of HEAD commit."""
-        ...
-
-    def revert_paths(self, paths: Sequence[str]) -> None:
-        """Selectively revert modified or untracked file paths."""
-        ...
-
-    def diff(self) -> str:
-        """Return working tree diff."""
         ...
 
 
