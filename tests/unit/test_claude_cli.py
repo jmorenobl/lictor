@@ -1,20 +1,27 @@
 """Unit tests for ClaudeCLI agent adapter.
 
 Result shapes come from the spike with the real CLI 2.1.316; `auth status` fields too.
+`fixtures/claude_stream.jsonl` is a stream of that spike, cut down to a few events.
 """
 
 import json
 import os
-import subprocess
+import stat
+import sys
+import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
+from lictor.adapters.runner.fake import FakeRunner
+from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.application.ports import Executor
-from lictor.domain.model import AgentResult, AgentTask, PermissionDenial, Tokens
+from lictor.domain.model import AgentResult, AgentTask, CommandOutput, PermissionDenial, Tokens
+
+CAPTURE = Path(__file__).resolve().parents[1] / "fixtures" / "claude_stream.jsonl"
 
 
 def _sample_task(cwd: Path, raw_path: Path, prompt: str = "Responde OK") -> AgentTask:
@@ -39,98 +46,96 @@ def _result(**fields: Any) -> dict[str, Any]:
     return {"type": "result", "subtype": "success", "is_error": False, "result": "x", **fields}
 
 
+def _output(
+    stdout: str = "", returncode: int = 0, stderr: str = "", **fields: Any
+) -> CommandOutput:
+    return CommandOutput(returncode=returncode, stdout=stdout, stderr=stderr, **fields)
+
+
+def _cli(*outputs: CommandOutput, **kwargs: Any) -> tuple[ClaudeCLI, FakeRunner]:
+    runner = FakeRunner()
+    for output in outputs:
+        runner.queue_response(output)
+    return ClaudeCLI(runner, **kwargs), runner
+
+
 def _run(tmp_path: Path, stdout: str, returncode: int = 0, stderr: str = "") -> AgentResult:
-    with patch("subprocess.Popen") as mock_popen:
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (stdout, stderr)
-        mock_proc.returncode = returncode
-        mock_popen.return_value = mock_proc
-        return ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "raw.json"))
+    cli, _ = _cli(_output(stdout, returncode, stderr))
+    return cli.run(_sample_task(tmp_path, tmp_path / "raw.json"))
 
 
-def _health_with_session(stdout: str) -> Any:
-    version = MagicMock(returncode=0, stdout="2.1.316 (Claude Code)\n", stderr="")
-    session = MagicMock(returncode=0, stdout=stdout, stderr="")
-    return [version, session]
+def _health_with_session(stdout: str) -> tuple[CommandOutput, CommandOutput]:
+    return _output("2.1.316 (Claude Code)\n"), _output(stdout)
 
 
 class TestClaudeCLIHealth:
     def test_implements_executor_protocol(self) -> None:
-        cli = ClaudeCLI()
+        cli, _ = _cli()
         assert isinstance(cli, Executor)
 
     def test_health_success(self) -> None:
-        cli = ClaudeCLI(auth="subscription")
-        session = '{"loggedIn": true, "authMethod": "claude.ai"}'
-        with (
-            patch("subprocess.run", side_effect=_health_with_session(session)) as mock_run,
-            patch.dict(os.environ, {}, clear=True),
-        ):
+        cli, runner = _cli(*_health_with_session('{"loggedIn": true, "authMethod": "claude.ai"}'))
+        with patch.dict(os.environ, {}, clear=True):
             health = cli.health()
         assert health.ok is True
         assert health.cli_version == "2.1.316 (Claude Code)"
         assert health.auth_status == "subscription"
-        assert mock_run.call_args.args[0] == ["claude", "auth", "status", "--json"]
+        assert [call["cmd"] for call in runner.calls] == [
+            ["claude", "--version"],
+            ["claude", "auth", "status", "--json"],
+        ]
+        assert [call["timeout_s"] for call in runner.calls] == [10, 10]
 
     def test_health_without_session_is_not_ok(self) -> None:
-        cli = ClaudeCLI(auth="subscription")
-        session = '{"loggedIn": false, "authMethod": "none"}'
-        with (
-            patch("subprocess.run", side_effect=_health_with_session(session)),
-            patch.dict(os.environ, {}, clear=True),
-        ):
+        cli, _ = _cli(*_health_with_session('{"loggedIn": false, "authMethod": "none"}'))
+        with patch.dict(os.environ, {}, clear=True):
             health = cli.health()
         assert health.ok is False
         assert health.auth_status == "none"
 
     @pytest.mark.parametrize("stdout", ["no es json", "[]", '{"loggedIn": "si"}', "{}"])
     def test_health_is_not_ok_when_the_session_is_unknown(self, stdout: str) -> None:
-        cli = ClaudeCLI(auth="subscription")
-        with (
-            patch("subprocess.run", side_effect=_health_with_session(stdout)),
-            patch.dict(os.environ, {}, clear=True),
-        ):
+        cli, _ = _cli(*_health_with_session(stdout))
+        with patch.dict(os.environ, {}, clear=True):
             health = cli.health()
         assert health.ok is False
         assert health.auth_status == "error"
 
     def test_health_api_key_auth_does_not_ask_for_a_session(self) -> None:
-        cli = ClaudeCLI(auth="api_key")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="2.1.316\n", stderr="")
-            health = cli.health()
+        cli, runner = _cli(_output("2.1.316\n"), auth="api_key")
+        health = cli.health()
         assert health.ok is True
-        mock_run.assert_called_once()
+        assert len(runner.calls) == 1
 
     def test_health_api_key_override_when_subscription(self) -> None:
-        cli = ClaudeCLI(auth="subscription")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="2.1.312\n", stderr="")
-            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
-                health = cli.health()
-                assert health.ok is False
-                assert health.auth_status == "api_key_override"
-                assert "ANTHROPIC_API_KEY" in (health.message or "")
+        cli, _ = _cli(_output("2.1.312\n"))
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
+            health = cli.health()
+        assert health.ok is False
+        assert health.auth_status == "api_key_override"
+        assert "ANTHROPIC_API_KEY" in (health.message or "")
 
     def test_health_cli_not_found(self) -> None:
-        cli = ClaudeCLI(cli_binary="nonexistent-claude-binary")
-        health = cli.health()
+        health = ClaudeCLI(SubprocessRunner(), cli_binary="nonexistent-claude-binary").health()
         assert health.ok is False
         assert health.auth_status == "none"
-        assert "not found" in (health.message or "").lower()
+        assert "No se pudo ejecutar el CLI 'nonexistent-claude-binary'" in (health.message or "")
 
-    def test_health_subprocess_error(self) -> None:
-        cli = ClaudeCLI()
-        with patch("subprocess.run", side_effect=subprocess.SubprocessError("exec error")):
-            health = cli.health()
-            assert health.ok is False
-            assert health.auth_status == "error"
-            assert "exec error" in (health.message or "")
+    def test_health_cli_that_fails_is_an_error_not_a_missing_cli(self) -> None:
+        cli, _ = _cli(_output(returncode=1, stderr="exec error"))
+        health = cli.health()
+        assert health.ok is False
+        assert health.auth_status == "error"
+        assert "exec error" in (health.message or "")
+
+    def test_health_cli_that_hangs_is_an_error(self) -> None:
+        cli, _ = _cli(_output(returncode=-9, stderr="Sin tiempo tras 10 s", timed_out=True))
+        health = cli.health()
+        assert (health.ok, health.auth_status) == (False, "error")
 
 
 class TestClaudeCLIRun:
     def test_command_line_and_env_construction(self, tmp_path: Path) -> None:
-        cli = ClaudeCLI(auth="subscription")
         task = _sample_task(tmp_path, tmp_path / "raw.json")
 
         sample_output = _result(
@@ -147,46 +152,43 @@ class TestClaudeCLIRun:
             result="Task completed successfully",
         )
 
-        with patch("subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.communicate.return_value = (json.dumps(sample_output), "")
-            mock_proc.returncode = 0
-            mock_popen.return_value = mock_proc
+        cli, runner = _cli(_output(json.dumps(sample_output)), auth="subscription")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "secret", "OTHER_VAR": "ok"}):
+            res = cli.run(task)
 
-            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "secret", "OTHER_VAR": "ok"}):
-                res = cli.run(task)
+        assert len(runner.calls) == 1
+        call = runner.calls[0]
+        cmd = call["cmd"]
+        assert isinstance(cmd, list)
+        assert cmd[0] == "claude"
+        assert "-p" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in cmd
+        assert "--permission-mode" in cmd
+        assert "acceptEdits" in cmd
+        assert "--allowedTools" in cmd
+        assert "Bash(uv run pytest:*)" in cmd
+        assert (call["cwd"], call["timeout_s"]) == (tmp_path, 1800)
 
-            mock_popen.assert_called_once()
-            call_args, call_kwargs = mock_popen.call_args
-            cmd = call_args[0]
-            assert cmd[0] == "claude"
-            assert "-p" in cmd
-            assert cmd[cmd.index("--output-format") + 1] == "stream-json"
-            assert "--verbose" in cmd
-            assert "--permission-mode" in cmd
-            assert "acceptEdits" in cmd
-            assert "--allowedTools" in cmd
-            assert "Bash(uv run pytest:*)" in cmd
-            assert call_kwargs["start_new_session"] is True
+        env = call["env"]
+        assert isinstance(env, dict)
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["DISABLE_AUTOUPDATER"] == "1"
+        assert env["OTHER_VAR"] == "ok"
 
-            env = call_kwargs["env"]
-            assert "ANTHROPIC_API_KEY" not in env
-            assert env["DISABLE_AUTOUPDATER"] == "1"
-            assert env["OTHER_VAR"] == "ok"
-
-            assert res.status == "ok"
-            assert res.exit_code == 0
-            assert res.session_id == "sess-uuid"
-            assert res.cost_usd == 0.05
-            assert res.cost_kind == "notional_subscription"
-            assert res.tokens == Tokens(input=100, output=50, cache_read=200, cache_write=30)
-            assert res.num_turns == 2
-            assert res.duration_ms == 1200
-            assert res.text == "Task completed successfully"
-            assert task.raw_path.read_text(encoding="utf-8") == json.dumps(sample_output)
+        assert res.status == "ok"
+        assert res.exit_code == 0
+        assert res.session_id == "sess-uuid"
+        assert res.cost_usd == 0.05
+        assert res.cost_kind == "notional_subscription"
+        assert res.tokens == Tokens(input=100, output=50, cache_read=200, cache_write=30)
+        assert res.num_turns == 2
+        assert res.duration_ms == 1200
+        assert res.text == "Task completed successfully"
+        assert task.raw_path.read_text(encoding="utf-8") == json.dumps(sample_output)
 
     def test_command_denies_every_protected_tool(self, tmp_path: Path) -> None:
-        cmd = ClaudeCLI()._build_command(_sample_task(tmp_path, tmp_path / "raw.json"))
+        cmd = _cli()[0]._build_command(_sample_task(tmp_path, tmp_path / "raw.json"))
 
         start = cmd.index("--disallowedTools") + 1
         denied = cmd[start : cmd.index("--setting-sources")]
@@ -199,7 +201,7 @@ class TestClaudeCLIRun:
         ]
 
     def test_command_loads_no_user_or_project_configuration(self, tmp_path: Path) -> None:
-        cmd = ClaudeCLI()._build_command(_sample_task(tmp_path, tmp_path / "raw.json"))
+        cmd = _cli()[0]._build_command(_sample_task(tmp_path, tmp_path / "raw.json"))
 
         assert cmd[cmd.index("--setting-sources") + 1] == ""
         assert "--strict-mcp-config" in cmd
@@ -309,16 +311,18 @@ class TestClaudeCLIRun:
         self, tmp_path: Path, session: str, expected: str
     ) -> None:
         data = _result(is_error=True, terminal_reason="api_error", api_error_status=404)
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout=session, stderr="")
-            assert _run(tmp_path, _stream(data), returncode=1).status == expected
+        cli, runner = _cli(_output(_stream(data), 1), _output(session, 1))
+
+        assert cli.run(_sample_task(tmp_path, tmp_path / "raw.json")).status == expected
+        assert runner.calls[1]["cmd"] == ["claude", "auth", "status", "--json"]
 
     def test_failure_other_than_api_error_does_not_ask_for_the_session(
         self, tmp_path: Path
     ) -> None:
-        with patch("subprocess.run") as mock_run:
-            assert _run(tmp_path, _stream(_result(is_error=True))).status == "error"
-        mock_run.assert_not_called()
+        cli, runner = _cli(_output(_stream(_result(is_error=True))))
+
+        assert cli.run(_sample_task(tmp_path, tmp_path / "raw.json")).status == "error"
+        assert len(runner.calls) == 1
 
     def test_exit_code_overrides_a_successful_result(self, tmp_path: Path) -> None:
         res = _run(tmp_path, _stream(_result()), returncode=3)
@@ -352,24 +356,46 @@ class TestClaudeCLIRun:
         res = _run(tmp_path, _stream(_result(permission_denials=denials)))
         assert res.permission_denials == ()
 
-    def test_timeout_handling(self, tmp_path: Path) -> None:
-        cli = ClaudeCLI()
+    def test_timeout_after_the_model_answered_keeps_the_partial_stream(
+        self, tmp_path: Path
+    ) -> None:
+        partial = "\n".join(CAPTURE.read_text(encoding="utf-8").splitlines()[:5]) + "\n"
+        cli, _ = _cli(_output(partial, -9, "Sin tiempo tras 1800 s", timed_out=True))
         task = _sample_task(tmp_path, tmp_path / "raw.json")
 
-        with patch("subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.pid = 12345
-            mock_proc.communicate.side_effect = [
-                subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
-                ("", "Process killed due to timeout"),
-            ]
-            mock_popen.return_value = mock_proc
+        res = cli.run(task)
 
-            with patch("os.killpg") as mock_killpg, patch("os.getpgid", return_value=12345):
-                res = cli.run(task)
-                mock_killpg.assert_called_once()
-                assert res.status == "timeout"
-                assert task.raw_path.exists()
+        assert (res.status, res.text) == ("timeout", "Sin tiempo tras 1800 s")
+        assert task.raw_path.read_text(encoding="utf-8") == partial
+        assert res.stderr_path == tmp_path / "raw.stderr.log"
+        assert res.cli_version == "2.1.316"
+        assert res.exit_code is None
+
+    @pytest.mark.parametrize(
+        "events",
+        [
+            [],
+            [{"type": "system", "subtype": "init", "claude_code_version": "2.1.316"}],
+            [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}],
+            [{"type": "assistant", "message": {"model": "<synthetic>", "content": []}}],
+        ],
+    )
+    def test_timeout_before_the_model_answered_is_an_error(
+        self, tmp_path: Path, events: list[dict[str, Any]]
+    ) -> None:
+        cli, _ = _cli(_output(_stream(*events), -9, "", timed_out=True))
+
+        res = cli.run(_sample_task(tmp_path, tmp_path / "raw.json"))
+
+        assert (res.status, res.text) == ("error", "El modelo no respondió en 1800 s")
+
+    def test_a_real_stream_is_read_whole(self, tmp_path: Path) -> None:
+        res = _run(tmp_path, CAPTURE.read_text(encoding="utf-8"))
+
+        assert res.status == "ok"
+        assert res.cli_version == "2.1.316"
+        assert res.num_turns > 0
+        assert res.tokens.output > 0
 
     def test_stderr_is_kept_beside_the_raw_output_without_a_result_event(
         self, tmp_path: Path
@@ -392,50 +418,48 @@ class TestClaudeCLIRun:
         assert not (tmp_path / "raw.stderr.log").exists()
 
     def test_each_call_keeps_its_own_stderr(self, tmp_path: Path) -> None:
-        with patch("subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.communicate.side_effect = [("", "primero"), ("", "segundo")]
-            mock_proc.returncode = 1
-            mock_popen.return_value = mock_proc
-            first = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "001-implement.json"))
-            second = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "001-implement-r1.json"))
+        cli, _ = _cli(_output("", 1, "primero"), _output("", 1, "segundo"))
+        first = cli.run(_sample_task(tmp_path, tmp_path / "001-implement.json"))
+        second = cli.run(_sample_task(tmp_path, tmp_path / "001-implement-r1.json"))
 
         assert first.stderr_path is not None
         assert second.stderr_path is not None
         assert first.stderr_path.read_text(encoding="utf-8") == "primero"
         assert second.stderr_path.read_text(encoding="utf-8") == "segundo"
 
-    def test_timeout_keeps_stderr_too(self, tmp_path: Path) -> None:
-        with patch("subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.pid = 12345
-            mock_proc.communicate.side_effect = [
-                subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
-                ("", "muerto"),
-            ]
-            mock_popen.return_value = mock_proc
-            with patch("os.killpg"), patch("os.getpgid", return_value=12345):
-                res = ClaudeCLI().run(_sample_task(tmp_path, tmp_path / "raw.json"))
-
-        assert res.stderr_path == tmp_path / "raw.stderr.log"
-
     def test_invalid_json_output(self, tmp_path: Path) -> None:
-        cli = ClaudeCLI()
         task = _sample_task(tmp_path, tmp_path / "raw.json")
+        cli, _ = _cli(_output("Not a JSON output", 7, "Fatal error occurred"))
 
-        with patch("subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.communicate.return_value = (
-                "Not a JSON output",
-                "Fatal error occurred",
-            )
-            mock_proc.returncode = 7
-            mock_popen.return_value = mock_proc
+        res = cli.run(task)
 
-            res = cli.run(task)
-            assert res.status == "error"
-            assert res.exit_code == 7
-            assert "No result event" in res.text
-            assert "Not a JSON output" in res.text
-            assert "Fatal error occurred" in res.text
-            assert task.raw_path.exists()
+        assert res.status == "error"
+        assert res.exit_code == 7
+        assert "El CLI no emitió el evento result (código de salida 7)" in res.text
+        assert "Not a JSON output" in res.text
+        assert "Fatal error occurred" in res.text
+        assert task.raw_path.exists()
+
+
+ORPHAN_CLAUDE = """#!{python}
+import os, subprocess, sys
+subprocess.Popen([sys.executable, "-c", "import time; time.sleep(6)"], start_new_session=True)
+os.write(1, open({capture!r}, "rb").read().replace(b'"result":"', b'"result":"\\xff', 1))
+"""
+
+
+def test_a_real_process_with_bad_bytes_and_an_orphan_does_not_hang_the_call(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "claude.py"
+    binary.write_text(ORPHAN_CLAUDE.format(python=sys.executable, capture=str(CAPTURE)))
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    task = _sample_task(tmp_path, tmp_path / "raw.json")
+    started = time.monotonic()
+
+    res = ClaudeCLI(SubprocessRunner(), cli_binary=str(binary)).run(task)
+
+    assert time.monotonic() - started < 4
+    assert res.status == "ok"
+    assert res.text.startswith("\ufffd")
+    assert res.cli_version == "2.1.316"

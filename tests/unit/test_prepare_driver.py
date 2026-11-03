@@ -450,3 +450,17 @@ def test_driver_prompt_without_reopened_scenarios_says_nothing_of_them(tmp_path:
     prompt = _prompt(executor)
     assert "cambiaron desde" not in prompt
     assert "{reabiertos}" not in prompt
+
+
+def test_driver_cli_version_comes_from_the_call_not_from_a_health_check(tmp_path: Path) -> None:
+    _, executor, event_log = _execute_driver(
+        tmp_path, AgentResult(status="ok", cli_version="2.1.316")
+    )
+
+    finished = [
+        call_.args[0]
+        for call_ in event_log.append.call_args_list
+        if call_.args[0].type == "lictor.agent.finished.v1"
+    ]
+    assert [e.data["cli_version"] for e in finished] == ["2.1.316"]
+    executor.health.assert_not_called()

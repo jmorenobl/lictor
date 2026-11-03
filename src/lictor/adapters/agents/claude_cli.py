@@ -2,13 +2,11 @@
 
 import json
 import os
-import signal
-import subprocess
-import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from lictor.application.ports import CommandRunner
 from lictor.domain.model import (
     AgentResult,
     AgentStatus,
@@ -18,11 +16,13 @@ from lictor.domain.model import (
     PermissionDenial,
     Tokens,
 )
+from lictor.domain.rules import model_responded
 
 AuthKind = Literal["subscription", "api_key"]
 _HTTP_UNAUTHORIZED = 401
 _HTTP_TOO_MANY_REQUESTS = 429
 _AUTH_CHECK_TIMEOUT_S = 10
+_VERSION_TIMEOUT_S = 10
 _DEFAULT_BASE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 _DEFAULT_DISALLOWED_TOOLS = (
     "Bash(git:*)",
@@ -32,49 +32,49 @@ _DEFAULT_DISALLOWED_TOOLS = (
 )
 
 
+@dataclass(frozen=True)
+class _Stream:
+    """What a call's stream of events says, read once."""
+
+    events: tuple[dict[str, Any], ...]
+    result: dict[str, Any] | None
+    rate_limit_status: str | None
+    cli_version: str
+
+
 class ClaudeCLI:
-    """Executes Claude Code CLI commands non-interactively via subprocess."""
+    """Executes Claude Code CLI commands non-interactively through a command runner."""
 
     def __init__(
         self,
+        runner: CommandRunner,
         auth: AuthKind = "subscription",
         cli_binary: str = "claude",
     ) -> None:
+        self.runner = runner
         self.auth: AuthKind = auth
         self.cli_binary: str = cli_binary
 
     def health(self) -> Health:
         """Verify CLI availability and authentication configuration."""
-        try:
-            res = subprocess.run(
-                [self.cli_binary, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if res.returncode != 0:
-                return Health(
-                    ok=False,
-                    cli_version="",
-                    auth_status="error",
-                    message=f"CLI returned code {res.returncode}: {res.stderr.strip()}",
-                )
-            version_str = res.stdout.strip()
-        except FileNotFoundError:
+        res = self.runner.run(
+            [self.cli_binary, "--version"], cwd=Path.cwd(), timeout_s=_VERSION_TIMEOUT_S
+        )
+        if not res.started:
             return Health(
                 ok=False,
                 cli_version="",
                 auth_status="none",
-                message=f"CLI executable '{self.cli_binary}' not found",
+                message=f"No se pudo ejecutar el CLI '{self.cli_binary}': {res.stderr.strip()}",
             )
-        except (subprocess.SubprocessError, OSError) as e:
+        if res.timed_out or res.returncode != 0:
             return Health(
                 ok=False,
                 cli_version="",
                 auth_status="error",
-                message=f"Error checking CLI version: {e}",
+                message=f"El CLI devolvió el código {res.returncode}: {res.stderr.strip()}",
             )
+        version_str = res.stdout.strip()
 
         if self.auth == "subscription":
             return self._subscription_health(version_str)
@@ -110,17 +110,15 @@ class ClaudeCLI:
 
     def _logged_in(self) -> bool | None:
         """Ask the CLI for its session, which costs no model call; None if it can't tell."""
+        res = self.runner.run(
+            [self.cli_binary, "auth", "status", "--json"],
+            cwd=Path.cwd(),
+            timeout_s=_AUTH_CHECK_TIMEOUT_S,
+            env=self._prepare_env(),
+        )
         try:
-            res = subprocess.run(
-                [self.cli_binary, "auth", "status", "--json"],
-                capture_output=True,
-                text=True,
-                timeout=_AUTH_CHECK_TIMEOUT_S,
-                check=False,
-                env=self._prepare_env(),
-            )
             data = json.loads(res.stdout)
-        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        except json.JSONDecodeError:
             return None
         logged_in = data.get("loggedIn") if isinstance(data, dict) else None
         return logged_in if isinstance(logged_in, bool) else None
@@ -200,44 +198,15 @@ class ClaudeCLI:
             return "auth"
         return "error" if failed else "ok"
 
-    def _execute_subprocess(
-        self,
-        cmd: list[str],
-        cwd: Path,
-        env: dict[str, str],
-        timeout_s: int,
-    ) -> tuple[str, str, int | None, int, bool]:
-        start_time = time.monotonic()
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(cwd),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            stdout, stderr = proc.communicate(timeout=timeout_s)
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            return stdout, stderr, proc.returncode, duration_ms, False
-        except subprocess.TimeoutExpired:
-            try:
-                pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            _out, err = proc.communicate()
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            return "", err, None, duration_ms, True
-
     def _cost_kind(self) -> CostKind:
         return "notional_subscription" if self.auth == "subscription" else "estimated"
 
-    def _read_events(self, stdout: str) -> tuple[dict[str, Any] | None, str | None]:
-        """Return the result event and the last rate limit status from the stream."""
+    def _read_stream(self, stdout: str) -> _Stream:
+        """Read the events of the stream, skipping what isn't one."""
+        events: list[dict[str, Any]] = []
         result: dict[str, Any] | None = None
         rate_limit_status: str | None = None
+        cli_version = ""
         for line in stdout.splitlines():
             try:
                 event = json.loads(line)
@@ -245,13 +214,17 @@ class ClaudeCLI:
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "result":
+            events.append(event)
+            kind = event.get("type")
+            if kind == "result":
                 result = event
-            elif event.get("type") == "rate_limit_event":
+            elif kind == "rate_limit_event":
                 info = event.get("rate_limit_info")
                 if isinstance(info, dict) and isinstance(info.get("status"), str):
                     rate_limit_status = info["status"]
-        return result, rate_limit_status
+            elif kind == "system" and event.get("subtype") == "init":
+                cli_version = str(event.get("claude_code_version") or "")
+        return _Stream(tuple(events), result, rate_limit_status, cli_version)
 
     def _read_denials(self, data: dict[str, Any]) -> tuple[PermissionDenial, ...]:
         denials = data.get("permission_denials")
@@ -326,54 +299,59 @@ class ClaudeCLI:
 
     def run(self, task: AgentTask) -> AgentResult:
         """Run claude -p for the given task and map the output to AgentResult."""
-        cmd = self._build_command(task)
-        env = self._prepare_env()
-        cost_kind = self._cost_kind()
-
-        stdout, stderr, exit_code, duration_ms, timed_out = self._execute_subprocess(
-            cmd=cmd,
+        out = self.runner.run(
+            self._build_command(task),
             cwd=task.cwd,
-            env=env,
             timeout_s=task.timeout_s,
+            env=self._prepare_env(),
         )
 
         task.raw_path.parent.mkdir(parents=True, exist_ok=True)
-        stderr_path = self._save_stderr(task.raw_path, stderr)
-        if timed_out:
-            task.raw_path.write_text(stderr or "TimeoutExpired", encoding="utf-8")
-            return AgentResult(
-                status="timeout",
-                text=stderr or "Process timed out",
-                duration_ms=duration_ms,
-                cost_kind=cost_kind,
-                raw_path=task.raw_path,
-                stderr_path=stderr_path,
-            )
+        # Whatever the call left, even cut short by the timeout, is the evidence of what it did.
+        task.raw_path.write_text(out.stdout, encoding="utf-8")
+        stderr_path = self._save_stderr(task.raw_path, out.stderr)
+        stream = self._read_stream(out.stdout)
+        common: dict[str, Any] = {
+            "duration_ms": out.duration_ms,
+            "cost_kind": self._cost_kind(),
+            "raw_path": task.raw_path,
+            "stderr_path": stderr_path,
+            "cli_version": stream.cli_version,
+        }
+        if out.timed_out:
+            return self._timed_out(task, stream, common)
 
-        task.raw_path.write_text(stdout, encoding="utf-8")
-
-        data, rate_limit_status = self._read_events(stdout)
-        if data is None:
+        exit_code = out.returncode
+        if stream.result is None:
             return AgentResult(
-                status="rate_limited" if rate_limit_status == "rejected" else "error",
+                status="rate_limited" if stream.rate_limit_status == "rejected" else "error",
                 text=(
-                    f"No result event from claude CLI (exit code {exit_code}). "
-                    f"Stderr: {stderr}\nStdout: {stdout}"
+                    f"El CLI no emitió el evento result (código de salida {exit_code}). "
+                    f"Stderr: {out.stderr}\nStdout: {out.stdout}"
                 ),
-                duration_ms=duration_ms,
-                cost_kind=cost_kind,
-                raw_path=task.raw_path,
                 exit_code=exit_code,
-                stderr_path=stderr_path,
+                **common,
             )
 
         return replace(
             self._parse_agent_data(
-                data=data,
-                rate_limit_status=rate_limit_status,
-                exit_code=exit_code or 0,
-                duration_ms=duration_ms,
+                data=stream.result,
+                rate_limit_status=stream.rate_limit_status,
+                exit_code=exit_code,
+                duration_ms=out.duration_ms,
                 raw_path=task.raw_path,
             ),
             stderr_path=stderr_path,
+            cli_version=stream.cli_version,
+        )
+
+    @staticmethod
+    def _timed_out(task: AgentTask, stream: _Stream, common: dict[str, Any]) -> AgentResult:
+        """A model that wrote something ran out of time; one that never answered is the backend."""
+        if model_responded(stream.events):
+            return AgentResult(
+                status="timeout", text=f"Sin tiempo tras {task.timeout_s} s", **common
+            )
+        return AgentResult(
+            status="error", text=f"El modelo no respondió en {task.timeout_s} s", **common
         )

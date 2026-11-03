@@ -1,6 +1,5 @@
 """ImplementScenario use case for executing an implementation attempt for a scenario."""
 
-import contextlib
 import hashlib
 import importlib.resources
 from collections.abc import Sequence
@@ -153,14 +152,6 @@ def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
     return "\n".join(lines)
 
 
-def _extract_cli_version(executor: Executor) -> str:
-    health_fn = getattr(executor, "health", None)
-    if callable(health_fn):
-        with contextlib.suppress(Exception):
-            return str(health_fn().cli_version)
-    return ""
-
-
 class ImplementScenario:
     """Use case to execute an implementation attempt on a single scenario."""
 
@@ -262,7 +253,7 @@ class ImplementScenario:
             attempt=new_attempt,
             signal=agent_signal,
             model=request.model,
-            cli_version=_extract_cli_version(self.executor),
+            cli_version=agent_result.cli_version,
             prompt_sha=prompt_sha,
             raw_path=raw_path,
             project_root=request.project_root,

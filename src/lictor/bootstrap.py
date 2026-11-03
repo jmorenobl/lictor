@@ -107,7 +107,7 @@ def bootstrap_runtime(
 
     if executor is None:
         if active_config.backend.kind == "claude-cli":
-            executor = ClaudeCLI(auth=active_config.backend.auth)
+            executor = ClaudeCLI(runner, auth=active_config.backend.auth)
         elif active_config.backend.kind == "fake":
             fake_config_path = lictor_dir / "fake_executor.json"
             if fake_config_path.is_file():

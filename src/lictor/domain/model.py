@@ -193,6 +193,7 @@ class AgentResult:
     permission_denials: tuple[PermissionDenial, ...] = ()
     exit_code: int | None = None
     stderr_path: Path | None = None
+    cli_version: str = ""  # as the backend reported it when the call started
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,7 @@ class CommandOutput:
     stderr: str
     duration_ms: int = 0
     timed_out: bool = False  # killed for running out of time; the returncode says nothing then
+    started: bool = True  # False when the command couldn't even start, e.g. it wasn't found
 
 
 # Properties a profile's runner may attach to each test case. Lictor names them, not the tool.

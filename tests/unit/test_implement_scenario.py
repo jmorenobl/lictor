@@ -586,3 +586,11 @@ def test_no_result_is_read_from_a_call_that_produced_none(
 
     vcs.capture.assert_not_called()
     assert result.tree is None
+
+
+def test_cli_version_comes_from_the_call_not_from_a_health_check(tmp_path: Path) -> None:
+    _, executor, event_log = _execute(tmp_path, AgentResult(status="ok", cli_version="2.1.316"))
+
+    finished = [e for e in _events(event_log) if e.type == "lictor.agent.finished.v1"]
+    assert [e.data["cli_version"] for e in finished] == ["2.1.316"]
+    executor.health.assert_not_called()

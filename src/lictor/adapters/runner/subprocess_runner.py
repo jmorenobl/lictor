@@ -97,6 +97,7 @@ class SubprocessRunner(CommandRunner):
                 stdout="",
                 stderr=f"No se pudo iniciar el proceso: {exc}",
                 duration_ms=int((time.monotonic() - start_time) * 1000),
+                started=False,
             )
 
         stdout, stderr, timed_out, left_open = self._collect(proc, start_time, timeout_s)

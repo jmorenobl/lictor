@@ -1,6 +1,5 @@
 """PrepareDriver use case for writing and updating acceptance test drivers."""
 
-import contextlib
 import hashlib
 import importlib.resources
 from collections.abc import Sequence
@@ -68,14 +67,6 @@ class PrepareDriverResult:
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
-
-
-def _extract_cli_version(executor: Executor) -> str:
-    health_fn = getattr(executor, "health", None)
-    if callable(health_fn):
-        with contextlib.suppress(Exception):
-            return str(health_fn().cli_version)
-    return ""
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -207,7 +198,7 @@ class PrepareDriver:
             attempt=new_attempts,
             signal=agent_signal,
             model=request.model,
-            cli_version=_extract_cli_version(self.executor),
+            cli_version=agent_result.cli_version,
             prompt_sha=prompt_sha,
             raw_path=raw_path,
             project_root=request.project_root,

@@ -58,6 +58,7 @@ def test_subprocess_runner_reports_a_command_the_exact_env_cannot_find(tmp_path:
 
     assert out.returncode != 0
     assert "uv-no-existe" in out.stderr
+    assert out.started is False
 
 
 def test_subprocess_runner_nonzero_exit(tmp_path: Path) -> None:
