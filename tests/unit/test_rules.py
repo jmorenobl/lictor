@@ -1,20 +1,22 @@
 """Unit tests for pure domain rules."""
 
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 
 from lictor.domain.errors import DriverError, ExitCode
-from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
+from lictor.domain.model import AgentSignal, AgentStatus, MutationScore, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
     SUSPICIOUS_DRIVER,
+    SYNTHETIC_MODEL,
     RedOracle,
     ScenarioClass,
     acceptance_failure,
     anchor_problems,
     banned_matches,
     baseline_head_accepted,
+    classify_agent,
     classify_scenarios,
     collateral_greens,
     condense_error,
@@ -26,7 +28,11 @@ from lictor.domain.rules import (
     impostor_survivors,
     is_agent_unavailable,
     judge_red,
+    keeps_attempt,
     map_test_cases_to_scenarios,
+    model_responded,
+    mutation_score,
+    path_within,
     red_failure_problem,
     render_full_error,
     run_outcome,
@@ -1113,3 +1119,127 @@ def test_run_outcome_suspicion_message_is_exact() -> None:
         "Escenarios en cuarentena: A-1, A-2. Posible driver defectuoso en A-1, A-2: sus tests "
         "fallaron por un error del propio driver en cada intento. Detalle en .lictor/report.md"
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "failures", "flags", "expected"),
+    [
+        ("ok", 0, {}, "ok"),
+        ("max_turns", 0, {}, "error"),
+        ("timeout", 0, {}, "error"),
+        ("error", 1, {}, "error"),
+        ("error", AGENT_FAILURE_LIMIT, {}, "unavailable"),
+        ("auth", 0, {}, "unavailable"),
+        ("rate_limited", 0, {}, "rate_limited"),
+        ("ok", 0, {"spec_conflict": True}, "spec_conflict"),
+        ("ok", 0, {"unreadable": True}, "rejected"),
+        ("error", 1, {"unreadable": True}, "rejected"),
+        ("ok", 0, {"tampered": True}, "rejected"),
+        ("rate_limited", 0, {"tampered": True}, "rejected"),
+        ("auth", 0, {"tampered": True}, "rejected"),
+        ("ok", 0, {"spec_conflict": True, "tampered": True}, "rejected"),
+        ("rate_limited", 0, {"unreadable": True}, "rate_limited"),
+        ("auth", 0, {"unreadable": True}, "unavailable"),
+        ("rate_limited", 0, {"spec_conflict": True}, "rate_limited"),
+        ("auth", 0, {"spec_conflict": True}, "unavailable"),
+        ("ok", 0, {"spec_conflict": True, "unreadable": True}, "spec_conflict"),
+    ],
+)
+def test_classify_agent_puts_tampering_first_then_the_backend(
+    status: AgentStatus, failures: int, flags: dict[str, bool], expected: AgentSignal
+) -> None:
+    assert classify_agent(status, failures, **flags) == expected
+
+
+@pytest.mark.parametrize(
+    ("signal", "failures", "expected"),
+    [
+        ("rate_limited", 0, True),
+        ("unavailable", 0, True),
+        ("error", 1, True),
+        ("error", 0, False),
+        ("ok", 0, False),
+        ("ok", 1, False),
+        ("rejected", 1, False),
+        ("spec_conflict", 0, False),
+    ],
+)
+def test_keeps_attempt_only_when_the_backend_failed(
+    signal: AgentSignal, failures: int, expected: bool
+) -> None:
+    assert keeps_attempt(signal, failures) is expected
+
+
+def _assistant(model: str | None) -> dict[str, Any]:
+    message: dict[str, Any] = {"content": []}
+    if model is not None:
+        message["model"] = model
+    return {"type": "assistant", "message": message}
+
+
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        ([], False),
+        ([{"type": "system", "subtype": "init", "model": "claude"}], False),
+        ([{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}], False),
+        ([{"type": "system", "subtype": "init"}, _assistant(SYNTHETIC_MODEL)], False),
+        ([{"type": "assistant", "message": "texto"}], True),
+        ([_assistant("claude-haiku-5-5")], True),
+        ([_assistant(None)], True),
+        ([_assistant(SYNTHETIC_MODEL), _assistant("claude-haiku-5-5")], True),
+        ([{"type": "user", "message": {"model": "claude"}}], False),
+    ],
+)
+def test_model_responded_ignores_what_the_backend_wrote_itself(
+    events: list[dict[str, Any]], expected: bool
+) -> None:
+    assert model_responded(events) is expected
+
+
+def test_synthetic_model_is_the_backend_s_marker() -> None:
+    assert SYNTHETIC_MODEL == "<synthetic>"
+
+
+@pytest.mark.parametrize(
+    ("path", "roots", "expected"),
+    [
+        ("src/a.py", ["src/"], True),
+        ("src", ["src/"], True),
+        ("src/x/y.py", ["/src"], True),
+        ("srcx/a.py", ["src/"], False),
+        ("tests/a.py", ["src/", "tests/unit/"], False),
+        ("tests/unit/a.py", ["src/", "tests/unit/"], True),
+        ("a.py", [""], True),
+        ("a.py", [], False),
+        ("lib/src/a.py", ["src"], False),
+    ],
+)
+def test_path_within(path: str, roots: list[str], expected: bool) -> None:
+    assert path_within(path, roots) is expected
+
+
+def test_mutation_score_counts_timeouts_and_untested_as_not_killed() -> None:
+    counts = {
+        "killed": 80,
+        "survived": 5,
+        "timeout": 4,
+        "no_tests": 3,
+        "suspicious": 2,
+        "segfault": 1,
+        "skipped": 5,
+        "total": 100,
+    }
+
+    assert mutation_score(counts) == MutationScore(**counts, percent=100 * 80 / 95)
+
+
+def test_mutation_score_reads_missing_counts_as_zero() -> None:
+    assert mutation_score({"killed": 3, "total": 4}) == MutationScore(
+        killed=3, total=4, percent=75.0
+    )
+
+
+@pytest.mark.parametrize("counts", [{}, {"total": 2, "skipped": 2}, {"total": 1, "skipped": 3}])
+def test_mutation_score_without_tried_mutants_is_zero(counts: dict[str, int]) -> None:
+    assert mutation_score(counts).percent == 0.0
