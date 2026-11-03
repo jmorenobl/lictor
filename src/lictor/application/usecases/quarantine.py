@@ -7,7 +7,7 @@ from typing import Literal
 from lictor.application.ports import Clock, EventLog
 from lictor.domain.model import Event, ScenarioId
 
-QuarantineReason = Literal["intentos agotados", "spec_conflict"]
+QuarantineReason = Literal["intentos agotados", "spec_conflict", "driver_sospechoso"]
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,8 @@ ControlLevel = Literal["L1", "L2", "L4", "L5"]
 ReportFormat = Literal["exit-code", "junit"]
 ControlMode = Literal["block", "measure"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
+RedKind = Literal["assertion", "not_implemented", "error"]
+MapLinkKind = Literal["name", "scenario"]
 BackendKind = Literal["claude-cli", "fake"]
 BackendAuth = Literal["subscription", "api_key"]
 
@@ -144,6 +146,30 @@ class ProfileVerification(BaseModel):
         return self
 
 
+class ImpostorConfig(BaseModel):
+    """Lines that mark a stub, and the constants that replace them to prove a test asserts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pattern: str = Field(min_length=1)
+    replacements: list[str] = Field(min_length=1)
+
+    @field_validator("pattern")
+    @classmethod
+    def _check_pattern(cls, pattern: str) -> str:
+        return _validate_regexes([pattern])[0]
+
+
+class ProfileOracle(BaseModel):
+    """What makes the sealed driver a valid oracle: only the profile declares it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    link: MapLinkKind = "name"
+    red_kinds: list[RedKind] = Field(default_factory=list)
+    impostors: ImpostorConfig | None = None
+
+
 class ProjectVerification(BaseModel):
     """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada."""
 
@@ -166,6 +192,7 @@ class ControlConfig(BaseModel):
     mode: ControlMode = "block"
     allow_empty: bool = False
     timeout_s: int = Field(default=600, gt=0)
+    when_exists: str | None = None
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
@@ -173,6 +200,17 @@ class ControlConfig(BaseModel):
             msg = f"El control '{self.id}' con report='junit' debe incluir '{{out}}' en run"
             raise ValueError(msg)
         return self
+
+    @field_validator("when_exists")
+    @classmethod
+    def _validate_when_exists(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = PurePosixPath(value.strip())
+        if not value.strip() or path.is_absolute() or ".." in path.parts:
+            msg = f"when_exists debe ser una ruta relativa dentro del proyecto: '{value}'"
+            raise ValueError(msg)
+        return path.as_posix()
 
 
 class BackendConfig(BaseModel):
@@ -229,6 +267,7 @@ class Profile(BaseModel):
     banned_patterns: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
     verification: ProfileVerification = Field(default_factory=ProfileVerification)
+    oracle: ProfileOracle = Field(default_factory=ProfileOracle)
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""

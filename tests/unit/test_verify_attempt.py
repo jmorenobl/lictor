@@ -37,6 +37,8 @@ class FakeVcs(Vcs):
         self._added = list(added or [])
         self.links: list[str] = []
         self.moved: list[str] = []
+        self.exported: list[str] = []
+        self.deleted: list[str] = []
 
     def pin(self) -> RepoPin:
         """Pin what is there now: a move nobody caught stops being a change, as in a real repo."""
@@ -54,10 +56,11 @@ class FakeVcs(Vcs):
         return "fake-tree"
 
     def changes(self, tree: str) -> list[TreeChange]:
-        return [
+        found = [
             TreeChange(path, "120000" if path in self.links else "100644")
             for path in self._changed_files
         ]
+        return found + [TreeChange(path, "000000") for path in self.deleted]
 
     def added_lines(self, tree: str) -> list[str]:
         return list(self._added)
@@ -66,14 +69,23 @@ class FakeVcs(Vcs):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
+        if parent is not None:
+            self.chained = (tree, message, trailers, parent, empty)
+            return Candidate(sha="fake-colateral", tree=tree, parent=parent)
         self.candidate_tree = tree
         self.candidate_trailers = trailers
         return Candidate(sha="fake-candidate", tree="fake-tree", parent="fake-sha-head")
 
     def export_tree(self, rev: str, dest: Path) -> None:
         dest.mkdir(parents=True)
+        for rel_path in self.exported:
+            (dest / rel_path).parent.mkdir(parents=True, exist_ok=True)
+            (dest / rel_path).write_text("x", encoding="utf-8")
 
     def export_copy(self, rev: str, dest: Path) -> None:
         dest.mkdir(parents=True)
@@ -1137,3 +1149,208 @@ def test_every_verification_records_its_evidence(tmp_path: Path) -> None:
 
     assert result.evidence["path"] == f".lictor/runs/{req.run_id}/IVA-001/002-verify"
     assert result.evidence["hash"] == hash_tree(tmp_path / result.evidence["path"])
+
+
+_UNIT_WHEN_EXISTS = VerificationControl(
+    id="unit",
+    level="L2",
+    run="unit --junitxml {out}",
+    report="junit",
+    when_exists="tests/unit",
+)
+
+
+def test_verify_skips_a_control_whose_path_neither_tree_has(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,))
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["suite"]
+    skipped = result.control_results["unit"]
+    assert skipped.ok is True
+    assert skipped.skipped is not None
+    assert "tests/unit" in skipped.skipped
+    assert control_summaries(result)["unit"]["skipped"] == skipped.skipped
+
+
+def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "unit": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.exported = ["tests/unit/test_smoke.py"]
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["unit", "suite"]
+    assert result.control_results["unit"].skipped is None
+    assert control_summaries(result)["unit"]["skipped"] is None
+
+
+def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -> None:
+    """Deleting the unit tests must not turn L2 into a skipped control."""
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(
+        tmp_path, runner, controls=(_UNIT_WHEN_EXISTS,), paths_writable=("src/", "tests/unit/")
+    )
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.deleted = ["tests/unit/test_smoke.py"]
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "unit"
+    assert "elimina tests/unit" in (result.condensed_error or "")
+    assert runner.calls == []
+    assert result.control_results["unit"].skipped is None
+
+
+def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
+    tmp_path: Path,
+) -> None:
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs._changed_files = []
+
+    result = verifier.execute(req)
+
+    assert result.ok is False
+    assert result.failed_at == "L0-sin-cambios"
+    assert "no cambia nada" in (result.condensed_error or "")
+    assert runner.calls == []
+    assert result.candidate is None
+
+
+_THREE_REPORT = (
+    '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/>'
+    '<testcase name="test_iva_003"><failure message="pendiente">traza</failure></testcase>'
+    "</testsuite>"
+)
+
+
+def test_verify_chains_the_pending_scenarios_the_candidate_also_turns_green(
+    tmp_path: Path,
+) -> None:
+    runner = _PlantingRunner({"suite": (_THREE_REPORT, 1)})
+    verifier, req = _verify(
+        tmp_path,
+        runner,
+        all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+        pending_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+    )
+    assert isinstance(verifier.vcs, FakeVcs)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.collateral == ("IVA-002",)
+    assert result.candidate == Candidate("fake-colateral", "fake-tree", "fake-sha-head")
+    tree, message, trailers, parent, empty = verifier.vcs.chained
+    assert (tree, parent, empty) == ("fake-tree", "fake-candidate", True)
+    assert message == "test(IVA-002): verde colateral"
+    assert trailers == {
+        "Scenario": ["IVA-002"],
+        "Lictor-Collateral": "fake-candidate",
+        "Lictor-Run": req.run_id,
+    }
+
+
+def test_verify_without_collateral_leaves_the_candidate_alone(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_THREE_REPORT, 1)})
+    verifier, req = _verify(
+        tmp_path,
+        runner,
+        all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"),
+        green_scenario_ids=("IVA-002",),
+        pending_scenario_ids=("IVA-001", "IVA-003"),
+    )
+
+    result = verifier.execute(req)
+
+    assert result.collateral == ()
+    assert result.candidate == Candidate("fake-candidate", "fake-tree", "fake-sha-head")
+
+
+def test_verify_records_how_the_scenario_failed(tmp_path: Path) -> None:
+    report = (
+        '<testsuite><testcase name="test_iva_001"><properties>'
+        '<property name="lictor.failure" value="error"/>'
+        '<property name="lictor.origin" value="tests/acceptance/test_iva.py"/>'
+        '</properties><failure message="m"/></testcase><testcase name="test_iva_002"/></testsuite>'
+    )
+    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (report, 1)}))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "acceptance"
+    assert result.failure == ("error", "tests/acceptance/test_iva.py")
+
+
+def test_verify_records_no_failure_when_the_scenario_passed(tmp_path: Path) -> None:
+    """A broken green is not this scenario's failure."""
+    report = (
+        '<testsuite><testcase name="test_iva_001"/>'
+        '<testcase name="test_iva_002"><failure message="m"/></testcase></testsuite>'
+    )
+    verifier, req = _verify(
+        tmp_path, _PlantingRunner({"suite": (report, 1)}), green_scenario_ids=("IVA-002",)
+    )
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "acceptance"
+    assert result.failure is None
+
+
+def test_verify_maps_by_the_scenario_each_test_executed(tmp_path: Path) -> None:
+    linked = (
+        '<testsuite><testcase name="test_uno"><properties>'
+        '<property name="lictor.scenario" value="IVA-001"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties></testcase>'
+        '<testcase name="test_dos"><properties>'
+        '<property name="lictor.scenario" value="IVA-002"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties>'
+        '<failure message="pendiente"/></testcase></testsuite>'
+    )
+    files = dict.fromkeys(("IVA-001", "IVA-002"), "features/iva.feature")
+    verifier, req = _verify(
+        tmp_path,
+        _PlantingRunner({"suite": (linked, 1)}),
+        link="scenario",
+        scenario_files=files,
+    )
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.scenario_results == {"IVA-001": "passed", "IVA-002": "failure"}
+
+
+def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
+    tmp_path: Path,
+) -> None:
+    linked = (
+        '<testsuite><testcase name="test_uno"><properties>'
+        '<property name="lictor.scenario" value="IVA-001"/>'
+        '<property name="lictor.feature" value="features/copia.txt"/></properties></testcase>'
+        '<testcase name="test_dos"><properties>'
+        '<property name="lictor.scenario" value="IVA-002"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties>'
+        '<failure message="pendiente"/></testcase></testsuite>'
+    )
+    files = dict.fromkeys(("IVA-001", "IVA-002"), "features/iva.feature")
+    verifier, req = _verify(
+        tmp_path,
+        _PlantingRunner({"suite": (linked, 1)}),
+        link="scenario",
+        scenario_files=files,
+    )
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "acceptance")
+    assert "desde features/copia.txt, no desde features/iva.feature" in result.condensed_error

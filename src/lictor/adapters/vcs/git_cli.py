@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import Vcs
@@ -198,11 +198,20 @@ class GitCli(Vcs):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
         """Build a commit with author Lictor; nothing points to it until the branch advances."""
-        parent = self.get_head_sha()
-        lines = [f"{key}: {val}" for key, val in (trailers or {}).items()]
+        parent = parent or self.get_head_sha()
+        if not empty and self.get_tree(parent) == tree:
+            raise CandidateError(f"El commit sobre {parent[:12]} no cambia nada")
+        lines = [
+            f"{key}: {value}"
+            for key, values in (trailers or {}).items()
+            for value in ([values] if isinstance(values, str) else values)
+        ]
         full_message = "\n\n".join([message, "\n".join(lines)]) if lines else message
         sha = self._run_git(
             ["commit-tree", tree, "-p", parent, "-m", full_message],
@@ -280,6 +289,33 @@ class GitCli(Vcs):
             if stripped:
                 values.append(stripped)
         return values
+
+    def trailer_commits(self, key: str) -> list[tuple[str, list[str]]]:
+        """Read every commit with the trailer in one call: NUL ends a record, LF a value."""
+        log = self._run_git(["log", f"--format=%H%n%(trailers:key={key},valueonly)%x00"]).stdout
+        found: list[tuple[str, list[str]]] = []
+        for record in log.split("\0"):
+            sha, _, values = record.strip().partition("\n")
+            names = [value.strip() for value in values.splitlines() if value.strip()]
+            if sha and names:
+                found.append((sha, names))
+        return found
+
+    def list_files(self, rev: str, directory: str) -> list[str]:
+        """List the files of a commit under a directory, without checking anything out."""
+        raw = self._run_git(
+            ["ls-tree", "-r", "-z", "--name-only", f"{rev}^{{tree}}", "--", directory]
+        ).stdout
+        return [path for path in raw.split("\0") if path]
+
+    def read_file(self, rev: str, path: str) -> str:
+        """Read a file of a commit with no filter, its line endings read as `read_text` would."""
+        return self._run_git(["cat-file", "blob", f"{rev}:{path}"]).stdout
+
+    def parent_of(self, rev: str) -> str:
+        """Return the first parent of a commit, or "" for a root commit."""
+        found = self._run_git(["rev-parse", "--verify", "--quiet", f"{rev}^"], check=False)
+        return found.stdout.strip() if found.returncode == 0 else ""
 
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""

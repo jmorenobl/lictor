@@ -78,3 +78,27 @@ def test_commit_green_expects_the_parent_it_verified_not_the_current_head() -> N
     use_case.execute(_request())
 
     vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")
+
+
+def test_commit_green_records_each_collateral_green_on_the_same_commit() -> None:
+    use_case, vcs, event_log = _use_case()
+
+    use_case.execute(
+        CommitGreenRequest(
+            scenario_id="IVA-001",
+            run_id="r",
+            attempt=2,
+            candidate=CANDIDATE,
+            collateral=["IVA-002"],
+        )
+    )
+
+    vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")
+    events = [call.args[0] for call in event_log.append.call_args_list]
+    assert [(e.scenarioid, e.data["commit"]) for e in events] == [
+        ("IVA-001", "c0ffee"),
+        ("IVA-002", "c0ffee"),
+    ]
+    assert events[1].data["collateral"] is True
+    assert events[1].data["attempt"] == 0
+    assert "collateral" not in events[0].data

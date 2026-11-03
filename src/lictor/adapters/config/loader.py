@@ -18,6 +18,7 @@ from lictor.adapters.config.models import (
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.errors import ConfigError
+from lictor.domain.rules import Impostors, MapLink
 
 CONFIG_FILENAME = "lictor.json"
 DEFAULT_PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
@@ -41,6 +42,9 @@ class Defences:
     suppressions: Sequence[str]
     banned_patterns: Sequence[str]
     forbidden_paths: Sequence[str]
+    map_link: MapLink = "name"
+    red_kinds: Sequence[str] = ()
+    impostors: Impostors | None = None
 
 
 def _resolve_profiles_dir(profiles_dir: Path | None) -> Path:
@@ -274,6 +278,13 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         suppressions=profile.suppressions,
         banned_patterns=profile.banned_patterns,
         forbidden_paths=profile.forbidden_paths,
+        map_link=profile.oracle.link,
+        red_kinds=tuple(profile.oracle.red_kinds),
+        impostors=(
+            Impostors(imp.pattern, tuple(imp.replacements))
+            if (imp := profile.oracle.impostors) is not None
+            else None
+        ),
     )
 
 

@@ -19,6 +19,8 @@ import pytest
 from lictor.application.run_files import _scratch_root
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
+    GOOD_3,
+    MODULE_PATH,
     events_of,
     false_greens,
     git,
@@ -182,6 +184,33 @@ def test_kill_9_at_every_node_loses_nothing_and_invents_nothing(
             sorted(set(quarantined(root))),
         )
     )
+
+
+def test_kill_9_while_the_baseline_registers_a_collateral_green(
+    make_project: ProjectFactory, tmp_path: Path
+) -> None:
+    """The branch moved inside the red check and the checkpoint never heard of it."""
+    root = make_project()
+    require(_relaunch(root, tmp_path, "cuarentena")[0] == 30, "IVA-003 debía quedar en cuarentena")
+    write(root, MODULE_PATH, GOOD_3)
+    git(root, "commit", "-q", "-am", "feat: importe negativo a mano")
+    point = "red_check:registro"
+
+    _kill_at(root, tmp_path, "verde", point, tmp_path / "alcanzado")
+    killed_head = git(root, "rev-parse", "HEAD").strip()
+    require(
+        "Lictor-Collateral" in git(root, "log", "-1", "--format=%B"),
+        "debía morir con el registro ya en la rama",
+    )
+    exit_code, relaunches = _relaunch(root, tmp_path, "verde")
+
+    assert exit_code == 0
+    assert green_ids(root) == ALL_GREEN, "ni commits dobles ni verdes perdidos"
+    assert git(root, "rev-parse", "HEAD").strip() == killed_head
+    assert false_greens(root) == []
+    assert not git(root, "status", "--short")
+    assert not [e for e in events_of(root, "run.stopped") if e["data"]["exit_code"] == 10]
+    _record(Cell(point, "linea-base", relaunches, exit_code, green_ids(root), []))
 
 
 def test_a_lock_left_by_a_killed_git_stops_and_explains(

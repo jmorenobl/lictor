@@ -35,6 +35,7 @@ from tests.integration.repro.harness import (
     good_impl,
     green_ids,
     known_limitation,
+    no_op_change,
     require,
     run_lictor,
     shell,
@@ -164,13 +165,21 @@ out = source.parent / "__pycache__" / name
 out.parent.mkdir(exist_ok=True)
 out.write_bytes(header + marshal.dumps(code))
 """
+# It forges what the profile's plugin would write too: both come from the same process.
+FORGED_CASE = (
+    '<testcase classname="t" name="test_iva_00{i}"><properties>'
+    '<property name="lictor.scenario" value="IVA-00{i}"/>'
+    '<property name="lictor.feature" value="features/iva.feature"/>'
+    "</properties></testcase>"
+)
 FORGE_JUNIT = (
     '"""Interfaz."""\nimport os\nimport sys\n\n'
+    f"CASE = {FORGED_CASE!r}\n\n"
     'if any("acceptance" in a for a in sys.argv):\n'
     '    out = sys.argv[sys.argv.index("--junitxml") + 1]\n'
     '    with open(out, "w", encoding="utf-8") as f:\n'
     "        f.write('<testsuite>' + ''.join("
-    'f\'<testcase classname="t" name="test_iva_00{i}"/>\' for i in (1, 2, 3))'
+    "CASE.format(i=i) for i in (1, 2, 3))"
     " + '</testsuite>')\n"
     "    os._exit(0)\n"
 ) + STUB.split('"""Interfaz."""')[1]
@@ -209,6 +218,7 @@ def _assert_rejected_by(project: Callable[[], Path], agent: Agent, *reasons: str
 
 def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        no_op_change(task)
         forged = shell(["uv", "run", "python", "-c", FORGE_MODULE_PYC, GOOD_3], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
@@ -217,6 +227,7 @@ def test_c1_forged_module_bytecode(make_project: ProjectFactory) -> None:
 
 def test_c2_forged_driver_bytecode(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        no_op_change(task)
         forged = shell(["uv", "run", "python", "-c", FORGE_DRIVER_PYC], task.cwd)
         require(forged.returncode == 0, f"el ataque debía ejecutarse: {forged.stderr}")
 
@@ -234,6 +245,7 @@ def test_c3_plugin_in_the_verification_venv_fails_by_hash(make_project: ProjectF
     planted: list[Path] = []
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        no_op_change(task)
         if scenario_id == "IVA-001" and not planted:
             for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 _plant_plugin(site_packages)
@@ -274,8 +286,9 @@ def test_c3_plugin_planted_during_a_command_is_not_loaded_nor_accepted(
     }
     root = make_project(extra_controls=[control])
 
-    def impl(_task: AgentTask, _sid: str, _attempt: int) -> None:
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
         """Leave the stub: only the planted plugin could turn it green."""
+        no_op_change(task)
 
     run_lictor(root, Agent(impl=impl))
 
@@ -307,6 +320,7 @@ def test_c3_forged_bytecode_in_the_verification_venv_fails_by_hash(
     planted: list[Path] = []
 
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
+        no_op_change(task)
         if scenario_id == "IVA-001" and not planted:
             for site_packages in root.glob(f"{VERIFY_ENV}/lib/python*/site-packages"):
                 pyc = site_packages / "_pytest" / "__pycache__" / "forjado.cpython-312.pyc"
@@ -325,6 +339,7 @@ def test_c3_plugin_in_the_agents_venv_does_not_reach_verification(
     make_project: ProjectFactory,
 ) -> None:
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        no_op_change(task)
         synced = shell(["uv", "sync", "-q", "--frozen", "--no-install-project"], task.cwd)
         require(synced.returncode == 0, f"el agente debía tener su venv: {synced.stderr}")
         sites = list(task.cwd.glob(".venv/lib/python*/site-packages"))
@@ -447,7 +462,7 @@ def test_project_needs_reach_the_commands(
 
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert {"MI_FIJA=1", "MI_HEREDADA=2"} <= set(seen)
-    assert "PYTEST_PLUGINS=lictor_project_path,pytest_bdd.plugin" in seen
+    assert "PYTEST_PLUGINS=lictor_project_path,lictor_outcome,pytest_bdd.plugin" in seen
 
 
 @pytest.mark.parametrize(
@@ -459,8 +474,9 @@ def test_project_needs_reach_the_commands(
         {"verification": {"prepare": "true"}},
         {"forbidden_paths": []},
         {"banned_patterns": []},
+        {"oracle": {}},
     ],
-    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones"],
+    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones", "oraculo"],
 )
 def test_lictor_json_cannot_weaken_the_profile(
     make_project: ProjectFactory, changes: dict[str, Any]
@@ -544,10 +560,9 @@ def test_installed_plugin_needs_no_declaration(make_project: ProjectFactory) -> 
 def test_installed_plugin_loads_with_autoload_off(make_project: ProjectFactory) -> None:
     root = make_project()
     needs_plugin = DRIVER.replace(
-        "def test_iva_001():\n    assert iva.general(100) == 121",
+        "def test_iva_001():\n    pass",
         "def test_iva_001(pytestconfig):\n"
-        '    assert pytestconfig.pluginmanager.get_plugin("pytest_bdd.plugin")\n'
-        "    assert iva.general(100) == 121",
+        '    assert pytestconfig.pluginmanager.get_plugin("pytest_bdd.plugin")',
     )
     require(needs_plugin != DRIVER, "el driver debía cambiar")
 

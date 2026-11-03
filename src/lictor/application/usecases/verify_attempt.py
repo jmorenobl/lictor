@@ -4,6 +4,7 @@ Includes ADR-0001 integrity snapshot for state protection.
 """
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -36,9 +37,12 @@ from lictor.domain.model import (
     VerifyResult,
 )
 from lictor.domain.rules import (
+    MapLink,
     acceptance_failure,
     banned_matches,
+    collateral_greens,
     condense_error,
+    control_path_status,
     forbidden_paths,
     map_test_cases_to_scenarios,
     render_full_error,
@@ -48,6 +52,7 @@ from lictor.domain.rules import (
 RoleKind = Literal["implement", "driver"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
+_DELETED_MODE = "000000"
 
 
 class VerificationControlProtocol(Protocol):
@@ -74,6 +79,9 @@ class VerificationControlProtocol(Protocol):
     @property
     def timeout_s(self) -> int: ...
 
+    @property
+    def when_exists(self) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class VerificationControl:
@@ -86,6 +94,7 @@ class VerificationControl:
     mode: str = "block"
     allow_empty: bool = False
     timeout_s: int = 600
+    when_exists: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,13 +112,16 @@ class VerifyAttemptRequest:
     acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
+    pending_scenario_ids: Sequence[str] = field(default_factory=tuple)
     all_scenario_ids: Sequence[str | ScenarioId] = field(default_factory=tuple)
+    scenario_files: Mapping[str, str] = field(default_factory=dict)  # relative to the project
     error_max_chars: int = 4000
     attempt: int = 1
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
     tree: str | None = None
+    link: MapLink = "name"
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
     tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
@@ -127,6 +139,7 @@ class _Failure:
     control_results: dict[str, ControlResult] = field(default_factory=dict)
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = ()
+    failure: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +160,7 @@ def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
             "exit_code": control.exit_code,
             "duration_ms": control.duration_ms,
             "output": control.output_path,
+            "skipped": control.skipped,
         }
         for control_id, control in result.control_results.items()
     }
@@ -303,10 +317,36 @@ class VerifyAttempt:
                 req,
                 _Failure("L0-entorno", env_problem, control_results=result.control_results),
             )
-        return replace(result, candidate=candidate)
+        collateral = collateral_greens(result.scenario_results, req.pending_scenario_ids, scenario)
+        if collateral:
+            candidate = self._chain_collateral(req, candidate, collateral)
+        return replace(result, candidate=candidate, collateral=tuple(collateral))
+
+    def _chain_collateral(
+        self, req: VerifyAttemptRequest, candidate: Candidate, collateral: Sequence[str]
+    ) -> Candidate:
+        """Register on top of the candidate what the same tree also turns green.
+
+        The branch then moves to both at once: no state in between can be left by a crash.
+        """
+        chained = self.vcs.commit_tree(
+            candidate.tree,
+            message=f"test({', '.join(collateral)}): verde colateral",
+            trailers={
+                "Scenario": list(collateral),
+                "Lictor-Collateral": candidate.sha,
+                "Lictor-Run": req.run_id,
+            },
+            parent=candidate.sha,
+            empty=True,
+        )
+        return Candidate(chained.sha, candidate.tree, candidate.parent)
 
     def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run L0 over what the agent left: the tree read from its copy, before any project code."""
+        if not self.vcs.changes(self._tree(req)):
+            return self._fail(req, _Failure("L0-sin-cambios", "El intento no cambia nada"))
+
         routes_res = self._check_routes(req)
         if not routes_res.ok:
             return routes_res
@@ -343,7 +383,7 @@ class VerifyAttempt:
     def _run_commands(self, req: VerifyAttemptRequest) -> VerifyResult:
         control_results: dict[str, ControlResult] = {}
         for ctrl in req.controls:
-            ctrl_run = self._run_single_control(ctrl, req)
+            ctrl_run = self._run_present_control(ctrl, req)
             control_results[ctrl.id] = ctrl_run.result
             if ctrl_run.tampered:
                 return self._fail(
@@ -396,6 +436,7 @@ class VerifyAttempt:
             scenario_results=failure.scenario_results,
             reverted_files=failure.reverted_files,
             error_path=relative_to_project(error_path, self.project_root),
+            failure=failure.failure,
         )
 
     def _tree(self, req: VerifyAttemptRequest) -> str:
@@ -497,6 +538,30 @@ class VerifyAttempt:
             return self._fail(req, _Failure("L0-supresiones", err))
 
         return VerifyResult(ok=True)
+
+    def _run_present_control(
+        self, ctrl: VerificationControlProtocol, req: VerifyAttemptRequest
+    ) -> _ControlRun:
+        """Skip a control whose path neither HEAD nor the candidate has; fail one removed."""
+        if ctrl.when_exists is None:
+            return self._run_single_control(ctrl, req)
+        in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
+        deleted = [
+            change.path
+            for change in self.vcs.changes(self._tree(req))
+            if change.mode == _DELETED_MODE
+        ]
+        status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
+        if status == "absent":
+            reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
+            return _ControlRun(ControlResult(ok=True, mode=ctrl.mode, skipped=reason))
+        if status == "removed":
+            reason = (
+                f"El intento elimina {ctrl.when_exists}, que existía: "
+                f"el control {ctrl.id} ya no puede ejecutarse"
+            )
+            return _ControlRun(ControlResult(ok=False, mode=ctrl.mode, error=reason))
+        return self._run_single_control(ctrl, req)
 
     def _run_single_control(
         self,
@@ -606,7 +671,9 @@ class VerifyAttempt:
 
         # Map test cases to scenario IDs
         try:
-            mapped = map_test_cases_to_scenarios(acc_res.test_cases, req.all_scenario_ids)
+            mapped = map_test_cases_to_scenarios(
+                acc_res.test_cases, req.all_scenario_ids, req.link, req.scenario_files
+            )
         except DriverError as exc:
             return self._fail(
                 req,
@@ -621,9 +688,11 @@ class VerifyAttempt:
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
 
+        current = mapped.get(_scenario_str(req.scenario_id))
         failure = acceptance_failure(_scenario_str(req.scenario_id), req.green_scenario_ids, mapped)
         if failure is not None:
             reason, relevant_cases = failure
+            failed = current is not None and current.status != "passed"
             return self._fail(
                 req,
                 _Failure(
@@ -634,6 +703,7 @@ class VerifyAttempt:
                     output=output,
                     control_results=control_results,
                     scenario_results=scenario_results,
+                    failure=(current.failure_kind, current.origin) if failed and current else None,
                 ),
             )
 

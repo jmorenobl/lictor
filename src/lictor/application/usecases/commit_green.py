@@ -1,6 +1,7 @@
 """CommitGreen use case for recording green scenarios to version control."""
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lictor.application.ports import Clock, EventLog, Vcs
@@ -16,6 +17,7 @@ class CommitGreenRequest:
     run_id: str
     attempt: int
     candidate: Candidate | None = None
+    collateral: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -54,20 +56,24 @@ class CommitGreen:
         if self.vcs.get_head_sha() != candidate.sha:
             self.vcs.advance_head(candidate.sha, expected=candidate.parent)
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.scenario.green.v1",
-            source="lictor/0.1.0",
-            time=self.clock.now_iso(),
-            runid=request.run_id,
-            scenarioid=sid_str,
-            data={
-                "commit": candidate.sha,
-                "tree": candidate.tree,
-                "attempt": request.attempt,
-                "attempts": request.attempt,
-            },
-        )
-        self.event_log.append(event)
+        attempts: dict[str, object] = {"attempt": request.attempt, "attempts": request.attempt}
+        self._green(request, candidate, sid_str, attempts)
+        for collateral in request.collateral:
+            self._green(request, candidate, collateral, {"attempt": 0, "collateral": True})
 
         return CommitGreenResult(commit_sha=candidate.sha)
+
+    def _green(
+        self, request: CommitGreenRequest, candidate: Candidate, sid: str, data: dict[str, object]
+    ) -> None:
+        self.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type="lictor.scenario.green.v1",
+                source="lictor/0.1.0",
+                time=self.clock.now_iso(),
+                runid=request.run_id,
+                scenarioid=sid,
+                data={"commit": candidate.sha, "tree": candidate.tree, **data},
+            )
+        )

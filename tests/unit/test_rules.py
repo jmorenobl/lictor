@@ -1,25 +1,38 @@
 """Unit tests for pure domain rules."""
 
+from typing import Literal
+
 import pytest
 
 from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
+    SUSPICIOUS_DRIVER,
+    RedOracle,
+    ScenarioClass,
     acceptance_failure,
     anchor_problems,
     banned_matches,
-    check_red_rule,
+    baseline_head_accepted,
+    classify_scenarios,
+    collateral_greens,
     condense_error,
+    control_path_status,
     count_agent_failures,
-    describe_red_violation,
     forbidden_paths,
+    impostor_problem,
+    impostor_source,
+    impostor_survivors,
     is_agent_unavailable,
+    judge_red,
     map_test_cases_to_scenarios,
-    red_rule_offenders,
+    red_failure_problem,
     render_full_error,
     run_outcome,
     suite_crash_reason,
+    suspicious_driver,
+    unmapped_cases,
 )
 
 
@@ -91,42 +104,6 @@ def test_map_test_cases_same_test_for_multiple_scenarios_raises_driver_error() -
 
     with pytest.raises(DriverError):
         map_test_cases_to_scenarios(test_cases, scenario_ids)
-
-
-def test_check_red_rule_all_valid() -> None:
-    scenario_results = {
-        "IVA-001": "passed",
-        "IVA-002": "failure",
-        "IVA-003": "error",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is True
-
-
-def test_check_red_rule_green_scenario_regression() -> None:
-    scenario_results = {
-        "IVA-001": "failure",
-        "IVA-002": "failure",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
-
-
-def test_check_red_rule_green_scenario_missing() -> None:
-    scenario_results = {
-        "IVA-002": "failure",
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
-
-
-def test_check_red_rule_pending_scenario_passed_fails_red() -> None:
-    scenario_results = {
-        "IVA-001": "passed",
-        "IVA-002": "passed",  # Pending scenario passed before implementation!
-    }
-    green_ids = ["IVA-001"]
-    assert check_red_rule(scenario_results, green_ids) is False
 
 
 def test_condense_error_exit_code_tail_lines() -> None:
@@ -387,66 +364,6 @@ def test_full_error_skips_cases_that_did_not_fail() -> None:
     full = render_full_error("x", "m", [TestCaseResult("test_ok", status="passed")])
     assert "test_ok" not in full
     assert "Salida:" not in full
-
-
-def test_red_rule_offender_is_the_pending_that_passed() -> None:
-    results = {"IVA-001": "failure", "IVA-002": "passed", "IVA-003": "error"}
-    assert red_rule_offenders(results, []) == ["IVA-002"]
-
-
-def test_red_rule_offender_is_the_green_that_failed() -> None:
-    results = {"IVA-001": "failure", "IVA-002": "failure"}
-    assert red_rule_offenders(results, ["IVA-001"]) == ["IVA-001"]
-
-
-def test_red_rule_offender_includes_a_green_without_result() -> None:
-    assert red_rule_offenders({}, ["IVA-001"]) == ["IVA-001"]
-
-
-def test_red_rule_offender_includes_a_skipped_pending() -> None:
-    assert red_rule_offenders({"IVA-001": "skipped"}, []) == ["IVA-001"]
-
-
-def test_red_rule_has_no_offenders_when_it_holds() -> None:
-    assert red_rule_offenders({"IVA-001": "passed", "IVA-002": "error"}, ["IVA-001"]) == []
-
-
-def test_red_rule_violation_names_only_the_offender() -> None:
-    bad = TestCaseResult("test_iva_003", status="passed")
-    mapped = {"IVA-001": TestCaseResult("test_iva_001", status="failure"), "IVA-003": bad}
-    reason, cases = describe_red_violation(mapped, [])
-    assert "test_iva_003" in reason
-    assert "IVA-003" in reason
-    assert "debía fallar" in reason
-    assert "test_iva_001" not in reason
-    assert cases == ()
-
-
-def test_red_rule_violation_lists_one_offender_per_line() -> None:
-    mapped = {
-        "IVA-001": TestCaseResult("test_iva_001", status="passed"),
-        "IVA-002": TestCaseResult("test_iva_002", status="skipped"),
-    }
-    reason, _ = describe_red_violation(mapped, [])
-    assert reason == (
-        "El test test_iva_001 del escenario IVA-001 debía fallar, pero su estado es passed\n"
-        "El test test_iva_002 del escenario IVA-002 debía fallar, pero su estado es skipped"
-    )
-
-
-def test_red_rule_violation_keeps_the_failure_of_a_green() -> None:
-    broken = TestCaseResult("test_iva_001", status="failure", message="m")
-    reason, cases = describe_red_violation({"IVA-001": broken}, ["IVA-001"])
-    assert "IVA-001" in reason
-    assert "verde" in reason
-    assert "test_iva_001" in reason
-    assert cases == (broken,)
-
-
-def test_red_rule_violation_with_a_green_without_test() -> None:
-    reason, cases = describe_red_violation({}, ["IVA-001"])
-    assert "IVA-001" in reason
-    assert cases == ()
 
 
 def test_acceptance_failure_is_none_when_current_and_greens_pass() -> None:
@@ -710,3 +627,489 @@ def test_anchor_before_sealing_ignores_the_seal() -> None:
 
 def test_anchor_of_a_run_that_recorded_nothing_has_no_problems() -> None:
     assert anchor_problems({}, _ANCHOR, set()) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "in_tree", "deleted", "expected"),
+    [
+        ("tests/unit", True, [], "present"),
+        ("tests/unit", True, ["tests/unit/test_a.py"], "present"),
+        ("tests/unit", False, [], "absent"),
+        ("tests/unit", False, ["tests/unit/test_a.py"], "removed"),
+        ("tests/unit/", False, ["tests/unit/test_a.py"], "removed"),
+        ("tests/unit", False, ["tests/unit"], "removed"),
+        ("tests/unit", False, ["tests/unittest/test_a.py", "src/tests/unit/x.py"], "absent"),
+    ],
+)
+def test_control_path_status_tells_absent_from_removed(
+    path: str, in_tree: bool, deleted: list[str], expected: str
+) -> None:
+    """Only a path the base never had lets a control be skipped; removing one fails it."""
+    assert control_path_status(path, in_tree=in_tree, deleted=deleted) == expected
+
+
+# --- Phase 5: the oracle and the cycle of scenarios ---
+
+IDS = ["IVA-001", "IVA-002"]
+FILES = dict.fromkeys(IDS, "features/iva.feature")
+Status = Literal["passed", "failure", "error", "skipped"]
+
+
+def _linked(name: str, sid: str = "", feature: str = "features/iva.feature") -> TestCaseResult:
+    props = {"lictor.scenario": sid, "lictor.feature": feature} if sid else {}
+    return TestCaseResult(name=name, properties=props)
+
+
+def test_map_by_scenario_follows_the_scenario_executed() -> None:
+    first, second = _linked("test_uno", "IVA-001"), _linked("test_dos", "IVA-002")
+
+    mapped = map_test_cases_to_scenarios([second, first], IDS, link="scenario", files=FILES)
+
+    assert mapped == {"IVA-001": first, "IVA-002": second}
+
+
+def test_map_by_scenario_ignores_tests_that_execute_no_scenario() -> None:
+    helper = _linked("test_ayuda")
+    first, second = _linked("test_iva_001", "IVA-001"), _linked("test_iva_002", "IVA-002")
+
+    mapped = map_test_cases_to_scenarios([helper, first, second], IDS, link="scenario", files=FILES)
+
+    assert unmapped_cases([helper, first, second], mapped) == [helper]
+
+
+def test_map_by_scenario_rejects_a_test_named_after_a_scenario_it_does_not_execute() -> None:
+    with pytest.raises(DriverError, match=r"test_iva_001 lleva el ID de IVA-001.*no ejecuta"):
+        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario", files=FILES)
+
+
+def test_map_by_scenario_rejects_a_name_that_contradicts_the_scenario() -> None:
+    cases = [_linked("test_iva_001", "IVA-002"), _linked("test_x", "IVA-001")]
+    with pytest.raises(DriverError, match="nombre, pero ejecuta el escenario IVA-002"):
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)
+
+
+def test_map_by_scenario_accepts_a_name_that_agrees() -> None:
+    cases = [_linked("test_iva_001", "IVA-001"), _linked("test_iva_002", "IVA-002")]
+    assert (
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)["IVA-001"] is cases[0]
+    )
+
+
+@pytest.mark.parametrize(
+    "feature",
+    ["", "features/copia.txt", "features/otra.feature", "otros/iva.feature", "features/iva"],
+)
+def test_map_by_scenario_requires_the_scenario_s_own_file(feature: str) -> None:
+    """Before the seal a driver may write another file with the same tag, `.feature` or not."""
+    cases = [_linked("test_a", "IVA-001", feature), _linked("test_b", "IVA-002")]
+    with pytest.raises(
+        DriverError, match=r"ejecuta IVA-001 desde .*no desde features/iva\.feature"
+    ):
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)
+
+
+def test_map_by_scenario_reads_each_scenario_from_its_own_file() -> None:
+    files = {"IVA-001": "features/a.feature", "IVA-002": "features/sub/b.feature"}
+    first = _linked("test_a", "IVA-001", "features/a.feature")
+    second = _linked("test_b", "IVA-002", "features/sub/b.feature")
+
+    assert map_test_cases_to_scenarios([first, second], IDS, link="scenario", files=files) == {
+        "IVA-001": first,
+        "IVA-002": second,
+    }
+    swapped = [_linked("test_a", "IVA-001", "features/sub/b.feature"), second]
+    with pytest.raises(DriverError, match=r"no desde features/a\.feature"):
+        map_test_cases_to_scenarios(swapped, IDS, link="scenario", files=files)
+
+
+@pytest.mark.parametrize("files", [None, {"IVA-002": "features/iva.feature"}])
+def test_map_by_scenario_links_no_scenario_whose_file_it_does_not_know(
+    files: dict[str, str] | None,
+) -> None:
+    cases = [_linked("test_a", "IVA-001"), _linked("test_b", "IVA-002")]
+    with pytest.raises(DriverError) as raised:
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=files)
+    assert str(raised.value) == (
+        "El test test_a ejecuta IVA-001 desde features/iva.feature, "
+        "no desde el fichero de su escenario"
+    )
+
+
+def test_map_by_name_ignores_the_files() -> None:
+    case = TestCaseResult(name="test_iva_001")
+    files = {"IVA-001": "features/otra.feature"}
+    assert map_test_cases_to_scenarios([case], ["IVA-001"], files=files) == {"IVA-001": case}
+
+
+def test_map_by_scenario_requires_one_test_per_scenario() -> None:
+    with pytest.raises(DriverError, match="Ningún test ejecuta el escenario 'IVA-002'"):
+        map_test_cases_to_scenarios(
+            [_linked("test_a", "IVA-001")], IDS, link="scenario", files=FILES
+        )
+    twice = [_linked("a", "IVA-001"), _linked("b", "IVA-001"), _linked("c", "IVA-002")]
+    with pytest.raises(DriverError, match=r"Múltiples casos de test ejecutan.*\['a', 'b'\]"):
+        map_test_cases_to_scenarios(twice, IDS, link="scenario", files=FILES)
+
+
+def test_map_by_scenario_rejects_a_test_that_executes_two_scenarios() -> None:
+    both = TestCaseResult(
+        name="t", properties={"lictor.scenario": "IVA-001 IVA-002", "lictor.feature": "features/f"}
+    )
+    with pytest.raises(DriverError, match="varios escenarios"):
+        map_test_cases_to_scenarios([both], IDS, link="scenario", files=FILES)
+
+
+def test_map_by_name_stays_the_default() -> None:
+    case = TestCaseResult(name="test_iva_001")
+    assert map_test_cases_to_scenarios([case], ["IVA-001"]) == {"IVA-001": case}
+
+
+def test_unmapped_cases_compares_identity_not_equality() -> None:
+    first, twin = TestCaseResult(name="t"), TestCaseResult(name="t")
+    assert unmapped_cases([first, twin], {"IVA-001": first}) == [twin]
+
+
+def test_classify_scenarios_by_their_recorded_hash() -> None:
+    current = {"A-1": "h1", "A-2": "h2", "A-3": "h3", "A-4": "h4"}
+    recorded: dict[str, str | None] = {"A-1": "h1", "A-2": "viejo", "A-4": None}
+
+    assert classify_scenarios(current, recorded) == {
+        "A-1": "green",
+        "A-2": "reopened",
+        "A-3": "new",
+        "A-4": "reopened",
+    }
+
+
+ORACLE = RedOracle(
+    red_kinds=("assertion", "not_implemented"), writable=("src/",), driver=("tests/acceptance/",)
+)
+
+
+def _failed(kind: str = "", origin: str = "") -> TestCaseResult:
+    props = {"lictor.failure": kind, "lictor.origin": origin} if kind or origin else {}
+    return TestCaseResult(name="test_iva_001", status="failure", properties=props)
+
+
+@pytest.mark.parametrize(
+    ("kind", "origin"),
+    [
+        ("assertion", "tests/acceptance/test_iva.py"),
+        ("assertion", ""),
+        ("not_implemented", "src/iva/__init__.py"),
+        ("not_implemented", "src"),
+    ],
+)
+def test_valid_red_kinds(kind: str, origin: str) -> None:
+    assert red_failure_problem(_failed(kind, origin), ORACLE) is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "origin", "expected"),
+    [
+        (
+            "error",
+            "tests/acceptance/test_iva.py",
+            "falla con error en tests/acceptance/test_iva.py",
+        ),
+        ("error", "", "falla con error"),
+        ("", "", "falla con un fallo sin clasificar"),
+        ("not_implemented", "tests/acceptance/test_iva.py", "desde tests/acceptance/test_iva.py"),
+        ("not_implemented", "", "desde fuera del proyecto, no desde la interfaz en src/"),
+        ("not_implemented", "srcx/iva.py", "desde srcx/iva.py"),
+    ],
+)
+def test_invalid_red_kinds(kind: str, origin: str, expected: str) -> None:
+    problem = red_failure_problem(_failed(kind, origin), ORACLE)
+    assert problem is not None
+    assert expected in problem
+
+
+def test_not_implemented_inside_a_driver_nested_in_writable_is_invalid() -> None:
+    oracle = RedOracle(("not_implemented",), writable=("tests/",), driver=("tests/acceptance/",))
+    assert red_failure_problem(_failed("not_implemented", "tests/acceptance/x.py"), oracle)
+
+
+def test_without_red_kinds_any_failure_is_a_red() -> None:
+    assert red_failure_problem(_failed("error", "tests/acceptance/x.py"), RedOracle()) is None
+
+
+def _case(status: Status, kind: str = "assertion") -> TestCaseResult:
+    props = {"lictor.failure": kind} if status != "passed" else {}
+    return TestCaseResult(name=f"t_{status}", status=status, properties=props)
+
+
+def test_judge_red_keeps_greens_passing_and_pendings_failing() -> None:
+    mapped = {"G": _case("passed"), "N": _case("failure"), "R": _case("error", "not_implemented")}
+    classes: dict[str, ScenarioClass] = {"G": "green", "N": "new", "R": "reopened"}
+
+    verdict = judge_red(mapped, classes, RedOracle(), driver_fresh=True)
+
+    assert verdict.ok
+    assert verdict.pending == ("N", "R")
+    assert (verdict.register, verdict.unproven, verdict.cases) == ((), (), ())
+    assert verdict.respecified == ()
+
+
+def test_judge_red_reports_a_broken_green_with_its_case() -> None:
+    broken = _case("failure")
+    verdict = judge_red({"G": broken}, {"G": "green"}, RedOracle(), driver_fresh=False)
+
+    assert not verdict.ok
+    assert verdict.problems == ("El escenario G estaba en verde y ahora no pasa: t_failure",)
+    assert verdict.cases == (broken,)
+
+
+def test_judge_red_reports_a_scenario_without_result() -> None:
+    verdict = judge_red({}, {"N": "new"}, RedOracle(), driver_fresh=True)
+    assert verdict.problems == ("El escenario N no tiene resultado",)
+
+
+def test_judge_red_registers_a_reopened_scenario_a_sealed_driver_passes() -> None:
+    verdict = judge_red({"R": _case("passed")}, {"R": "reopened"}, ORACLE, driver_fresh=False)
+    assert (verdict.ok, verdict.register, verdict.pending) == (True, ("R",), ())
+    assert (verdict.unproven, verdict.respecified) == ((), ())
+
+
+def test_judge_red_leaves_a_reopened_scenario_that_passes_a_fresh_driver_to_a_person() -> None:
+    """The step may still hold the old value: nothing tells it from a test that doesn't check."""
+    verdict = judge_red({"R": _case("passed")}, {"R": "reopened"}, ORACLE, driver_fresh=True)
+    assert (verdict.ok, verdict.respecified) == (True, ("R",))
+    assert (verdict.register, verdict.unproven, verdict.pending) == ((), (), ())
+
+
+def test_judge_red_registers_a_new_scenario_a_sealed_driver_already_proved() -> None:
+    verdict = judge_red({"N": _case("passed")}, {"N": "new"}, ORACLE, driver_fresh=False)
+    assert (verdict.ok, verdict.register, verdict.unproven) == (True, ("N",), ())
+
+
+def test_judge_red_cannot_prove_a_new_scenario_that_passes_with_a_fresh_driver() -> None:
+    verdict = judge_red({"N": _case("passed")}, {"N": "new"}, ORACLE, driver_fresh=True)
+    assert (verdict.ok, verdict.register, verdict.unproven) == (True, (), ("N",))
+    assert verdict.respecified == ()
+
+
+@pytest.mark.parametrize("status", ["passed", "failure", "error", "skipped"])
+@pytest.mark.parametrize("cls", ["green", "new", "reopened"])
+def test_judge_red_never_registers_with_a_fresh_driver(status: Status, cls: ScenarioClass) -> None:
+    """Only a sealed driver has proved its tests: nothing is green without the agent before."""
+    verdict = judge_red({"S": _case(status)}, {"S": cls}, ORACLE, driver_fresh=True)
+    assert verdict.register == ()
+
+
+def test_judge_red_rejects_a_skipped_pending_test() -> None:
+    verdict = judge_red({"N": _case("skipped")}, {"N": "new"}, ORACLE, driver_fresh=True)
+    assert verdict.problems == (
+        "El test t_skipped del escenario N debía fallar, pero su estado es skipped",
+    )
+
+
+@pytest.mark.parametrize("cls", ["new", "reopened"])
+def test_judge_red_rejects_a_pending_that_fails_with_an_error(cls: ScenarioClass) -> None:
+    bad = _case("failure", "error")
+    verdict = judge_red({"N": bad}, {"N": cls}, ORACLE, driver_fresh=True)
+    assert verdict.problems == (
+        "El test t_failure del escenario N no falla por un rojo válido: falla con error",
+    )
+    assert verdict.cases == (bad,)
+    assert verdict.pending == ()
+
+
+def test_impostor_source_replaces_whole_matching_lines_only() -> None:
+    pattern = r"^(\s*)raise NotImplementedError\b.*$"
+    text = (
+        "def f():\n    raise NotImplementedError\n"
+        "def g():\n\traise NotImplementedError('x')\r\n"
+        "    # raise NotImplementedError\n"
+        "    raise NotImplementedErrorX\n"
+        "raise NotImplementedError"
+    )
+
+    result, count = impostor_source(text, pattern, r"\1return None")
+
+    assert count == 3
+    assert result == (
+        "def f():\n    return None\n"
+        "def g():\n\treturn None\r\n"
+        "    # raise NotImplementedError\n"
+        "    raise NotImplementedErrorX\n"
+        "return None"
+    )
+
+
+def test_impostor_source_without_matches_leaves_the_text() -> None:
+    assert impostor_source("x = 1\n", r"^raise\b.*$", "return None") == ("x = 1\n", 0)
+
+
+def test_impostor_problem_needs_a_run_that_maps_and_lost_every_stub() -> None:
+    stub = TestCaseResult(
+        name="t1", status="failure", properties={"lictor.failure": "not_implemented"}
+    )
+    fine = TestCaseResult(name="t2", status="failure", properties={"lictor.failure": "assertion"})
+
+    assert impostor_problem("caída", None, [fine]) == "caída"
+    assert impostor_problem(None, "sin mapeo", [fine]) == "sin mapeo"
+    problem = impostor_problem(None, None, [fine, stub])
+    assert problem is not None
+    assert problem.startswith("t1 siguen lanzando NotImplementedError")
+    assert "una sola línea" in problem
+    assert impostor_problem(None, None, [fine, TestCaseResult(name="t3")]) is None
+
+
+def test_impostor_survivors_passed_every_impostor() -> None:
+    runs = [{"A": "passed", "B": "passed", "C": "failure"}, {"A": "passed", "B": "error"}]
+    assert impostor_survivors(["A", "B", "C"], runs) == ["A"]
+    assert impostor_survivors(["A"], []) == ["A"]
+
+
+def test_collateral_greens_are_other_pendings_that_pass() -> None:
+    results = {"A": "passed", "B": "passed", "C": "failure", "D": "passed"}
+    assert collateral_greens(results, ["A", "B", "C", "E"], "A") == ["B"]
+
+
+@pytest.mark.parametrize(
+    ("failures", "expected"),
+    [
+        ([("error", "tests/acceptance/test_iva.py")] * 3, True),
+        ([("error", "tests/acceptance/x.py"), ("error", "src/iva.py")], False),
+        ([("error", "tests/acceptance/x.py"), ("assertion", "tests/acceptance/x.py")], False),
+        ([("error", "tests/acceptance/x.py"), None], False),
+        ([("error", "")], False),
+        ([], False),
+    ],
+)
+def test_suspicious_driver_needs_every_attempt_to_fail_inside_it(
+    failures: list[tuple[str, str] | None], expected: bool
+) -> None:
+    assert suspicious_driver(failures, ["tests/acceptance/"]) is expected
+
+
+def test_run_outcome_names_a_suspicious_driver_without_claiming_it() -> None:
+    code, reason = run_outcome(
+        {"IVA-001": "quarantined", "IVA-002": "quarantined"},
+        {"IVA-001": SUSPICIOUS_DRIVER, "IVA-002": "intentos agotados"},
+    )
+
+    assert code == ExitCode.QUARANTINED
+    assert "Escenarios en cuarentena: IVA-001, IVA-002." in reason
+    assert "Posible driver defectuoso en IVA-001:" in reason
+    assert "IVA-002:" not in reason
+
+
+def test_run_outcome_without_suspicion_says_nothing_of_the_driver() -> None:
+    _, reason = run_outcome({"IVA-001": "quarantined"}, {"IVA-001": "intentos agotados"})
+    assert "driver" not in reason
+
+
+def _baseline(
+    *, pending_node: str | None = "red_check", head_parent: str = "ancla", head_tree: str = "arbol"
+) -> bool:
+    return baseline_head_accepted(
+        pending_node=pending_node,
+        head_parent=head_parent,
+        head_tree=head_tree,
+        anchored_head="ancla",
+        anchored_tree="arbol",
+    )
+
+
+def test_baseline_head_is_accepted_on_top_of_the_anchor_during_red_check() -> None:
+    assert _baseline() is True
+
+
+def test_baseline_head_is_refused_otherwise() -> None:
+    assert _baseline(pending_node="implement") is False
+    assert _baseline(pending_node=None) is False
+    assert _baseline(head_parent="otro") is False
+    assert _baseline(head_tree="x") is False
+
+
+def test_judge_red_lists_each_offender_once_in_the_order_of_the_scenarios() -> None:
+    mapped = {"A": _case("failure"), "B": _case("passed"), "C": _case("skipped")}
+    classes: dict[str, ScenarioClass] = {"C": "new", "A": "green", "B": "green"}
+
+    verdict = judge_red(mapped, classes, RedOracle(), driver_fresh=True)
+
+    assert [problem.split()[2] for problem in verdict.problems] == ["t_skipped", "A"]
+    assert verdict.cases == (mapped["A"],)
+
+
+def test_map_by_scenario_says_exactly_what_is_missing() -> None:
+    with pytest.raises(DriverError) as unlinked:
+        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario", files=FILES)
+    assert str(unlinked.value) == (
+        "El test test_iva_001 lleva el ID de IVA-001 en el nombre, pero no ejecuta "
+        "ningún escenario del Gherkin: enlázalo con su escenario"
+    )
+    with pytest.raises(DriverError) as missing:
+        map_test_cases_to_scenarios([_linked("a", "IVA-001")], IDS, link="scenario", files=FILES)
+    assert str(missing.value) == (
+        "Ningún test ejecuta el escenario 'IVA-002': cada escenario necesita un test "
+        "enlazado con su escenario del Gherkin"
+    )
+    with pytest.raises(DriverError) as outside:
+        map_test_cases_to_scenarios(
+            [_linked("a", "IVA-001", ""), _linked("b", "IVA-002")],
+            IDS,
+            link="scenario",
+            files=FILES,
+        )
+    assert str(outside.value) == (
+        "El test a ejecuta IVA-001 desde un fichero fuera del proyecto, "
+        "no desde features/iva.feature"
+    )
+
+
+def test_map_by_scenario_tells_ids_apart_by_their_letters() -> None:
+    """`test_abc_001` carries no ID of these scenarios, whatever its digits."""
+    other = _linked("test_abc_001", "IVA-002")
+    first = _linked("test_iva_001", "IVA-001")
+    assert (
+        map_test_cases_to_scenarios([first, other], IDS, link="scenario", files=FILES)["IVA-002"]
+        is other
+    )
+
+
+def test_under_keeps_every_character_of_the_root_but_its_slashes() -> None:
+    oracle = RedOracle(("not_implemented",), writable=("srcX/",), driver=("tests/X",))
+    assert red_failure_problem(_failed("not_implemented", "srcX/iva.py"), oracle) is None
+    assert red_failure_problem(_failed("not_implemented", "src/iva.py"), oracle) is not None
+    assert control_path_status("unitX/", in_tree=False, deleted=["unitX/a.py"]) == "removed"
+    assert control_path_status("Xunit", in_tree=False, deleted=["Xunit/a.py"]) == "removed"
+
+
+def test_invalid_red_names_every_writable_root() -> None:
+    oracle = RedOracle(("not_implemented",), writable=("src/", "lib/"), driver=("tests/",))
+    assert red_failure_problem(_failed("not_implemented", "tests/x.py"), oracle) == (
+        "lanza NotImplementedError desde tests/x.py, no desde la interfaz en src/, lib/"
+    )
+
+
+def test_impostor_source_drops_the_trailing_spaces_of_the_line_it_replaces() -> None:
+    result, count = impostor_source(
+        "    raise NotImplementedError  \n", r"^(\s*)raise\b.*$", r"\1x"
+    )
+    assert (result, count) == ("    x\n", 1)
+
+
+def test_impostor_problem_says_exactly_how_to_write_a_stub() -> None:
+    def stub(name: str) -> TestCaseResult:
+        return TestCaseResult(
+            name=name, status="failure", properties={"lictor.failure": "not_implemented"}
+        )
+
+    assert impostor_problem(None, None, [stub("t1"), stub("t2")]) == (
+        "t1, t2 siguen lanzando NotImplementedError: escribe cada "
+        "`raise NotImplementedError` en una sola línea"
+    )
+
+
+def test_run_outcome_suspicion_message_is_exact() -> None:
+    _, reason = run_outcome(
+        {"A-1": "quarantined", "A-2": "quarantined"},
+        {"A-1": SUSPICIOUS_DRIVER, "A-2": SUSPICIOUS_DRIVER},
+    )
+    assert reason == (
+        "Escenarios en cuarentena: A-1, A-2. Posible driver defectuoso en A-1, A-2: sus tests "
+        "fallaron por un error del propio driver en cada intento. Detalle en .lictor/report.md"
+    )

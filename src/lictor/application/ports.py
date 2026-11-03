@@ -92,9 +92,15 @@ class Vcs(Protocol):
         self,
         tree: str,
         message: str,
-        trailers: dict[str, str] | None = None,
+        trailers: Mapping[str, str | Sequence[str]] | None = None,
+        *,
+        parent: str | None = None,
+        empty: bool = False,
     ) -> Candidate:
-        """Build a commit of `tree` on top of HEAD, leaving the branch alone."""
+        """Build a commit of `tree` on `parent`, or HEAD, leaving the branch alone.
+
+        A commit that changes nothing over its parent is refused unless `empty` says it registers.
+        """
         ...
 
     def export_tree(self, rev: str, dest: Path) -> None:
@@ -127,6 +133,22 @@ class Vcs(Protocol):
 
     def get_trailers(self, key: str, commit_ref: str | None = None) -> list[str]:
         """Get trailer values for the given key from git log, optionally limited to a commit."""
+        ...
+
+    def trailer_commits(self, key: str) -> list[tuple[str, list[str]]]:
+        """Return each commit with trailer `key`, newest first, with all its values."""
+        ...
+
+    def list_files(self, rev: str, directory: str) -> list[str]:
+        """Return the paths of the files under `directory` in the tree of `rev`."""
+        ...
+
+    def read_file(self, rev: str, path: str) -> str:
+        """Return the content of a file in the tree of `rev`."""
+        ...
+
+    def parent_of(self, rev: str) -> str:
+        """Return the first parent of a commit, or "" for a root commit."""
         ...
 
     def get_head_sha(self) -> str:
@@ -174,6 +196,10 @@ class SpecSource(Protocol):
 
     def load(self, features_dir: Path) -> list[Scenario]:
         """Load and validate all scenarios from the given directory."""
+        ...
+
+    def spec_hashes(self, text: str) -> dict[str, str]:
+        """Hash each tagged scenario of a feature's text; what can't be read is left out."""
         ...
 
     def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:

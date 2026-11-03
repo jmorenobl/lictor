@@ -30,6 +30,7 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_project import CheckProject
 from lictor.application.usecases.check_red import CheckRed
@@ -41,6 +42,7 @@ from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import ConfigError
+from lictor.domain.rules import RedOracle
 from lictor.orchestration.graph import GraphContext
 
 
@@ -141,11 +143,12 @@ def bootstrap_runtime(
     )
 
     acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
+    spec_history = SpecHistory(vcs, spec_source)
     check_red_uc = CheckRed(
         environment=environment,
         reader=acceptance_reader,
         vcs=vcs,
-        spec_source=spec_source,
+        history=spec_history,
         audit=audit_sink,
     )
 
@@ -203,6 +206,7 @@ def bootstrap_runtime(
         commit_green=commit_green_uc,
         quarantine=quarantine_uc,
         spec_source=spec_source,
+        spec_history=spec_history,
         vcs=vcs,
         executor=executor,
         event_log=active_event_log,
@@ -212,6 +216,13 @@ def bootstrap_runtime(
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
         forbidden_paths=defences.forbidden_paths,
         banned_patterns=defences.banned_patterns,
+        oracle=RedOracle(
+            red_kinds=defences.red_kinds,
+            writable=active_config.paths.writable,
+            driver=active_config.paths.driver,
+        ),
+        map_link=defences.map_link,
+        impostors=defences.impostors,
     )
 
     return BootstrapResult(

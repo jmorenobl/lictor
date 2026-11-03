@@ -12,12 +12,12 @@
     "run": "uv run pytest tests/acceptance -q --junitxml {out}",
     "report": "junit",
     "failure_exit_codes": [1],
-    "driver_hints": "Usa pytest-bdd. Escribe los tests y todas las definiciones de pasos (@given, @when, @then) juntos en tests/acceptance/test_<nombre>.py (o en tests/acceptance/conftest.py) para que pytest los encuentre. Un test por escenario, enlazado con @scenario('../../features/<archivo>.feature', '<nombre>') y llamado test_<id> (por ejemplo test_iva_001). Los pasos @given que devuelvan una entidad deben usar target_fixture='<nombre_fixture>'. Los pasos deben llamar a la interfaz pública en src/ para que fallen por NotImplementedError al ejecutarse con pytest. Crea en src/ la interfaz pública mínima requerida por los pasos, con funciones que lancen NotImplementedError y código limpio que pase lint (por ejemplo, en clases con docstring no agregues 'pass' innecesario)."
+    "driver_hints": "Usa pytest-bdd. Escribe los tests y todas las definiciones de pasos (@given, @when, @then) juntos en tests/acceptance/test_<nombre>.py (o en tests/acceptance/conftest.py) para que pytest los encuentre. Un test por escenario, enlazado con @scenario('../../features/<archivo>.feature', '<nombre>') y llamado test_<id> (por ejemplo test_iva_001). Los pasos @given que devuelvan una entidad deben usar target_fixture='<nombre_fixture>'. Los pasos deben llamar a la interfaz pública en src/ para que fallen por NotImplementedError al ejecutarse con pytest. Crea en src/ la interfaz pública mínima requerida por los pasos, con funciones que lancen NotImplementedError y código limpio que pase lint (por ejemplo, en clases con docstring no agregues 'pass' innecesario). Escribe cada `raise NotImplementedError` en una sola línea. Los pasos leen los valores del Gherkin con parsers y los pasos Entonces comprueban el resultado con assert: cada test tiene que fallar porque la interfaz lanza NotImplementedError o por una aserción, nunca por un error del propio test. No escribas tests que no sean de ningún escenario."
   },
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
+    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true, "when_exists": "tests/unit"}
   ],
   "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
   "banned_patterns": [
@@ -57,7 +57,7 @@
       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
     },
     "plugin_variable": "PYTEST_PLUGINS",
-    "plugins": ["lictor_project_path"],
+    "plugins": ["lictor_project_path", "lictor_outcome"],
     "plugins_command": "{env_dir}/bin/python -I -B -c 'from importlib.metadata import entry_points; print(*(e.value for e in entry_points(group=\"pytest11\")), sep=\"\\n\")'",
     "inherit": ["PATH", "TMPDIR"],
     "reserved": [
@@ -65,7 +65,15 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py"]
+  },
+  "oracle": {
+    "link": "scenario",
+    "red_kinds": ["assertion", "not_implemented"],
+    "impostors": {
+      "pattern": "^(\\s*)raise NotImplementedError\\b.*$",
+      "replacements": ["\\1return None", "\\1return True"]
+    }
   },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],

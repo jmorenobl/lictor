@@ -69,7 +69,7 @@ def _check_private(root: Path) -> None:
     try:
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as err:
-        _refuse(root, _why_unopenable(root, err))
+        _why_unopenable(root, err)
     try:
         info = os.fstat(fd)
         mode = stat.S_IMODE(info.st_mode)
@@ -83,14 +83,19 @@ def _check_private(root: Path) -> None:
         os.close(fd)
 
 
-def _why_unopenable(root: Path, err: OSError) -> str:
+def _why_unopenable(root: Path, err: OSError) -> NoReturn:
     with contextlib.suppress(OSError):
         mode = os.lstat(root).st_mode
         if stat.S_ISLNK(mode):
-            return "es un enlace simbólico"
+            _refuse(root, "es un enlace simbólico")
         if not stat.S_ISDIR(mode):
-            return "no es un directorio"
-    return f"no se puede abrir ({err.strerror})"
+            _refuse(root, "no es un directorio")
+    # A directory of one's own without permissions: nobody else is involved, only its owner.
+    raise EnvironmentUnavailableError(
+        f"el directorio temporal {root} no se puede abrir ({err.strerror}), así que Lictor no "
+        "puede comprobar quién más lo usa. Si es tuyo, devuélvele los permisos con `chmod 700` "
+        "o bórralo, y vuelve a lanzar; si no, apunta TMPDIR a un directorio solo tuyo."
+    )
 
 
 def _refuse(root: Path, problem: str) -> NoReturn:

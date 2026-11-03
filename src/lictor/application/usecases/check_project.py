@@ -1,5 +1,6 @@
 """CheckProject use case for verifying project controls and acceptance."""
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -26,6 +27,7 @@ class CheckControlSpec:
     mode: str = "block"
     allow_empty: bool = False
     timeout_s: int = 600
+    when_exists: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,11 @@ class CheckProject:
 
         control_results: dict[str, ControlResult] = {}
         for ctrl in filtered_controls:
+            # The working tree has no base to compare with: a missing path is simply missing.
+            if ctrl.when_exists and not os.path.lexists(req.project_root / ctrl.when_exists):
+                reason = f"No existe {ctrl.when_exists} en el árbol de trabajo"
+                control_results[ctrl.id] = ControlResult(ok=True, mode=ctrl.mode, skipped=reason)
+                continue
             c_res = self._run_command(
                 _RunStepParams(
                     project_root=req.project_root,

@@ -4,7 +4,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
@@ -16,6 +16,7 @@ from langgraph.types import interrupt
 
 from lictor.application.anchor import observe_anchor
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
@@ -24,7 +25,11 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
 )
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
-from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
+from lictor.application.usecases.quarantine import (
+    Quarantine,
+    QuarantineReason,
+    QuarantineRequest,
+)
 from lictor.application.usecases.verify_attempt import (
     VerifyAttempt,
     VerifyAttemptRequest,
@@ -46,7 +51,7 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
-from lictor.domain.rules import run_outcome
+from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome, suspicious_driver
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -108,6 +113,8 @@ class GraphState(TypedDict, total=False):
     spec_conflict: str | None
     seal_ok: bool
     resume_to: str | None
+    reopened: list[str]
+    failures: list[list[str] | None]
 
 
 @dataclass(frozen=True)
@@ -140,6 +147,7 @@ class GraphContext:
     commit_green: CommitGreen
     quarantine: Quarantine
     spec_source: SpecSource
+    spec_history: SpecHistory
     vcs: Vcs
     executor: Executor
     event_log: EventLog
@@ -149,12 +157,20 @@ class GraphContext:
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
+    oracle: RedOracle = field(default_factory=RedOracle)
+    map_link: MapLink = "name"
+    impostors: Impostors | None = None
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
 # checkpoint while the agent runs: a kill loses it, and `IntegritySnapshot` sees it as tampering.
 DURABILITY: Literal["sync"] = "sync"
 
+_SUSPICIOUS_DRIVER = (
+    "Posible driver defectuoso, no seguro: en cada intento el test de {sid} falló con un error "
+    "lanzado desde el propio driver ({origin}), no desde la implementación. Revisa el driver; "
+    "al cambiarlo y confirmarlo, la siguiente ejecución lo reconstruye y lo vuelve a validar."
+)
 _PAUSE_REASONS = {"rate_limited": "rate_limited", "blocked": "branch_blocked"}
 
 
@@ -242,6 +258,11 @@ class _GraphNodes:
             return {**self._finish(state, int(ExitCode.PRECONDITION), reason), "seal_ok": False}
 
         seal_ok = self.ctx.spec_source.verify_seal(self.ctx.project_root, self.ctx.paths_driver)
+        records = self.ctx.spec_history.records()
+        classes = self.ctx.spec_history.classify({s.id.value: s.spec_hash for s in scenarios})
+        reopened = [sid for sid, cls in classes.items() if cls == "reopened"]
+        for sid in reopened:
+            self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
 
         event = Event(
             id=uuid.uuid4().hex,
@@ -261,12 +282,35 @@ class _GraphNodes:
 
         return {
             "scenarios": [
-                {"id": s.id.value, "name": s.name, "file": s.file, "line": s.line}
+                {
+                    "id": s.id.value,
+                    "name": s.name,
+                    "file": s.file,
+                    "line": s.line,
+                    "spec_hash": s.spec_hash,
+                }
                 for s in scenarios
             ],
+            "status": {
+                sid: "green" if cls == "green" else "pending" for sid, cls in classes.items()
+            },
+            "reopened": reopened,
             "seal_ok": seal_ok,
             "driver_fresh": not seal_ok,
         }
+
+    def _scenario_event(self, state: GraphState, kind: str, sid: str, commit: str) -> None:
+        self.ctx.event_log.append(
+            Event(
+                id=uuid.uuid4().hex,
+                type=kind,
+                source="lictor/0.1.0",
+                time=self.ctx.clock.now_iso(),
+                runid=state["run_id"],
+                scenarioid=sid,
+                data={"commit": commit},
+            )
+        )
 
     def build_driver(self, state: GraphState) -> dict[str, Any]:
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
@@ -284,6 +328,7 @@ class _GraphNodes:
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
                 green_ids=green_ids,
+                reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
                 agent_failures=state.get("agent_failures", 0),
@@ -337,6 +382,13 @@ class _GraphNodes:
                     error_max_chars=self.ctx.error_max_chars,
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                     tree=state.get("attempt_tree"),
+                    scenario_hashes={
+                        s["id"]: s.get("spec_hash", "") for s in state.get("scenarios", [])
+                    },
+                    scenario_files=_scenario_files(state),
+                    oracle=self.ctx.oracle,
+                    link=self.ctx.map_link,
+                    impostors=self.ctx.impostors,
                 )
             )
         except DriverError as exc:
@@ -370,6 +422,7 @@ class _GraphNodes:
                 return {
                     "current": sid,
                     "attempt": 0,
+                    "failures": [],
                     "last_error": None,
                     "last_failed_at": None,
                     "last_agent_status": None,
@@ -489,6 +542,7 @@ class _GraphNodes:
             "last_verify": {"ok": False, "failed_at": failed_at, "condensed_error": error},
             "last_error": error,
             "last_failed_at": failed_at,
+            "failures": [*state.get("failures", []), None],
         }
 
     def verify(self, state: GraphState) -> dict[str, Any]:
@@ -496,8 +550,10 @@ class _GraphNodes:
         if not current_id:
             return {}
 
-        green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
+        status = state.get("status", {})
+        green_ids = [sid for sid, st in status.items() if st == "green"]
         all_sids = [s["id"] for s in state.get("scenarios", [])]
+        pending_ids = [sid for sid in all_sids if status.get(sid, "pending") == "pending"]
 
         res = self.ctx.verify_attempt.execute(
             VerifyAttemptRequest(
@@ -512,13 +568,16 @@ class _GraphNodes:
                 acceptance_report=self.ctx.acceptance_report,
                 acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                 green_scenario_ids=green_ids,
+                pending_scenario_ids=pending_ids,
                 all_scenario_ids=all_sids,
+                scenario_files=_scenario_files(state),
                 error_max_chars=self.ctx.error_max_chars,
                 attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
                 acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
                 forbidden_paths=self.ctx.forbidden_paths,
                 banned_patterns=self.ctx.banned_patterns,
                 tree=state.get("attempt_tree"),
+                link=self.ctx.map_link,
             )
         )
 
@@ -543,6 +602,7 @@ class _GraphNodes:
                 "evidence": res.evidence,
                 "candidate": res.candidate.sha if res.candidate else None,
                 "tree": res.candidate.tree if res.candidate else None,
+                "collateral": list(res.collateral),
             },
         )
         self.ctx.event_log.append(event)
@@ -552,9 +612,11 @@ class _GraphNodes:
                 "failed_at": res.failed_at,
                 "condensed_error": res.condensed_error,
                 "candidate": asdict(res.candidate) if res.candidate else None,
+                "collateral": list(res.collateral),
             },
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
+            "failures": [*state.get("failures", []), list(res.failure) if res.failure else None],
             "totals": {
                 "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
                 "cost_usd": 0.0,
@@ -568,7 +630,9 @@ class _GraphNodes:
         if not current_id:
             return {}
 
-        verified = (state.get("last_verify") or {}).get("candidate")
+        last_verify = state.get("last_verify") or {}
+        verified = last_verify.get("candidate")
+        collateral = list(last_verify.get("collateral") or [])
         try:
             self.ctx.commit_green.execute(
                 CommitGreenRequest(
@@ -576,11 +640,13 @@ class _GraphNodes:
                     run_id=state["run_id"],
                     attempt=state.get("attempt", 1),
                     candidate=Candidate(**verified) if verified else None,
+                    collateral=collateral,
                 )
             )
         except CandidateError as exc:
             return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "commit"}
-        return {"status": {current_id: "green"}, "agent_signal": None, "anchor": self._anchor()}
+        greens = dict.fromkeys([current_id, *collateral], "green")
+        return {"status": greens, "agent_signal": None, "anchor": self._anchor()}
 
     def quarantine(self, state: GraphState) -> dict[str, Any]:
         current_id = state.get("current")
@@ -588,10 +654,15 @@ class _GraphNodes:
             return {}
 
         conflict = state.get("agent_signal") == "spec_conflict"
-        reason: Literal["intentos agotados", "spec_conflict"] = (
-            "spec_conflict" if conflict else "intentos agotados"
-        )
-        details = (state.get("spec_conflict") if conflict else state.get("last_error")) or ""
+        failures = [(f[0], f[1]) if f else None for f in state.get("failures", [])]
+        reason: QuarantineReason = "intentos agotados"
+        details = state.get("last_error") or ""
+        if conflict:
+            reason, details = "spec_conflict", state.get("spec_conflict") or ""
+        elif suspicious_driver(failures, self.ctx.paths_driver):
+            reason = "driver_sospechoso"
+            origin = next(f[1] for f in reversed(failures) if f is not None)
+            details = f"{_SUSPICIOUS_DRIVER.format(sid=current_id, origin=origin)}\n{details}"
 
         self.ctx.quarantine.execute(
             QuarantineRequest(
@@ -622,6 +693,11 @@ class _GraphNodes:
         if exit_val is not None:
             return self._finish(state, exit_val, state.get("exit_reason", ""))
         return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
+
+
+def _scenario_files(state: GraphState) -> dict[str, str]:
+    """Each scenario's feature file: the one its test must execute it from."""
+    return {s["id"]: s["file"] for s in state.get("scenarios", [])}
 
 
 def get_sqlite_saver(db_path: Path) -> SqliteSaver:

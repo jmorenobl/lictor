@@ -1,7 +1,9 @@
 """Gherkin specification source adapter and seal management."""
 
+import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,72 @@ from lictor.domain.model import Scenario, ScenarioId
 ALL_OUTLINE_KEYWORDS: frozenset[str] = frozenset(
     kw.strip().lower() for dialect in DIALECTS.values() for kw in dialect.get("scenarioOutline", [])
 )
+
+
+Steps = Sequence[Mapping[str, Any]]
+
+
+def _canonical_steps(steps: Steps) -> list[dict[str, Any]]:
+    """Keep what a step demands: its kind, text, doc string and table, not its keyword's words."""
+    canonical: list[dict[str, Any]] = []
+    previous = "Unknown"
+    for step in steps:
+        kind = str(step.get("keywordType", "Unknown"))
+        if kind == "Conjunction":
+            kind = previous
+        previous = kind
+        rows = step.get("dataTable", {}).get("rows", [])
+        canonical.append(
+            {
+                "kind": kind,
+                "text": str(step.get("text", "")).strip(),
+                "doc": step.get("docString", {}).get("content"),
+                "table": [[str(cell.get("value", "")) for cell in row["cells"]] for row in rows],
+            }
+        )
+    return canonical
+
+
+def _cells(row: Mapping[str, Any] | None) -> list[str]:
+    return [str(cell.get("value", "")) for cell in (row or {}).get("cells", [])]
+
+
+def spec_hash(backgrounds: Sequence[Steps], scenario: Mapping[str, Any]) -> str:
+    """Hash what a scenario demands: names, tags, comments and spacing don't count.
+
+    The form is Lictor's own, not a dump of the AST, so a new version of the parser reopens nothing.
+    """
+    payload = {
+        "background": [_canonical_steps(steps) for steps in backgrounds],
+        "steps": _canonical_steps(scenario.get("steps", [])),
+        "examples": [
+            {"header": _cells(ex.get("tableHeader")), "rows": [_cells(r) for r in ex["tableBody"]]}
+            for ex in scenario.get("examples", [])
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(encoded.encode()).hexdigest()}"
+
+
+def _background_steps(children: Sequence[Mapping[str, Any]]) -> list[Steps]:
+    return [child["background"].get("steps", []) for child in children if "background" in child]
+
+
+def _scenarios(
+    feature: Mapping[str, Any],
+) -> Iterator[tuple[list[Steps], Mapping[str, Any] | None, Mapping[str, Any]]]:
+    """Yield each scenario with the backgrounds that apply to it and its rule, if any."""
+    children = feature.get("children", [])
+    outer = _background_steps(children)
+    for child in children:
+        rule = child.get("rule")
+        if isinstance(rule, Mapping):
+            inner = outer + _background_steps(rule.get("children", []))
+            for rule_child in rule.get("children", []):
+                if rule_child.get("scenario"):
+                    yield inner, rule, rule_child
+        elif child.get("scenario"):
+            yield outer, None, child
 
 
 class GherkinSource(SpecSource):
@@ -37,6 +105,24 @@ class GherkinSource(SpecSource):
             self._load_file(feature_path, parser, seen_ids, scenarios, root)
 
         return scenarios
+
+    def spec_hashes(self, text: str) -> dict[str, str]:
+        """Hash the scenarios of an old tree's feature, skipping what `load` would reject."""
+        try:
+            feature = Parser().parse(text).get("feature") or {}
+        except ParserError:
+            return {}
+        found: dict[str, str] = {}
+        for backgrounds, _rule, child in _scenarios(feature):
+            scenario = child.get("scenario") or {}
+            tags = scenario.get("tags", [])
+            try:
+                sid = ScenarioId.from_tag(str(tags[0].get("name", ""))) if len(tags) == 1 else None
+            except SpecError:
+                sid = None
+            if sid is not None:
+                found.setdefault(sid.value, spec_hash(backgrounds, scenario))
+        return found
 
     def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:
         """Verify that current features and driver files match .lictor/seal.json."""
@@ -82,11 +168,12 @@ class GherkinSource(SpecSource):
         for child in feature.get("children", []):
             rule = child.get("rule")
             if isinstance(rule, Mapping):
-                self._parse_rule(rule, rel_file, seen_ids, scenarios)
-            else:
-                scenario = self._parse_child(child, rel_file, seen_ids)
-                if scenario is not None:
-                    scenarios.append(scenario)
+                self._forbid_scenario_id_tags(rule.get("tags", []), "Rule", rel_file)
+        for backgrounds, _rule, entry in _scenarios(feature):
+            scenario = self._parse_child(entry, rel_file, seen_ids)
+            if scenario is not None:
+                hashed = spec_hash(backgrounds, entry.get("scenario") or {})
+                scenarios.append(replace(scenario, spec_hash=hashed))
 
     def _forbid_scenario_id_tags(
         self,
@@ -108,19 +195,6 @@ class GherkinSource(SpecSource):
                     f"Tag ID '{tag_name}' no permitido en nivel {level_name} "
                     f"en {rel_file}:{tag_line}"
                 )
-
-    def _parse_rule(
-        self,
-        rule: Mapping[str, Any],
-        rel_file: str,
-        seen_ids: dict[str, tuple[str, int]],
-        scenarios: list[Scenario],
-    ) -> None:
-        self._forbid_scenario_id_tags(rule.get("tags", []), "Rule", rel_file)
-        for rule_child in rule.get("children", []):
-            scenario = self._parse_child(rule_child, rel_file, seen_ids)
-            if scenario is not None:
-                scenarios.append(scenario)
 
     def _parse_child(
         self,

@@ -116,7 +116,11 @@ class BuildReport:
             "failed_by_level": defaultdict(int),
             "attempts": [],
             "measures": [],
+            "skipped_controls": [],
             "rejected_drivers": [],
+            "reopened": [],
+            "reregistered": [],
+            "collateral": [],
         }
 
         for ev in events:
@@ -135,6 +139,8 @@ class BuildReport:
             "lictor.run.finished.v1": self._on_run_finished,
             "lictor.run.stopped.v1": self._on_run_stopped,
             "lictor.driver.rejected.v1": self._on_driver_rejected,
+            "lictor.scenario.reopened.v1": self._on_scenario_reopened,
+            "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
         }
         handler = handlers.get(ev.type)
         if handler is not None:
@@ -166,10 +172,14 @@ class BuildReport:
 
     def _on_scenario_green(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
+        if ev.data.get("collateral"):
+            info["collateral"].append(
+                f"- **{sid}**: pasó sin llamar al agente en `{str(ev.data.get('commit', ''))[:12]}`"
+            )
         if sid and sid in info["scenarios"]:
             info["scenarios"][sid]["status"] = "green"
             info["scenarios"][sid]["commit"] = str(ev.data.get("commit", "-"))
-            raw_attempts = ev.data.get("attempt") or ev.data.get("attempts", 1)
+            raw_attempts = ev.data.get("attempt", ev.data.get("attempts", 1))
             if isinstance(raw_attempts, (int, str)):
                 info["scenarios"][sid]["attempts"] = max(
                     info["scenarios"][sid]["attempts"], int(raw_attempts)
@@ -195,6 +205,23 @@ class BuildReport:
         info["rejected_drivers"].append(
             f"- Intento {ev.data.get('attempt')}: {ev.data.get('reason')} "
             f"(`{ev.data.get('error_path')}`)"
+        )
+
+    def _on_scenario_reopened(self, ev: Event, info: dict[str, Any]) -> None:
+        info["reopened"].append(
+            f"- **{ev.scenarioid}**: su especificación cambió desde el verde de "
+            f"`{str(ev.data.get('commit', ''))[:12]}`"
+        )
+
+    def _on_scenario_reregistered(self, ev: Event, info: dict[str, Any]) -> None:
+        sid = ev.scenarioid
+        commit = str(ev.data.get("commit", "-"))
+        if sid and sid in info["scenarios"]:
+            info["scenarios"][sid]["status"] = "green"
+            info["scenarios"][sid]["commit"] = commit
+        info["reregistered"].append(
+            f"- **{sid}**: sigue pasando con la especificación nueva; registrado sin agente "
+            f"en `{commit[:12]}`"
         )
 
     def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
@@ -253,6 +280,11 @@ class BuildReport:
 
         controls = ev.data.get("controls")
         for control_id, control in controls.items() if isinstance(controls, dict) else ():
+            if isinstance(control, dict) and control.get("skipped"):
+                info["skipped_controls"].append(
+                    f"- **{control_id}** ({sid}, intento {attempt}): {control['skipped']}"
+                )
+                continue
             if isinstance(control, dict) and control.get("mode") == "measure":
                 result = "correcto" if control.get("ok") else "fallo"
                 info["measures"].append(
@@ -306,6 +338,15 @@ class BuildReport:
                     lines.append(f"  {q_data['last_error']}")
                     lines.append("  ```")
 
+        lines.extend(["", "## Escenarios reabiertos"])
+        lines.extend(info["reopened"] or ["- *Ningún escenario reabierto.*"])
+
+        lines.extend(["", "## Verdes registrados de nuevo"])
+        lines.extend(info["reregistered"] or ["- *Ningún verde registrado de nuevo.*"])
+
+        lines.extend(["", "## Verdes colaterales"])
+        lines.extend(info["collateral"] or ["- *Ningún verde colateral.*"])
+
         lines.extend(["", "## Intentos fallidos por nivel"])
         if not info["failed_by_level"]:
             lines.append("- *Sin fallos registrados.*")
@@ -320,6 +361,9 @@ class BuildReport:
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
+
+        lines.extend(["", "## Controles omitidos"])
+        lines.extend(info["skipped_controls"] or ["- *Ningún control omitido.*"])
 
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])

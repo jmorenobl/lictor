@@ -225,14 +225,36 @@ def test_commit_tree_carries_author_and_trailers_without_moving_the_branch(
     assert author == "Lictor <lictor@localhost>"
 
 
-def test_commit_tree_allows_an_empty_change(git_repo: Path) -> None:
+def test_commit_tree_refuses_an_empty_change_unless_asked(git_repo: Path) -> None:
+    """An attempt that changes nothing is not a candidate; only a registration may be empty."""
     cli = GitCli(repo_dir=git_repo)
     head = _head(git_repo)
 
-    candidate = cli.commit_tree(cli.get_tree("HEAD"), "m")
+    with pytest.raises(CandidateError, match="no cambia nada"):
+        cli.commit_tree(cli.get_tree("HEAD"), "m")
+    candidate = cli.commit_tree(cli.get_tree("HEAD"), "m", empty=True)
 
     assert candidate.parent == head
     assert candidate.sha != head
+
+
+def test_commit_tree_chains_on_a_given_parent(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = _head(git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "file_a.txt").write_text("encadenado", encoding="utf-8")
+    first = cli.commit_tree(cli.capture(workdir), "primero")
+
+    second = cli.commit_tree(
+        first.tree, "segundo", {"Scenario": ["IVA-002", "IVA-003"]}, parent=first.sha, empty=True
+    )
+
+    assert _head(git_repo) == head
+    assert second.parent == first.sha
+    assert cli.get_tree(second.sha) == first.tree
+    assert cli.get_trailers("Scenario", commit_ref=second.sha) == ["IVA-002", "IVA-003"]
+    with pytest.raises(CandidateError):
+        cli.commit_tree(first.tree, "vacío", parent=first.sha)
 
 
 def _tree_files(repo: Path, rev: str) -> list[str]:
@@ -565,3 +587,50 @@ def test_export_tree_is_independent_of_the_user_configuration(
     GitCli(repo_dir=git_repo).export_tree("HEAD", dest)
 
     assert b"\r" not in (dest / "README.md").read_bytes()
+
+
+def test_trailer_commits_list_every_value_newest_first(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    first = cli.commit_tree(cli.get_tree("HEAD"), "a", {"Scenario": "A-1"}, empty=True)
+    cli.advance_head(first.sha, expected=first.parent)
+    plain = cli.commit_tree(cli.get_tree("HEAD"), "sin trailer", empty=True)
+    cli.advance_head(plain.sha, expected=plain.parent)
+    both = cli.commit_tree(
+        cli.get_tree("HEAD"), "b", {"Scenario": ["A-2", "A-3"], "Otro": "x"}, empty=True
+    )
+    cli.advance_head(both.sha, expected=both.parent)
+
+    assert cli.trailer_commits("Scenario") == [(both.sha, ["A-2", "A-3"]), (first.sha, ["A-1"])]
+    assert cli.parent_of(both.sha) == plain.sha
+
+
+def test_list_and_read_files_of_an_older_commit(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "features").mkdir()
+    (workdir / "features" / "a.feature").write_text("viejo\r\n", encoding="utf-8")
+    (workdir / "features" / "sub").mkdir()
+    (workdir / "features" / "sub" / "b.feature").write_text("b", encoding="utf-8")
+    old = cli.commit_tree(cli.capture(workdir), "con features")
+    cli.advance_head(old.sha, expected=old.parent)
+    (git_repo / "features" / "a.feature").write_text("nuevo", encoding="utf-8")
+
+    assert sorted(cli.list_files(old.sha, "features")) == [
+        "features/a.feature",
+        "features/sub/b.feature",
+    ]
+    assert cli.list_files(old.parent, "features") == []
+    # Line endings read as `Path.read_text` reads the working tree, so both hash the same text.
+    assert cli.read_file(old.sha, "features/a.feature") == "viejo\n"
+
+
+def test_parent_of_a_root_commit_is_empty(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    root = subprocess.run(
+        [GIT_BIN, "rev-list", "--max-parents=0", "HEAD"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()[0]
+    assert cli.parent_of(root) == ""

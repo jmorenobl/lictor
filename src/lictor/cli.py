@@ -25,7 +25,7 @@ from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
-from lictor.domain.rules import anchor_problems
+from lictor.domain.rules import anchor_problems, baseline_head_accepted
 from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
 app = typer.Typer(
@@ -209,6 +209,7 @@ def check(
                 mode=c.mode,
                 allow_empty=c.allow_empty,
                 timeout_s=c.timeout_s,
+                when_exists=c.when_exists,
             )
             for c in runtime.config.controls
         ]
@@ -236,6 +237,9 @@ def check(
         )
 
         for name, cr in res.control_results.items():
+            if cr.skipped:
+                typer.echo(f"- {name} omitido: {cr.skipped}")
+                continue
             status_char = "✓" if cr.ok else "✗"
             typer.echo(f"{status_char} {name} ({cr.duration_ms}ms)")
             if not cr.ok and cr.output_path:
@@ -296,11 +300,26 @@ def _refuse_resume(runtime: BootstrapResult, run_id: str, code: int, reason: str
     return code
 
 
-def _anchor_problems(runtime: BootstrapResult, resolved_cwd: Path, values: Any) -> list[str]:
+def _anchor_problems(
+    runtime: BootstrapResult, resolved_cwd: Path, values: Any, pending_node: str | None
+) -> list[str]:
     """Compare the repository with the run's record, allowing what a crash can leave behind."""
     anchor = values.get("anchor") or {}
     observed = observe_anchor(runtime.vcs, resolved_cwd)
     accepted = {anchor.get("head")}
+    # A red check registers greens with an empty commit; repeating it tests them all again.
+    if (
+        anchor.get("head")
+        and observed["head"] != anchor["head"]
+        and baseline_head_accepted(
+            pending_node=pending_node,
+            head_parent=runtime.vcs.parent_of("HEAD"),
+            head_tree=runtime.vcs.get_tree("HEAD"),
+            anchored_head=anchor["head"],
+            anchored_tree=runtime.vcs.get_tree(anchor["head"]),
+        )
+    ):
+        accepted.add(observed["head"])
     verified = (values.get("last_verify") or {}).get("candidate")
     if verified:
         accepted.add(verified["sha"])
@@ -311,7 +330,9 @@ def _anchor_problems(runtime: BootstrapResult, resolved_cwd: Path, values: Any) 
     return anchor_problems(anchor, observed, {sha for sha in accepted if sha})
 
 
-def _integrity_refusal(runtime: BootstrapResult, resolved_cwd: Path, values: Any) -> str | None:
+def _integrity_refusal(
+    runtime: BootstrapResult, resolved_cwd: Path, values: Any, pending_node: str | None = None
+) -> str | None:
     """Say why this run can't go on. Control files come first: they are read without git."""
     anchor = values.get("anchor") or {}
     if anchor.get("repo") and runtime.vcs.fingerprint() != anchor["repo"]:
@@ -327,7 +348,7 @@ def _integrity_refusal(runtime: BootstrapResult, resolved_cwd: Path, values: Any
             f"lictor.json, el perfil o los ficheros del perfil. {_UNDO_OR_START_OVER}"
         )
 
-    problems = _anchor_problems(runtime, resolved_cwd, values)
+    problems = _anchor_problems(runtime, resolved_cwd, values, pending_node)
     if problems:
         return f"{'; '.join(problems)}. {_UNDO_OR_START_OVER}"
 
@@ -353,7 +374,8 @@ def _check_resume_guard(
     run_id: str,
     state_snapshot: Any,
 ) -> int | None:
-    reason = _integrity_refusal(runtime, resolved_cwd, state_snapshot.values)
+    pending_node = state_snapshot.next[0] if state_snapshot.next else None
+    reason = _integrity_refusal(runtime, resolved_cwd, state_snapshot.values, pending_node)
     if reason is not None:
         return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 

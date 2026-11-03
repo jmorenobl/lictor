@@ -117,3 +117,25 @@ def test_junit_reader_rejects_malicious_xml() -> None:
     res = reader.read(output=malicious_xml, exit_code=0, duration_ms=10)
     assert res.ok is False
     assert res.error is not None
+
+
+def test_junit_reads_the_properties_of_each_case() -> None:
+    xml = (
+        "<testsuite>"
+        '<testcase name="a"><properties>'
+        '<property name="lictor.failure" value="assertion"/>'
+        '<property name="lictor.origin" value="src/x.py"/>'
+        '<property value="sin nombre"/><property name="vacía"/>'
+        '</properties><failure message="m"/></testcase>'
+        '<testcase name="b"/>'
+        "</testsuite>"
+    )
+
+    first, second = JUnitReader().read(xml, exit_code=1, duration_ms=0).test_cases
+
+    assert first.properties == {
+        "lictor.failure": "assertion",
+        "lictor.origin": "src/x.py",
+        "vacía": "",
+    }
+    assert second.properties == {}

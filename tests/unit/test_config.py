@@ -35,7 +35,7 @@ from lictor.adapters.config.models import (
     ProfileVerification,
     ProjectVerification,
 )
-from lictor.adapters.config.profiles.python_uv import lictor_project_path
+from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
 )
@@ -348,7 +348,7 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
 def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
     spec = resolve_defences(load_config(REPO_ROOT)).verification
 
-    assert [path.name for path in spec.files] == ["lictor_project_path.py"]
+    assert [path.name for path in spec.files] == ["lictor_project_path.py", "lictor_outcome.py"]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
     assert "get_path" in spec.files_dir_command
@@ -365,9 +365,16 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     assert sys.path == ["primero", str(tmp_path / "src")]
 
 
-def test_the_path_plugin_stands_alone() -> None:
-    """It is installed on its own in an environment where Lictor doesn't exist."""
-    tree = ast.parse(Path(lictor_project_path.__file__).read_text(encoding="utf-8"))
+@pytest.mark.parametrize(
+    ("plugin", "expected"),
+    [
+        (lictor_project_path.__file__, {"pytest", "sys", "typing"}),
+        (lictor_outcome.__file__, {"pytest", "pathlib", "typing", "collections"}),
+    ],
+)
+def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> None:
+    """They are installed on their own in an environment where Lictor doesn't exist."""
+    tree = ast.parse(Path(plugin).read_text(encoding="utf-8"))
     imported = {
         alias.name.split(".")[0]
         for node in ast.walk(tree)
@@ -380,7 +387,7 @@ def test_the_path_plugin_stands_alone() -> None:
         if isinstance(node, ast.ImportFrom) and node.module
     }
 
-    assert imported == {"pytest", "sys", "typing"}
+    assert imported == expected
 
 
 def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path) -> None:
@@ -620,9 +627,9 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
     profiles = tmp_path / "profiles"
     profiles.mkdir()
     (profiles / "python-uv.json").write_text(json.dumps(profile_data), encoding="utf-8")
-    plugin = Path(lictor_project_path.__file__)
     (profiles / "python_uv").mkdir()
-    (profiles / "python_uv" / plugin.name).write_text("", encoding="utf-8")
+    for plugin in (lictor_project_path.__file__, lictor_outcome.__file__):
+        (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
     defences = resolve_defences(load_config(tmp_path, profiles), profiles)
 
@@ -658,7 +665,7 @@ def test_demo_declares_nothing_of_its_own() -> None:
 def test_profile_no_longer_assumes_a_project_dependency() -> None:
     verification = load_profile("python-uv").verification
 
-    assert verification.plugins == ["lictor_project_path"]
+    assert verification.plugins == ["lictor_project_path", "lictor_outcome"]
     assert "PYTEST_PLUGINS" not in verification.env
 
 
@@ -808,3 +815,54 @@ def test_profile_agent_commands_include_the_acceptance_suite() -> None:
     target = profile.acceptance.run.split(" --")[0]
 
     assert target in profile.agent_commands
+
+
+def test_python_uv_unit_control_runs_only_where_its_tests_exist() -> None:
+    unit = next(c for c in load_profile("python-uv").controls if c.id == "unit")
+    assert unit.when_exists == "tests/unit"
+
+
+@pytest.mark.parametrize("path", ["", "/abs/tests", "../fuera", "tests/../../fuera"])
+def test_control_when_exists_must_stay_inside_the_project(path: str) -> None:
+    with pytest.raises(ValidationError, match="when_exists"):
+        ControlConfig.model_validate(
+            {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code", "when_exists": path}
+        )
+
+
+def test_the_oracle_comes_from_the_profile_only(tmp_path: Path) -> None:
+    defences = resolve_defences(load_config(REPO_ROOT))
+
+    assert defences.map_link == "scenario"
+    assert defences.red_kinds == ("assertion", "not_implemented")
+    assert defences.impostors is not None
+    assert defences.impostors.replacements == (r"\1return None", r"\1return True")
+    config = json.loads((REPO_ROOT / "lictor.json").read_text(encoding="utf-8"))
+    config["oracle"] = {"red_kinds": []}
+    (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ConfigError, match="oracle"):
+        load_config(tmp_path)
+
+
+def test_a_profile_without_oracle_keeps_the_rules_of_before() -> None:
+    raw = load_profile("python-uv").model_dump(mode="json")
+    del raw["oracle"]
+    oracle = Profile.model_validate(raw).oracle
+    assert (oracle.link, oracle.red_kinds, oracle.impostors) == ("name", [], None)
+
+
+@pytest.mark.parametrize(
+    "oracle",
+    [
+        {"red_kinds": ["cualquiera"]},
+        {"link": "otro"},
+        {"impostors": {"pattern": "(", "replacements": ["x"]}},
+        {"impostors": {"pattern": "x", "replacements": []}},
+        {"desconocido": 1},
+    ],
+)
+def test_an_invalid_oracle_is_refused(oracle: dict[str, object]) -> None:
+    raw = load_profile("python-uv").model_dump(mode="json")
+    raw["oracle"] = oracle
+    with pytest.raises(ValidationError):
+        Profile.model_validate(raw)

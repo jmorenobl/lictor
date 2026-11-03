@@ -347,3 +347,59 @@ def test_report_counts_discarded_lines_by_kind(tmp_path: Path) -> None:
     assert "**Líneas descartadas**: 7" in report
     assert "(escritura cortada o edición): 2" in report
     assert "(forjadas): 5" in report
+
+
+def test_report_lists_skipped_controls_with_the_reason(tmp_path: Path) -> None:
+    controls: dict[str, object] = {
+        "unit": {"ok": True, "mode": "block", "skipped": "no existe tests/unit"},
+        "lint": {"ok": True, "mode": "block", "skipped": None},
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Controles omitidos")[1].split("##")[0]
+    assert "- **unit** (IVA-001, intento 1): no existe tests/unit" in section
+    assert "lint" not in section
+
+
+def test_report_says_when_no_control_was_skipped(tmp_path: Path) -> None:
+    assert "*Ningún control omitido.*" in _report(tmp_path, [_verify_event({})])
+
+
+def test_report_lists_reopened_and_reregistered_scenarios(tmp_path: Path) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-001", "name": "General"}]})
+    reopened = _event("lictor.scenario.reopened.v1", {"commit": "a" * 40}, "IVA-001")
+    again = _event("lictor.scenario.reregistered.v1", {"commit": "b" * 40}, "IVA-001")
+
+    report = _report(tmp_path, [loaded, reopened, again])
+
+    section = report.split("## Escenarios reabiertos")[1].split("##")[0]
+    assert f"- **IVA-001**: su especificación cambió desde el verde de `{'a' * 12}`" in section
+    section = report.split("## Verdes registrados de nuevo")[1].split("##")[0]
+    assert (
+        "- **IVA-001**: sigue pasando con la especificación nueva; "
+        f"registrado sin agente en `{'b' * 12}`" in section
+    )
+    assert "| IVA-001 | General | green | 0 |" in report
+
+
+def test_report_says_when_nothing_was_reopened_or_reregistered(tmp_path: Path) -> None:
+    report = _report(tmp_path, [])
+    assert "*Ningún escenario reabierto.*" in report
+    assert "*Ningún verde registrado de nuevo.*" in report
+
+
+def test_report_lists_collateral_greens(tmp_path: Path) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-002", "name": "R"}]})
+    green = _event(
+        "lictor.scenario.green.v1",
+        {"commit": "c" * 40, "attempt": 0, "collateral": True},
+        "IVA-002",
+    )
+
+    report = _report(tmp_path, [loaded, green])
+
+    section = report.split("## Verdes colaterales")[1].split("##")[0]
+    assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
+    assert "| IVA-002 | R | green | 0 |" in report
+    assert "*Ningún verde colateral.*" in _report(tmp_path, [])

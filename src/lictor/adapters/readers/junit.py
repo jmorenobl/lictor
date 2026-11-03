@@ -56,7 +56,17 @@ def _parse_test_case(tc_elem: ET.Element) -> TestCaseResult:
         status=status,
         message=message,
         details=details,
+        properties=_properties(tc_elem),
     )
+
+
+def _properties(tc_elem: ET.Element) -> dict[str, str]:
+    """Read what the runner attached to the case; a repeated name keeps its last value."""
+    return {
+        prop.attrib["name"]: prop.attrib.get("value", "")
+        for prop in tc_elem.findall("properties/property")
+        if "name" in prop.attrib
+    }
 
 
 class JUnitReader(ResultReader):

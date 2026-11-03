@@ -79,6 +79,8 @@ def _profile_without_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "banned_patterns": [],
         "forbidden_paths": [],
         "suppressions": ["# noqa", "# type: ignore"],
+        # Without the profile's plugin nothing reports how a test failed or what it executed.
+        "oracle": {},
         "verification": {
             "inherit": ["PATH", "HOME", "VIRTUAL_ENV"],
             "env": {"PYTHONDONTWRITEBYTECODE": "1"},
