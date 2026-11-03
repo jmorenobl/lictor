@@ -134,6 +134,7 @@ class BuildReport:
             "failed_by_level": defaultdict(int),
             "attempts": [],
             "measures": [],
+            "scores": [],
             "skipped_controls": [],
             "rejected_drivers": [],
             "reopened": [],
@@ -298,14 +299,20 @@ class BuildReport:
 
         controls = ev.data.get("controls")
         for control_id, control in controls.items() if isinstance(controls, dict) else ():
-            if isinstance(control, dict) and control.get("skipped"):
+            if not isinstance(control, dict):
+                continue
+            if control.get("skipped"):
                 info["skipped_controls"].append(
                     f"- **{control_id}** ({sid}, intento {attempt}): {control['skipped']}"
                 )
                 continue
-            if isinstance(control, dict) and control.get("mode") == "measure":
-                result = "correcto" if control.get("ok") else "fallo"
-                score = _score_text(control.get("score"))
+            result = "correcto" if control.get("ok") else "fallo"
+            score = _score_text(control.get("score"))
+            if score:
+                info["scores"].append(
+                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}"
+                )
+            if control.get("mode") == "measure":
                 info["measures"].append(
                     f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}, "
                     f"código {control.get('exit_code')}, salida en `{control.get('output')}`"
@@ -380,6 +387,14 @@ class BuildReport:
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
+
+        lines.extend(
+            [
+                "",
+                "## Puntuaciones",
+                *(info["scores"] or ["- *Ningún control registró puntuación.*"]),
+            ]
+        )
 
         lines.extend(["", "## Controles omitidos"])
         lines.extend(info["skipped_controls"] or ["- *Ningún control omitido.*"])
