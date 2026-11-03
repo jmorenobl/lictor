@@ -269,7 +269,8 @@ class LimitsConfig(BaseModel):
 
     max_attempts: int = Field(default=3, gt=0)
     max_driver_attempts: int = Field(default=2, gt=0)
-    error_max_chars: int = Field(default=4000, gt=0)
+    # Below this the reason and the first failed case no longer fit, and the agent retries blind.
+    error_max_chars: int = Field(default=4000, ge=500)
 
 
 class Profile(BaseModel):

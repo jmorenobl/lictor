@@ -186,7 +186,7 @@
         },
         "error_max_chars": {
           "default": 4000,
-          "exclusiveMinimum": 0,
+          "minimum": 500,
           "title": "Error Max Chars",
           "type": "integer"
         }

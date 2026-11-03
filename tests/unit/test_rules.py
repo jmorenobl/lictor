@@ -1275,3 +1275,23 @@ def test_describe_score_adds_the_other_outcomes_only_when_there_are_some() -> No
 
 def test_mutation_score_of_a_single_tried_mutant() -> None:
     assert mutation_score({"killed": 1, "total": 1}).percent == 100.0
+
+
+def test_the_smallest_error_budget_keeps_the_reason_and_the_first_case() -> None:
+    cases = [
+        TestCaseResult(
+            name=f"test_iva_00{n}",
+            status="failure",
+            message="AssertionError: " + "x" * 280,
+            details="\n".join(f"linea {i} de la traza" for i in range(40)),
+        )
+        for n in range(1, 4)
+    ]
+
+    text = condense_error("L2-unit", "Fallaron 3 casos de test", cases, max_chars=500)
+
+    assert len(text) <= 500
+    assert "Falló L2-unit" in text
+    assert "Fallaron 3 casos de test" in text
+    assert "test_iva_001" in text
+    assert "AssertionError: xxxxxxxx" in text

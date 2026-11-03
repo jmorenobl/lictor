@@ -19,6 +19,7 @@ from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import AuditSink, SpecSource
 from lictor.application.spec_history import SpecHistory
+from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
@@ -26,7 +27,14 @@ from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
-from lictor.domain.model import AgentStatus, AgentTask, CommandOutput, Scenario, VerifyResult
+from lictor.domain.model import (
+    AgentStatus,
+    AgentTask,
+    CommandOutput,
+    Health,
+    Scenario,
+    VerifyResult,
+)
 from lictor.orchestration.graph import (
     DURABILITY,
     GraphContext,
@@ -485,6 +493,38 @@ def test_a_driver_call_that_fails_is_retried_without_judging_its_tree(tmp_path: 
     driver_calls = [e.data for e in events if e.type == "lictor.agent.finished.v1"][:2]
     assert [(d["signal"], d["attempt"]) for d in driver_calls] == [("error", 0), ("ok", 1)]
     assert not (tmp_path / ".lictor" / "runs" / run_id / "driver" / "000-red").exists()
+
+
+@pytest.mark.parametrize("cause", ["sucio", "sin_ejecutor"])
+def test_a_stop_in_preflight_leaves_the_last_report_alone(
+    tmp_path: Path, cause: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = FakeExecutor(mode="good")
+    context = _setup_test_environment(tmp_path, executor)
+    context = dataclasses.replace(context, build_report=BuildReport(context.event_log))
+    if cause == "sucio":
+        (tmp_path / "suelto.txt").write_text("x", encoding="utf-8")
+    else:
+        broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
+        monkeypatch.setattr(executor, "health", lambda: broken)
+    report = tmp_path / ".lictor" / "report.md"
+    report.parent.mkdir(exist_ok=True)
+    report.write_bytes(b"# Informe de la ejecuci\xc3\xb3n anterior\n")
+    run_id = "20261103-160000-0001"
+    graph = create_graph(
+        context, checkpointer=get_sqlite_saver(tmp_path / ".lictor" / "checkpoints.sqlite")
+    )
+
+    final = graph.invoke(
+        {"run_id": run_id, "config_hash": "h", "driver_attempts": 0},
+        config={"configurable": {"thread_id": run_id}},
+        durability=DURABILITY,
+    )
+
+    assert final.get("exit_code") in (10, 40)
+    assert report.read_bytes() == b"# Informe de la ejecuci\xc3\xb3n anterior\n"
+    events = JsonlEventLog(tmp_path / ".lictor" / "journal.jsonl").events(run_id=run_id)
+    assert [e.type for e in events] == ["lictor.run.finished.v1"]
 
 
 def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:

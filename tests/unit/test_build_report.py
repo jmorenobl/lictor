@@ -444,3 +444,37 @@ def test_report_lists_collateral_greens(tmp_path: Path) -> None:
     assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
     assert "| IVA-002 | R | green | 0 |" in report
     assert "*Ningún verde colateral.*" in _report(tmp_path, [])
+
+
+def _verification(path: str, ok: bool, failed_at: str | None = None) -> Event:
+    return _event(
+        "lictor.verify.finished.v1",
+        {"attempt": 1, "ok": ok, "failed_at": failed_at, "evidence": {"path": path, "hash": "h"}},
+        "IVA-001",
+    )
+
+
+def test_a_verification_repeated_in_the_same_attempt_shows_twice_in_one_attempt(
+    tmp_path: Path,
+) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-001", "name": "General"}]})
+    first = _verification("r/IVA-001/001-verify", False, "L1")
+    again = _verification("r/IVA-001/001-verify-r1", True)
+    call = _event("lictor.agent.finished.v1", {"role": "implement", "attempt": 1}, "IVA-001")
+
+    report = _report(tmp_path, [loaded, call, first, again])
+
+    rows = report.split("## Verificaciones")[1].split("##")[0]
+    assert "| IVA-001 | 1 | L1 | - |" in rows
+    assert "| IVA-001 | 1 | verde | - |" in rows
+    assert "| IVA-001 | General |" in report
+    assert report.split("| IVA-001 | General |")[1].split("|")[1].strip() == "1"
+
+
+def test_an_event_repeated_by_a_resumed_node_counts_once(tmp_path: Path) -> None:
+    same = _verification("r/IVA-001/001-verify", True)
+
+    report = _report(tmp_path, [same, same])
+
+    rows = report.split("## Verificaciones")[1].split("##")[0]
+    assert rows.count("| IVA-001 | 1 | verde | - |") == 1

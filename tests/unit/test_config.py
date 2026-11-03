@@ -30,6 +30,7 @@ from lictor.adapters.config.models import (
     BackendConfig,
     ControlConfig,
     LictorConfig,
+    LimitsConfig,
     PathsConfig,
     Profile,
     ProfileVerification,
@@ -911,3 +912,12 @@ def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
 def test_a_control_that_reads_a_report_needs_its_path(report: str) -> None:
     with pytest.raises(ValidationError, match=f"report='{report}' debe incluir"):
         ControlConfig.model_validate({"id": "m", "level": "L5", "run": "cmd", "report": report})
+
+
+@pytest.mark.parametrize(("chars", "valid"), [(499, False), (500, True), (4000, True)])
+def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> None:
+    if valid:
+        assert LimitsConfig(error_max_chars=chars).error_max_chars == chars
+    else:
+        with pytest.raises(ValidationError, match="greater than or equal to 500"):
+            LimitsConfig(error_max_chars=chars)

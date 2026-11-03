@@ -181,8 +181,14 @@ class _GraphNodes:
     def __init__(self, ctx: GraphContext) -> None:
         self.ctx = ctx
 
-    def _finish(self, state: GraphState, code: int, reason: str) -> dict[str, Any]:
-        """End the run leaving its reason in the journal, the report and the state."""
+    def _finish(
+        self, state: GraphState, code: int, reason: str, *, report: bool = True
+    ) -> dict[str, Any]:
+        """End the run leaving its reason in the journal, the report and the state.
+
+        A run that stops before starting (`report=False`) leaves `report.md` alone: it still holds
+        the last run that did something. The reason stays in the journal and on stderr.
+        """
         event = new_event(
             self.ctx.clock,
             "lictor.run.finished.v1",
@@ -194,7 +200,7 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
-        if self.ctx.build_report is not None:
+        if report and self.ctx.build_report is not None:
             self.ctx.build_report.execute(
                 BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
             )
@@ -210,6 +216,7 @@ class _GraphNodes:
                 int(ExitCode.PRECONDITION),
                 "El árbol de trabajo tiene cambios sin confirmar: "
                 f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
+                report=False,
             )
         health = self.ctx.executor.health()
         if not health.ok:
@@ -219,6 +226,7 @@ class _GraphNodes:
                     state,
                     int(ExitCode.ENVIRONMENT_UNAVAILABLE),
                     f"el ejecutor no está disponible: {detail}",
+                    report=False,
                 ),
                 "agent_detail": detail,
             }

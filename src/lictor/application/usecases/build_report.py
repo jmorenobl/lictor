@@ -98,11 +98,18 @@ class BuildReport:
         return BuildReportResult(report_path=report_path, content=report_md)
 
     def _deduplicate_events(self, events: list[Event]) -> list[Event]:
-        """Keep the last event for each (type, runid, scenarioid, attempt)."""
-        seen: dict[tuple[str, str | None, str | None, Any], Event] = {}
+        """Keep the last event for each (type, runid, scenarioid, attempt, evidence).
+
+        A node that runs again after a crash repeats its event, and only the last one counts. A
+        step that ran twice left two evidence directories, whose names are never reused: both
+        happened, so both stay.
+        """
+        seen: dict[tuple[str, str | None, str | None, Any, Any], Event] = {}
         for ev in events:
             attempt = ev.data.get("attempt")
-            key = (ev.type, ev.runid, ev.scenarioid, attempt)
+            evidence = ev.data.get("evidence")
+            where = evidence.get("path") if isinstance(evidence, dict) else None
+            key = (ev.type, ev.runid, ev.scenarioid, attempt, where)
             seen[key] = ev
         return list(seen.values())
 
