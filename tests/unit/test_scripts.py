@@ -109,5 +109,39 @@ def test_mutation_score_leaves_no_report_when_nothing_was_exported(tmp_path: Pat
     assert not report.exists()
 
 
+FAILED_EXPORT = """#!/bin/sh
+case "$1" in
+  export-cicd-stats) exit 4 ;;
+esac
+"""
+
+
+def test_mutation_score_does_not_pass_off_an_old_score_when_the_export_fails(
+    tmp_path: Path,
+) -> None:
+    tool = tmp_path / "mutmut"
+    tool.write_text(FAILED_EXPORT, encoding="utf-8")
+    tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+    stats = tmp_path / "mutants" / "mutmut-cicd-stats.json"
+    stats.parent.mkdir()
+    stats.write_text('{"killed": 3, "total": 3}', encoding="utf-8")
+    report = tmp_path / "score.json"
+
+    code = _load("mutation_score").main([str(report)], mutmut=[str(tool)], root=tmp_path)
+
+    assert code == 4
+    assert not report.exists()
+    assert not stats.exists()
+
+
+def test_mutation_score_fails_if_the_export_leaves_no_file(tmp_path: Path) -> None:
+    report = tmp_path / "score.json"
+
+    code = _load("mutation_score").main([str(report)], mutmut=["true"], root=tmp_path)
+
+    assert code == 1
+    assert not report.exists()
+
+
 def test_mutation_score_needs_the_report_path() -> None:
     assert _load("mutation_score").main([]) == 2
