@@ -46,7 +46,6 @@ Característica: X
 '''
 
 
-@pending(6, "A8")
 def test_e20_non_utf8_output_does_not_crash_the_run(make_project: ProjectFactory) -> None:
     root = make_project()
 
@@ -57,7 +56,6 @@ def test_e20_non_utf8_output_does_not_crash_the_run(make_project: ProjectFactory
     assert run_lictor(root, Agent(impl=impl)) == Outcome(0)
 
 
-@pending(6, "A8")
 def test_d21_timeout_is_bounded_with_an_orphan_holding_stdout(tmp_path: Path) -> None:
     started = time.monotonic()
     SubprocessRunner().run([sys.executable, "-c", ORPHAN_HOLDS_STDOUT], cwd=tmp_path, timeout_s=1)
