@@ -12,7 +12,7 @@ from lictor.adapters.spec.gherkin_source import (
 )
 from lictor.application.seal import hash_file
 from lictor.domain.errors import SpecError
-from lictor.domain.model import ScenarioId
+from lictor.domain.model import Scenario, ScenarioId
 
 
 def test_load_valid_feature_spanish_and_background(tmp_path: Path) -> None:
@@ -592,3 +592,143 @@ def test_a_rule_without_scenarios_still_cannot_carry_a_scenario_id(tmp_path: Pat
     )
     with pytest.raises(SpecError, match="nivel Rule"):
         GherkinSource().load(tmp_path / "features")
+
+
+def _text_of(tmp_path: Path, content: str, sid: str, name: str = "N") -> str:
+    feature = tmp_path / "features" / "iva.feature"
+    feature.parent.mkdir(parents=True, exist_ok=True)
+    feature.write_text(content, encoding="utf-8")
+    scenario = Scenario(ScenarioId(sid), name, "features/iva.feature", 1)
+    return GherkinSource().scenario_text(tmp_path, scenario)
+
+
+FEATURE_WITH_COMMENTS = """# language: es
+Característica: Facturación
+  Antecedentes:
+    Dado una tasa de IVA del 21%
+    Y un emisor registrado
+
+  # Comentario importante 1
+  # Comentario importante 2
+  @IVA-001
+  # Comentario entre tag y escenario
+  Escenario: IVA general
+    Dado una factura con importe 100
+    Cuando calculo el total
+    Entonces el total es 121
+
+  @IVA-002
+  Escenario: IVA reducido
+    Dado una factura con importe 100
+"""
+
+
+def test_scenario_text_keeps_background_comments_and_its_own_lines(tmp_path: Path) -> None:
+    text = _text_of(tmp_path, FEATURE_WITH_COMMENTS, "IVA-001")
+
+    assert text == (
+        "Antecedentes:\n"
+        "    Dado una tasa de IVA del 21%\n"
+        "    Y un emisor registrado\n\n"
+        "# Comentario importante 1\n"
+        "  # Comentario importante 2\n"
+        "  @IVA-001\n"
+        "  # Comentario entre tag y escenario\n"
+        "  Escenario: IVA general\n"
+        "    Dado una factura con importe 100\n"
+        "    Cuando calculo el total\n"
+        "    Entonces el total es 121"
+    )
+
+
+def test_scenario_text_of_the_last_scenario_runs_to_the_end(tmp_path: Path) -> None:
+    text = _text_of(tmp_path, FEATURE_WITH_COMMENTS, "IVA-002")
+
+    assert text.startswith("Antecedentes:")
+    assert text.endswith(
+        "@IVA-002\n  Escenario: IVA reducido\n    Dado una factura con importe 100"
+    )
+    assert "IVA general" not in text
+
+
+def test_scenario_text_finds_the_exact_id_not_a_prefix(tmp_path: Path) -> None:
+    content = """Feature: X
+  @IVA-10
+  Scenario: diez
+    Given secreto
+
+  @IVA-1
+  Scenario: uno
+    Given a
+"""
+    assert _text_of(tmp_path, content, "IVA-1") == "@IVA-1\n  Scenario: uno\n    Given a"
+
+
+def test_scenario_text_takes_the_rule_background_too(tmp_path: Path) -> None:
+    content = """Feature: X
+  Background:
+    Given general
+
+  Rule: R
+    Background:
+      Given de la regla
+
+    @IVA-1
+    Scenario: uno
+      Given a
+
+  Rule: S
+    Background:
+      Given de otra regla
+
+    @IVA-2
+    Scenario: dos
+      Given b
+"""
+    text = _text_of(tmp_path, content, "IVA-1")
+
+    assert text == (
+        "Background:\n    Given general\n\n"
+        "Background:\n      Given de la regla\n\n"
+        "@IVA-1\n    Scenario: uno\n      Given a"
+    )
+
+
+def test_scenario_text_with_its_tag_lines_away_from_the_keyword(tmp_path: Path) -> None:
+    content = """Feature: X
+  @IVA-1
+
+  # nota
+  Scenario: uno
+    Given a
+  @IVA-2
+  Scenario: dos
+    Given b
+"""
+    assert _text_of(tmp_path, content, "IVA-1") == (
+        "@IVA-1\n\n  # nota\n  Scenario: uno\n    Given a"
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["Feature: X\n  @IVA-2\n  Scenario: dos\n    Given b\n", "no es gherkin: [", ""],
+)
+def test_scenario_text_without_the_scenario_is_only_its_header(
+    tmp_path: Path, content: str
+) -> None:
+    assert _text_of(tmp_path, content, "IVA-1", "uno") == "Scenario: uno (@IVA-1)"
+
+
+def test_scenario_text_without_the_file_is_only_its_header(tmp_path: Path) -> None:
+    scenario = Scenario(ScenarioId("IVA-1"), "uno", "features/no.feature", 1)
+
+    assert GherkinSource().scenario_text(tmp_path, scenario) == "Scenario: uno (@IVA-1)"
+
+
+def test_scenario_text_reads_an_absolute_path(tmp_path: Path) -> None:
+    feature = tmp_path / "a.feature"
+    feature.write_text("Feature: X\n  @IVA-1\n  Scenario: uno\n    Given a\n", encoding="utf-8")
+    scenario = Scenario(ScenarioId("IVA-1"), "uno", str(feature), 1)
+
+    assert GherkinSource().scenario_text(Path("/no/existe"), scenario).endswith("Given a")

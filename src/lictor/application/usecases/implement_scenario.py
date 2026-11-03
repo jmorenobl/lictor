@@ -73,85 +73,6 @@ class ImplementScenarioResult:
     error: str | None = None
 
 
-def _extract_background(lines: Sequence[str]) -> str:
-    bg_lines: list[str] = []
-    in_bg = False
-    for line in lines:
-        stripped = line.strip().lower()
-        if (
-            stripped.startswith("background:")
-            or stripped.startswith("antecedentes:")
-            or stripped in {"background", "antecedentes"}
-        ):
-            in_bg = True
-            bg_lines.append(line)
-        elif in_bg:
-            if (
-                stripped.startswith("@")
-                or stripped.startswith("scenario:")
-                or stripped.startswith("escenario:")
-            ):
-                break
-            bg_lines.append(line)
-    return "\n".join(bg_lines).strip()
-
-
-def _find_tag_start_index(lines: Sequence[str], target_tag: str, scen_line_idx: int) -> int:
-    for idx in range(scen_line_idx, -1, -1):
-        line_str = lines[idx].strip()
-        if target_tag in line_str:
-            return idx
-        is_scen = line_str.startswith("Scenario:") or line_str.startswith("Escenario:")
-        if is_scen and idx != scen_line_idx:
-            break
-    return scen_line_idx
-
-
-def _extract_scenario_body(lines: Sequence[str], target_tag: str, start_idx: int) -> str:
-    scen_lines: list[str] = []
-    started = False
-    seen_header = False
-    for line in lines[start_idx:]:
-        stripped = line.strip()
-        if target_tag in stripped:
-            started = True
-        elif started:
-            is_header = stripped.startswith("Scenario:") or stripped.startswith("Escenario:")
-            if is_header and seen_header:
-                break
-            if is_header:
-                seen_header = True
-            elif stripped.startswith("@") and not stripped.startswith(target_tag):
-                break
-        if started:
-            scen_lines.append(line)
-    return "\n".join(scen_lines).strip()
-
-
-def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
-    path = Path(scenario.file)
-    if not path.is_absolute():
-        path = project_root / path
-    if not path.is_file():
-        return f"Scenario: {scenario.name} (@{scenario.id.value})"
-
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return ""
-
-    bg_text = _extract_background(lines)
-    target_tag = f"@{scenario.id.value}"
-    scen_line_idx = scenario.line - 1 if 0 < scenario.line <= len(lines) else 0
-    start_idx = _find_tag_start_index(lines, target_tag, scen_line_idx)
-    scen_text = _extract_scenario_body(lines, target_tag, start_idx)
-
-    if bg_text and scen_text:
-        return f"{bg_text}\n\n{scen_text}"
-    if scen_text:
-        return scen_text
-    return "\n".join(lines)
-
-
 class ImplementScenario:
     """Use case to execute an implementation attempt on a single scenario."""
 
@@ -186,7 +107,7 @@ class ImplementScenario:
         )
         prompt_sha = f"sha256:{hashlib.sha256(raw_template.encode('utf-8')).hexdigest()}"
 
-        gherkin_text = _extract_scenario_gherkin(request.project_root, request.scenario)
+        gherkin_text = self.spec_source.scenario_text(request.project_root, request.scenario)
 
         error_block = _STOPPED_EARLY_NOTES.get(request.last_agent_status or "", "")
         if request.last_error:

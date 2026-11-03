@@ -593,6 +593,9 @@ def test_graph_seal_tampered_in_implement_terminates_with_exit_code_10(tmp_path:
         ) -> dict[str, Any]:
             return self._inner.write_seal(project_root, run_id, driver_paths)
 
+        def scenario_text(self, project_root: Path, scenario: Scenario) -> str:
+            return self._inner.scenario_text(project_root, scenario)
+
     context = dataclasses.replace(context, spec_source=_TamperSpecSource(context.spec_source))
     graph = create_graph(context, checkpointer=saver)
 

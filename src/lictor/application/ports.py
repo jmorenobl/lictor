@@ -209,6 +209,10 @@ class SpecSource(Protocol):
         """Verify that current features and driver files match .lictor/seal.json."""
         ...
 
+    def scenario_text(self, project_root: Path, scenario: Scenario) -> str:
+        """The scenario's own text with its backgrounds; only its header if it can't be found."""
+        ...
+
     def write_seal(
         self,
         project_root: Path,
