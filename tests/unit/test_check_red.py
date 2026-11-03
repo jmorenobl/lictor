@@ -1063,3 +1063,57 @@ def test_check_red_impostors_never_touch_the_driver_even_inside_writable(tmp_pat
     use_case.execute(request)
 
     assert len(runner.sources) == 3, "el driver intacto en cada impostor"
+
+
+_FILES = dict.fromkeys(("IVA-001", "IVA-002"), "features/iva.feature")
+
+
+def _linked_xml(name: str, sid: str, feature: str, failure: str = "") -> str:
+    props = f'<property name="lictor.scenario" value="{sid}"/>'
+    props += f'<property name="lictor.feature" value="{feature}"/>'
+    if failure:
+        props += f'<property name="lictor.failure" value="{failure}"/>'
+        props += '<property name="lictor.origin" value="src/iva.py"/>'
+    verdict = '<failure message="m"/>' if failure else ""
+    return f'<testcase name="{name}"><properties>{props}</properties>{verdict}</testcase>'
+
+
+def test_check_red_rejects_a_scenario_executed_from_another_file(tmp_path: Path) -> None:
+    """Before the seal the driver may write a copy of the feature under another name."""
+    report = _suite(
+        _linked_xml("test_a", "IVA-001", "features/copia.txt", "not_implemented"),
+        _linked_xml("test_b", "IVA-002", "features/iva.feature", "not_implemented"),
+    )
+    use_case, request, event_log, spec_source, _ = _real_check(
+        tmp_path, report, 1, link="scenario", scenario_files=_FILES
+    )
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert "desde features/copia.txt, no desde features/iva.feature" in (result.last_error or "")
+    assert _rejection(event_log).data["reason"] == "mapeo"
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_impostors_map_by_the_scenario_s_own_file(tmp_path: Path) -> None:
+    def suite(first: str, second: str) -> tuple[str, int]:
+        return (
+            _suite(
+                _linked_xml("test_a", "IVA-001", "features/iva.feature", first),
+                _linked_xml("test_b", "IVA-002", "features/iva.feature", second),
+            ),
+            1,
+        )
+
+    reports = {
+        "raise NotImplementedError": suite("not_implemented", "not_implemented"),
+        "return None": suite("assertion", ""),
+        "return True": suite("", "assertion"),
+    }
+    use_case, request, _, spec_source, _ = _impostor_check(
+        tmp_path, reports, link="scenario", scenario_files=_FILES
+    )
+
+    assert use_case.execute(request).ok is True
+    spec_source.write_seal.assert_called_once()

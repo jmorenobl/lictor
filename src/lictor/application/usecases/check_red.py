@@ -80,6 +80,7 @@ class CheckRedRequest:
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     tree: str | None = None
     scenario_hashes: Mapping[str, str] = field(default_factory=dict)
+    scenario_files: Mapping[str, str] = field(default_factory=dict)  # relative to the project
     oracle: RedOracle = field(default_factory=RedOracle)
     link: MapLink = "name"
     impostors: Impostors | None = None
@@ -236,7 +237,9 @@ class CheckRed:
 
         ids = [_scenario_str(sid) for sid in request.all_scenario_ids]
         try:
-            mapped = map_test_cases_to_scenarios(control_res.test_cases, ids, request.link)
+            mapped = map_test_cases_to_scenarios(
+                control_res.test_cases, ids, request.link, request.scenario_files
+            )
         except DriverError as exc:
             rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
             return self._reject_or_raise(request, step_dir, rejection), None
@@ -341,7 +344,10 @@ class CheckRed:
         crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
         try:
             mapped = map_test_cases_to_scenarios(
-                cases, [_scenario_str(s) for s in request.all_scenario_ids], request.link
+                cases,
+                [_scenario_str(s) for s in request.all_scenario_ids],
+                request.link,
+                request.scenario_files,
             )
         except DriverError as exc:
             return {}, impostor_problem(crash, str(exc), cases)

@@ -385,6 +385,7 @@ class _GraphNodes:
                     scenario_hashes={
                         s["id"]: s.get("spec_hash", "") for s in state.get("scenarios", [])
                     },
+                    scenario_files=_scenario_files(state),
                     oracle=self.ctx.oracle,
                     link=self.ctx.map_link,
                     impostors=self.ctx.impostors,
@@ -569,6 +570,7 @@ class _GraphNodes:
                 green_scenario_ids=green_ids,
                 pending_scenario_ids=pending_ids,
                 all_scenario_ids=all_sids,
+                scenario_files=_scenario_files(state),
                 error_max_chars=self.ctx.error_max_chars,
                 attempt=state.get("attempt_slot") or max(state.get("attempt", 1), 1),
                 acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
@@ -691,6 +693,11 @@ class _GraphNodes:
         if exit_val is not None:
             return self._finish(state, exit_val, state.get("exit_reason", ""))
         return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
+
+
+def _scenario_files(state: GraphState) -> dict[str, str]:
+    """Each scenario's feature file: the one its test must execute it from."""
+    return {s["id"]: s["file"] for s in state.get("scenarios", [])}
 
 
 def get_sqlite_saver(db_path: Path) -> SqliteSaver:

@@ -22,7 +22,6 @@ _CLIPPED = " […] "
 _OMISSION_RESERVE = 60
 _FAILED_STATUSES = ("failure", "error")
 _NOT_IMPLEMENTED = "not_implemented"
-_FEATURES_DIR = "features/"
 SUSPICIOUS_DRIVER = "driver_sospechoso"
 
 
@@ -43,17 +42,22 @@ def map_test_cases_to_scenarios(
     test_cases: Sequence[TestCaseResult],
     scenario_ids: Sequence[ScenarioId | str],
     link: MapLink = "name",
+    files: Mapping[str, str] | None = None,
 ) -> dict[str, TestCaseResult]:
     """Map test cases to scenario IDs with strict 1:1 validation.
 
     By `name`, each scenario ID is normalized to lowercase alphanumeric with underscores (e.g.
     'iva_001') and matched with boundaries (^|_)norm_id(_|$) against the normalized test case name
-    and classname. By `scenario`, a test belongs to the scenario its runner says it executed.
-    Raises DriverError if any scenario has zero or multiple matching test cases, or if
-    a test case matches multiple scenarios.
+    and classname. By `scenario`, a test belongs to the scenario its runner says it executed, read
+    from the scenario's own file in `files` (relative to the project); a scenario with no file
+    there can't be linked. Raises DriverError if any scenario has zero or multiple matching test
+    cases, or if a test case matches multiple scenarios.
     """
     if link != "name":
-        return _map_by_scenario(test_cases, [str(sid) for sid in scenario_ids])
+        known = files or {}
+        return _map_by_scenario(
+            test_cases, {str(sid): known.get(str(sid), "") for sid in scenario_ids}
+        )
     mapped: dict[str, TestCaseResult] = {}
     matched_tc_indices: set[int] = set()
 
@@ -103,8 +107,9 @@ def _named_ids(case: TestCaseResult, scenario_ids: Sequence[str]) -> list[str]:
     return found
 
 
-def _linked_id(case: TestCaseResult, scenario_ids: Sequence[str]) -> str | None:
-    """Return the scenario a test executed, checking that it agrees with the test's name."""
+def _linked_id(case: TestCaseResult, files: Mapping[str, str]) -> str | None:
+    """Return the scenario a test executed, checking its name and the file it read it from."""
+    scenario_ids = list(files)
     linked = [sid for sid in scenario_ids if sid in case.scenario_tags]
     named = _named_ids(case, scenario_ids)
     if not linked:
@@ -121,21 +126,24 @@ def _linked_id(case: TestCaseResult, scenario_ids: Sequence[str]) -> str | None:
             f"El test {case.name} lleva el ID de {named[0]} en el nombre, "
             f"pero ejecuta el escenario {linked[0]}"
         )
-    if not _under(case.feature, [_FEATURES_DIR]):
+    expected = files[linked[0]]
+    if not expected or case.feature != expected:
+        # Another file may carry the same tag: the runner reads any file it's given.
         raise DriverError(
-            f"El test {case.name} ejecuta {linked[0]} desde {case.feature or 'un fichero'} "
-            f"fuera de {_FEATURES_DIR}"
+            f"El test {case.name} ejecuta {linked[0]} desde "
+            f"{case.feature or 'un fichero fuera del proyecto'}, no desde "
+            f"{expected or 'el fichero de su escenario'}"
         )
     return linked[0]
 
 
 def _map_by_scenario(
-    test_cases: Sequence[TestCaseResult], scenario_ids: Sequence[str]
+    test_cases: Sequence[TestCaseResult], files: Mapping[str, str]
 ) -> dict[str, TestCaseResult]:
     """Map each scenario to the one test that executed it, not to a test that is named after it."""
-    found: dict[str, list[TestCaseResult]] = {sid: [] for sid in scenario_ids}
+    found: dict[str, list[TestCaseResult]] = {sid: [] for sid in files}
     for case in test_cases:
-        sid = _linked_id(case, scenario_ids)
+        sid = _linked_id(case, files)
         if sid is not None:
             found[sid].append(case)
     mapped: dict[str, TestCaseResult] = {}

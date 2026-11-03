@@ -651,6 +651,7 @@ def test_control_path_status_tells_absent_from_removed(
 # --- Phase 5: the oracle and the cycle of scenarios ---
 
 IDS = ["IVA-001", "IVA-002"]
+FILES = dict.fromkeys(IDS, "features/iva.feature")
 Status = Literal["passed", "failure", "error", "skipped"]
 
 
@@ -662,7 +663,7 @@ def _linked(name: str, sid: str = "", feature: str = "features/iva.feature") -> 
 def test_map_by_scenario_follows_the_scenario_executed() -> None:
     first, second = _linked("test_uno", "IVA-001"), _linked("test_dos", "IVA-002")
 
-    mapped = map_test_cases_to_scenarios([second, first], IDS, link="scenario")
+    mapped = map_test_cases_to_scenarios([second, first], IDS, link="scenario", files=FILES)
 
     assert mapped == {"IVA-001": first, "IVA-002": second}
 
@@ -671,40 +672,83 @@ def test_map_by_scenario_ignores_tests_that_execute_no_scenario() -> None:
     helper = _linked("test_ayuda")
     first, second = _linked("test_iva_001", "IVA-001"), _linked("test_iva_002", "IVA-002")
 
-    mapped = map_test_cases_to_scenarios([helper, first, second], IDS, link="scenario")
+    mapped = map_test_cases_to_scenarios([helper, first, second], IDS, link="scenario", files=FILES)
 
     assert unmapped_cases([helper, first, second], mapped) == [helper]
 
 
 def test_map_by_scenario_rejects_a_test_named_after_a_scenario_it_does_not_execute() -> None:
     with pytest.raises(DriverError, match=r"test_iva_001 lleva el ID de IVA-001.*no ejecuta"):
-        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario")
+        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario", files=FILES)
 
 
 def test_map_by_scenario_rejects_a_name_that_contradicts_the_scenario() -> None:
     cases = [_linked("test_iva_001", "IVA-002"), _linked("test_x", "IVA-001")]
     with pytest.raises(DriverError, match="nombre, pero ejecuta el escenario IVA-002"):
-        map_test_cases_to_scenarios(cases, IDS, link="scenario")
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)
 
 
 def test_map_by_scenario_accepts_a_name_that_agrees() -> None:
     cases = [_linked("test_iva_001", "IVA-001"), _linked("test_iva_002", "IVA-002")]
-    assert map_test_cases_to_scenarios(cases, IDS, link="scenario")["IVA-001"] is cases[0]
+    assert (
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)["IVA-001"] is cases[0]
+    )
 
 
-@pytest.mark.parametrize("feature", ["", "otros/iva.feature", "featuresx/iva.feature"])
-def test_map_by_scenario_requires_the_feature_under_features(feature: str) -> None:
+@pytest.mark.parametrize(
+    "feature",
+    ["", "features/copia.txt", "features/otra.feature", "otros/iva.feature", "features/iva"],
+)
+def test_map_by_scenario_requires_the_scenario_s_own_file(feature: str) -> None:
+    """Before the seal a driver may write another file with the same tag, `.feature` or not."""
     cases = [_linked("test_a", "IVA-001", feature), _linked("test_b", "IVA-002")]
-    with pytest.raises(DriverError, match="fuera de features/"):
-        map_test_cases_to_scenarios(cases, IDS, link="scenario")
+    with pytest.raises(
+        DriverError, match=r"ejecuta IVA-001 desde .*no desde features/iva\.feature"
+    ):
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=FILES)
+
+
+def test_map_by_scenario_reads_each_scenario_from_its_own_file() -> None:
+    files = {"IVA-001": "features/a.feature", "IVA-002": "features/sub/b.feature"}
+    first = _linked("test_a", "IVA-001", "features/a.feature")
+    second = _linked("test_b", "IVA-002", "features/sub/b.feature")
+
+    assert map_test_cases_to_scenarios([first, second], IDS, link="scenario", files=files) == {
+        "IVA-001": first,
+        "IVA-002": second,
+    }
+    swapped = [_linked("test_a", "IVA-001", "features/sub/b.feature"), second]
+    with pytest.raises(DriverError, match=r"no desde features/a\.feature"):
+        map_test_cases_to_scenarios(swapped, IDS, link="scenario", files=files)
+
+
+@pytest.mark.parametrize("files", [None, {"IVA-002": "features/iva.feature"}])
+def test_map_by_scenario_links_no_scenario_whose_file_it_does_not_know(
+    files: dict[str, str] | None,
+) -> None:
+    cases = [_linked("test_a", "IVA-001"), _linked("test_b", "IVA-002")]
+    with pytest.raises(DriverError) as raised:
+        map_test_cases_to_scenarios(cases, IDS, link="scenario", files=files)
+    assert str(raised.value) == (
+        "El test test_a ejecuta IVA-001 desde features/iva.feature, "
+        "no desde el fichero de su escenario"
+    )
+
+
+def test_map_by_name_ignores_the_files() -> None:
+    case = TestCaseResult(name="test_iva_001")
+    files = {"IVA-001": "features/otra.feature"}
+    assert map_test_cases_to_scenarios([case], ["IVA-001"], files=files) == {"IVA-001": case}
 
 
 def test_map_by_scenario_requires_one_test_per_scenario() -> None:
     with pytest.raises(DriverError, match="Ningún test ejecuta el escenario 'IVA-002'"):
-        map_test_cases_to_scenarios([_linked("test_a", "IVA-001")], IDS, link="scenario")
+        map_test_cases_to_scenarios(
+            [_linked("test_a", "IVA-001")], IDS, link="scenario", files=FILES
+        )
     twice = [_linked("a", "IVA-001"), _linked("b", "IVA-001"), _linked("c", "IVA-002")]
     with pytest.raises(DriverError, match=r"Múltiples casos de test ejecutan.*\['a', 'b'\]"):
-        map_test_cases_to_scenarios(twice, IDS, link="scenario")
+        map_test_cases_to_scenarios(twice, IDS, link="scenario", files=FILES)
 
 
 def test_map_by_scenario_rejects_a_test_that_executes_two_scenarios() -> None:
@@ -712,7 +756,7 @@ def test_map_by_scenario_rejects_a_test_that_executes_two_scenarios() -> None:
         name="t", properties={"lictor.scenario": "IVA-001 IVA-002", "lictor.feature": "features/f"}
     )
     with pytest.raises(DriverError, match="varios escenarios"):
-        map_test_cases_to_scenarios([both], IDS, link="scenario")
+        map_test_cases_to_scenarios([both], IDS, link="scenario", files=FILES)
 
 
 def test_map_by_name_stays_the_default() -> None:
@@ -984,29 +1028,38 @@ def test_judge_red_lists_each_offender_once_in_the_order_of_the_scenarios() -> N
 
 def test_map_by_scenario_says_exactly_what_is_missing() -> None:
     with pytest.raises(DriverError) as unlinked:
-        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario")
+        map_test_cases_to_scenarios([_linked("test_iva_001")], IDS, link="scenario", files=FILES)
     assert str(unlinked.value) == (
         "El test test_iva_001 lleva el ID de IVA-001 en el nombre, pero no ejecuta "
         "ningún escenario del Gherkin: enlázalo con su escenario"
     )
     with pytest.raises(DriverError) as missing:
-        map_test_cases_to_scenarios([_linked("a", "IVA-001")], IDS, link="scenario")
+        map_test_cases_to_scenarios([_linked("a", "IVA-001")], IDS, link="scenario", files=FILES)
     assert str(missing.value) == (
         "Ningún test ejecuta el escenario 'IVA-002': cada escenario necesita un test "
         "enlazado con su escenario del Gherkin"
     )
     with pytest.raises(DriverError) as outside:
         map_test_cases_to_scenarios(
-            [_linked("a", "IVA-001", ""), _linked("b", "IVA-002")], IDS, link="scenario"
+            [_linked("a", "IVA-001", ""), _linked("b", "IVA-002")],
+            IDS,
+            link="scenario",
+            files=FILES,
         )
-    assert str(outside.value) == "El test a ejecuta IVA-001 desde un fichero fuera de features/"
+    assert str(outside.value) == (
+        "El test a ejecuta IVA-001 desde un fichero fuera del proyecto, "
+        "no desde features/iva.feature"
+    )
 
 
 def test_map_by_scenario_tells_ids_apart_by_their_letters() -> None:
     """`test_abc_001` carries no ID of these scenarios, whatever its digits."""
     other = _linked("test_abc_001", "IVA-002")
     first = _linked("test_iva_001", "IVA-001")
-    assert map_test_cases_to_scenarios([first, other], IDS, link="scenario")["IVA-002"] is other
+    assert (
+        map_test_cases_to_scenarios([first, other], IDS, link="scenario", files=FILES)["IVA-002"]
+        is other
+    )
 
 
 def test_under_keeps_every_character_of_the_root_but_its_slashes() -> None:

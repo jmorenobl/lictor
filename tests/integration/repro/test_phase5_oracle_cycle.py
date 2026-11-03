@@ -78,6 +78,40 @@ def test_f30_driver_without_assertions_is_rejected(make_project: ProjectFactory)
     assert false_greens(root) == []
 
 
+def test_a_scenario_executed_from_a_copy_of_its_feature_does_not_link(
+    make_project: ProjectFactory,
+) -> None:
+    """A project that lets its driver write features/ lets it write a copy, which pytest-bdd reads
+    even as a `.txt`. With the profile's paths, the copy never leaves the agent's workspace."""
+    paths = {
+        "writable": ["src/", "tests/unit/"],
+        "driver": ["tests/acceptance/", "features/"],
+        "protected": ["features/", "tests/acceptance/", "lictor.json", "pyproject.toml", "uv.lock"],
+    }
+    root = make_project(config_changes={"paths": paths})
+    feature = (root / "features" / "iva.feature").read_text(encoding="utf-8")
+
+    def driver(task: AgentTask, attempt: int) -> None:
+        good_driver(task, attempt)
+        write(task.cwd, "features/copia.txt", feature.replace("el total es 121", "el total es 0"))
+        copied = DRIVER.replace(
+            '@scenario(FEATURE, "IVA general")',
+            '@scenario("../../features/copia.txt", "IVA general")',
+        )
+        write(task.cwd, DRIVER_PATH, copied)
+
+    def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
+        write(task.cwd, MODULE_PATH, STUB.replace("raise NotImplementedError", "return 0", 1))
+
+    outcome = run_lictor(root, Agent(driver=driver, impl=impl))
+
+    assert outcome == Outcome(10)
+    rejected = events_of(root, "driver.rejected")
+    assert {event["data"]["reason"] for event in rejected} == {"mapeo"}
+    assert "desde features/copia.txt, no desde features/iva.feature" in rejected[0]["data"]["error"]
+    assert green_ids(root) == []
+
+
 def test_d10_broken_driver_is_not_blamed_on_the_scenario(make_project: ProjectFactory) -> None:
     root = make_project()
 

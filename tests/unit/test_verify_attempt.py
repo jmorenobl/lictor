@@ -1316,9 +1316,41 @@ def test_verify_maps_by_the_scenario_each_test_executed(tmp_path: Path) -> None:
         '<property name="lictor.feature" value="features/iva.feature"/></properties>'
         '<failure message="pendiente"/></testcase></testsuite>'
     )
-    verifier, req = _verify(tmp_path, _PlantingRunner({"suite": (linked, 1)}), link="scenario")
+    files = dict.fromkeys(("IVA-001", "IVA-002"), "features/iva.feature")
+    verifier, req = _verify(
+        tmp_path,
+        _PlantingRunner({"suite": (linked, 1)}),
+        link="scenario",
+        scenario_files=files,
+    )
 
     result = verifier.execute(req)
 
     assert result.ok is True
     assert result.scenario_results == {"IVA-001": "passed", "IVA-002": "failure"}
+
+
+def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
+    tmp_path: Path,
+) -> None:
+    linked = (
+        '<testsuite><testcase name="test_uno"><properties>'
+        '<property name="lictor.scenario" value="IVA-001"/>'
+        '<property name="lictor.feature" value="features/copia.txt"/></properties></testcase>'
+        '<testcase name="test_dos"><properties>'
+        '<property name="lictor.scenario" value="IVA-002"/>'
+        '<property name="lictor.feature" value="features/iva.feature"/></properties>'
+        '<failure message="pendiente"/></testcase></testsuite>'
+    )
+    files = dict.fromkeys(("IVA-001", "IVA-002"), "features/iva.feature")
+    verifier, req = _verify(
+        tmp_path,
+        _PlantingRunner({"suite": (linked, 1)}),
+        link="scenario",
+        scenario_files=files,
+    )
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "acceptance")
+    assert "desde features/copia.txt, no desde features/iva.feature" in result.condensed_error

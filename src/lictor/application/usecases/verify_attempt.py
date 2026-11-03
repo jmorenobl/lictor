@@ -114,6 +114,7 @@ class VerifyAttemptRequest:
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
     pending_scenario_ids: Sequence[str] = field(default_factory=tuple)
     all_scenario_ids: Sequence[str | ScenarioId] = field(default_factory=tuple)
+    scenario_files: Mapping[str, str] = field(default_factory=dict)  # relative to the project
     error_max_chars: int = 4000
     attempt: int = 1
     acceptance_failure_exit_codes: Sequence[int] = (1,)
@@ -670,7 +671,9 @@ class VerifyAttempt:
 
         # Map test cases to scenario IDs
         try:
-            mapped = map_test_cases_to_scenarios(acc_res.test_cases, req.all_scenario_ids, req.link)
+            mapped = map_test_cases_to_scenarios(
+                acc_res.test_cases, req.all_scenario_ids, req.link, req.scenario_files
+            )
         except DriverError as exc:
             return self._fail(
                 req,
