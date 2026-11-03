@@ -6,7 +6,6 @@ import importlib.resources
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
 from lictor.application.run_files import (
@@ -23,15 +22,14 @@ from lictor.application.usecases.agent_events import (
 )
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
 from lictor.domain.errors import CandidateError
-from lictor.domain.model import AgentResult, AgentTask, TreeChange
+from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.rules import (
+    classify_agent,
     count_agent_failures,
     forbidden_paths,
-    is_agent_unavailable,
+    keeps_attempt,
     path_within,
 )
-
-DriverSignal = Literal["ok", "rate_limited", "unavailable", "error", "rejected"]
 
 
 @dataclass(frozen=True)
@@ -66,7 +64,7 @@ class PrepareDriverResult:
     driver_attempts: int
     prompt_sha: str
     reverted_files: tuple[str, ...] = ()
-    agent_signal: DriverSignal = "ok"
+    agent_signal: AgentSignal = "ok"
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
@@ -193,20 +191,14 @@ class PrepareDriver:
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
 
-        agent_signal: DriverSignal
-        new_attempts = request.driver_attempts
-        if outcome.tampered:
-            agent_signal = "rejected"
-            new_attempts = request.driver_attempts + 1
-        elif agent_result.status == "rate_limited":
-            agent_signal = "rate_limited"
-        elif is_agent_unavailable(agent_result.status, agent_failures):
-            agent_signal = "unavailable"
-        else:
-            agent_signal = "ok" if agent_result.status == "ok" else "error"
-            if outcome.unreadable is not None:
-                agent_signal = "rejected"
-            new_attempts = request.driver_attempts + 1
+        agent_signal = classify_agent(
+            agent_result.status,
+            agent_failures,
+            tampered=bool(outcome.tampered),
+            unreadable=outcome.unreadable is not None,
+        )
+        keeps = keeps_attempt(agent_signal, agent_failures)
+        new_attempts = request.driver_attempts if keeps else request.driver_attempts + 1
 
         call = AgentCall(
             run_id=request.run_id,

@@ -26,7 +26,7 @@ from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
-from lictor.domain.model import CommandOutput, Scenario, VerifyResult
+from lictor.domain.model import AgentStatus, AgentTask, CommandOutput, Scenario, VerifyResult
 from lictor.orchestration.graph import (
     DURABILITY,
     GraphContext,
@@ -450,6 +450,40 @@ def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
     assert resumed_state.get("exit_code") == 0
     assert resumed_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
     assert resumed_state.get("driver_attempts") == 1
+
+
+def test_a_driver_call_that_fails_is_retried_without_judging_its_tree(tmp_path: Path) -> None:
+    def fail_first_driver_call(task: AgentTask, _sid: str | None, calls: int) -> AgentStatus | None:
+        return "error" if task.role == "driver" and calls == 1 else None
+
+    executor = FakeExecutor(
+        mode="good",
+        effect=fail_first_driver_call,
+        files_to_write={
+            "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},
+            "IVA-001": {"src/iva.py": "# IVA-001: OK\n"},
+            "IVA-002": {"src/iva.py": "# IVA-001: OK\n# IVA-002: OK\n"},
+        },
+    )
+    context = _setup_test_environment(tmp_path, executor)
+    graph = create_graph(
+        context, checkpointer=get_sqlite_saver(tmp_path / ".lictor" / "checkpoints.sqlite")
+    )
+    run_id = "20261103-150000-0001"
+
+    final = graph.invoke(
+        {"run_id": run_id, "config_hash": "h", "driver_fresh": True, "driver_attempts": 0},
+        config={"configurable": {"thread_id": run_id}},
+        durability=DURABILITY,
+    )
+
+    assert final.get("exit_code") == 0, final.get("exit_reason")
+    assert final.get("driver_attempts") == 1
+    assert executor.calls.count("driver") == 2
+    events = JsonlEventLog(tmp_path / ".lictor" / "journal.jsonl").events(run_id=run_id)
+    driver_calls = [e.data for e in events if e.type == "lictor.agent.finished.v1"][:2]
+    assert [(d["signal"], d["attempt"]) for d in driver_calls] == [("error", 0), ("ok", 1)]
+    assert not (tmp_path / ".lictor" / "runs" / run_id / "driver" / "000-red").exists()
 
 
 def test_graph_mode_crash_and_checkpoint_resumption(tmp_path: Path) -> None:

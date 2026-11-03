@@ -44,6 +44,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.routing import (
+    route_build_driver,
     route_commit,
     route_implement,
     route_load_spec,
@@ -739,13 +740,6 @@ def create_graph(
             return END
         return "load_spec"
 
-    def route_build_driver_edge(state: GraphState) -> str:
-        if state.get("exit_code") is not None:
-            return END
-        if state.get("agent_signal") in ("rate_limited", "unavailable"):
-            return "pause"
-        return "build_driver" if state.get("agent_signal") == "rejected" else "red_check"
-
     def route_implement_edge(state: GraphState) -> str:
         return route_implement(state, max_attempts=context.max_attempts)
 
@@ -786,7 +780,7 @@ def create_graph(
     )
     builder.add_conditional_edges(
         "build_driver",
-        route_build_driver_edge,
+        route_build_driver,
         {"pause": "pause", "red_check": "red_check", "build_driver": "build_driver", END: END},
     )
     builder.add_conditional_edges(

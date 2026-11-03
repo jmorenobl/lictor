@@ -1,6 +1,9 @@
+import pytest
+
 from lictor.domain.model import VerifyResult
 from lictor.domain.routing import (
     END,
+    route_build_driver,
     route_commit,
     route_implement,
     route_load_spec,
@@ -167,3 +170,23 @@ def test_route_commit_blocked_waits_for_the_user() -> None:
 
 def test_route_commit_goes_on_otherwise() -> None:
     assert route_commit({"agent_signal": None}) == "pick_next"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({"exit_code": 10, "agent_signal": "rejected"}, END),
+        ({"agent_signal": "rate_limited"}, "pause"),
+        ({"agent_signal": "unavailable", "agent_failures": 2}, "pause"),
+        ({"agent_signal": "rejected"}, "build_driver"),
+        ({"agent_signal": "error", "agent_failures": 1}, "build_driver"),
+        ({"agent_signal": "error", "agent_failures": 0}, "red_check"),
+        ({"agent_signal": "error"}, "red_check"),
+        ({"agent_signal": "ok", "agent_failures": 0}, "red_check"),
+        ({}, "red_check"),
+    ],
+)
+def test_route_build_driver_retries_a_call_that_kept_its_attempt(
+    state: dict[str, object], expected: str
+) -> None:
+    assert route_build_driver(state) == expected

@@ -293,7 +293,9 @@ def _execute_driver(
     ("status", "failures", "expected"),
     [
         ("ok", 1, ("ok", 2, 0)),
-        ("error", 0, ("error", 2, 1)),
+        ("error", 0, ("error", 1, 1)),
+        ("max_turns", 0, ("error", 2, 0)),
+        ("timeout", 1, ("error", 2, 0)),
         ("error", 1, ("unavailable", 1, 2)),
         ("auth", 0, ("unavailable", 1, 0)),
         ("rate_limited", 0, ("rate_limited", 1, 0)),
