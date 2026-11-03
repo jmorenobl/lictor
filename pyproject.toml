@@ -86,10 +86,32 @@ branch = true
 source = ["lictor"]
 
 [tool.mutmut]
-source_paths = ["src/lictor/domain/"]
+# The domain, plus the application modules whose unit tests are fast and cover them. The large use
+# cases (verify_attempt, check_red, implement_scenario, prepare_driver) stay out: their decisions
+# move into the domain, and their wiring is covered by manual mutants against the whole suite.
+source_paths = [
+    "src/lictor/domain/",
+    "src/lictor/application/anchor.py",
+    "src/lictor/application/events.py",
+    "src/lictor/application/seal.py",
+    "src/lictor/application/spec_history.py",
+    "src/lictor/application/usecases/agent_events.py",
+    "src/lictor/application/usecases/commit_green.py",
+    "src/lictor/application/usecases/quarantine.py",
+]
 also_copy = ["src/"]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_rules.py",
     "tests/unit/test_routing.py",
     "tests/unit/test_model.py",
+    "tests/unit/test_anchor.py",
+    "tests/unit/test_events.py",
+    "tests/unit/test_agent_events.py",
+    "tests/unit/test_seal.py",
+    "tests/unit/test_gherkin_source.py",
+    "tests/unit/test_spec_history.py",
+    "tests/unit/test_implement_scenario.py",
+    "tests/unit/test_prepare_driver.py",
+    "tests/unit/test_commit_green.py",
+    "tests/unit/test_quarantine.py",
 ]

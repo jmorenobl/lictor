@@ -37,11 +37,7 @@ class CommitGreen:
 
     def execute(self, request: CommitGreenRequest) -> CommitGreenResult:
         """Advance the branch to the verified commit and append CloudEvent."""
-        sid_str = (
-            request.scenario_id.value
-            if isinstance(request.scenario_id, ScenarioId)
-            else str(request.scenario_id)
-        )
+        sid_str = str(request.scenario_id)
 
         candidate = request.candidate
         if candidate is None:

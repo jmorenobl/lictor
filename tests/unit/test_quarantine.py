@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 from lictor.application.ports import Clock, EventLog
 from lictor.application.usecases.quarantine import Quarantine, QuarantineRequest
-from lictor.domain.model import Event
+from lictor.domain.model import Event, ScenarioId
 
 
 def test_quarantine_emits_event() -> None:
@@ -30,3 +30,19 @@ def test_quarantine_emits_event() -> None:
     assert event.data["reason"] == "intentos agotados"
     assert event.data["details"] == "3 failed verification attempts"
     assert event.data["last_error"] == "3 failed verification attempts"
+
+
+def test_quarantine_event_without_details_and_from_a_scenario_id() -> None:
+    event_log = MagicMock(spec=EventLog)
+    clock = MagicMock(spec=Clock)
+    clock.now_iso.return_value = "2026-10-30T14:10:00Z"
+    req = QuarantineRequest(
+        scenario_id=ScenarioId("IVA-002"), run_id="R7", reason="spec_conflict", details=None
+    )
+
+    result = Quarantine(event_log=event_log, clock=clock).execute(req)
+
+    assert result.scenario_id == "IVA-002"
+    event = event_log.append.call_args[0][0]
+    assert (event.runid, event.scenarioid) == ("R7", "IVA-002")
+    assert (event.data["details"], event.data["last_error"]) == ("", "")

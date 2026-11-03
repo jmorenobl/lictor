@@ -37,11 +37,7 @@ class Quarantine:
 
     def execute(self, request: QuarantineRequest) -> QuarantineResult:
         """Append CloudEvent and return result."""
-        sid_str = (
-            request.scenario_id.value
-            if isinstance(request.scenario_id, ScenarioId)
-            else str(request.scenario_id)
-        )
+        sid_str = str(request.scenario_id)
 
         event = new_event(
             self.clock,

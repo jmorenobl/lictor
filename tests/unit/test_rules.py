@@ -1190,6 +1190,7 @@ def _assistant(model: str | None) -> dict[str, Any]:
         ([_assistant(None)], True),
         ([_assistant(SYNTHETIC_MODEL), _assistant("claude-haiku-5-5")], True),
         ([{"type": "user", "message": {"model": "claude"}}], False),
+        ([{"type": "system", "subtype": "init"}, _assistant("claude-haiku-5-5")], True),
     ],
 )
 def test_model_responded_ignores_what_the_backend_wrote_itself(
@@ -1214,6 +1215,8 @@ def test_synthetic_model_is_the_backend_s_marker() -> None:
         ("a.py", [""], True),
         ("a.py", [], False),
         ("lib/src/a.py", ["src"], False),
+        ("a.py", ["X"], False),
+        ("X/a.py", ["X"], True),
     ],
 )
 def test_path_within(path: str, roots: list[str], expected: bool) -> None:
@@ -1268,3 +1271,7 @@ def test_describe_score_adds_the_other_outcomes_only_when_there_are_some() -> No
         "84,2 % (80 de 95 muertos; 5 vivos, 4 por tiempo, 3 sin tests, 2 sospechosos, "
         "1 con segfault, 5 omitidos)"
     )
+
+
+def test_mutation_score_of_a_single_tried_mutant() -> None:
+    assert mutation_score({"killed": 1, "total": 1}).percent == 100.0

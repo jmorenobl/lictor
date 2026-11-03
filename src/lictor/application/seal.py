@@ -41,7 +41,7 @@ def _verify_symlink_and_hash(
     if path.is_symlink():
         try:
             resolved_p = path.resolve()
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:  # a loop is RuntimeError before Python 3.13
             rel = path.relative_to(project_root).as_posix()
             raise SpecError(f"Enlace simbólico inválido en {rel}: {exc}") from exc
         if not resolved_p.is_relative_to(resolved_root):

@@ -36,6 +36,7 @@ def test_each_scenario_takes_its_most_recent_green_commit() -> None:
         "B-1": GreenRecord("c1", "hb"),
     }
     vcs.trailer_commits.assert_called_once_with("Scenario")
+    assert {call.args[1] for call in vcs.list_files.call_args_list} == {"features"}
 
 
 def test_a_scenario_its_green_commit_does_not_describe_has_no_hash() -> None:
