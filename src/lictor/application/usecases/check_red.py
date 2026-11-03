@@ -280,7 +280,7 @@ class CheckRed:
         impostors: Impostors,
         new_pending: Sequence[str],
     ) -> _Rejection | None:
-        """Prove each new test asserts something: with stubs turned into constants, it must fail.
+        """Prove each new test uses what the interface returns: with constants, it must fail.
 
         Two opposite constants, because a legitimate test may pass with one of them. A run that
         crashed, didn't map or kept a stub proves nothing, and doesn't count.
@@ -312,7 +312,7 @@ class CheckRed:
         return _Rejection(
             "impostor",
             f"Los tests de {', '.join(survivors)} pasan aunque la interfaz devuelva siempre "
-            f"una constante ({constants}): no comprueban su resultado con ninguna aserción.",
+            f"una constante ({constants}): ignoran el valor que devuelve la interfaz.",
         )
 
     def _impersonate(self, clone: Path, oracle: RedOracle, pattern: str, replacement: str) -> None:
