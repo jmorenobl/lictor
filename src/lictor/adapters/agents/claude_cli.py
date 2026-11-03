@@ -347,10 +347,19 @@ class ClaudeCLI:
 
     @staticmethod
     def _timed_out(task: AgentTask, stream: _Stream, common: dict[str, Any]) -> AgentResult:
-        """A model that wrote something ran out of time; one that never answered is the backend."""
+        """A model that wrote something ran out of time; one that never answered is the backend.
+
+        A backend that rejected the call for its rate limit before answering is that limit.
+        """
         if model_responded(stream.events):
             return AgentResult(
                 status="timeout", text=f"Sin tiempo tras {task.timeout_s} s", **common
+            )
+        if stream.rate_limit_status == "rejected":
+            return AgentResult(
+                status="rate_limited",
+                text=f"Límite de uso alcanzado; el modelo no respondió en {task.timeout_s} s",
+                **common,
             )
         return AgentResult(
             status="error", text=f"El modelo no respondió en {task.timeout_s} s", **common

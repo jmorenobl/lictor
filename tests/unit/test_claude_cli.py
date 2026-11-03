@@ -389,6 +389,29 @@ class TestClaudeCLIRun:
 
         assert (res.status, res.text) == ("error", "El modelo no respondió en 1800 s")
 
+    def test_timeout_after_a_rejected_rate_limit_is_a_rate_limit(self, tmp_path: Path) -> None:
+        events = [
+            {"type": "system", "subtype": "init", "claude_code_version": "2.1.316"},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}},
+        ]
+        cli, _ = _cli(_output(_stream(*events), -9, "", timed_out=True))
+
+        res = cli.run(_sample_task(tmp_path, tmp_path / "raw.json"))
+
+        assert res.status == "rate_limited"
+        assert res.text == "Límite de uso alcanzado; el modelo no respondió en 1800 s"
+
+    def test_timeout_after_the_model_answered_is_a_timeout_even_if_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        events = [
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}},
+            {"type": "assistant", "message": {"model": "claude-opus-5-5", "content": []}},
+        ]
+        cli, _ = _cli(_output(_stream(*events), -9, "", timed_out=True))
+
+        assert cli.run(_sample_task(tmp_path, tmp_path / "raw.json")).status == "timeout"
+
     def test_a_real_stream_is_read_whole(self, tmp_path: Path) -> None:
         res = _run(tmp_path, CAPTURE.read_text(encoding="utf-8"))
 
