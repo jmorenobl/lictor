@@ -54,10 +54,7 @@ def map_test_cases_to_scenarios(
     cases, or if a test case matches multiple scenarios.
     """
     if link != "name":
-        known = files or {}
-        return _map_by_scenario(
-            test_cases, {str(sid): known.get(str(sid), "") for sid in scenario_ids}
-        )
+        return _map_by_scenario(test_cases, [str(sid) for sid in scenario_ids], files or {})
     mapped: dict[str, TestCaseResult] = {}
     matched_tc_indices: set[int] = set()
 
@@ -107,9 +104,10 @@ def _named_ids(case: TestCaseResult, scenario_ids: Sequence[str]) -> list[str]:
     return found
 
 
-def _linked_id(case: TestCaseResult, files: Mapping[str, str]) -> str | None:
+def _linked_id(
+    case: TestCaseResult, scenario_ids: Sequence[str], files: Mapping[str, str]
+) -> str | None:
     """Return the scenario a test executed, checking its name and the file it read it from."""
-    scenario_ids = list(files)
     linked = [sid for sid in scenario_ids if sid in case.scenario_tags]
     named = _named_ids(case, scenario_ids)
     if not linked:
@@ -126,7 +124,7 @@ def _linked_id(case: TestCaseResult, files: Mapping[str, str]) -> str | None:
             f"El test {case.name} lleva el ID de {named[0]} en el nombre, "
             f"pero ejecuta el escenario {linked[0]}"
         )
-    expected = files[linked[0]]
+    expected = files.get(linked[0])
     if not expected or case.feature != expected:
         # Another file may carry the same tag: the runner reads any file it's given.
         raise DriverError(
@@ -138,12 +136,12 @@ def _linked_id(case: TestCaseResult, files: Mapping[str, str]) -> str | None:
 
 
 def _map_by_scenario(
-    test_cases: Sequence[TestCaseResult], files: Mapping[str, str]
+    test_cases: Sequence[TestCaseResult], scenario_ids: Sequence[str], files: Mapping[str, str]
 ) -> dict[str, TestCaseResult]:
     """Map each scenario to the one test that executed it, not to a test that is named after it."""
-    found: dict[str, list[TestCaseResult]] = {sid: [] for sid in files}
+    found: dict[str, list[TestCaseResult]] = {sid: [] for sid in scenario_ids}
     for case in test_cases:
-        sid = _linked_id(case, files)
+        sid = _linked_id(case, scenario_ids, files)
         if sid is not None:
             found[sid].append(case)
     mapped: dict[str, TestCaseResult] = {}
