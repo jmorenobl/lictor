@@ -126,10 +126,10 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
     reader = MagicMock(spec=ResultReader)
-    # IVA-001 is green and fails now: the red rule breaks and the agent may fix the driver.
-    tc1 = TestCaseResult(name="test_iva_001", status="failure")
-    tc2 = TestCaseResult(name="test_iva_002", status="failure")
-    reader.read.return_value = ControlResult(ok=False, test_cases=(tc1, tc2))
+    # Both pass: IVA-002 is new and should have failed, so its test proves nothing yet.
+    tc1 = TestCaseResult(name="test_iva_001", status="passed")
+    tc2 = TestCaseResult(name="test_iva_002", status="passed")
+    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -159,7 +159,10 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
 
     result = use_case.execute(req)
     assert result.ok is False
-    assert result.last_error is not None
+    assert "test_iva_002 del escenario IVA-002 pasa con un driver nuevo" in (
+        result.last_error or ""
+    )
+    assert event_log.append.call_args.args[0].data["reason"] == "sin_prueba"
     spec_source.write_seal.assert_not_called()
 
 
@@ -168,9 +171,9 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
     reader = MagicMock(spec=ResultReader)
-    tc1 = TestCaseResult(name="test_iva_001", status="failure")
-    tc2 = TestCaseResult(name="test_iva_002", status="failure")
-    reader.read.return_value = ControlResult(ok=False, test_cases=(tc1, tc2))
+    tc1 = TestCaseResult(name="test_iva_001", status="passed")
+    tc2 = TestCaseResult(name="test_iva_002", status="passed")
+    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -446,8 +449,14 @@ def test_check_red_mapping_failure_is_recorded(tmp_path: Path) -> None:
     assert "No se encontró" in error_path.read_text(encoding="utf-8")
 
 
-def test_check_red_violation_names_only_the_offender(tmp_path: Path) -> None:
-    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **_BROKEN_GREEN)
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [({"report": _REPORT_OFFENDER}, "sin_prueba"), (_BROKEN_GREEN, "regla_del_rojo")],
+)
+def test_check_red_violation_names_only_the_offender(
+    tmp_path: Path, setup: dict[str, Any], reason: str
+) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **setup)
 
     result = use_case.execute(request)
 
@@ -455,11 +464,14 @@ def test_check_red_violation_names_only_the_offender(tmp_path: Path) -> None:
     assert "test_iva_002" in error
     assert "test_iva_001" not in error
     assert "salida" not in error
-    assert _rejection(event_log).data["reason"] == "regla_del_rojo"
+    assert _rejection(event_log).data["reason"] == reason
 
 
-def test_check_red_full_error_keeps_the_legitimate_reds(tmp_path: Path) -> None:
-    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **_BROKEN_GREEN)
+@pytest.mark.parametrize("setup", [{"report": _REPORT_OFFENDER}, _BROKEN_GREEN])
+def test_check_red_full_error_keeps_the_legitimate_reds(
+    tmp_path: Path, setup: dict[str, Any]
+) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, code=1, **setup)
 
     use_case.execute(request)
 
@@ -469,9 +481,12 @@ def test_check_red_full_error_keeps_the_legitimate_reds(tmp_path: Path) -> None:
     assert "stderr crudo" in full
 
 
-def test_check_red_exhausted_attempts_carry_the_reason(tmp_path: Path) -> None:
+@pytest.mark.parametrize("setup", [{"report": _REPORT_OFFENDER}, _BROKEN_GREEN])
+def test_check_red_exhausted_attempts_carry_the_reason(
+    tmp_path: Path, setup: dict[str, Any]
+) -> None:
     use_case, request, event_log, _, _ = _real_check(
-        tmp_path, code=1, driver_attempts=2, max_driver_attempts=2, **_BROKEN_GREEN
+        tmp_path, code=1, driver_attempts=2, max_driver_attempts=2, **setup
     )
 
     with pytest.raises(DriverError, match="test_iva_002"):
@@ -658,19 +673,42 @@ def _events(event_log: MagicMock, kind: str) -> list[Event]:
     return [c.args[0] for c in event_log.append.call_args_list if c.args[0].type == kind]
 
 
-def test_check_red_new_scenario_passing_with_a_fresh_driver_stops_without_retrying(
+def test_check_red_new_scenario_passing_with_a_fresh_driver_is_another_try(
     tmp_path: Path,
 ) -> None:
-    """Nothing tells an already implemented scenario from a test that checks nothing."""
+    """With stubs in place, a new test that passes most likely checks nothing: the agent fixes."""
     use_case, request, event_log, spec_source, _ = _real_check(tmp_path, _REPORT_OFFENDER, 1)
 
-    with pytest.raises(DriverError, match="IVA-002 ya pasan con un driver nuevo") as raised:
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    error = result.last_error or ""
+    assert "test_iva_002 del escenario IVA-002 pasa con un driver nuevo, sin llegar a" in error
+    assert "comprobar el resultado" in error
+    assert "--allow-empty" not in error
+    rejection = _rejection(event_log)
+    assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", False)
+    spec_source.write_seal.assert_not_called()
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.advance_head.assert_not_called()
+
+
+def test_check_red_new_scenario_passing_on_the_last_attempt_stops_with_the_hint(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path, _REPORT_OFFENDER, 1, driver_attempts=3, max_driver_attempts=3
+    )
+
+    with pytest.raises(DriverError, match="tras 3 intentos") as raised:
         use_case.execute(request)
 
-    assert "--allow-empty" in str(raised.value)
-    assert "no comprueba nada" in str(raised.value)
+    message = str(raised.value)
+    assert raised.value.exit_code == 10
+    fix, register = message.index("Corrige el test"), message.index("Solo si el escenario ya")
+    assert fix < register
+    assert '--trailer "Scenario: <id>"' in message
     assert _rejection(event_log).data["final"] is True
-    spec_source.write_seal.assert_not_called()
 
 
 def test_check_red_reopened_scenario_passing_with_a_fresh_driver_stops_for_a_person(

@@ -72,9 +72,8 @@ def test_e11_red_rule_names_the_offender_and_only_it(make_project: ProjectFactor
     def driver(task: AgentTask, attempt: int) -> None:
         good_driver(task)
         if attempt == 1:
-            # Skipped, not failed: the agent can fix it, so the driver is retried.
-            skipped = DRIVER.replace(NEGATIVE_CHECK, 'pytest.skip("pendiente")')
-            write(task.cwd, DRIVER_PATH, f"import pytest\n{skipped}")
+            # A new test that passes with the stubs proves nothing: the agent can fix it.
+            write(task.cwd, DRIVER_PATH, DRIVER.replace(NEGATIVE_CHECK, "assert True"))
 
     agent = Agent(driver=driver)
     run_lictor(root, agent)
@@ -83,6 +82,7 @@ def test_e11_red_rule_names_the_offender_and_only_it(make_project: ProjectFactor
     block = error_block(agent.prompts["driver"][1])
     assert "test_iva_003" in block
     assert "test_iva_001" not in block, "lista un rojo legítimo"
+    assert events_of(root, "driver.rejected")[0]["data"]["reason"] == "sin_prueba"
 
 
 def test_e12_current_scenario_survives_many_pending() -> None:

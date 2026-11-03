@@ -29,6 +29,7 @@ from lictor.domain.rules import (
     Impostors,
     MapLink,
     RedOracle,
+    RedVerdict,
     condense_error,
     impostor_problem,
     impostor_source,
@@ -43,9 +44,9 @@ from lictor.domain.rules import (
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
 _REGISTER_HINT = (
-    "Si el escenario ya está implementado por un commit anterior, regístralo y relanza: "
-    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>". '
-    "Si no, su test no comprueba nada: corrígelo."
+    "Corrige el test para que compruebe el resultado. Solo si el escenario ya estaba implementado "
+    "por un commit anterior, regístralo y relanza: "
+    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>".'
 )
 
 RejectionKind = Literal[
@@ -56,6 +57,7 @@ RejectionKind = Literal[
     "sin_escenario",
     "regla_del_rojo",
     "impostor",
+    "sin_prueba",
     "especificacion_cambiada",
 ]
 
@@ -249,29 +251,16 @@ class CheckRed:
         # Git says what was green, and for which specification: the checkpoint has no say.
         classes = self.history.classify({sid: request.scenario_hashes.get(sid, "") for sid in ids})
         verdict = judge_red(mapped, classes, request.oracle, driver_fresh=request.driver_fresh)
-        if not verdict.ok:
-            rejection = _Rejection(
-                "regla_del_rojo",
-                "\n".join(verdict.problems),
-                verdict.cases,
-                all_cases=control_res.test_cases,
-                output=raw_output,
-            )
-            return self._reject_or_raise(request, step_dir, rejection), None
-        if verdict.respecified:
+        if verdict.ok and verdict.respecified:
             # Only a person knows whether the specification changed in wording or in substance.
             reason = _respecified_reason(verdict.respecified)
             self._reject(
                 request, step_dir, _Rejection("especificacion_cambiada", reason), final=True
             )
             raise DriverError(reason)
-        if verdict.unproven:
-            reason = (
-                f"Los escenarios {', '.join(verdict.unproven)} ya pasan con un driver nuevo: "
-                f"nada distingue su test de uno que no comprueba nada. {_REGISTER_HINT}"
-            )
-            self._reject(request, step_dir, _Rejection("regla_del_rojo", reason), final=True)
-            raise DriverError(reason)
+        judged = _verdict_rejection(request, verdict, mapped, control_res.test_cases, raw_output)
+        if judged is not None:
+            return self._reject_or_raise(request, step_dir, judged), None
         registration = _Registration(
             reopened=tuple(sid for sid in verdict.register if classes[sid] == "reopened"),
             collateral=tuple(sid for sid in verdict.register if classes[sid] == "new"),
@@ -513,6 +502,39 @@ class CheckRed:
         )
         self.event_log.append(event)
         return commit_sha
+
+
+def _verdict_rejection(
+    request: CheckRedRequest,
+    verdict: RedVerdict,
+    mapped: Mapping[str, TestCaseResult],
+    all_cases: Sequence[TestCaseResult],
+    output: str,
+) -> _Rejection | None:
+    """Say why the verdict rejects a driver its agent may still fix."""
+    if not verdict.ok:
+        reason = "\n".join(verdict.problems)
+        return _Rejection("regla_del_rojo", reason, verdict.cases, all_cases, output)
+    if verdict.unproven:
+        # Most likely a test that checks nothing, which the agent can fix.
+        reason = _unproven_reason(request, verdict.unproven, mapped)
+        cases = tuple(mapped[sid] for sid in verdict.unproven)
+        return _Rejection("sin_prueba", reason, cases, all_cases, output)
+    return None
+
+
+def _unproven_reason(
+    request: CheckRedRequest, scenarios: Sequence[str], mapped: Mapping[str, TestCaseResult]
+) -> str:
+    lines = [
+        f"El test {mapped[sid].name} del escenario {sid} pasa con un driver nuevo, sin llegar a "
+        "la interfaz: tiene que comprobar el resultado que pide su escenario y fallar mientras "
+        "la interfaz no esté implementada."
+        for sid in scenarios
+    ]
+    if request.driver_attempts >= request.max_driver_attempts:
+        lines.append(_REGISTER_HINT)  # the last attempt: the person who reads the stop decides
+    return "\n".join(lines)
 
 
 def _respecified_reason(scenarios: Sequence[str]) -> str:
