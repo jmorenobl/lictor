@@ -307,7 +307,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Enlaza cada test con el escenario de Gherkin que ejecutó (en `python-uv`, el que informa el plugin del perfil; sin él, por el `@ID-NNN` del nombre): exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. Los pendientes que el mismo árbol también hace pasar se registran como verdes colaterales sin llamar al agente. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Hoy solo registra resultado y salida: `mutmut` termina con 0 aunque queden supervivientes, y Lictor aún no lee la puntuación. | `measure` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Registra resultado, salida y puntuación: `scripts/mutation_score.py` deja los recuentos donde los lee el lector `mutation`, y el informe muestra, por ejemplo, «94,7 % (1082 de 1142 muertos; 60 vivos, 0 por tiempo)». Aún no hay umbral. | `measure` |
 
 ---
 
@@ -355,7 +355,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true, "when_exists": "tests/unit"}
+    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"}
   ],
   "verification": {"env": {}, "inherit": [], "prepare_inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
@@ -527,8 +527,8 @@ uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 uv run python scripts/audit_dependencies.py
 gitleaks detect --no-banner
 
-# L5: Pruebas de mutación sobre el dominio
-uv run mutmut run
+# L5: Pruebas de mutación sobre el dominio y los módulos pequeños de la aplicación
+uv run python scripts/mutation_score.py mutants/score.json
 
 # Todos los controles de lictor.json en un clon limpio de HEAD, en el entorno de verificación real
 uv run python scripts/verify_self.py
