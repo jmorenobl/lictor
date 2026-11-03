@@ -136,6 +136,44 @@ def test_a_link_loop_is_a_spec_error(tmp_path: Path) -> None:
         collect_monitored_files(tmp_path, [])
 
 
+def test_a_link_loop_in_a_driver_directory_is_a_spec_error(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "acceptance").mkdir(parents=True)
+    os.symlink("b", tmp_path / "tests" / "acceptance" / "a")
+    os.symlink("a", tmp_path / "tests" / "acceptance" / "b")
+
+    with pytest.raises(SpecError, match=r"^Enlace simbólico inválido en tests/acceptance/a: "):
+        collect_monitored_files(tmp_path, ["tests/acceptance/"])
+
+
+def test_a_broken_link_in_features_is_a_spec_error(tmp_path: Path) -> None:
+    (tmp_path / "features").mkdir()
+    os.symlink("no_existe.feature", tmp_path / "features" / "roto.feature")
+
+    with pytest.raises(SpecError, match=r"^Enlace simbólico inválido en features/roto\.feature: "):
+        collect_monitored_files(tmp_path, [])
+
+
+def test_a_broken_link_as_the_driver_file_is_a_spec_error(tmp_path: Path) -> None:
+    os.symlink("no_existe.py", tmp_path / "drv.py")
+
+    with pytest.raises(SpecError, match=r"^Enlace simbólico inválido en drv\.py: "):
+        collect_monitored_files(tmp_path, ["drv.py"])
+
+
+def test_a_chain_of_links_is_sealed_with_the_hash_of_its_target(tmp_path: Path) -> None:
+    target = _write(tmp_path, "features/real.feature", "Feature: real")
+    os.symlink("real.feature", tmp_path / "features" / "y")
+    os.symlink("y", tmp_path / "features" / "x")
+
+    files = collect_monitored_files(tmp_path, [])
+
+    assert files == {
+        "features/real.feature": hash_file(target),
+        "features/x": hash_file(target),
+        "features/y": hash_file(target),
+    }
+
+
 @pytest.mark.parametrize("pattern", ["tests/accX/", "tests/acc "])
 def test_a_driver_directory_is_taken_by_its_exact_name(tmp_path: Path, pattern: str) -> None:
     exact = _write(tmp_path, pattern.rstrip("/") + "/t.py", "t")

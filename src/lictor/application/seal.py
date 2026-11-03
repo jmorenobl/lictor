@@ -40,8 +40,10 @@ def _verify_symlink_and_hash(
         return
     if path.is_symlink():
         try:
-            resolved_p = path.resolve()
-        except (OSError, RuntimeError) as exc:  # a loop is RuntimeError before Python 3.13
+            # Without strict, 3.13 returns a loop as the link itself, and every version a broken
+            # link as its target, and neither is a file the seal would see.
+            resolved_p = path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:  # a loop is RuntimeError in 3.12, OSError after
             rel = path.relative_to(project_root).as_posix()
             raise SpecError(f"Enlace simbólico inválido en {rel}: {exc}") from exc
         if not resolved_p.is_relative_to(resolved_root):
@@ -69,7 +71,7 @@ def _collect_driver_pattern(
 def collect_monitored_files(project_root: Path, driver_paths: Sequence[str]) -> dict[str, str]:
     """Collect and hash all files under features/** and paths.driver.
 
-    Rejects symlinks pointing outside project_root by raising SpecError.
+    Raises SpecError for a symlink that loops, is broken or points outside project_root.
     """
     files_map: dict[str, str] = {}
     resolved_root = project_root.resolve()
