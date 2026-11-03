@@ -889,6 +889,14 @@ def test_judge_red_cannot_prove_a_new_scenario_that_passes_with_a_fresh_driver()
     assert verdict.respecified == ()
 
 
+@pytest.mark.parametrize("status", ["passed", "failure", "error", "skipped"])
+@pytest.mark.parametrize("cls", ["green", "new", "reopened"])
+def test_judge_red_never_registers_with_a_fresh_driver(status: Status, cls: ScenarioClass) -> None:
+    """Only a sealed driver has proved its tests: nothing is green without the agent before."""
+    verdict = judge_red({"S": _case(status)}, {"S": cls}, ORACLE, driver_fresh=True)
+    assert verdict.register == ()
+
+
 def test_judge_red_rejects_a_skipped_pending_test() -> None:
     verdict = judge_red({"N": _case("skipped")}, {"N": "new"}, ORACLE, driver_fresh=True)
     assert verdict.problems == (

@@ -1,3 +1,4 @@
+import contextlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,11 @@ from lictor.application.ports import (
     Vcs,
 )
 from lictor.application.spec_history import SpecHistory
-from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
+from lictor.application.usecases.check_red import (
+    DRIVER_COMMIT_MESSAGE,
+    CheckRed,
+    CheckRedRequest,
+)
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
 from lictor.domain.model import (
@@ -1117,3 +1122,33 @@ def test_check_red_impostors_map_by_the_scenario_s_own_file(tmp_path: Path) -> N
 
     assert use_case.execute(request).ok is True
     spec_source.write_seal.assert_called_once()
+
+
+_REPORT_GREEN = (
+    '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/></testsuite>'
+)
+
+
+@pytest.mark.parametrize("report", [_REPORT_RED, _REPORT_OFFENDER, _REPORT_GREEN])
+@pytest.mark.parametrize("cls", ["green", "new", "reopened"])
+def test_check_red_with_a_fresh_driver_never_commits_a_registration(
+    tmp_path: Path, report: str, cls: str
+) -> None:
+    """Nothing turns green inside the red check before the seal: the branch moves to the driver."""
+    use_case, request, event_log, _, _ = _real_check(tmp_path, report, 1, tree="driver-tree")
+    assert isinstance(use_case.history, MagicMock)
+    use_case.history.classify.side_effect = lambda current: dict.fromkeys(current, cls)
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.commit_tree.return_value = Candidate("driver", "driver-tree", "head")
+
+    with contextlib.suppress(DriverError):
+        use_case.execute(request)
+
+    for call in vcs.commit_tree.call_args_list:
+        assert call.kwargs["message"] == DRIVER_COMMIT_MESSAGE
+        assert "empty" not in call.kwargs
+    for call in vcs.advance_head.call_args_list:
+        assert call.args == ("driver",)
+    assert _events(event_log, "lictor.scenario.reregistered.v1") == []
+    assert _events(event_log, "lictor.scenario.green.v1") == []
