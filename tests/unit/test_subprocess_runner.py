@@ -190,6 +190,33 @@ def test_subprocess_runner_keeps_the_head_and_the_tail_on_whole_lines(tmp_path: 
     )
 
 
+def test_subprocess_runner_keeps_a_tail_with_no_line_break(tmp_path: Path) -> None:
+    code = (
+        "import sys\n"
+        "sys.stdout.write('inicio\\n')\n"
+        "for i in range(17 * 1024):\n"
+        "    sys.stdout.write('\\r' + 'p' * 1023)\n"
+        "sys.stdout.write('fin')\n"
+    )
+    out = SubprocessRunner().run([sys.executable, "-c", code], cwd=tmp_path, timeout_s=60)
+
+    lines = out.stdout.split("\n")
+    assert lines[0] == "inicio"
+    assert re.fullmatch(r"\[… \d+ bytes omitidos …\]", lines[1])
+    assert lines[2].endswith("\r" + "p" * 1023 + "fin")
+    assert len(lines) == 3
+
+
+def test_subprocess_runner_keeps_a_head_with_no_line_break(tmp_path: Path) -> None:
+    code = "import sys\nsys.stdout.write('ab' * (9 << 20) + '\\nfin\\n')\n"
+    out = SubprocessRunner().run([sys.executable, "-c", code], cwd=tmp_path, timeout_s=60)
+
+    lines = out.stdout.split("\n")
+    assert lines[0] == "ab" * (HEAD_BYTES // 2)
+    assert re.fullmatch(r"\[… \d+ bytes omitidos …\]", lines[1])
+    assert lines[2:] == ["fin", ""]
+
+
 def test_subprocess_runner_keeps_short_output_whole(tmp_path: Path) -> None:
     out = SubprocessRunner().run([sys.executable, "-c", "print('a\\nb')"], cwd=tmp_path)
 

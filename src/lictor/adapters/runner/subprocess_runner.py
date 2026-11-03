@@ -52,10 +52,15 @@ class _Capture:
         tail = b"".join(self.tail)[-TAIL_BYTES:]
         head = bytes(self.head)
         if self.total > len(head) + len(tail):
-            # Cut on line breaks, so that no line reaches the result in pieces.
-            head = head[: head.rfind(b"\n") + 1]
-            tail = tail[tail.find(b"\n") + 1 :] if b"\n" in tail else b""
+            # Cut on line breaks, so that no line reaches the result in pieces. A piece with no
+            # line break stays raw: progress redrawn with `\r` is still the only clue it holds.
+            if b"\n" in head:
+                head = head[: head.rfind(b"\n") + 1]
+            if b"\n" in tail:
+                tail = tail[tail.find(b"\n") + 1 :]
             omitted = self.total - len(head) - len(tail)
+            if head and not head.endswith(b"\n"):
+                head += b"\n"
             head += f"[… {omitted} bytes omitidos …]\n".encode()
         return (head + tail).decode("utf-8", errors="replace")
 
