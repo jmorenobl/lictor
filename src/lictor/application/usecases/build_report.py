@@ -7,7 +7,8 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_tree
-from lictor.domain.model import Event, JournalDamage
+from lictor.domain.model import Event, JournalDamage, MutationScore
+from lictor.domain.rules import describe_score
 
 _MS_PER_SECOND: Final[int] = 1000
 
@@ -24,6 +25,16 @@ def _calculate_total_duration(info: dict[str, Any]) -> str:
             for s in info["scenarios"].values()
         )
     return f"{total_ms}ms" if total_ms < _MS_PER_SECOND else f"{total_ms / _MS_PER_SECOND:.2f}s"
+
+
+def _score_text(raw: object) -> str:
+    """The score a control recorded, if it recorded one the journal can still read."""
+    if not isinstance(raw, dict) or not raw:
+        return ""
+    try:
+        return f", {describe_score(MutationScore(**raw))}"
+    except TypeError:
+        return ""
 
 
 @dataclass(frozen=True)
@@ -287,8 +298,9 @@ class BuildReport:
                 continue
             if isinstance(control, dict) and control.get("mode") == "measure":
                 result = "correcto" if control.get("ok") else "fallo"
+                score = _score_text(control.get("score"))
                 info["measures"].append(
-                    f"- **{control_id}** ({sid}, intento {attempt}): {result}, "
+                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}, "
                     f"código {control.get('exit_code')}, salida en `{control.get('output')}`"
                 )
 

@@ -12,6 +12,7 @@ import pytest
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
@@ -576,7 +577,7 @@ def _verify(
 ) -> tuple[VerifyAttempt, VerifyAttemptRequest]:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(), "mutation": MutationReader()}
     fields: dict[str, Any] = {
         "scenario_id": "IVA-001",
         "run_id": run_id,
@@ -1383,3 +1384,38 @@ def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
 
     assert (result.ok, result.failed_at) == (False, "acceptance")
     assert "desde features/copia.txt, no desde features/iva.feature" in result.condensed_error
+
+
+def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
+    control = VerificationControl(
+        id="mut", level="L5", run="mut {out}", report="mutation", mode="measure"
+    )
+    stats = '{"killed": 9, "survived": 1, "timeout": 0, "total": 10}'
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": (stats, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    result = verifier.execute(req)
+    summaries = control_summaries(result)
+
+    assert result.ok is True
+    assert summaries["mut"]["ok"] is True
+    assert summaries["mut"]["score"] == {
+        "killed": 9,
+        "survived": 1,
+        "timeout": 0,
+        "no_tests": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "skipped": 0,
+        "total": 10,
+        "percent": 90.0,
+    }
+    json.dumps(summaries)
+
+
+def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    assert control_summaries(verifier.execute(req))["lint"]["score"] is None

@@ -6,7 +6,7 @@ Includes ADR-0001 integrity snapshot for state protection.
 import json
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -17,6 +17,7 @@ from lictor.application.run_files import (
     fill_report_path,
     format_output,
     new_step_dir,
+    reader_input,
     relative_to_project,
     save_output,
     step_evidence,
@@ -162,6 +163,7 @@ def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
             "duration_ms": control.duration_ms,
             "output": control.output_path,
             "skipped": control.skipped,
+            "score": asdict(control.score) if control.score else None,
         }
         for control_id, control in result.control_results.items()
     }
@@ -584,13 +586,10 @@ class VerifyAttempt:
 
         reader = self.readers.get(ctrl.report)
         if reader is None:
-            err_msg = f"No reader available for format: {ctrl.report}"
+            err_msg = f"No hay lector para el formato: {ctrl.report}"
             return _ControlRun(recorded(ControlResult(ok=False, error=err_msg)), output=cmd_out)
 
-        if ctrl.report == "junit":
-            output_content = str(out_file) if "{out}" in ctrl.run else cmd_out.stdout
-        else:
-            output_content = format_output(cmd_out)
+        output_content = reader_input(ctrl.report, ctrl.run, out_file, cmd_out)
         c_res = reader.read(
             output=output_content,
             exit_code=cmd_out.returncode,

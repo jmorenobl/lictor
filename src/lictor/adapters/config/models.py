@@ -5,7 +5,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit"]
+ReportFormat = Literal["exit-code", "junit", "mutation"]
 ControlMode = Literal["block", "measure"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
 RedKind = Literal["assertion", "not_implemented", "error"]
@@ -217,8 +217,8 @@ class ControlConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
-        if self.report == "junit" and "{out}" not in self.run:
-            msg = f"El control '{self.id}' con report='junit' debe incluir '{{out}}' en run"
+        if self.report != "exit-code" and "{out}" not in self.run:
+            msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)
         return self
 

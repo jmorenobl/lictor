@@ -6,6 +6,8 @@ import pytest
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
+from lictor.domain.model import ControlResult, MutationScore
 
 
 def test_exit_code_reader_success() -> None:
@@ -166,3 +168,62 @@ def test_junit_reads_the_properties_of_each_case() -> None:
         "vacía": "",
     }
     assert second.properties == {}
+
+
+def _mutation(tmp_path: Path, content: str | None, exit_code: int = 0) -> ControlResult:
+    report = tmp_path / "score.json"
+    if content is not None:
+        report.write_text(content, encoding="utf-8")
+    return MutationReader().read(output=str(report), exit_code=exit_code, duration_ms=3)
+
+
+def test_mutation_reader_scores_the_exported_counts(tmp_path: Path) -> None:
+    counts = '{"killed": 8, "survived": 1, "timeout": 1, "skipped": 2, "total": 12, "x": "y"}'
+
+    res = _mutation(tmp_path, counts)
+
+    assert (res.ok, res.error, res.duration_ms) == (True, None, 3)
+    assert res.score == MutationScore(
+        killed=8, survived=1, timeout=1, skipped=2, total=12, percent=80.0
+    )
+
+
+def test_mutation_reader_keeps_the_score_of_a_failed_pass(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, '{"killed": 1, "total": 2}', exit_code=4)
+
+    assert res.ok is False
+    assert res.error == "La pasada de mutación falló con el código 4"
+    assert res.score is not None
+    assert res.score.percent == 50.0
+
+
+def test_mutation_reader_without_a_report_fails(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, None)
+    assert (res.ok, res.error, res.score) == (False, "Sin informe de mutación", None)
+    empty = MutationReader().read(output="", exit_code=0, duration_ms=1)
+    assert (empty.ok, empty.error) == (False, "Sin informe de mutación")
+
+
+def test_mutation_reader_with_no_mutants_fails(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, '{"total": 0}')
+    assert (res.ok, res.error) == (False, "El informe de mutación no tiene mutantes")
+
+
+@pytest.mark.parametrize(
+    ("content", "why"),
+    [
+        ("no", "no es JSON"),
+        ("[1]", "no es un objeto JSON"),
+        ('{"killed": "3"}', "'killed' no es un número de mutantes: '3'"),
+        ('{"total": -1}', "'total' no es un número de mutantes: -1"),
+        ('{"survived": true}', "'survived' no es un número de mutantes: True"),
+    ],
+)
+def test_mutation_reader_refuses_a_report_it_cannot_trust(
+    tmp_path: Path, content: str, why: str
+) -> None:
+    res = _mutation(tmp_path, content)
+
+    assert res.ok is False
+    assert res.error is not None
+    assert res.error.startswith(f"El informe de mutación no es válido: {why}")

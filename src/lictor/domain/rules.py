@@ -660,6 +660,22 @@ def mutation_score(counts: Mapping[str, int]) -> MutationScore:
     return MutationScore(**found, percent=percent)
 
 
+def describe_score(score: MutationScore) -> str:
+    """Say a mutation score with what wasn't killed beside it, so a ✓ never stands alone."""
+    tried = score.total - score.skipped
+    percent = f"{score.percent:.1f}".replace(".", ",")
+    apart = [f"{score.survived} vivos", f"{score.timeout} por tiempo"]
+    for count, label in (
+        (score.no_tests, "sin tests"),
+        (score.suspicious, "sospechosos"),
+        (score.segfault, "con segfault"),
+        (score.skipped, "omitidos"),
+    ):
+        if count:
+            apart.append(f"{count} {label}")
+    return f"{percent} % ({score.killed} de {tried} muertos; {', '.join(apart)})"
+
+
 def baseline_head_accepted(
     *,
     pending_node: str | None,

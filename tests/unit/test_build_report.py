@@ -252,6 +252,47 @@ def test_report_lists_measure_controls_with_result_and_output(tmp_path: Path) ->
     assert "lint" not in section
 
 
+def test_report_shows_the_mutation_score_beside_the_result(tmp_path: Path) -> None:
+    score = {
+        "killed": 923,
+        "survived": 57,
+        "timeout": 0,
+        "no_tests": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "skipped": 0,
+        "total": 980,
+        "percent": 100 * 923 / 980,
+    }
+    controls: dict[str, object] = {
+        "mutation": {
+            "ok": True,
+            "mode": "measure",
+            "exit_code": 0,
+            "output": "r/m.log",
+            "score": score,
+        },
+        "odd": {"ok": True, "mode": "measure", "exit_code": 0, "output": "r/o.log", "score": {}},
+        "bad": {
+            "ok": True,
+            "mode": "measure",
+            "exit_code": 0,
+            "output": "r/b.log",
+            "score": {"x": 1},
+        },
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Controles en medición")[1].split("##")[0]
+    assert (
+        "**mutation** (IVA-001, intento 1): correcto, 94,2 % (923 de 980 muertos; 57 vivos, "
+        "0 por tiempo), código 0, salida en `r/m.log`"
+    ) in section
+    assert "**odd** (IVA-001, intento 1): correcto, código 0" in section
+    assert "**bad** (IVA-001, intento 1): correcto, código 0" in section
+
+
 def test_report_says_when_nothing_was_measured(tmp_path: Path) -> None:
     assert "*Ningún control en medición.*" in _report(tmp_path, [_verify_event({})])
 

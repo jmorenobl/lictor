@@ -8,7 +8,7 @@ from pathlib import Path
 from lictor.application.ports import CommandRunner, ResultReader
 from lictor.application.run_files import (
     fill_report_path,
-    format_output,
+    reader_input,
     relative_to_project,
     save_output,
 )
@@ -172,12 +172,11 @@ class CheckProject:
 
         reader = self.readers.get(params.report_format)
         if reader is None:
-            return ControlResult(ok=False, error=f"No reader for format: {params.report_format}")
+            return ControlResult(
+                ok=False, error=f"No hay lector para el formato: {params.report_format}"
+            )
 
-        if params.report_format == "junit":
-            content = str(out_file) if "{out}" in params.command_template else cmd_out.stdout
-        else:
-            content = format_output(cmd_out)
+        content = reader_input(params.report_format, params.command_template, out_file, cmd_out)
 
         return replace(
             reader.read(

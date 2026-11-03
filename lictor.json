@@ -10,7 +10,7 @@
     {"id": "coverage-domain", "level": "L4", "run": "uv run coverage report --include=*/lictor/domain/* --fail-under=95", "report": "exit-code", "mode": "block"},
     {"id": "audit",           "level": "L4", "run": "uv run python scripts/audit_dependencies.py", "report": "exit-code", "mode": "block"},
     {"id": "secrets",         "level": "L4", "run": "gitleaks detect --no-banner",        "report": "exit-code", "mode": "block"},
-    {"id": "mutation",        "level": "L5", "run": "uv run mutmut run",                  "report": "exit-code", "mode": "measure", "timeout_s": 3000}
+    {"id": "mutation",        "level": "L5", "run": "uv run python scripts/mutation_score.py {out}", "report": "mutation", "mode": "measure", "timeout_s": 3000}
   ],
   "acceptance": {"run": "uv run pytest tests/integration -n auto -q --junitxml {out}", "report": "junit", "timeout_s": 3000}
 }

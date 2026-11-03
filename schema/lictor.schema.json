@@ -13,7 +13,8 @@
           "default": "junit",
           "enum": [
             "exit-code",
-            "junit"
+            "junit",
+            "mutation"
           ],
           "title": "Report",
           "type": "string"
@@ -117,7 +118,8 @@
         "report": {
           "enum": [
             "exit-code",
-            "junit"
+            "junit",
+            "mutation"
           ],
           "title": "Report",
           "type": "string"

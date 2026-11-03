@@ -22,6 +22,7 @@ from lictor.domain.rules import (
     condense_error,
     control_path_status,
     count_agent_failures,
+    describe_score,
     forbidden_paths,
     impostor_problem,
     impostor_source,
@@ -1243,3 +1244,27 @@ def test_mutation_score_reads_missing_counts_as_zero() -> None:
 @pytest.mark.parametrize("counts", [{}, {"total": 2, "skipped": 2}, {"total": 1, "skipped": 3}])
 def test_mutation_score_without_tried_mutants_is_zero(counts: dict[str, int]) -> None:
     assert mutation_score(counts).percent == 0.0
+
+
+def test_describe_score_names_what_was_not_killed() -> None:
+    score = mutation_score({"killed": 923, "survived": 57, "total": 980})
+
+    assert describe_score(score) == "94,2 % (923 de 980 muertos; 57 vivos, 0 por tiempo)"
+
+
+def test_describe_score_adds_the_other_outcomes_only_when_there_are_some() -> None:
+    counts = {
+        "killed": 80,
+        "survived": 5,
+        "timeout": 4,
+        "no_tests": 3,
+        "suspicious": 2,
+        "segfault": 1,
+        "skipped": 5,
+        "total": 100,
+    }
+
+    assert describe_score(mutation_score(counts)) == (
+        "84,2 % (80 de 95 muertos; 5 vivos, 4 por tiempo, 3 sin tests, 2 sospechosos, "
+        "1 con segfault, 5 omitidos)"
+    )

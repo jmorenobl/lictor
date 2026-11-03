@@ -24,7 +24,7 @@ from lictor.application.usecases.check_project import (
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
-from lictor.domain.rules import anchor_problems, baseline_head_accepted
+from lictor.domain.rules import anchor_problems, baseline_head_accepted, describe_score
 from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
 app = typer.Typer(
@@ -240,7 +240,8 @@ def check(
                 typer.echo(f"- {name} omitido: {cr.skipped}")
                 continue
             status_char = "✓" if cr.ok else "✗"
-            typer.echo(f"{status_char} {name} ({cr.duration_ms}ms)")
+            score = f": {describe_score(cr.score)}" if cr.score else ""
+            typer.echo(f"{status_char} {name} ({cr.duration_ms}ms){score}")
             if not cr.ok and cr.output_path:
                 typer.echo(f"  salida: {cr.output_path}")
 

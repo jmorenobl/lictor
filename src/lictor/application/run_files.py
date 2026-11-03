@@ -195,6 +195,13 @@ def format_output(output: CommandOutput) -> str:
     return f"{output.stdout}\n{output.stderr}".strip()
 
 
+def reader_input(report: str, run: str, out_file: Path, output: CommandOutput) -> str:
+    """What a reader gets: the report the command wrote, or what it printed if it wrote none."""
+    if report == "exit-code":
+        return format_output(output)
+    return str(out_file) if "{out}" in run else output.stdout
+
+
 def save_output(path: Path, output: CommandOutput) -> None:
     """Keep the exit code and both streams of a command."""
     write_text(

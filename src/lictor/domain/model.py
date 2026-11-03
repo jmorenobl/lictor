@@ -284,6 +284,7 @@ class ControlResult:
     mode: str = "block"
     output_path: str | None = None
     skipped: str | None = None  # why the control didn't run, when it didn't
+    score: MutationScore | None = None  # only a mutation report has one
 
 
 @dataclass(frozen=True)

@@ -905,3 +905,9 @@ def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
         ControlConfig.model_validate(
             {"id": "u", "level": "L2", "run": "c", "report": "exit-code", "allow_empty": True}
         )
+
+
+@pytest.mark.parametrize("report", ["junit", "mutation"])
+def test_a_control_that_reads_a_report_needs_its_path(report: str) -> None:
+    with pytest.raises(ValidationError, match=f"report='{report}' debe incluir"):
+        ControlConfig.model_validate({"id": "m", "level": "L5", "run": "cmd", "report": report})
