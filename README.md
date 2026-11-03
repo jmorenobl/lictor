@@ -491,6 +491,7 @@ flowchart TB
 - 📌 **[ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
 - 📌 **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
 - 📌 **[ADR-0004](docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
+- 📝 **[ADR-0005](docs/adr/ADR-0005-clon-y-rama-propios.md):** Cada ejecución trabaja en su propio clon y en su propia rama (propuesta).
 
 ---
 
