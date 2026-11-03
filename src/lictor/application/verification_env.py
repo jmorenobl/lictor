@@ -27,17 +27,17 @@ import re
 import shlex
 import shutil
 import time
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
 
+from lictor.application.events import new_event
 from lictor.application.ports import AuditSink, CommandRunner, Vcs
 from lictor.application.run_files import save_output, scratch_dir, unused_path, verification_tree
 from lictor.application.seal import hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError
-from lictor.domain.model import CommandOutput, Event
+from lictor.domain.model import CommandOutput
 
 ENV_DIR_PLACEHOLDER = "{env_dir}"
 HOME_DIR_PLACEHOLDER = "{home_dir}"
@@ -263,12 +263,10 @@ class VerificationEnvironment:
 
     def _emit(self, run_id: str, name: str, data: dict[str, object]) -> None:
         self.audit.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type=f"lictor.{name}.v1",
-                source="lictor/0.1.0",
-                time=self.audit.clock.now_iso(),
-                runid=run_id,
+            new_event(
+                self.audit.clock,
+                f"lictor.{name}.v1",
+                run_id,
                 data=data,
             )
         )

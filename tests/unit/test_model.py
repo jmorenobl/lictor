@@ -8,8 +8,10 @@ from lictor.domain.errors import ExitCode, PreconditionError, SpecError
 from lictor.domain.model import (
     AgentResult,
     AgentTask,
+    CommandOutput,
     Event,
     Health,
+    MutationScore,
     Scenario,
     ScenarioId,
     TestCaseResult,
@@ -274,3 +276,19 @@ def test_test_case_reads_the_properties_lictor_names() -> None:
 def test_test_case_without_properties_reports_nothing() -> None:
     case = TestCaseResult(name="test_iva_001")
     assert (case.failure_kind, case.origin, case.scenario_tags, case.feature) == ("", "", (), "")
+
+
+def test_command_output_is_not_timed_out_by_default() -> None:
+    assert CommandOutput(returncode=0, stdout="", stderr="").timed_out is False
+
+
+def test_mutation_score_starts_empty() -> None:
+    assert MutationScore() == MutationScore(0, 0, 0, 0, 0, 0, 0, 0, 0.0)
+
+
+def test_command_output_started_by_default() -> None:
+    assert CommandOutput(returncode=0, stdout="", stderr="").started is True
+
+
+def test_agent_result_has_no_cli_version_by_default() -> None:
+    assert AgentResult(status="ok").cli_version == ""

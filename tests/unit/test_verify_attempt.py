@@ -12,6 +12,7 @@ import pytest
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
@@ -25,6 +26,8 @@ from lictor.application.usecases.verify_attempt import (
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
+
+_SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
 
 
 class FakeVcs(Vcs):
@@ -157,6 +160,8 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -179,6 +184,8 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -204,6 +211,7 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
         paths_writable=("src/",),
         paths_driver=("tests/acceptance/",),
         all_scenario_ids=("IVA-001",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -231,6 +239,7 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
         paths_writable=("src/",),
         paths_driver=("tests/acceptance/",),
         all_scenario_ids=("IVA-001",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -254,6 +263,7 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
         paths_writable=("src/",),
         suppressions=("# noqa",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
     )
 
     result = verifier.execute(req)
@@ -288,6 +298,8 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
             ),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -332,6 +344,8 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
         ),
         acceptance_run="pytest",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -364,6 +378,8 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
         acceptance_run="pytest",
         green_scenario_ids=("IVA-002",),
         all_scenario_ids=("IVA-001", "IVA-002"),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -396,6 +412,8 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
             VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -431,6 +449,8 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
             VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -439,7 +459,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
     assert "hacked" not in (project_root / "lictor.json").read_text(encoding="utf-8")
 
 
-def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
+def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
@@ -448,7 +468,7 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
         "pytest",
         CommandOutput(returncode=5, stdout="", stderr="no tests ran", duration_ms=15),
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(allow_empty=False)}
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -464,11 +484,13 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
                 run="pytest tests/unit --junitxml {out}",
                 report="junit",
                 mode="block",
-                allow_empty=True,
+                empty_exit_codes=(5,),
             ),
         ),
         acceptance_run="echo passed",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     # Acceptance xml passed
@@ -508,6 +530,7 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
         suppressions=("# noqa",),
         acceptance_run="pytest",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
     )
 
     result = verifier.execute(req)
@@ -554,11 +577,13 @@ def _verify(
 ) -> tuple[VerifyAttempt, VerifyAttemptRequest]:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(), "mutation": MutationReader()}
     fields: dict[str, Any] = {
         "scenario_id": "IVA-001",
         "run_id": run_id,
         "paths_writable": ("src/",),
+        "paths_driver": ("tests/acceptance/",),
+        "suppressions": _SUPPRESSIONS,
         "acceptance_run": "suite --junitxml {out}",
         "all_scenario_ids": ("IVA-001", "IVA-002"),
         "attempt": 2,
@@ -634,7 +659,7 @@ def test_verify_unreadable_report_reason_survives_a_long_output(tmp_path: Path) 
 
     verifier, req = _verify(tmp_path, Noisy({"suite": ("<roto", 1)}))
 
-    assert "Failed to parse JUnit XML" in (verifier.execute(req).condensed_error or "")
+    assert "No se pudo leer el informe JUnit" in (verifier.execute(req).condensed_error or "")
 
 
 def test_verify_gates_need_the_step_dir_from_execute(tmp_path: Path) -> None:
@@ -672,7 +697,7 @@ def test_verify_unparsable_report_explains_why(tmp_path: Path) -> None:
     result = verifier.execute(req)
 
     assert result.ok is False
-    assert "Failed to parse JUnit XML" in (result.condensed_error or "")
+    assert "No se pudo leer el informe JUnit" in (result.condensed_error or "")
 
 
 def test_verify_condensed_error_omits_pending_but_the_full_error_keeps_them(
@@ -745,7 +770,12 @@ def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
         project_root=project_root,
     )
     req = VerifyAttemptRequest(
-        scenario_id="IVA-001", run_id=run_id, paths_writable=("src/",), tree="agent-tree"
+        scenario_id="IVA-001",
+        run_id=run_id,
+        paths_writable=("src/",),
+        tree="agent-tree",
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -1354,3 +1384,38 @@ def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
 
     assert (result.ok, result.failed_at) == (False, "acceptance")
     assert "desde features/copia.txt, no desde features/iva.feature" in result.condensed_error
+
+
+def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
+    control = VerificationControl(
+        id="mut", level="L5", run="mut {out}", report="mutation", mode="measure"
+    )
+    stats = '{"killed": 9, "survived": 1, "timeout": 0, "total": 10}'
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": (stats, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    result = verifier.execute(req)
+    summaries = control_summaries(result)
+
+    assert result.ok is True
+    assert summaries["mut"]["ok"] is True
+    assert summaries["mut"]["score"] == {
+        "killed": 9,
+        "survived": 1,
+        "timeout": 0,
+        "no_tests": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "skipped": 0,
+        "total": 10,
+        "percent": 90.0,
+    }
+    json.dumps(summaries)
+
+
+def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
+    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    assert control_summaries(verifier.execute(req))["lint"]["score"] is None

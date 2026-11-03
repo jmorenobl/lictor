@@ -16,6 +16,7 @@ from pathlib import Path
 from lictor.adapters.config.loader import load_config, resolve_defences
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
@@ -29,6 +30,7 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.model import CommandOutput
+from lictor.domain.rules import describe_score
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE = "acceptance"
@@ -53,7 +55,7 @@ class _EnvironmentRunner:
 def _specs(selected: Sequence[str]) -> list[CheckControlSpec]:
     config = load_config(REPO_ROOT)
     specs = [
-        CheckControlSpec(c.id, c.level, c.run, c.report, c.mode, c.allow_empty, c.timeout_s)
+        CheckControlSpec(c.id, c.level, c.run, c.report, c.mode, c.empty_exit_codes, c.timeout_s)
         for c in config.controls
     ]
     acceptance = config.acceptance
@@ -71,7 +73,11 @@ def main(selected: Sequence[str]) -> int:
     audit = AuditSink(JsonlEventLog(REPO_ROOT / ".lictor" / "verify_self.jsonl"), SystemClock())
     spec = resolve_defences(config).verification
     environment = VerificationEnvironment(vcs, SubprocessRunner(), audit, REPO_ROOT, spec)
-    readers: dict[str, ResultReader] = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers: dict[str, ResultReader] = {
+        "exit-code": ExitCodeReader(),
+        "junit": JUnitReader(),
+        "mutation": MutationReader(),
+    }
     check = CheckProject(_EnvironmentRunner(environment), readers)
 
     run_id = f"self-{int(time.time())}"
@@ -83,7 +89,9 @@ def main(selected: Sequence[str]) -> int:
             result = check.execute(CheckProjectRequest(project_root=tree, controls=[control]))
             outcome = result.control_results[control.id]
             state = "ok" if outcome.ok else "FALLA"
-            print(f"{state:6}{control.id} ({time.monotonic() - started:.0f} s)", flush=True)
+            score = f": {describe_score(outcome.score)}" if outcome.score else ""
+            elapsed = time.monotonic() - started
+            print(f"{state:6}{control.id} ({elapsed:.0f} s){score}", flush=True)
             if not outcome.ok:
                 print(result.condensed_error or outcome.error, flush=True)
                 if control.mode != "measure":

@@ -9,7 +9,6 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
     ImplementScenarioResult,
-    _extract_scenario_gherkin,
 )
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
@@ -22,6 +21,8 @@ from lictor.domain.model import (
     ScenarioId,
     Tokens,
 )
+
+SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
 
 
 def _execute(
@@ -38,6 +39,7 @@ def _execute(
     else:
         executor.run.side_effect = result
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
     event_log = MagicMock(spec=EventLog)
     clock = MagicMock(spec=Clock)
@@ -240,6 +242,7 @@ def test_implement_scenario_seal_tampered_raises_before_the_agent(tmp_path: Path
     vcs = MagicMock(spec=Vcs)
     executor = MagicMock(spec=Executor)
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = False  # Human edited files!
 
     event_log = MagicMock(spec=EventLog)
@@ -304,6 +307,7 @@ def test_implement_scenario_success(tmp_path: Path) -> None:
     executor.run.return_value = agent_result
 
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
 
     event_log = MagicMock(spec=EventLog)
@@ -374,6 +378,7 @@ def test_implement_scenario_spec_conflict(tmp_path: Path) -> None:
     )
 
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
 
     event_log = MagicMock(spec=EventLog)
@@ -425,6 +430,7 @@ def test_implement_scenario_rate_limited_does_not_increment_attempt(tmp_path: Pa
     executor.run.return_value = AgentResult(status="rate_limited")
 
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
 
     event_log = MagicMock(spec=EventLog)
@@ -464,49 +470,6 @@ def test_implement_scenario_rate_limited_does_not_increment_attempt(tmp_path: Pa
     assert result.agent_signal == "rate_limited"
 
 
-def test_extract_scenario_gherkin_includes_background_and_handles_comments(tmp_path: Path) -> None:
-    feature_file = tmp_path / "features" / "iva.feature"
-    feature_file.parent.mkdir(parents=True)
-    feature_file.write_text(
-        """# language: es
-Característica: Facturación
-  Antecedentes:
-    Dado una tasa de IVA del 21%
-    Y un emisor registrado
-
-  # Comentario importante 1
-  # Comentario importante 2
-  @IVA-001
-  # Comentario entre tag y escenario
-  Escenario: IVA general
-    Dado una factura con importe 100
-    Cuando calculo el total
-    Entonces el total es 121
-
-  @IVA-002
-  Escenario: IVA reducido
-    Dado una factura con importe 100
-""",
-        encoding="utf-8",
-    )
-
-    scenario = Scenario(
-        id=ScenarioId("IVA-001"),
-        name="IVA general",
-        file=str(feature_file),
-        line=11,  # Line of Escenario: IVA general
-    )
-
-    extracted = _extract_scenario_gherkin(tmp_path, scenario)
-    assert "Antecedentes:" in extracted
-    assert "Dado una tasa de IVA del 21%" in extracted
-    assert "@IVA-001" in extracted
-    assert "Escenario: IVA general" in extracted
-    assert "Entonces el total es 121" in extracted
-    assert "@IVA-002" not in extracted
-    assert "Escenario: IVA reducido" not in extracted
-
-
 def test_implement_scenario_handles_curly_braces_in_hints_and_errors(tmp_path: Path) -> None:
     feature_file = tmp_path / "features" / "iva.feature"
     feature_file.parent.mkdir(parents=True)
@@ -517,6 +480,7 @@ def test_implement_scenario_handles_curly_braces_in_hints_and_errors(tmp_path: P
     executor.run.return_value = AgentResult(status="ok")
 
     spec_source = MagicMock(spec=SpecSource)
+    spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
 
     event_log = MagicMock(spec=EventLog)
@@ -586,3 +550,18 @@ def test_no_result_is_read_from_a_call_that_produced_none(
 
     vcs.capture.assert_not_called()
     assert result.tree is None
+
+
+def test_cli_version_comes_from_the_call_not_from_a_health_check(tmp_path: Path) -> None:
+    _, executor, event_log = _execute(tmp_path, AgentResult(status="ok", cli_version="2.1.316"))
+
+    finished = [e for e in _events(event_log) if e.type == "lictor.agent.finished.v1"]
+    assert [e.data["cli_version"] for e in finished] == ["2.1.316"]
+    executor.health.assert_not_called()
+
+
+def test_the_prompt_carries_the_scenario_text_from_the_spec_source(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"))
+
+    task = executor.run.call_args.args[0]
+    assert SCENARIO_TEXT in task.prompt

@@ -163,6 +163,8 @@ class AgentTask:
 
 
 AgentStatus = Literal["ok", "error", "auth", "max_turns", "rate_limited", "timeout"]
+# What a call means for the run, once its status and what it left in the copy are read.
+AgentSignal = Literal["ok", "spec_conflict", "rate_limited", "unavailable", "error", "rejected"]
 CostKind = Literal["notional_subscription", "estimated"]
 
 
@@ -191,6 +193,7 @@ class AgentResult:
     permission_denials: tuple[PermissionDenial, ...] = ()
     exit_code: int | None = None
     stderr_path: Path | None = None
+    cli_version: str = ""  # as the backend reported it when the call started
 
 
 @dataclass(frozen=True)
@@ -204,6 +207,21 @@ class Health:
 
 
 @dataclass(frozen=True)
+class MutationScore:
+    """Mutants of a mutation run by outcome, and the share the tests killed."""
+
+    killed: int = 0
+    survived: int = 0
+    timeout: int = 0
+    no_tests: int = 0
+    suspicious: int = 0
+    segfault: int = 0
+    skipped: int = 0
+    total: int = 0
+    percent: float = 0.0
+
+
+@dataclass(frozen=True)
 class CommandOutput:
     """Captured output of a system process execution."""
 
@@ -211,6 +229,8 @@ class CommandOutput:
     stdout: str
     stderr: str
     duration_ms: int = 0
+    timed_out: bool = False  # killed for running out of time; the returncode says nothing then
+    started: bool = True  # False when the command couldn't even start, e.g. it wasn't found
 
 
 # Properties a profile's runner may attach to each test case. Lictor names them, not the tool.
@@ -264,6 +284,7 @@ class ControlResult:
     mode: str = "block"
     output_path: str | None = None
     skipped: str | None = None  # why the control didn't run, when it didn't
+    score: MutationScore | None = None  # only a mutation report has one
 
 
 @dataclass(frozen=True)

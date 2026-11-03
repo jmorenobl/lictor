@@ -1,29 +1,34 @@
 """PrepareDriver use case for writing and updating acceptance test drivers."""
 
-import contextlib
 import hashlib
 import importlib.resources
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
-from typing import Literal
+from pathlib import Path
 
 from lictor.application.ports import Clock, EventLog, Executor, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
     agent_workspace,
     attempt_prefix,
-    relative_to_project,
     unused_path,
 )
-from lictor.application.usecases.agent_events import denial_event, denial_targets, tamper_event
+from lictor.application.usecases.agent_events import (
+    AgentCall,
+    agent_finished_event,
+    denial_event,
+    tamper_event,
+)
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
 from lictor.domain.errors import CandidateError
-from lictor.domain.model import AgentResult, AgentTask, Event, TreeChange
-from lictor.domain.rules import count_agent_failures, forbidden_paths, is_agent_unavailable
-
-DriverSignal = Literal["ok", "rate_limited", "unavailable", "error", "rejected"]
+from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
+from lictor.domain.rules import (
+    classify_agent,
+    count_agent_failures,
+    forbidden_paths,
+    keeps_attempt,
+    path_within,
+)
 
 
 @dataclass(frozen=True)
@@ -58,31 +63,10 @@ class PrepareDriverResult:
     driver_attempts: int
     prompt_sha: str
     reverted_files: tuple[str, ...] = ()
-    agent_signal: DriverSignal = "ok"
+    agent_signal: AgentSignal = "ok"
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
-
-
-def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
-    norm_rel = rel_path.strip('"').strip("/")
-    path_obj = PurePosixPath(norm_rel)
-    for root in allowed_roots:
-        norm_root = root.strip('"').strip("/")
-        if not norm_root:
-            return True
-        root_obj = PurePosixPath(norm_root)
-        if path_obj == root_obj or root_obj in path_obj.parents:
-            return True
-    return False
-
-
-def _extract_cli_version(executor: Executor) -> str:
-    health_fn = getattr(executor, "health", None)
-    if callable(health_fn):
-        with contextlib.suppress(Exception):
-            return str(health_fn().cli_version)
-    return ""
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -111,10 +95,10 @@ def _discarded_paths(changes: Sequence[TreeChange], request: PrepareDriverReques
     discarded: list[str] = []
     for change in changes:
         # The driver may need its own config; what it writes in project code may not.
-        in_project_code = change.path in forbidden and not _is_path_allowed(
+        in_project_code = change.path in forbidden and not path_within(
             change.path, request.paths_driver
         )
-        if change.is_link or in_project_code or not _is_path_allowed(change.path, allowed_paths):
+        if change.is_link or in_project_code or not path_within(change.path, allowed_paths):
             discarded.append(change.path)
     return discarded
 
@@ -198,59 +182,29 @@ class PrepareDriver:
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
 
-        agent_signal: DriverSignal
-        new_attempts = request.driver_attempts
-        if outcome.tampered:
-            agent_signal = "rejected"
-            new_attempts = request.driver_attempts + 1
-        elif agent_result.status == "rate_limited":
-            agent_signal = "rate_limited"
-        elif is_agent_unavailable(agent_result.status, agent_failures):
-            agent_signal = "unavailable"
-        else:
-            agent_signal = "ok" if agent_result.status == "ok" else "error"
-            if outcome.unreadable is not None:
-                agent_signal = "rejected"
-            new_attempts = request.driver_attempts + 1
+        agent_signal = classify_agent(
+            agent_result.status,
+            agent_failures,
+            tampered=bool(outcome.tampered),
+            unreadable=outcome.unreadable is not None,
+        )
+        keeps = keeps_attempt(agent_signal, agent_failures)
+        new_attempts = request.driver_attempts if keeps else request.driver_attempts + 1
 
-        rel_raw = relative_to_project(raw_path, request.project_root)
-        stderr_path = agent_result.stderr_path
-
-        cli_version = _extract_cli_version(self.executor)
-
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.agent.finished.v1",
-            source="lictor/0.1.0",
-            time=self.clock.now_iso(),
-            runid=request.run_id,
-            scenarioid=None,
-            data={
-                "role": "driver",
-                "attempt": new_attempts,
-                "status": agent_result.status,
-                "signal": agent_signal,
-                "exit_code": agent_result.exit_code,
-                "permission_denials": denial_targets(agent_result),
-                "model": request.model,
-                "cli_version": cli_version,
-                "tokens": {
-                    "input": agent_result.tokens.input,
-                    "output": agent_result.tokens.output,
-                    "cache_read": agent_result.tokens.cache_read,
-                    "cache_write": agent_result.tokens.cache_write,
-                },
-                "cost_usd": agent_result.cost_usd or 0.0,
-                "cost_kind": agent_result.cost_kind,
-                "num_turns": agent_result.num_turns,
-                "duration_ms": agent_result.duration_ms,
-                "prompt_sha": prompt_sha,
-                "raw": rel_raw,
-                "stderr": (
-                    relative_to_project(stderr_path, request.project_root) if stderr_path else None
-                ),
-                "reverted_files": reverted,
-            },
+        call = AgentCall(
+            run_id=request.run_id,
+            scenario_id=None,
+            role="driver",
+            attempt=new_attempts,
+            signal=agent_signal,
+            model=request.model,
+            cli_version=agent_result.cli_version,
+            prompt_sha=prompt_sha,
+            raw_path=raw_path,
+            project_root=request.project_root,
+        )
+        event = agent_finished_event(
+            self.clock, call, agent_result, extra={"reverted_files": reverted}
         )
         self.event_log.append(event)
         if agent_result.permission_denials:

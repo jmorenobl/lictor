@@ -88,6 +88,41 @@ def _scenarios(
             yield outer, None, child
 
 
+def _first_line(node: Mapping[str, Any]) -> int:
+    """The line a background, scenario or rule starts on: its first tag, or its keyword."""
+    lines = [int(tag["location"]["line"]) for tag in node.get("tags", [])]
+    return min([*lines, int(node.get("location", {}).get("line", 1))])
+
+
+def _with_comments_above(lines: Sequence[str], first: int) -> int:
+    """Take in the comment lines right above a node: they are written for it."""
+    while first > 1 and lines[first - 2].strip().startswith("#"):
+        first -= 1
+    return first
+
+
+def _starts(feature: Mapping[str, Any], lines: Sequence[str]) -> list[int]:
+    """Where every background, scenario and rule of the feature starts, comments included."""
+    nodes: list[Mapping[str, Any]] = []
+    for child in feature.get("children", []):
+        for kind in ("background", "scenario", "rule"):
+            if kind in child:
+                nodes.append(child[kind])
+        for rule_child in child.get("rule", {}).get("children", []):
+            nodes.extend(
+                rule_child[kind] for kind in ("background", "scenario") if kind in rule_child
+            )
+    return sorted(_with_comments_above(lines, _first_line(node)) for node in nodes)
+
+
+def _section(lines: Sequence[str], starts: Sequence[int], node: Mapping[str, Any]) -> str:
+    """The original lines of a node, up to where the next one starts."""
+    first = _with_comments_above(lines, _first_line(node))
+    following = [start for start in starts if start > first]
+    last = following[0] - 1 if following else len(lines)
+    return "\n".join(lines[first - 1 : last]).strip()
+
+
 class GherkinSource(SpecSource):
     """Adapter for discovering and parsing Gherkin specification scenarios."""
 
@@ -127,6 +162,37 @@ class GherkinSource(SpecSource):
     def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:
         """Verify that current features and driver files match .lictor/seal.json."""
         return verify_seal(project_root, driver_paths)
+
+    def scenario_text(self, project_root: Path, scenario: Scenario) -> str:
+        """The scenario as its author wrote it, after the backgrounds that apply to it.
+
+        It is found by its ID tag, never by line or by text: a doc string may hold anything.
+        """
+        header = f"Scenario: {scenario.name} (@{scenario.id.value})"
+        path = Path(scenario.file)
+        if not path.is_absolute():
+            path = project_root / path
+        try:
+            text = path.read_text(encoding="utf-8")
+            feature: Mapping[str, Any] = Parser().parse(text).get("feature") or {}
+        except (OSError, ParserError):
+            return header
+        lines = text.splitlines()
+        starts = _starts(feature, lines)
+        tag = f"@{scenario.id.value}"
+        children = feature.get("children", [])
+        for child in children:
+            rule = child.get("rule")
+            inner = rule.get("children", []) if isinstance(rule, Mapping) else [child]
+            for entry in inner:
+                node = entry.get("scenario")
+                if node and [t.get("name") for t in node.get("tags", [])] == [tag]:
+                    backgrounds = [c["background"] for c in children if "background" in c]
+                    if isinstance(rule, Mapping):
+                        backgrounds += [c["background"] for c in inner if "background" in c]
+                    parts = [_section(lines, starts, b) for b in [*backgrounds, node]]
+                    return "\n\n".join(parts)
+        return header
 
     def write_seal(
         self,

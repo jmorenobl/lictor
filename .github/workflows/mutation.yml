@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   mutation:
-    name: Mutación del dominio (mide, no bloquea)
+    name: Mutación (mide, no bloquea)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -25,4 +25,6 @@ jobs:
         with:
           version: "0.12.18"
       - run: uv sync --all-groups --frozen
-      - run: uv run mutmut run
+      - run: uv run python scripts/mutation_score.py "$RUNNER_TEMP/mutation.json"
+      - if: always()
+        run: cat "$RUNNER_TEMP/mutation.json"

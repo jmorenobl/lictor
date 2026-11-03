@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.agents.claude_cli import ClaudeCLI
+from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.domain.errors import ExitCode
 from lictor.domain.model import AgentResult, AgentStatus, AgentTask, Health
 from tests.integration.repro.conftest import ProjectFactory
@@ -115,7 +116,7 @@ def _task(tmp_path: Path) -> AgentTask:
 
 def _run_fake_claude(tmp_path: Path, body: str) -> AgentResult:
     binary = _executable(tmp_path / "claude.sh", f"#!/bin/sh\n{body}\n")
-    return ClaudeCLI(cli_binary=str(binary)).run(_task(tmp_path))
+    return ClaudeCLI(SubprocessRunner(), cli_binary=str(binary)).run(_task(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -166,7 +167,7 @@ def test_user_hook_does_not_alter_agent_commands(
     control = shell([str(claude), "-p", "x", "--allowedTools", "Bash(uv run pytest:*)"], tmp_path)
     require("uv run rtk pytest" in control.stdout, f"el hook debía actuar: {control.stdout}")
 
-    result = ClaudeCLI(cli_binary=str(claude)).run(_task(tmp_path))
+    result = ClaudeCLI(SubprocessRunner(), cli_binary=str(claude)).run(_task(tmp_path))
 
     executed = tmp_path / "executed"
     assert executed.is_file(), "el comando se denegó tras reescribirlo el hook"

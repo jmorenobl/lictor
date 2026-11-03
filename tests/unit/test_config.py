@@ -30,6 +30,7 @@ from lictor.adapters.config.models import (
     BackendConfig,
     ControlConfig,
     LictorConfig,
+    LimitsConfig,
     PathsConfig,
     Profile,
     ProfileVerification,
@@ -866,3 +867,57 @@ def test_an_invalid_oracle_is_refused(oracle: dict[str, object]) -> None:
     raw["oracle"] = oracle
     with pytest.raises(ValidationError):
         Profile.model_validate(raw)
+
+
+def test_python_uv_unit_control_declares_the_empty_run_code() -> None:
+    unit = next(c for c in load_profile("python-uv").controls if c.id == "unit")
+    assert unit.empty_exit_codes == [5]
+
+
+def test_control_without_empty_exit_codes_declares_none() -> None:
+    control = ControlConfig.model_validate(
+        {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code"}
+    )
+    assert control.empty_exit_codes == []
+
+
+def test_a_lictor_json_with_allow_empty_says_what_to_write_instead(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    init_config_file(tmp_path)
+    config_path = tmp_path / "lictor.json"
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    unit = next(c for c in raw["controls"] if c["id"] == "unit")
+    unit.pop("empty_exit_codes")
+    unit["allow_empty"] = True
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(tmp_path)
+
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    message = str(exc_info.value)
+    assert "'unit' usa 'allow_empty', que ya no existe" in message
+    assert "'empty_exit_codes'; el control 'unit' del perfil declara [5]" in message
+    assert "no se podrá reanudar" in message
+
+
+def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
+    with pytest.raises(ValidationError, match="'u' usa 'allow_empty', que ya no existe"):
+        ControlConfig.model_validate(
+            {"id": "u", "level": "L2", "run": "c", "report": "exit-code", "allow_empty": True}
+        )
+
+
+@pytest.mark.parametrize("report", ["junit", "mutation"])
+def test_a_control_that_reads_a_report_needs_its_path(report: str) -> None:
+    with pytest.raises(ValidationError, match=f"report='{report}' debe incluir"):
+        ControlConfig.model_validate({"id": "m", "level": "L5", "run": "cmd", "report": report})
+
+
+@pytest.mark.parametrize(("chars", "valid"), [(499, False), (500, True), (4000, True)])
+def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> None:
+    if valid:
+        assert LimitsConfig(error_max_chars=chars).error_max_chars == chars
+    else:
+        with pytest.raises(ValidationError, match="greater than or equal to 500"):
+            LimitsConfig(error_max_chars=chars)

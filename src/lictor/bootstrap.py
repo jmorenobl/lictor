@@ -15,6 +15,7 @@ from lictor.adapters.config.loader import (
 from lictor.adapters.config.models import LictorConfig
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
@@ -102,12 +103,13 @@ def bootstrap_runtime(
     readers: dict[str, ResultReader] = {
         "exit-code": ExitCodeReader(),
         "junit": JUnitReader(),
+        "mutation": MutationReader(),
     }
     spec_source = GherkinSource()
 
     if executor is None:
         if active_config.backend.kind == "claude-cli":
-            executor = ClaudeCLI(auth=active_config.backend.auth)
+            executor = ClaudeCLI(runner, auth=active_config.backend.auth)
         elif active_config.backend.kind == "fake":
             fake_config_path = lictor_dir / "fake_executor.json"
             if fake_config_path.is_file():

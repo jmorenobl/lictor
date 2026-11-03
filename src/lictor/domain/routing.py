@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from typing import Any, Final
 
+from lictor.domain.rules import keeps_attempt
+
 END: Final[str] = "__end__"
 
 
@@ -21,6 +23,24 @@ def route_load_spec(state: Mapping[str, Any]) -> str:
     if state.get("exit_code") is not None:
         return END
     return "red_check" if state.get("seal_ok") else "build_driver"
+
+
+def route_build_driver(state: Mapping[str, Any]) -> str:
+    """Route after build_driver node.
+
+    A call that failed without spending the attempt is tried again before anything judges it: its
+    copy is gone and the next call starts from HEAD.
+    """
+    if state.get("exit_code") is not None:
+        return END
+    signal = state.get("agent_signal")
+    if signal in ("rate_limited", "unavailable"):
+        return "pause"
+    if signal == "rejected":
+        return "build_driver"
+    if signal == "error" and keeps_attempt(signal, state.get("agent_failures", 0)):
+        return "build_driver"
+    return "red_check"
 
 
 def route_red_check(state: Mapping[str, Any], max_attempts: int | None = None) -> str:

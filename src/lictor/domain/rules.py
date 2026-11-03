@@ -2,17 +2,25 @@
 
 import fnmatch
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import PurePosixPath
+from typing import Any, Literal
 
 from lictor.domain.errors import DriverError, ExitCode
-from lictor.domain.model import AgentStatus, ScenarioId, TestCaseResult
+from lictor.domain.model import (
+    AgentSignal,
+    AgentStatus,
+    MutationScore,
+    ScenarioId,
+    TestCaseResult,
+)
 
 ScenarioClass = Literal["green", "reopened", "new"]
 MapLink = Literal["name", "scenario"]
 
 AGENT_FAILURE_LIMIT = 2
+SYNTHETIC_MODEL = "<synthetic>"  # what the backend writes as the model of a message it made up
 _MAX_EXIT_CODE_TAIL_LINES = 40
 _MAX_JUNIT_DETAIL_LINES = 15
 _MAX_ASSERTION_LINES = 10
@@ -576,6 +584,96 @@ def count_agent_failures(status: AgentStatus, failures: int) -> int:
 def is_agent_unavailable(status: AgentStatus, failures: int) -> bool:
     """Tell whether the backend is at fault, so that no scenario should pay for it."""
     return status == "auth" or failures >= AGENT_FAILURE_LIMIT
+
+
+def classify_agent(
+    status: AgentStatus,
+    failures: int,
+    *,
+    spec_conflict: bool = False,
+    tampered: bool = False,
+    unreadable: bool = False,
+) -> AgentSignal:
+    """Decide what a call means: tampering first, then the backend, then what the agent left.
+
+    `failures` already counts this call. A copy that can't be read only matters when the agent
+    finished its turn: a declared conflict or a backend at fault says more.
+    """
+    if tampered:
+        return "rejected"
+    if status == "rate_limited":
+        return "rate_limited"
+    if is_agent_unavailable(status, failures):
+        return "unavailable"
+    if spec_conflict:
+        return "spec_conflict"
+    if unreadable:
+        return "rejected"
+    return "ok" if status == "ok" else "error"
+
+
+def keeps_attempt(signal: AgentSignal, failures: int) -> bool:
+    """Tell whether a call leaves the attempt unspent: the backend failed, not the work."""
+    if signal in ("rate_limited", "unavailable"):
+        return True
+    return signal == "error" and failures > 0
+
+
+def model_responded(events: Iterable[Mapping[str, Any]]) -> bool:
+    """Tell whether the model itself wrote anything in a stream of agent events.
+
+    Only an assistant message counts, and not one the backend made up on the model's behalf:
+    the stream's own start and its rate limit notices don't come from the model.
+    """
+    for event in events:
+        if event.get("type") != "assistant":
+            continue
+        message = event.get("message")
+        model = message.get("model") if isinstance(message, Mapping) else None
+        if model != SYNTHETIC_MODEL:
+            return True
+    return False
+
+
+def path_within(path: str, roots: Sequence[str]) -> bool:
+    """Tell whether a relative path is one of `roots` or inside one; "" stands for the project."""
+    target = PurePosixPath(path)
+    for root in roots:
+        base = PurePosixPath(root.strip("/"))
+        if target == base or target.is_relative_to(base):
+            return True
+    return False
+
+
+_MUTATION_COUNTS = ("killed", "survived", "timeout", "no_tests", "suspicious", "segfault")
+
+
+def mutation_score(counts: Mapping[str, int]) -> MutationScore:
+    """Score a mutation run: what the tests killed, out of every mutant that was tried.
+
+    Only skipped mutants leave the denominator. A timeout isn't counted as killed: it may come
+    from a loaded machine as well as from the mutant, so it stays apart where it can be seen.
+    """
+    found = {name: counts.get(name, 0) for name in (*_MUTATION_COUNTS, "skipped", "total")}
+    tried = found["total"] - found["skipped"]
+    percent = 100 * found["killed"] / tried if tried > 0 else 0.0
+    return MutationScore(**found, percent=percent)
+
+
+def describe_score(score: MutationScore) -> str:
+    """Say a mutation score with what wasn't killed beside it, so a ✓ never stands alone."""
+    tried = score.total - score.skipped
+    percent = f"{score.percent:.1f}".replace(".", ",")
+    apart = [f"{score.survived} vivos", f"{score.timeout} por tiempo"]
+    for count, label in (
+        (score.no_tests, "sin tests"),
+        (score.suspicious, "sospechosos"),
+        (score.segfault, "con segfault"),
+        (score.skipped, "omitidos"),
+    ):
+        if count:
+            apart.append(f"{count} {label}")
+    return f"{percent} % ({score.killed} de {tried} muertos; {', '.join(apart)})"
 
 
 def baseline_head_accepted(

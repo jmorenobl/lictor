@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
+import pytest
+
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
+from lictor.domain.model import ControlResult, MutationScore
 
 
 def test_exit_code_reader_success() -> None:
@@ -90,18 +94,43 @@ def test_junit_reader_from_file_path(tmp_path: Path) -> None:
     assert res.test_cases[0].name == "test_file"
 
 
-def test_junit_reader_allow_empty_with_pytest_code_5() -> None:
-    reader = JUnitReader(allow_empty=True)
-    res = reader.read(output="", exit_code=5, duration_ms=5)
+def test_junit_reader_empty_passes_with_a_declared_empty_code() -> None:
+    res = JUnitReader().read(output="", exit_code=5, duration_ms=5, empty_exit_codes=[5])
     assert res.ok is True
     assert res.test_cases == ()
 
 
-def test_junit_reader_empty_without_allow_empty_fails() -> None:
-    reader = JUnitReader(allow_empty=False)
-    res = reader.read(output="", exit_code=5, duration_ms=5)
+def test_junit_reader_empty_without_empty_codes_fails() -> None:
+    res = JUnitReader().read(output="", exit_code=5, duration_ms=5)
     assert res.ok is False
-    assert "No test cases found" in (res.error or "")
+    assert res.error == "No hay casos de test (código de salida 5)"
+
+
+@pytest.mark.parametrize(("codes", "ok"), [([5], False), ([0, 5], True), ([], False)])
+def test_junit_reader_empty_with_exit_0_needs_0_declared(codes: list[int], ok: bool) -> None:
+    report = "<testsuite></testsuite>"
+    res = JUnitReader().read(output=report, exit_code=0, duration_ms=5, empty_exit_codes=codes)
+    assert res.ok is ok
+
+
+@pytest.mark.parametrize(("code", "ok"), [(0, True), (5, True), (4, False), (1, False)])
+def test_exit_code_reader_passes_a_declared_empty_code(code: int, ok: bool) -> None:
+    res = ExitCodeReader().read(output="", exit_code=code, duration_ms=1, empty_exit_codes=(5,))
+    assert res.ok is ok
+
+
+def test_exit_code_reader_without_output_names_the_code() -> None:
+    res = ExitCodeReader().read(output="", exit_code=3, duration_ms=1)
+    assert res.error == "El comando falló con el código 3"
+
+
+def test_junit_reader_messages_are_in_spanish() -> None:
+    failed = '<testsuite><testcase name="t"><failure message="m"/></testcase></testsuite>'
+    assert JUnitReader().read(failed, 1, 1).error == "Fallaron 1 casos de test"
+    passed = '<testsuite><testcase name="t"/></testsuite>'
+    assert JUnitReader().read(passed, 2, 1).error == "La suite falló con el código 2"
+    broken = JUnitReader().read("<testsuite>", 1, 1).error or ""
+    assert broken.startswith("No se pudo leer el informe JUnit: ")
 
 
 def test_junit_reader_rejects_malicious_xml() -> None:
@@ -139,3 +168,62 @@ def test_junit_reads_the_properties_of_each_case() -> None:
         "vacía": "",
     }
     assert second.properties == {}
+
+
+def _mutation(tmp_path: Path, content: str | None, exit_code: int = 0) -> ControlResult:
+    report = tmp_path / "score.json"
+    if content is not None:
+        report.write_text(content, encoding="utf-8")
+    return MutationReader().read(output=str(report), exit_code=exit_code, duration_ms=3)
+
+
+def test_mutation_reader_scores_the_exported_counts(tmp_path: Path) -> None:
+    counts = '{"killed": 8, "survived": 1, "timeout": 1, "skipped": 2, "total": 12, "x": "y"}'
+
+    res = _mutation(tmp_path, counts)
+
+    assert (res.ok, res.error, res.duration_ms) == (True, None, 3)
+    assert res.score == MutationScore(
+        killed=8, survived=1, timeout=1, skipped=2, total=12, percent=80.0
+    )
+
+
+def test_mutation_reader_keeps_the_score_of_a_failed_pass(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, '{"killed": 1, "total": 2}', exit_code=4)
+
+    assert res.ok is False
+    assert res.error == "La pasada de mutación falló con el código 4"
+    assert res.score is not None
+    assert res.score.percent == 50.0
+
+
+def test_mutation_reader_without_a_report_fails(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, None)
+    assert (res.ok, res.error, res.score) == (False, "Sin informe de mutación", None)
+    empty = MutationReader().read(output="", exit_code=0, duration_ms=1)
+    assert (empty.ok, empty.error) == (False, "Sin informe de mutación")
+
+
+def test_mutation_reader_with_no_mutants_fails(tmp_path: Path) -> None:
+    res = _mutation(tmp_path, '{"total": 0}')
+    assert (res.ok, res.error) == (False, "El informe de mutación no tiene mutantes")
+
+
+@pytest.mark.parametrize(
+    ("content", "why"),
+    [
+        ("no", "no es JSON"),
+        ("[1]", "no es un objeto JSON"),
+        ('{"killed": "3"}', "'killed' no es un número de mutantes: '3'"),
+        ('{"total": -1}', "'total' no es un número de mutantes: -1"),
+        ('{"survived": true}', "'survived' no es un número de mutantes: True"),
+    ],
+)
+def test_mutation_reader_refuses_a_report_it_cannot_trust(
+    tmp_path: Path, content: str, why: str
+) -> None:
+    res = _mutation(tmp_path, content)
+
+    assert res.ok is False
+    assert res.error is not None
+    assert res.error.startswith(f"El informe de mutación no es válido: {why}")

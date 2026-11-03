@@ -252,6 +252,66 @@ def test_report_lists_measure_controls_with_result_and_output(tmp_path: Path) ->
     assert "lint" not in section
 
 
+def test_report_shows_the_mutation_score_beside_the_result(tmp_path: Path) -> None:
+    score = {
+        "killed": 923,
+        "survived": 57,
+        "timeout": 0,
+        "no_tests": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "skipped": 0,
+        "total": 980,
+        "percent": 100 * 923 / 980,
+    }
+    controls: dict[str, object] = {
+        "mutation": {
+            "ok": True,
+            "mode": "measure",
+            "exit_code": 0,
+            "output": "r/m.log",
+            "score": score,
+        },
+        "odd": {"ok": True, "mode": "measure", "exit_code": 0, "output": "r/o.log", "score": {}},
+        "bad": {
+            "ok": True,
+            "mode": "measure",
+            "exit_code": 0,
+            "output": "r/b.log",
+            "score": {"x": 1},
+        },
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Controles en medición")[1].split("##")[0]
+    assert (
+        "**mutation** (IVA-001, intento 1): correcto, 94,2 % (923 de 980 muertos; 57 vivos, "
+        "0 por tiempo), código 0, salida en `r/m.log`"
+    ) in section
+    assert "**odd** (IVA-001, intento 1): correcto, código 0" in section
+    assert "**bad** (IVA-001, intento 1): correcto, código 0" in section
+
+
+def test_report_shows_the_score_of_a_blocking_control(tmp_path: Path) -> None:
+    score = {"killed": 3, "survived": 1, "total": 4, "percent": 75.0}
+    controls: dict[str, object] = {
+        "mutation": {"ok": False, "mode": "block", "exit_code": 0, "score": score},
+        "lint": {"ok": True, "mode": "block", "exit_code": 0},
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Puntuaciones")[1].split("##")[0]
+    assert "**mutation** (IVA-001, intento 1): fallo, 75,0 % (3 de 4 muertos; 1 vivos" in section
+    assert "lint" not in section
+    assert "*Ningún control en medición.*" in report
+
+
+def test_report_says_when_no_control_was_scored(tmp_path: Path) -> None:
+    assert "*Ningún control registró puntuación.*" in _report(tmp_path, [_verify_event({})])
+
+
 def test_report_says_when_nothing_was_measured(tmp_path: Path) -> None:
     assert "*Ningún control en medición.*" in _report(tmp_path, [_verify_event({})])
 
@@ -403,3 +463,37 @@ def test_report_lists_collateral_greens(tmp_path: Path) -> None:
     assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
     assert "| IVA-002 | R | green | 0 |" in report
     assert "*Ningún verde colateral.*" in _report(tmp_path, [])
+
+
+def _verification(path: str, ok: bool, failed_at: str | None = None) -> Event:
+    return _event(
+        "lictor.verify.finished.v1",
+        {"attempt": 1, "ok": ok, "failed_at": failed_at, "evidence": {"path": path, "hash": "h"}},
+        "IVA-001",
+    )
+
+
+def test_a_verification_repeated_in_the_same_attempt_shows_twice_in_one_attempt(
+    tmp_path: Path,
+) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-001", "name": "General"}]})
+    first = _verification("r/IVA-001/001-verify", False, "L1")
+    again = _verification("r/IVA-001/001-verify-r1", True)
+    call = _event("lictor.agent.finished.v1", {"role": "implement", "attempt": 1}, "IVA-001")
+
+    report = _report(tmp_path, [loaded, call, first, again])
+
+    rows = report.split("## Verificaciones")[1].split("##")[0]
+    assert "| IVA-001 | 1 | L1 | - |" in rows
+    assert "| IVA-001 | 1 | verde | - |" in rows
+    assert "| IVA-001 | General |" in report
+    assert report.split("| IVA-001 | General |")[1].split("|")[1].strip() == "1"
+
+
+def test_an_event_repeated_by_a_resumed_node_counts_once(tmp_path: Path) -> None:
+    same = _verification("r/IVA-001/001-verify", True)
+
+    report = _report(tmp_path, [same, same])
+
+    rows = report.split("## Verificaciones")[1].split("##")[0]
+    assert rows.count("| IVA-001 | 1 | verde | - |") == 1

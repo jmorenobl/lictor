@@ -236,7 +236,7 @@ cat >src/lictor/adapters/config/profiles/python-uv.json <<'EOF'
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "allow_empty": true}
+    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5]}
   ],
   "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],

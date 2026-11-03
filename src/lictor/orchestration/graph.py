@@ -1,7 +1,6 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
-import uuid
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
@@ -15,6 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
 from lictor.application.anchor import observe_anchor
+from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
@@ -42,8 +42,9 @@ from lictor.domain.errors import (
     SealTamperedError,
     SpecError,
 )
-from lictor.domain.model import AgentStatus, Candidate, Event, Scenario, ScenarioId
+from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.routing import (
+    route_build_driver,
     route_commit,
     route_implement,
     route_load_spec,
@@ -180,14 +181,18 @@ class _GraphNodes:
     def __init__(self, ctx: GraphContext) -> None:
         self.ctx = ctx
 
-    def _finish(self, state: GraphState, code: int, reason: str) -> dict[str, Any]:
-        """End the run leaving its reason in the journal, the report and the state."""
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+    def _finish(
+        self, state: GraphState, code: int, reason: str, *, report: bool = True
+    ) -> dict[str, Any]:
+        """End the run leaving its reason in the journal, the report and the state.
+
+        A run that stops before starting (`report=False`) leaves `report.md` alone: it still holds
+        the last run that did something. The reason stays in the journal and on stderr.
+        """
+        event = new_event(
+            self.ctx.clock,
+            "lictor.run.finished.v1",
+            state["run_id"],
             data={
                 "exit_code": code,
                 "reason": reason,
@@ -195,7 +200,7 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
-        if self.ctx.build_report is not None:
+        if report and self.ctx.build_report is not None:
             self.ctx.build_report.execute(
                 BuildReportRequest(project_root=self.ctx.project_root, run_id=state["run_id"])
             )
@@ -211,6 +216,7 @@ class _GraphNodes:
                 int(ExitCode.PRECONDITION),
                 "El árbol de trabajo tiene cambios sin confirmar: "
                 f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
+                report=False,
             )
         health = self.ctx.executor.health()
         if not health.ok:
@@ -220,16 +226,15 @@ class _GraphNodes:
                     state,
                     int(ExitCode.ENVIRONMENT_UNAVAILABLE),
                     f"el ejecutor no está disponible: {detail}",
+                    report=False,
                 ),
                 "agent_detail": detail,
             }
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.started.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+        event = new_event(
+            self.ctx.clock,
+            "lictor.run.started.v1",
+            state["run_id"],
             data={
                 "lictor_version": "0.1.0",
                 "cli_version": health.cli_version,
@@ -264,12 +269,10 @@ class _GraphNodes:
         for sid in reopened:
             self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.spec.loaded.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+        event = new_event(
+            self.ctx.clock,
+            "lictor.spec.loaded.v1",
+            state["run_id"],
             data={
                 "scenario_count": len(scenarios),
                 "scenarios": [
@@ -301,13 +304,11 @@ class _GraphNodes:
 
     def _scenario_event(self, state: GraphState, kind: str, sid: str, commit: str) -> None:
         self.ctx.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type=kind,
-                source="lictor/0.1.0",
-                time=self.ctx.clock.now_iso(),
-                runid=state["run_id"],
-                scenarioid=sid,
+            new_event(
+                self.ctx.clock,
+                kind,
+                state["run_id"],
+                scenario_id=sid,
                 data={"commit": commit},
             )
         )
@@ -517,13 +518,11 @@ class _GraphNodes:
     ) -> dict[str, Any]:
         """Fail an attempt that can't even be verified, leaving the same record as verify."""
         self.ctx.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type="lictor.verify.finished.v1",
-                source="lictor/0.1.0",
-                time=self.ctx.clock.now_iso(),
-                runid=state["run_id"],
-                scenarioid=state.get("current"),
+            new_event(
+                self.ctx.clock,
+                "lictor.verify.finished.v1",
+                state["run_id"],
+                scenario_id=state.get("current"),
                 data={
                     "attempt": attempt,
                     "ok": False,
@@ -583,13 +582,11 @@ class _GraphNodes:
 
         verify_duration = sum(cr.duration_ms for cr in res.control_results.values())
         control_durations = {k: v.duration_ms for k, v in res.control_results.items()}
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.verify.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
-            scenarioid=current_id,
+        event = new_event(
+            self.ctx.clock,
+            "lictor.verify.finished.v1",
+            state["run_id"],
+            scenario_id=current_id,
             data={
                 "attempt": state.get("attempt", 0),
                 "ok": res.ok,
@@ -751,13 +748,6 @@ def create_graph(
             return END
         return "load_spec"
 
-    def route_build_driver_edge(state: GraphState) -> str:
-        if state.get("exit_code") is not None:
-            return END
-        if state.get("agent_signal") in ("rate_limited", "unavailable"):
-            return "pause"
-        return "build_driver" if state.get("agent_signal") == "rejected" else "red_check"
-
     def route_implement_edge(state: GraphState) -> str:
         return route_implement(state, max_attempts=context.max_attempts)
 
@@ -798,7 +788,7 @@ def create_graph(
     )
     builder.add_conditional_edges(
         "build_driver",
-        route_build_driver_edge,
+        route_build_driver,
         {"pause": "pause", "red_check": "red_check", "build_driver": "build_driver", END: END},
     )
     builder.add_conditional_edges(

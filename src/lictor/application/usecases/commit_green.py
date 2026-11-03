@@ -1,12 +1,12 @@
 """CommitGreen use case for recording green scenarios to version control."""
 
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Vcs
 from lictor.domain.errors import CandidateError
-from lictor.domain.model import Candidate, Event, ScenarioId
+from lictor.domain.model import Candidate, ScenarioId
 
 
 @dataclass(frozen=True)
@@ -37,11 +37,7 @@ class CommitGreen:
 
     def execute(self, request: CommitGreenRequest) -> CommitGreenResult:
         """Advance the branch to the verified commit and append CloudEvent."""
-        sid_str = (
-            request.scenario_id.value
-            if isinstance(request.scenario_id, ScenarioId)
-            else str(request.scenario_id)
-        )
+        sid_str = str(request.scenario_id)
 
         candidate = request.candidate
         if candidate is None:
@@ -67,13 +63,11 @@ class CommitGreen:
         self, request: CommitGreenRequest, candidate: Candidate, sid: str, data: dict[str, object]
     ) -> None:
         self.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type="lictor.scenario.green.v1",
-                source="lictor/0.1.0",
-                time=self.clock.now_iso(),
-                runid=request.run_id,
-                scenarioid=sid,
+            new_event(
+                self.clock,
+                "lictor.scenario.green.v1",
+                request.run_id,
+                scenario_id=sid,
                 data={"commit": candidate.sha, "tree": candidate.tree, **data},
             )
         )

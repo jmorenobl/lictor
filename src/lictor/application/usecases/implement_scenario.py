@@ -1,31 +1,30 @@
 """ImplementScenario use case for executing an implementation attempt for a scenario."""
 
-import contextlib
 import hashlib
 import importlib.resources
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.run_files import (
     agent_workspace,
     attempt_prefix,
-    relative_to_project,
     unused_path,
 )
-from lictor.application.usecases.agent_events import denial_event, denial_targets, tamper_event
+from lictor.application.usecases.agent_events import (
+    AgentCall,
+    agent_finished_event,
+    denial_event,
+    tamper_event,
+)
 from lictor.application.usecases.verify_attempt import (
     AgentCopyOutcome,
     IntegritySnapshot,
 )
 from lictor.domain.errors import CandidateError, SealTamperedError
-from lictor.domain.model import AgentResult, AgentStatus, AgentTask, Event, Scenario
-from lictor.domain.rules import count_agent_failures, is_agent_unavailable
-
-AgentSignal = Literal["ok", "spec_conflict", "rate_limited", "unavailable", "error", "rejected"]
+from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
+from lictor.domain.rules import classify_agent, count_agent_failures, keeps_attempt
 
 _STOPPED_EARLY_NOTES: dict[str, str] = {
     "max_turns": "El intento anterior se quedó sin turnos antes de terminar.",
@@ -74,103 +73,6 @@ class ImplementScenarioResult:
     error: str | None = None
 
 
-def _extract_background(lines: Sequence[str]) -> str:
-    bg_lines: list[str] = []
-    in_bg = False
-    for line in lines:
-        stripped = line.strip().lower()
-        if (
-            stripped.startswith("background:")
-            or stripped.startswith("antecedentes:")
-            or stripped in {"background", "antecedentes"}
-        ):
-            in_bg = True
-            bg_lines.append(line)
-        elif in_bg:
-            if (
-                stripped.startswith("@")
-                or stripped.startswith("scenario:")
-                or stripped.startswith("escenario:")
-            ):
-                break
-            bg_lines.append(line)
-    return "\n".join(bg_lines).strip()
-
-
-def _find_tag_start_index(lines: Sequence[str], target_tag: str, scen_line_idx: int) -> int:
-    for idx in range(scen_line_idx, -1, -1):
-        line_str = lines[idx].strip()
-        if target_tag in line_str:
-            return idx
-        is_scen = line_str.startswith("Scenario:") or line_str.startswith("Escenario:")
-        if is_scen and idx != scen_line_idx:
-            break
-    return scen_line_idx
-
-
-def _extract_scenario_body(lines: Sequence[str], target_tag: str, start_idx: int) -> str:
-    scen_lines: list[str] = []
-    started = False
-    seen_header = False
-    for line in lines[start_idx:]:
-        stripped = line.strip()
-        if target_tag in stripped:
-            started = True
-        elif started:
-            is_header = stripped.startswith("Scenario:") or stripped.startswith("Escenario:")
-            if is_header and seen_header:
-                break
-            if is_header:
-                seen_header = True
-            elif stripped.startswith("@") and not stripped.startswith(target_tag):
-                break
-        if started:
-            scen_lines.append(line)
-    return "\n".join(scen_lines).strip()
-
-
-def _extract_scenario_gherkin(project_root: Path, scenario: Scenario) -> str:
-    path = Path(scenario.file)
-    if not path.is_absolute():
-        path = project_root / path
-    if not path.is_file():
-        return f"Scenario: {scenario.name} (@{scenario.id.value})"
-
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return ""
-
-    bg_text = _extract_background(lines)
-    target_tag = f"@{scenario.id.value}"
-    scen_line_idx = scenario.line - 1 if 0 < scenario.line <= len(lines) else 0
-    start_idx = _find_tag_start_index(lines, target_tag, scen_line_idx)
-    scen_text = _extract_scenario_body(lines, target_tag, start_idx)
-
-    if bg_text and scen_text:
-        return f"{bg_text}\n\n{scen_text}"
-    if scen_text:
-        return scen_text
-    return "\n".join(lines)
-
-
-def _extract_cli_version(executor: Executor) -> str:
-    health_fn = getattr(executor, "health", None)
-    if callable(health_fn):
-        with contextlib.suppress(Exception):
-            return str(health_fn().cli_version)
-    return ""
-
-
-def _classify_agent(result: AgentResult, agent_failures: int) -> AgentSignal:
-    if result.status == "rate_limited":
-        return "rate_limited"
-    if is_agent_unavailable(result.status, agent_failures):
-        return "unavailable"
-    if result.spec_conflict:
-        return "spec_conflict"
-    return "ok" if result.status == "ok" else "error"
-
-
 class ImplementScenario:
     """Use case to execute an implementation attempt on a single scenario."""
 
@@ -205,7 +107,7 @@ class ImplementScenario:
         )
         prompt_sha = f"sha256:{hashlib.sha256(raw_template.encode('utf-8')).hexdigest()}"
 
-        gherkin_text = _extract_scenario_gherkin(request.project_root, request.scenario)
+        gherkin_text = self.spec_source.scenario_text(request.project_root, request.scenario)
 
         error_block = _STOPPED_EARLY_NOTES.get(request.last_agent_status or "", "")
         if request.last_error:
@@ -255,52 +157,29 @@ class ImplementScenario:
         agent_result = outcome.agent_result
 
         agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
-        agent_signal = _classify_agent(agent_result, agent_failures)
-        if outcome.tampered or (outcome.unreadable and agent_signal in ("ok", "error")):
-            agent_signal = "rejected"
-        keeps_attempt = agent_signal in ("rate_limited", "unavailable") or (
-            agent_signal == "error" and agent_failures > 0
+        agent_signal = classify_agent(
+            agent_result.status,
+            agent_failures,
+            spec_conflict=bool(agent_result.spec_conflict),
+            tampered=bool(outcome.tampered),
+            unreadable=bool(outcome.unreadable),
         )
-        new_attempt = request.attempt if keeps_attempt else request.attempt + 1
+        keeps = keeps_attempt(agent_signal, agent_failures)
+        new_attempt = request.attempt if keeps else request.attempt + 1
 
-        rel_raw = relative_to_project(raw_path, request.project_root)
-        stderr_path = agent_result.stderr_path
-
-        cli_version = _extract_cli_version(self.executor)
-
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.agent.finished.v1",
-            source="lictor/0.1.0",
-            time=self.clock.now_iso(),
-            runid=request.run_id,
-            scenarioid=request.scenario.id.value,
-            data={
-                "role": "implement",
-                "attempt": new_attempt,
-                "status": agent_result.status,
-                "signal": agent_signal,
-                "exit_code": agent_result.exit_code,
-                "permission_denials": denial_targets(agent_result),
-                "model": request.model,
-                "cli_version": cli_version,
-                "tokens": {
-                    "input": agent_result.tokens.input,
-                    "output": agent_result.tokens.output,
-                    "cache_read": agent_result.tokens.cache_read,
-                    "cache_write": agent_result.tokens.cache_write,
-                },
-                "cost_usd": agent_result.cost_usd or 0.0,
-                "cost_kind": agent_result.cost_kind,
-                "num_turns": agent_result.num_turns,
-                "duration_ms": agent_result.duration_ms,
-                "prompt_sha": prompt_sha,
-                "raw": rel_raw,
-                "stderr": (
-                    relative_to_project(stderr_path, request.project_root) if stderr_path else None
-                ),
-            },
+        call = AgentCall(
+            run_id=request.run_id,
+            scenario_id=request.scenario.id.value,
+            role="implement",
+            attempt=new_attempt,
+            signal=agent_signal,
+            model=request.model,
+            cli_version=agent_result.cli_version,
+            prompt_sha=prompt_sha,
+            raw_path=raw_path,
+            project_root=request.project_root,
         )
+        event = agent_finished_event(self.clock, call, agent_result)
         self.event_log.append(event)
         if agent_result.permission_denials:
             self.event_log.append(denial_event(agent_result, event))

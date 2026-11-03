@@ -15,6 +15,8 @@ from lictor.domain.model import (
     Tokens,
 )
 
+FAKE_CLI_VERSION = "fake-1.0.0"
+
 FakeMode = Literal["good", "fail", "cheat", "conflict", "rate_limit", "crash"]
 FakeEffect = Callable[[AgentTask, str | None, int], AgentStatus | None]
 _SCENARIO_TAG_RE = re.compile(r"([A-Z][A-Z0-9]*-[0-9]+)")
@@ -55,7 +57,7 @@ class FakeExecutor:
         """Return healthy fake status."""
         return Health(
             ok=True,
-            cli_version="fake-1.0.0",
+            cli_version=FAKE_CLI_VERSION,
             auth_status="subscription",
             message=None,
         )
@@ -160,4 +162,5 @@ class FakeExecutor:
             cost_usd=cost,
             cost_kind="notional_subscription",
             raw_path=task.raw_path,
+            cli_version=FAKE_CLI_VERSION,
         )

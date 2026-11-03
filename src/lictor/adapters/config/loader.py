@@ -14,6 +14,7 @@ from lictor.adapters.config.models import (
     Profile,
     ProfileVerification,
     ProjectVerification,
+    allow_empty_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
@@ -225,12 +226,35 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         msg = f"El contenido de '{config_path}' debe ser un objeto JSON"
         raise ConfigError(msg)
 
+    _reject_allow_empty(parsed, profiles_dir)
     merged = _merge_profile_defaults(parsed, profiles_dir)
     try:
         return LictorConfig.model_validate(merged)
     except ValidationError as exc:
         msg = f"Configuración inválida en '{config_path}': {exc}"
         raise ConfigError(msg) from exc
+
+
+def _reject_allow_empty(raw: dict[str, object], profiles_dir: Path | None) -> None:
+    """Refuse the old field before validating, naming what the profile declares instead."""
+    controls = raw.get("controls")
+    if not isinstance(controls, list):
+        return
+    for control in controls:
+        if not isinstance(control, dict) or "allow_empty" not in control:
+            continue
+        control_id = str(control.get("id", ""))
+        profile_ref = raw.get("profile")
+        codes: list[int] | None = None
+        if isinstance(profile_ref, str):
+            try:
+                profile = load_profile(profile_ref, profiles_dir)
+            except ConfigError:
+                profile = None
+            if profile is not None:
+                same = [c.empty_exit_codes for c in profile.controls if c.id == control_id]
+                codes = same[0] if same else None
+        raise ConfigError(allow_empty_message(control_id, codes))
 
 
 def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerification) -> None:

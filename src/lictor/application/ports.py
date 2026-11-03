@@ -1,6 +1,6 @@
 """Ports (Protocols) of the application layer in hexagonal architecture."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -184,9 +184,12 @@ class ResultReader(Protocol):
         output: str,
         exit_code: int,
         duration_ms: int,
-        allow_empty: bool = False,
+        empty_exit_codes: Collection[int] = (),
     ) -> ControlResult:
-        """Parse raw output or report files into a ControlResult."""
+        """Parse raw output or report files into a ControlResult.
+
+        A run with no test cases passes only when its exit code is one of `empty_exit_codes`.
+        """
         ...
 
 
@@ -204,6 +207,10 @@ class SpecSource(Protocol):
 
     def verify_seal(self, project_root: Path, driver_paths: Sequence[str]) -> bool:
         """Verify that current features and driver files match .lictor/seal.json."""
+        ...
+
+    def scenario_text(self, project_root: Path, scenario: Scenario) -> str:
+        """The scenario's own text with its backgrounds; only its header if it can't be found."""
         ...
 
     def write_seal(

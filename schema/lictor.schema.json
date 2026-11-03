@@ -13,7 +13,8 @@
           "default": "junit",
           "enum": [
             "exit-code",
-            "junit"
+            "junit",
+            "mutation"
           ],
           "title": "Report",
           "type": "string"
@@ -117,7 +118,8 @@
         "report": {
           "enum": [
             "exit-code",
-            "junit"
+            "junit",
+            "mutation"
           ],
           "title": "Report",
           "type": "string"
@@ -131,10 +133,12 @@
           "title": "Mode",
           "type": "string"
         },
-        "allow_empty": {
-          "default": false,
-          "title": "Allow Empty",
-          "type": "boolean"
+        "empty_exit_codes": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Empty Exit Codes",
+          "type": "array"
         },
         "timeout_s": {
           "default": 600,
@@ -182,7 +186,7 @@
         },
         "error_max_chars": {
           "default": 4000,
-          "exclusiveMinimum": 0,
+          "minimum": 500,
           "title": "Error Max Chars",
           "type": "integer"
         }

@@ -7,7 +7,8 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_tree
-from lictor.domain.model import Event, JournalDamage
+from lictor.domain.model import Event, JournalDamage, MutationScore
+from lictor.domain.rules import describe_score
 
 _MS_PER_SECOND: Final[int] = 1000
 
@@ -24,6 +25,16 @@ def _calculate_total_duration(info: dict[str, Any]) -> str:
             for s in info["scenarios"].values()
         )
     return f"{total_ms}ms" if total_ms < _MS_PER_SECOND else f"{total_ms / _MS_PER_SECOND:.2f}s"
+
+
+def _score_text(raw: object) -> str:
+    """The score a control recorded, if it recorded one the journal can still read."""
+    if not isinstance(raw, dict) or not raw:
+        return ""
+    try:
+        return f", {describe_score(MutationScore(**raw))}"
+    except TypeError:
+        return ""
 
 
 @dataclass(frozen=True)
@@ -87,11 +98,18 @@ class BuildReport:
         return BuildReportResult(report_path=report_path, content=report_md)
 
     def _deduplicate_events(self, events: list[Event]) -> list[Event]:
-        """Keep the last event for each (type, runid, scenarioid, attempt)."""
-        seen: dict[tuple[str, str | None, str | None, Any], Event] = {}
+        """Keep the last event for each (type, runid, scenarioid, attempt, evidence).
+
+        A node that runs again after a crash repeats its event, and only the last one counts. A
+        step that ran twice left two evidence directories, whose names are never reused: both
+        happened, so both stay.
+        """
+        seen: dict[tuple[str, str | None, str | None, Any, Any], Event] = {}
         for ev in events:
             attempt = ev.data.get("attempt")
-            key = (ev.type, ev.runid, ev.scenarioid, attempt)
+            evidence = ev.data.get("evidence")
+            where = evidence.get("path") if isinstance(evidence, dict) else None
+            key = (ev.type, ev.runid, ev.scenarioid, attempt, where)
             seen[key] = ev
         return list(seen.values())
 
@@ -116,6 +134,7 @@ class BuildReport:
             "failed_by_level": defaultdict(int),
             "attempts": [],
             "measures": [],
+            "scores": [],
             "skipped_controls": [],
             "rejected_drivers": [],
             "reopened": [],
@@ -280,15 +299,22 @@ class BuildReport:
 
         controls = ev.data.get("controls")
         for control_id, control in controls.items() if isinstance(controls, dict) else ():
-            if isinstance(control, dict) and control.get("skipped"):
+            if not isinstance(control, dict):
+                continue
+            if control.get("skipped"):
                 info["skipped_controls"].append(
                     f"- **{control_id}** ({sid}, intento {attempt}): {control['skipped']}"
                 )
                 continue
-            if isinstance(control, dict) and control.get("mode") == "measure":
-                result = "correcto" if control.get("ok") else "fallo"
+            result = "correcto" if control.get("ok") else "fallo"
+            score = _score_text(control.get("score"))
+            if score:
+                info["scores"].append(
+                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}"
+                )
+            if control.get("mode") == "measure":
                 info["measures"].append(
-                    f"- **{control_id}** ({sid}, intento {attempt}): {result}, "
+                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}, "
                     f"código {control.get('exit_code')}, salida en `{control.get('output')}`"
                 )
 
@@ -361,6 +387,14 @@ class BuildReport:
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
+
+        lines.extend(
+            [
+                "",
+                "## Puntuaciones",
+                *(info["scores"] or ["- *Ningún control registró puntuación.*"]),
+            ]
+        )
 
         lines.extend(["", "## Controles omitidos"])
         lines.extend(info["skipped_controls"] or ["- *Ningún control omitido.*"])

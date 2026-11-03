@@ -5,7 +5,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit"]
+ReportFormat = Literal["exit-code", "junit", "mutation"]
 ControlMode = Literal["block", "measure"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
 RedKind = Literal["assertion", "not_implemented", "error"]
@@ -180,6 +180,20 @@ class ProjectVerification(BaseModel):
     prepare_inherit: list[str] = Field(default_factory=list)
 
 
+def allow_empty_message(control_id: str, profile_codes: list[int] | None) -> str:
+    """Say what replaces `allow_empty`, with the profile's own codes when they are known."""
+    where = (
+        f"; el control '{control_id}' del perfil declara {profile_codes}"
+        if profile_codes is not None
+        else ""
+    )
+    return (
+        f"El control '{control_id}' usa 'allow_empty', que ya no existe: declara los códigos de "
+        f"salida de una ejecución sin casos en 'empty_exit_codes'{where}. Una ejecución a medias "
+        "no se podrá reanudar tras editar lictor.json: termínala antes o empieza otra con --new."
+    )
+
+
 class ControlConfig(BaseModel):
     """Control determinista de verificación."""
 
@@ -190,14 +204,21 @@ class ControlConfig(BaseModel):
     run: str = Field(min_length=1)
     report: ReportFormat
     mode: ControlMode = "block"
-    allow_empty: bool = False
+    empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_allow_empty(cls, data: object) -> object:
+        if isinstance(data, dict) and "allow_empty" in data:
+            raise ValueError(allow_empty_message(str(data.get("id", "")), None))
+        return data
+
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
-        if self.report == "junit" and "{out}" not in self.run:
-            msg = f"El control '{self.id}' con report='junit' debe incluir '{{out}}' en run"
+        if self.report != "exit-code" and "{out}" not in self.run:
+            msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)
         return self
 
@@ -248,7 +269,8 @@ class LimitsConfig(BaseModel):
 
     max_attempts: int = Field(default=3, gt=0)
     max_driver_attempts: int = Field(default=2, gt=0)
-    error_max_chars: int = Field(default=4000, gt=0)
+    # Below this the reason and the first failed case no longer fit, and the agent retries blind.
+    error_max_chars: int = Field(default=4000, ge=500)
 
 
 class Profile(BaseModel):

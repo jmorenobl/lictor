@@ -5,7 +5,7 @@ import pytest
 from lictor.application.ports import Clock, EventLog, Vcs
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
 from lictor.domain.errors import CandidateError
-from lictor.domain.model import Candidate, Event
+from lictor.domain.model import Candidate, Event, ScenarioId
 
 CANDIDATE = Candidate(sha="c0ffee", tree="t1", parent="p0")
 
@@ -102,3 +102,41 @@ def test_commit_green_records_each_collateral_green_on_the_same_commit() -> None
     assert events[1].data["collateral"] is True
     assert events[1].data["attempt"] == 0
     assert "collateral" not in events[0].data
+
+
+def test_commit_green_reads_the_tree_of_the_candidate_and_names_it() -> None:
+    use_case, vcs, _ = _use_case(tree="otro")
+    candidate = Candidate(sha="0123456789abcdef", tree="t1", parent="p0")
+    request = CommitGreenRequest(scenario_id="IVA-001", run_id="r", attempt=1, candidate=candidate)
+
+    with pytest.raises(CandidateError) as exc_info:
+        use_case.execute(request)
+
+    vcs.get_tree.assert_called_once_with("0123456789abcdef")
+    assert str(exc_info.value) == "El commit 0123456789ab no es el árbol verificado."
+
+
+def test_commit_green_without_a_candidate_says_how_to_go_on() -> None:
+    use_case, _, _ = _use_case()
+    request = CommitGreenRequest(
+        scenario_id=ScenarioId("IVA-001"), run_id="r", attempt=1, candidate=None
+    )
+
+    with pytest.raises(CandidateError) as exc_info:
+        use_case.execute(request)
+
+    assert str(exc_info.value) == (
+        "No hay commit verificado para IVA-001: lanza una ejecución nueva con --new."
+    )
+
+
+def test_commit_green_event_belongs_to_the_run() -> None:
+    use_case, _, event_log = _use_case()
+    request = CommitGreenRequest(
+        scenario_id=ScenarioId("IVA-001"), run_id="R9", attempt=1, candidate=CANDIDATE
+    )
+
+    use_case.execute(request)
+
+    event = event_log.append.call_args[0][0]
+    assert (event.runid, event.scenarioid) == ("R9", "IVA-001")
