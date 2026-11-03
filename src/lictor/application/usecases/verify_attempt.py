@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal, Protocol
 
 from lictor.application.ports import CommandRunner, ResultReader, Vcs
@@ -45,6 +45,7 @@ from lictor.domain.rules import (
     control_path_status,
     forbidden_paths,
     map_test_cases_to_scenarios,
+    path_within,
     render_full_error,
     suite_crash_reason,
 )
@@ -97,16 +98,16 @@ class VerificationControl:
     when_exists: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class VerifyAttemptRequest:
-    """Request payload for VerifyAttempt use case."""
+    """Request payload for VerifyAttempt use case; paths and suppressions come from the profile."""
 
     scenario_id: str | ScenarioId
     run_id: str
     role: RoleKind = "implement"
-    paths_writable: Sequence[str] = ("src/", "tests/unit/")
-    paths_driver: Sequence[str] = ("tests/acceptance/",)
-    suppressions: Sequence[str] = ("# noqa", "# type: ignore", "# pragma: no cover")
+    paths_writable: Sequence[str]
+    paths_driver: Sequence[str]
+    suppressions: Sequence[str]
     controls: Sequence[VerificationControlProtocol] = field(default_factory=tuple)
     acceptance_run: str = ""
     acceptance_report: str = "junit"
@@ -253,15 +254,6 @@ class AgentCopyOutcome:
 def describe_tampering(changes: Sequence[str]) -> str:
     """Name what was restored: the agent reads it, and so does whoever audits the run."""
     return f"{STATE_TAMPERED}: {', '.join(changes)}. Se ha restaurado."
-
-
-def _is_path_allowed(rel_path: str, allowed_roots: Sequence[str]) -> bool:
-    target = PurePosixPath(rel_path)
-    for root_str in allowed_roots:
-        root_norm = PurePosixPath(root_str.strip("/"))
-        if target == root_norm or target.is_relative_to(root_norm):
-            return True
-    return False
 
 
 def _scenario_str(scenario_id: str | ScenarioId) -> str:
@@ -465,7 +457,7 @@ class VerifyAttempt:
         # A link in the commit can point to what the commit leaves out.
         rejected.update(change.path for change in changes if change.is_link)
         forbidden: list[str] = [
-            f for f in changed_files if f in rejected or not _is_path_allowed(f, allowed)
+            f for f in changed_files if f in rejected or not path_within(f, allowed)
         ]
 
         if forbidden:

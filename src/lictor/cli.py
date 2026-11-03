@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 import shutil
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -14,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from lictor.application.anchor import observe_anchor
+from lictor.application.events import new_event
 from lictor.application.run_files import exclusive_run, sweep_scratch
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import (
@@ -24,7 +24,6 @@ from lictor.application.usecases.check_project import (
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
-from lictor.domain.model import Event
 from lictor.domain.rules import anchor_problems, baseline_head_accepted
 from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
@@ -283,12 +282,10 @@ def run(
 
 def _record_stop(runtime: BootstrapResult, run_id: str, code: int, reason: str) -> None:
     """Leave in the journal why a run that can still be resumed stopped."""
-    event = Event(
-        id=uuid.uuid4().hex,
-        type="lictor.run.stopped.v1",
-        source="lictor/0.1.0",
-        time=runtime.clock.now_iso(),
-        runid=run_id,
+    event = new_event(
+        runtime.clock,
+        "lictor.run.stopped.v1",
+        run_id,
         data={"exit_code": code, "reason": reason},
     )
     runtime.event_log.append(event)
@@ -447,12 +444,10 @@ def _resume_run(
         if state_snapshot.next
         else str(state_snapshot.values.get("resume_to", "implement"))
     )
-    resumed_event = Event(
-        id=uuid.uuid4().hex,
-        type="lictor.run.resumed.v1",
-        source="lictor/0.1.0",
-        time=runtime.clock.now_iso(),
-        runid=existing_run_id,
+    resumed_event = new_event(
+        runtime.clock,
+        "lictor.run.resumed.v1",
+        existing_run_id,
         data={"resume_node": next_node},
     )
     runtime.event_log.append(resumed_event)

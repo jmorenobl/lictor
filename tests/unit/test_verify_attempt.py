@@ -26,6 +26,8 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 
+_SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
+
 
 class FakeVcs(Vcs):
     """In-memory VCS fake for testing VerifyAttempt."""
@@ -157,6 +159,8 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -179,6 +183,8 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -204,6 +210,7 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
         paths_writable=("src/",),
         paths_driver=("tests/acceptance/",),
         all_scenario_ids=("IVA-001",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -231,6 +238,7 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
         paths_writable=("src/",),
         paths_driver=("tests/acceptance/",),
         all_scenario_ids=("IVA-001",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -254,6 +262,7 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
         paths_writable=("src/",),
         suppressions=("# noqa",),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
     )
 
     result = verifier.execute(req)
@@ -288,6 +297,8 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
             ),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -332,6 +343,8 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
         ),
         acceptance_run="pytest",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -364,6 +377,8 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
         acceptance_run="pytest",
         green_scenario_ids=("IVA-002",),
         all_scenario_ids=("IVA-001", "IVA-002"),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -396,6 +411,8 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
             VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -431,6 +448,8 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
             VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
         ),
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)
@@ -469,6 +488,8 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
         ),
         acceptance_run="echo passed",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     # Acceptance xml passed
@@ -508,6 +529,7 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
         suppressions=("# noqa",),
         acceptance_run="pytest",
         all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
     )
 
     result = verifier.execute(req)
@@ -559,6 +581,8 @@ def _verify(
         "scenario_id": "IVA-001",
         "run_id": run_id,
         "paths_writable": ("src/",),
+        "paths_driver": ("tests/acceptance/",),
+        "suppressions": _SUPPRESSIONS,
         "acceptance_run": "suite --junitxml {out}",
         "all_scenario_ids": ("IVA-001", "IVA-002"),
         "attempt": 2,
@@ -745,7 +769,12 @@ def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
         project_root=project_root,
     )
     req = VerifyAttemptRequest(
-        scenario_id="IVA-001", run_id=run_id, paths_writable=("src/",), tree="agent-tree"
+        scenario_id="IVA-001",
+        run_id=run_id,
+        paths_writable=("src/",),
+        tree="agent-tree",
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
     )
 
     result = verifier.execute(req)

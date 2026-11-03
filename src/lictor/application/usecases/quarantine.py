@@ -1,11 +1,11 @@
 """Quarantine use case for handling scenarios that failed or were conflicted."""
 
-import uuid
 from dataclasses import dataclass
 from typing import Literal
 
+from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog
-from lictor.domain.model import Event, ScenarioId
+from lictor.domain.model import ScenarioId
 
 QuarantineReason = Literal["intentos agotados", "spec_conflict", "driver_sospechoso"]
 
@@ -43,13 +43,11 @@ class Quarantine:
             else str(request.scenario_id)
         )
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.scenario.quarantined.v1",
-            source="lictor/0.1.0",
-            time=self.clock.now_iso(),
-            runid=request.run_id,
-            scenarioid=sid_str,
+        event = new_event(
+            self.clock,
+            "lictor.scenario.quarantined.v1",
+            request.run_id,
+            scenario_id=sid_str,
             data={
                 "reason": request.reason,
                 "details": request.details or "",

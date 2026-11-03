@@ -1,11 +1,11 @@
 """CheckRed use case for verifying acceptance test driver against red rule."""
 
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+from lictor.application.events import new_event
 from lictor.application.ports import AuditSink, ResultReader, SpecSource, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
@@ -24,7 +24,7 @@ from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.verify_attempt import IntegritySnapshot, describe_tampering
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
-from lictor.domain.model import Candidate, CommandOutput, Event, ScenarioId, TestCaseResult
+from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseResult
 from lictor.domain.rules import (
     Impostors,
     MapLink,
@@ -408,13 +408,10 @@ class CheckRed:
             max_chars=request.error_max_chars,
         )
         self.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type="lictor.driver.rejected.v1",
-                source="lictor/0.1.0",
-                time=self.clock.now_iso(),
-                runid=request.run_id,
-                scenarioid=None,
+            new_event(
+                self.clock,
+                "lictor.driver.rejected.v1",
+                request.run_id,
                 data={
                     "attempt": request.driver_attempts,
                     "reason": rejection.kind,
@@ -466,13 +463,11 @@ class CheckRed:
         self, request: CheckRedRequest, kind: str, sid: str, commit: str, **data: object
     ) -> None:
         self.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type=kind,
-                source="lictor/0.1.0",
-                time=self.clock.now_iso(),
-                runid=request.run_id,
-                scenarioid=sid,
+            new_event(
+                self.clock,
+                kind,
+                request.run_id,
+                scenario_id=sid,
                 data={"commit": commit, **data},
             )
         )
@@ -493,13 +488,10 @@ class CheckRed:
         )
         commit_sha = candidate.sha if candidate is not None else self.vcs.get_head_sha()
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.driver.sealed.v1",
-            source="lictor/0.1.0",
-            time=self.clock.now_iso(),
-            runid=request.run_id,
-            scenarioid=None,
+        event = new_event(
+            self.clock,
+            "lictor.driver.sealed.v1",
+            request.run_id,
             data={
                 "commit": commit_sha,
                 "files": seal_data.get("files", {}),

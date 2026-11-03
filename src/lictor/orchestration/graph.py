@@ -1,7 +1,6 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
-import uuid
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
@@ -15,6 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
 from lictor.application.anchor import observe_anchor
+from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
@@ -42,7 +42,7 @@ from lictor.domain.errors import (
     SealTamperedError,
     SpecError,
 )
-from lictor.domain.model import AgentStatus, Candidate, Event, Scenario, ScenarioId
+from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.routing import (
     route_commit,
     route_implement,
@@ -182,12 +182,10 @@ class _GraphNodes:
 
     def _finish(self, state: GraphState, code: int, reason: str) -> dict[str, Any]:
         """End the run leaving its reason in the journal, the report and the state."""
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+        event = new_event(
+            self.ctx.clock,
+            "lictor.run.finished.v1",
+            state["run_id"],
             data={
                 "exit_code": code,
                 "reason": reason,
@@ -224,12 +222,10 @@ class _GraphNodes:
                 "agent_detail": detail,
             }
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.run.started.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+        event = new_event(
+            self.ctx.clock,
+            "lictor.run.started.v1",
+            state["run_id"],
             data={
                 "lictor_version": "0.1.0",
                 "cli_version": health.cli_version,
@@ -264,12 +260,10 @@ class _GraphNodes:
         for sid in reopened:
             self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
 
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.spec.loaded.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
+        event = new_event(
+            self.ctx.clock,
+            "lictor.spec.loaded.v1",
+            state["run_id"],
             data={
                 "scenario_count": len(scenarios),
                 "scenarios": [
@@ -301,13 +295,11 @@ class _GraphNodes:
 
     def _scenario_event(self, state: GraphState, kind: str, sid: str, commit: str) -> None:
         self.ctx.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type=kind,
-                source="lictor/0.1.0",
-                time=self.ctx.clock.now_iso(),
-                runid=state["run_id"],
-                scenarioid=sid,
+            new_event(
+                self.ctx.clock,
+                kind,
+                state["run_id"],
+                scenario_id=sid,
                 data={"commit": commit},
             )
         )
@@ -517,13 +509,11 @@ class _GraphNodes:
     ) -> dict[str, Any]:
         """Fail an attempt that can't even be verified, leaving the same record as verify."""
         self.ctx.event_log.append(
-            Event(
-                id=uuid.uuid4().hex,
-                type="lictor.verify.finished.v1",
-                source="lictor/0.1.0",
-                time=self.ctx.clock.now_iso(),
-                runid=state["run_id"],
-                scenarioid=state.get("current"),
+            new_event(
+                self.ctx.clock,
+                "lictor.verify.finished.v1",
+                state["run_id"],
+                scenario_id=state.get("current"),
                 data={
                     "attempt": attempt,
                     "ok": False,
@@ -583,13 +573,11 @@ class _GraphNodes:
 
         verify_duration = sum(cr.duration_ms for cr in res.control_results.values())
         control_durations = {k: v.duration_ms for k, v in res.control_results.items()}
-        event = Event(
-            id=uuid.uuid4().hex,
-            type="lictor.verify.finished.v1",
-            source="lictor/0.1.0",
-            time=self.ctx.clock.now_iso(),
-            runid=state["run_id"],
-            scenarioid=current_id,
+        event = new_event(
+            self.ctx.clock,
+            "lictor.verify.finished.v1",
+            state["run_id"],
+            scenario_id=current_id,
             data={
                 "attempt": state.get("attempt", 0),
                 "ok": res.ok,
