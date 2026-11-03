@@ -25,7 +25,7 @@ class CheckControlSpec:
     run: str
     report: str = "exit-code"
     mode: str = "block"
-    allow_empty: bool = False
+    empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
     when_exists: str | None = None
 
@@ -66,7 +66,7 @@ class _RunStepParams:
     command_template: str
     report_format: str
     timeout_s: int
-    allow_empty: bool
+    empty_exit_codes: Sequence[int]
     step_id: str
     mode: str = "block"
 
@@ -107,7 +107,7 @@ class CheckProject:
                     command_template=ctrl.run,
                     report_format=ctrl.report,
                     timeout_s=ctrl.timeout_s,
-                    allow_empty=ctrl.allow_empty,
+                    empty_exit_codes=ctrl.empty_exit_codes,
                     step_id=ctrl.id,
                     mode=ctrl.mode,
                 )
@@ -138,7 +138,7 @@ class CheckProject:
                     command_template=req.acceptance.run,
                     report_format=req.acceptance.report,
                     timeout_s=req.acceptance.timeout_s,
-                    allow_empty=False,
+                    empty_exit_codes=(),
                     step_id="acceptance",
                 )
             )
@@ -184,7 +184,7 @@ class CheckProject:
                 output=content,
                 exit_code=cmd_out.returncode,
                 duration_ms=cmd_out.duration_ms,
-                allow_empty=params.allow_empty,
+                empty_exit_codes=params.empty_exit_codes,
             ),
             exit_code=cmd_out.returncode,
             mode=params.mode,

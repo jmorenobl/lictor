@@ -180,6 +180,20 @@ class ProjectVerification(BaseModel):
     prepare_inherit: list[str] = Field(default_factory=list)
 
 
+def allow_empty_message(control_id: str, profile_codes: list[int] | None) -> str:
+    """Say what replaces `allow_empty`, with the profile's own codes when they are known."""
+    where = (
+        f"; el control '{control_id}' del perfil declara {profile_codes}"
+        if profile_codes is not None
+        else ""
+    )
+    return (
+        f"El control '{control_id}' usa 'allow_empty', que ya no existe: declara los códigos de "
+        f"salida de una ejecución sin casos en 'empty_exit_codes'{where}. Una ejecución a medias "
+        "no se podrá reanudar tras editar lictor.json: termínala antes o empieza otra con --new."
+    )
+
+
 class ControlConfig(BaseModel):
     """Control determinista de verificación."""
 
@@ -190,9 +204,16 @@ class ControlConfig(BaseModel):
     run: str = Field(min_length=1)
     report: ReportFormat
     mode: ControlMode = "block"
-    allow_empty: bool = False
+    empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_allow_empty(cls, data: object) -> object:
+        if isinstance(data, dict) and "allow_empty" in data:
+            raise ValueError(allow_empty_message(str(data.get("id", "")), None))
+        return data
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:

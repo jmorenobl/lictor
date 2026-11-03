@@ -458,7 +458,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
     assert "hacked" not in (project_root / "lictor.json").read_text(encoding="utf-8")
 
 
-def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
+def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
@@ -467,7 +467,7 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
         "pytest",
         CommandOutput(returncode=5, stdout="", stderr="no tests ran", duration_ms=15),
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(allow_empty=False)}
+    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -483,7 +483,7 @@ def test_verify_attempt_control_allow_empty_junit(tmp_path: Path) -> None:
                 run="pytest tests/unit --junitxml {out}",
                 report="junit",
                 mode="block",
-                allow_empty=True,
+                empty_exit_codes=(5,),
             ),
         ),
         acceptance_run="echo passed",
@@ -658,7 +658,7 @@ def test_verify_unreadable_report_reason_survives_a_long_output(tmp_path: Path) 
 
     verifier, req = _verify(tmp_path, Noisy({"suite": ("<roto", 1)}))
 
-    assert "Failed to parse JUnit XML" in (verifier.execute(req).condensed_error or "")
+    assert "No se pudo leer el informe JUnit" in (verifier.execute(req).condensed_error or "")
 
 
 def test_verify_gates_need_the_step_dir_from_execute(tmp_path: Path) -> None:
@@ -696,7 +696,7 @@ def test_verify_unparsable_report_explains_why(tmp_path: Path) -> None:
     result = verifier.execute(req)
 
     assert result.ok is False
-    assert "Failed to parse JUnit XML" in (result.condensed_error or "")
+    assert "No se pudo leer el informe JUnit" in (result.condensed_error or "")
 
 
 def test_verify_condensed_error_omits_pending_but_the_full_error_keeps_them(

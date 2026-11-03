@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 
@@ -90,18 +92,43 @@ def test_junit_reader_from_file_path(tmp_path: Path) -> None:
     assert res.test_cases[0].name == "test_file"
 
 
-def test_junit_reader_allow_empty_with_pytest_code_5() -> None:
-    reader = JUnitReader(allow_empty=True)
-    res = reader.read(output="", exit_code=5, duration_ms=5)
+def test_junit_reader_empty_passes_with_a_declared_empty_code() -> None:
+    res = JUnitReader().read(output="", exit_code=5, duration_ms=5, empty_exit_codes=[5])
     assert res.ok is True
     assert res.test_cases == ()
 
 
-def test_junit_reader_empty_without_allow_empty_fails() -> None:
-    reader = JUnitReader(allow_empty=False)
-    res = reader.read(output="", exit_code=5, duration_ms=5)
+def test_junit_reader_empty_without_empty_codes_fails() -> None:
+    res = JUnitReader().read(output="", exit_code=5, duration_ms=5)
     assert res.ok is False
-    assert "No test cases found" in (res.error or "")
+    assert res.error == "No hay casos de test (código de salida 5)"
+
+
+@pytest.mark.parametrize(("codes", "ok"), [([5], False), ([0, 5], True), ([], False)])
+def test_junit_reader_empty_with_exit_0_needs_0_declared(codes: list[int], ok: bool) -> None:
+    report = "<testsuite></testsuite>"
+    res = JUnitReader().read(output=report, exit_code=0, duration_ms=5, empty_exit_codes=codes)
+    assert res.ok is ok
+
+
+@pytest.mark.parametrize(("code", "ok"), [(0, True), (5, True), (4, False), (1, False)])
+def test_exit_code_reader_passes_a_declared_empty_code(code: int, ok: bool) -> None:
+    res = ExitCodeReader().read(output="", exit_code=code, duration_ms=1, empty_exit_codes=(5,))
+    assert res.ok is ok
+
+
+def test_exit_code_reader_without_output_names_the_code() -> None:
+    res = ExitCodeReader().read(output="", exit_code=3, duration_ms=1)
+    assert res.error == "El comando falló con el código 3"
+
+
+def test_junit_reader_messages_are_in_spanish() -> None:
+    failed = '<testsuite><testcase name="t"><failure message="m"/></testcase></testsuite>'
+    assert JUnitReader().read(failed, 1, 1).error == "Fallaron 1 casos de test"
+    passed = '<testsuite><testcase name="t"/></testsuite>'
+    assert JUnitReader().read(passed, 2, 1).error == "La suite falló con el código 2"
+    broken = JUnitReader().read("<testsuite>", 1, 1).error or ""
+    assert broken.startswith("No se pudo leer el informe JUnit: ")
 
 
 def test_junit_reader_rejects_malicious_xml() -> None:

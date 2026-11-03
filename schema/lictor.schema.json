@@ -131,10 +131,12 @@
           "title": "Mode",
           "type": "string"
         },
-        "allow_empty": {
-          "default": false,
-          "title": "Allow Empty",
-          "type": "boolean"
+        "empty_exit_codes": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Empty Exit Codes",
+          "type": "array"
         },
         "timeout_s": {
           "default": 600,

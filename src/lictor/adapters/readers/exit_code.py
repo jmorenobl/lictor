@@ -1,10 +1,11 @@
 """Exit-code result reader."""
 
+from collections.abc import Collection
+
 from lictor.application.ports import ResultReader
 from lictor.domain.model import ControlResult
 
 _MAX_TAIL_LINES = 40
-_PYTEST_NO_TESTS_EXIT_CODE = 5
 
 
 class ExitCodeReader(ResultReader):
@@ -15,10 +16,10 @@ class ExitCodeReader(ResultReader):
         output: str,
         exit_code: int,
         duration_ms: int,
-        allow_empty: bool = False,
+        empty_exit_codes: Collection[int] = (),
     ) -> ControlResult:
-        """Parse exit code and output."""
-        if exit_code == 0 or (allow_empty and exit_code == _PYTEST_NO_TESTS_EXIT_CODE):
+        """Parse exit code and output; a code the profile declares as an empty run also passes."""
+        if exit_code == 0 or exit_code in empty_exit_codes:
             return ControlResult(
                 ok=True,
                 duration_ms=duration_ms,
@@ -29,7 +30,7 @@ class ExitCodeReader(ResultReader):
         lines = output.splitlines()
         tail = lines[-_MAX_TAIL_LINES:] if len(lines) > _MAX_TAIL_LINES else lines
         error_msg = (
-            "\n".join(tail).strip() if tail else f"Command failed with exit code {exit_code}"
+            "\n".join(tail).strip() if tail else f"El comando falló con el código {exit_code}"
         )
 
         return ControlResult(

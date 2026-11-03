@@ -75,7 +75,7 @@ class VerificationControlProtocol(Protocol):
     def mode(self) -> str: ...
 
     @property
-    def allow_empty(self) -> bool: ...
+    def empty_exit_codes(self) -> Sequence[int]: ...
 
     @property
     def timeout_s(self) -> int: ...
@@ -93,7 +93,7 @@ class VerificationControl:
     run: str
     report: str
     mode: str = "block"
-    allow_empty: bool = False
+    empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
     when_exists: str | None = None
 
@@ -595,7 +595,7 @@ class VerifyAttempt:
             output=output_content,
             exit_code=cmd_out.returncode,
             duration_ms=cmd_out.duration_ms,
-            allow_empty=ctrl.allow_empty,
+            empty_exit_codes=ctrl.empty_exit_codes,
         )
 
         return _ControlRun(recorded(c_res), output=cmd_out)
@@ -639,7 +639,6 @@ class VerifyAttempt:
                 output=output_content,
                 exit_code=cmd_out.returncode,
                 duration_ms=cmd_out.duration_ms,
-                allow_empty=False,
             ),
             exit_code=cmd_out.returncode,
             output_path=relative_to_project(log_file, self.project_root),

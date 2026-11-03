@@ -53,7 +53,7 @@ class _EnvironmentRunner:
 def _specs(selected: Sequence[str]) -> list[CheckControlSpec]:
     config = load_config(REPO_ROOT)
     specs = [
-        CheckControlSpec(c.id, c.level, c.run, c.report, c.mode, c.allow_empty, c.timeout_s)
+        CheckControlSpec(c.id, c.level, c.run, c.report, c.mode, c.empty_exit_codes, c.timeout_s)
         for c in config.controls
     ]
     acceptance = config.acceptance

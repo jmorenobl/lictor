@@ -90,7 +90,8 @@ class DynamicTestRunner(FakeRunner):
                     '<testsuites><testsuite name="unit" /></testsuites>',
                     encoding="utf-8",
                 )
-                return CommandOutput(returncode=0, stdout="OK", stderr="", duration_ms=10)
+                # What the tool does with no unit tests: an empty report and its own exit code.
+                return CommandOutput(returncode=5, stdout="OK", stderr="", duration_ms=10)
 
             # Check implementation in src/
             iva_code = cwd / "src" / "iva.py"
@@ -224,7 +225,7 @@ Característica: IVA de facturas
                 level="L2",
                 run="unit-runner {out}",
                 report="junit",
-                allow_empty=True,
+                empty_exit_codes=(5,),
             )
         ],
         prepare_driver=prepare_driver,

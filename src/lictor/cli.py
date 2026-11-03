@@ -206,7 +206,7 @@ def check(
                 run=c.run,
                 report=c.report,
                 mode=c.mode,
-                allow_empty=c.allow_empty,
+                empty_exit_codes=c.empty_exit_codes,
                 timeout_s=c.timeout_s,
                 when_exists=c.when_exists,
             )

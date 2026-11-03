@@ -219,7 +219,6 @@ class CheckRed:
             output=content if content else output.stdout,
             exit_code=output.returncode,
             duration_ms=output.duration_ms,
-            allow_empty=False,
         )
 
         raw_output = format_output(output)
@@ -339,7 +338,6 @@ class CheckRed:
             output=content or output.stdout,
             exit_code=output.returncode,
             duration_ms=output.duration_ms,
-            allow_empty=False,
         ).test_cases
         crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
         try:
