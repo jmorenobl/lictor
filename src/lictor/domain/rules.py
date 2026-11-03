@@ -195,7 +195,8 @@ class RedVerdict:
     cases: tuple[TestCaseResult, ...] = ()
     pending: tuple[str, ...] = ()
     register: tuple[str, ...] = ()  # pass with a validated test: green without the agent
-    unproven: tuple[str, ...] = ()  # pass with a test nobody has validated yet
+    unproven: tuple[str, ...] = ()  # new, pass with a test nobody has validated yet
+    respecified: tuple[str, ...] = ()  # reopened, pass with a test nobody has validated yet
 
     @property
     def ok(self) -> bool:
@@ -232,15 +233,18 @@ def judge_red(
 ) -> RedVerdict:
     """Judge each scenario of the red run by its class.
 
-    A green must pass. A reopened one may pass, and is registered again, or fail with a valid red.
-    A new one must fail with a valid red, unless the sealed driver already proved its test: then
-    passing makes it a collateral green. With a fresh driver nothing tells it from a vacuous test.
+    A green must pass. A pending one must fail with a valid red, unless the sealed driver already
+    proved its test: then passing registers a reopened one again and makes a new one a collateral
+    green. With a fresh driver nothing tells a pass from a vacuous test: a new one is `unproven`,
+    for the agent to fix, and a reopened one is `respecified`, for a person to decide whether its
+    specification changed only in wording.
     """
     problems: list[str] = []
     cases: list[TestCaseResult] = []
     pending: list[str] = []
     register: list[str] = []
     unproven: list[str] = []
+    respecified: list[str] = []
     for sid, cls in classes.items():
         case = mapped.get(sid)
         if case is None:
@@ -250,7 +254,10 @@ def judge_red(
                 problems.append(f"El escenario {sid} estaba en verde y ahora no pasa: {case.name}")
                 cases.append(case)
         elif case.status == "passed":
-            (register if cls == "reopened" or not driver_fresh else unproven).append(sid)
+            if not driver_fresh:
+                register.append(sid)
+            else:
+                (respecified if cls == "reopened" else unproven).append(sid)
         elif case.status not in _FAILED_STATUSES:
             problems.append(
                 f"El test {case.name} del escenario {sid} debía fallar, "
@@ -266,7 +273,12 @@ def judge_red(
                 )
                 cases.append(case)
     return RedVerdict(
-        tuple(problems), tuple(cases), tuple(pending), tuple(register), tuple(unproven)
+        tuple(problems),
+        tuple(cases),
+        tuple(pending),
+        tuple(register),
+        tuple(unproven),
+        tuple(respecified),
     )
 
 

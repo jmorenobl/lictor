@@ -804,6 +804,7 @@ def test_judge_red_keeps_greens_passing_and_pendings_failing() -> None:
     assert verdict.ok
     assert verdict.pending == ("N", "R")
     assert (verdict.register, verdict.unproven, verdict.cases) == ((), (), ())
+    assert verdict.respecified == ()
 
 
 def test_judge_red_reports_a_broken_green_with_its_case() -> None:
@@ -820,9 +821,17 @@ def test_judge_red_reports_a_scenario_without_result() -> None:
     assert verdict.problems == ("El escenario N no tiene resultado",)
 
 
-def test_judge_red_registers_a_reopened_scenario_that_passes() -> None:
-    verdict = judge_red({"R": _case("passed")}, {"R": "reopened"}, ORACLE, driver_fresh=True)
+def test_judge_red_registers_a_reopened_scenario_a_sealed_driver_passes() -> None:
+    verdict = judge_red({"R": _case("passed")}, {"R": "reopened"}, ORACLE, driver_fresh=False)
     assert (verdict.ok, verdict.register, verdict.pending) == (True, ("R",), ())
+    assert (verdict.unproven, verdict.respecified) == ((), ())
+
+
+def test_judge_red_leaves_a_reopened_scenario_that_passes_a_fresh_driver_to_a_person() -> None:
+    """The step may still hold the old value: nothing tells it from a test that doesn't check."""
+    verdict = judge_red({"R": _case("passed")}, {"R": "reopened"}, ORACLE, driver_fresh=True)
+    assert (verdict.ok, verdict.respecified) == (True, ("R",))
+    assert (verdict.register, verdict.unproven, verdict.pending) == ((), (), ())
 
 
 def test_judge_red_registers_a_new_scenario_a_sealed_driver_already_proved() -> None:
@@ -833,6 +842,7 @@ def test_judge_red_registers_a_new_scenario_a_sealed_driver_already_proved() -> 
 def test_judge_red_cannot_prove_a_new_scenario_that_passes_with_a_fresh_driver() -> None:
     verdict = judge_red({"N": _case("passed")}, {"N": "new"}, ORACLE, driver_fresh=True)
     assert (verdict.ok, verdict.register, verdict.unproven) == (True, (), ("N",))
+    assert verdict.respecified == ()
 
 
 def test_judge_red_rejects_a_skipped_pending_test() -> None:

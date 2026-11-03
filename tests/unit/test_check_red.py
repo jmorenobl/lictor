@@ -673,11 +673,12 @@ def test_check_red_new_scenario_passing_with_a_fresh_driver_stops_without_retryi
     spec_source.write_seal.assert_not_called()
 
 
-def test_check_red_reopened_scenario_that_passes_is_registered_again_on_the_driver(
+def test_check_red_reopened_scenario_passing_with_a_fresh_driver_stops_for_a_person(
     tmp_path: Path,
 ) -> None:
-    use_case, request, event_log, _, _ = _real_check(
-        tmp_path, _REPORT_OFFENDER, 1, tree="driver-tree"
+    """The step may still hold the old value: only a person knows the change was only wording."""
+    use_case, request, event_log, spec_source, _ = _real_check(
+        tmp_path, _REPORT_OFFENDER, 1, tree="driver-tree", driver_attempts=1
     )
     use_case.history.classify.side_effect = lambda current: {
         "IVA-001": "new",
@@ -685,23 +686,19 @@ def test_check_red_reopened_scenario_that_passes_is_registered_again_on_the_driv
     }
     vcs = use_case.vcs
     assert isinstance(vcs, MagicMock)
-    vcs.commit_tree.side_effect = [
-        Candidate("driver", "driver-tree", "head"),
-        Candidate("registro", "driver-tree", "driver"),
-    ]
 
-    result = use_case.execute(request)
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
 
-    assert result.scenario_status == {"IVA-001": "pending", "IVA-002": "green"}
-    assert result.commit_sha == "driver"
-    registered = vcs.commit_tree.call_args_list[1]
-    assert registered.args[0] == "driver-tree"
-    assert registered.kwargs["trailers"] == {"Scenario": ["IVA-002"], "Lictor-Run": "R"}
-    assert registered.kwargs["parent"] == "driver"
-    assert registered.kwargs["empty"] is True
-    vcs.advance_head.assert_called_once_with("registro", expected="head")
-    [event] = _events(event_log, "lictor.scenario.reregistered.v1")
-    assert (event.scenarioid, event.data["commit"]) == ("IVA-002", "registro")
+    message = str(raised.value)
+    assert message.startswith("La especificación de IVA-002 cambió y su test pasa")
+    assert '--trailer "Scenario: <id>"' in message
+    assert "Si no, su test no detecta el cambio" in message
+    rejection = _rejection(event_log)
+    assert (rejection.data["reason"], rejection.data["final"]) == ("especificacion_cambiada", True)
+    vcs.advance_head.assert_not_called()
+    assert _events(event_log, "lictor.scenario.reregistered.v1") == []
+    spec_source.write_seal.assert_not_called()
 
 
 def test_check_red_reopened_scenario_registers_on_head_with_a_sealed_driver(

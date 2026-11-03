@@ -184,9 +184,10 @@ def test_d12_missing_unit_dir_does_not_block_an_honest_agent(make_project: Proje
     assert len(green_ids(root)) == 3
 
 
-def test_reopened_green_that_still_passes_is_registered_again_without_the_agent(
+def test_reopened_green_that_passes_a_fresh_driver_waits_for_a_person(
     make_project: ProjectFactory,
 ) -> None:
+    """A step may still hold the old value: only a person knows the change was only wording."""
     root = make_project()
     require(run_lictor(root, Agent()) == Outcome(0), "la primera pasada debía quedar verde")
     feature = root / "features" / "iva.feature"
@@ -200,21 +201,32 @@ def test_reopened_green_that_still_passes_is_registered_again_without_the_agent(
     )
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "spec: un paso más en un verde")
+    head = git(root, "rev-parse", "HEAD").strip()
     step = '\n\n@given("la factura es nacional")\ndef nacional():\n    pass\n'
     agent = Agent(driver=lambda task, _attempt: write(task.cwd, DRIVER_PATH, DRIVER + step))
 
-    outcome = run_lictor(root, agent)
+    stopped = run_lictor(root, agent)
 
-    assert outcome == Outcome(0), agent.calls
+    assert stopped == Outcome(10), agent.calls
     assert agent.calls == ["driver"]
     assert [event["scenarioid"] for event in events_of(root, "scenario.reopened")] == ["IVA-002"]
-    [again] = events_of(root, "scenario.reregistered")
-    assert again["scenarioid"] == "IVA-002"
-    assert git(root, "rev-parse", "HEAD").strip() == again["data"]["commit"]
+    assert events_of(root, "scenario.reregistered") == []
+    assert git(root, "rev-parse", "HEAD").strip() == head
+    [rejected] = events_of(root, "driver.rejected")
+    assert (rejected["data"]["reason"], rejected["data"]["final"]) == (
+        "especificacion_cambiada",
+        True,
+    )
+
+    # The person checks the change was only wording and registers it, as the stop message says.
+    trailer = ("--trailer", "Scenario: IVA-002")
+    git(root, "commit", "-q", "--allow-empty", "-m", "test: solo cambió la redacción", *trailer)
+    outcome = run_lictor(root, agent, new=True)
+
+    assert outcome == Outcome(0), agent.calls
+    assert agent.calls == ["driver", "driver"]
     assert green_ids(root).count("IVA-002") == 2
     assert false_greens(root) == []
-    report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
-    assert "registrado sin agente" in report.split("## Verdes registrados de nuevo")[1]
 
 
 def test_baseline_registers_a_green_the_user_implemented_by_hand(

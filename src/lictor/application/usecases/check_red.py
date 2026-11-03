@@ -49,7 +49,14 @@ _REGISTER_HINT = (
 )
 
 RejectionKind = Literal[
-    "L0-estado", "L0-entorno", "suite_caida", "mapeo", "sin_escenario", "regla_del_rojo", "impostor"
+    "L0-estado",
+    "L0-entorno",
+    "suite_caida",
+    "mapeo",
+    "sin_escenario",
+    "regla_del_rojo",
+    "impostor",
+    "especificacion_cambiada",
 ]
 
 
@@ -251,6 +258,13 @@ class CheckRed:
                 output=raw_output,
             )
             return self._reject_or_raise(request, step_dir, rejection), None
+        if verdict.respecified:
+            # Only a person knows whether the specification changed in wording or in substance.
+            reason = _respecified_reason(verdict.respecified)
+            self._reject(
+                request, step_dir, _Rejection("especificacion_cambiada", reason), final=True
+            )
+            raise DriverError(reason)
         if verdict.unproven:
             reason = (
                 f"Los escenarios {', '.join(verdict.unproven)} ya pasan con un driver nuevo: "
@@ -499,6 +513,17 @@ class CheckRed:
         )
         self.event_log.append(event)
         return commit_sha
+
+
+def _respecified_reason(scenarios: Sequence[str]) -> str:
+    names = ", ".join(scenarios)
+    return (
+        f"La especificación de {names} cambió y su test pasa con un driver nuevo: nada distingue "
+        "una implementación que ya cumple la nueva de un test que no detecta el cambio. Si la "
+        "implementación ya la cumple, regístralos y relanza: "
+        'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>". '
+        "Si no, su test no detecta el cambio: corrígelo."
+    )
 
 
 def _scenario_str(sid: ScenarioId | str) -> str:
