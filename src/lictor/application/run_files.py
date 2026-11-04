@@ -23,6 +23,9 @@ from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
 
 DRIVER_OWNER = "driver"
+# What `doctor` and `check` leave, apart from any run's and replaced by the next one.
+DOCTOR_DIR = "doctor"
+CHECK_DIR = "check"
 RUN_LOCK = "run.lock"
 PRIVATE_MODE = 0o700
 
@@ -30,6 +33,11 @@ PRIVATE_MODE = 0o700
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
     """Return the common prefix of everything an attempt leaves in `runs/`."""
     return project_root / ".lictor" / "runs" / run_id / owner / f"{attempt:03d}"
+
+
+def aside_dir(project_root: Path, name: str) -> Path:
+    """Return where a command that isn't a run keeps what it leaves, under `.lictor/`."""
+    return project_root / ".lictor" / name
 
 
 def unused_path(path: Path, start: int = 0) -> Path:
@@ -132,8 +140,8 @@ def sweep_scratch(project_root: Path) -> None:
 
 
 @contextlib.contextmanager
-def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
-    """Hold the project for one command, or refuse at once if another one holds it.
+def holding_project(project_root: Path) -> Iterator[bool]:
+    """Try to hold the project, and say whether it was free; never wait for it.
 
     Without it a second `lictor run` swept the copy and the clone of the first one midway. The
     kernel drops the lock with the process, so a kill leaves nothing to clean, and the descriptor
@@ -146,15 +154,30 @@ def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as err:
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
+    """Hold the project for one command, or refuse at once if another one holds it."""
+    with holding_project(project_root) as held:
+        if not held:
             raise RunInProgressError(
                 "otra ejecución de Lictor está en curso en este proyecto (tiene el cerrojo "
                 f".lictor/{RUN_LOCK}). No se ha tocado nada: espera a que termine o detenla, y "
                 f"vuelve a lanzar `{command}`."
-            ) from err
+            )
         yield
-    finally:
-        os.close(fd)
+
+
+def prepare_scratch(project_root: Path) -> None:
+    """Make sure the temporary directory is private, before anything needs it."""
+    _private_root(project_root)
 
 
 @contextlib.contextmanager

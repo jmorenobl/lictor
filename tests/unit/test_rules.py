@@ -1313,28 +1313,42 @@ def test_no_problem_exits_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("first", "expected"), [("environment", 40), ("config", 10), ("repository", 10)]
+    ("kinds", "expected"),
+    [
+        (["environment"], 40),
+        (["environment", "environment"], 40),
+        (["config"], 10),
+        (["repository"], 10),
+        (["environment", "config"], 10),
+        (["environment", "repository", "environment"], 10),
+    ],
 )
-def test_the_first_problem_decides_the_exit_code(
-    first: Literal["config", "repository", "environment"], expected: int
+def test_the_project_decides_before_the_machine(
+    kinds: list[Literal["config", "repository", "environment"]], expected: int
 ) -> None:
-    other: Literal["config", "environment"] = "config" if first == "environment" else "environment"
-    problems = [PreconditionProblem(first, "uno"), PreconditionProblem(other, "dos")]
+    problems = [PreconditionProblem(kind, "x") for kind in kinds]
 
     assert precondition_exit_code(problems) == expected
 
 
 def test_a_command_whose_program_is_found_is_no_problem() -> None:
-    assert missing_executables({"lint": "uv run ruff check src"}, lambda word: word == "uv") == []
+    assert (
+        missing_executables(
+            {"del control 'lint'": "uv run ruff check src"}, lambda word: word == "uv"
+        )
+        == []
+    )
 
 
 def test_a_command_whose_program_is_missing_names_it_and_the_command() -> None:
-    problems = missing_executables({"secrets": "gitleaks detect --no-banner"}, lambda _word: False)
+    problems = missing_executables(
+        {"del control 'secrets'": "gitleaks detect --no-banner"}, lambda _word: False
+    )
 
     assert problems == [
         PreconditionProblem(
             "environment",
-            "No se encuentra 'gitleaks', con el que empieza el comando de secrets "
+            "No se encuentra 'gitleaks', con el que empieza el comando del control 'secrets' "
             "('gitleaks detect --no-banner'). Instálalo o corrige el comando en lictor.json.",
         )
     ]
@@ -1343,9 +1357,11 @@ def test_a_command_whose_program_is_missing_names_it_and_the_command() -> None:
 def test_an_empty_command_is_a_configuration_problem() -> None:
     asked: list[str] = []
 
-    problems = missing_executables({"lint": "  "}, lambda word: asked.append(word) is None)
+    problems = missing_executables(
+        {"de la aceptación": "  "}, lambda word: asked.append(word) is None
+    )
 
-    assert problems == [PreconditionProblem("config", "El comando de lint está vacío")]
+    assert problems == [PreconditionProblem("config", "El comando de la aceptación está vacío")]
     assert asked == []
 
 

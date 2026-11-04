@@ -11,6 +11,7 @@ from lictor.application.run_files import (
     _scratch_root,
     attempt_prefix,
     exclusive_run,
+    holding_project,
     new_step_dir,
     relative_to_project,
     save_output,
@@ -275,3 +276,10 @@ def test_the_run_lock_is_not_state_the_integrity_snapshot_guards(tmp_path: Path)
         pass
 
     assert snapshot.verify_and_restore()
+
+
+def test_holding_the_project_says_whether_it_was_free(tmp_path: Path) -> None:
+    with holding_project(tmp_path) as first, holding_project(tmp_path) as second:
+        assert (first, second) == (True, False)
+    with holding_project(tmp_path) as again:
+        assert again is True

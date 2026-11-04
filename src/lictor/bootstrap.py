@@ -31,6 +31,7 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.run_files import DOCTOR_DIR, aside_dir
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_project import CheckProject
@@ -38,10 +39,11 @@ from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.init_project import InitProject
+from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerifyAttempt
-from lictor.application.verification_env import VerificationEnvironment
+from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import ConfigError
 from lictor.domain.rules import RedOracle
 from lictor.orchestration.graph import GraphContext
@@ -69,6 +71,8 @@ class BootstrapResult:
     verify_attempt: VerifyAttempt
     commit_green: CommitGreen
     quarantine: Quarantine
+    preconditions: CheckPreconditions
+    verification: VerificationEnvSpec
     graph_context: GraphContext
 
 
@@ -181,6 +185,22 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
+    commands = {f"del control '{c.id}'": c.run for c in active_config.controls}
+    commands["de la aceptación"] = active_config.acceptance.run
+    doctor_audit = AuditSink(
+        JsonlEventLog(aside_dir(resolved_root, DOCTOR_DIR) / "journal.jsonl"), active_clock
+    )
+    preconditions_uc = CheckPreconditions(
+        vcs=vcs,
+        executor=executor,
+        environment=environment,
+        project_root=resolved_root,
+        commands=commands,
+        aside=VerificationEnvironment(
+            vcs, runner, doctor_audit, resolved_root, defences.verification
+        ),
+    )
+
     graph_context = GraphContext(
         project_root=resolved_root,
         paths_writable=active_config.paths.writable,
@@ -207,6 +227,7 @@ def bootstrap_runtime(
         verify_attempt=verify_attempt_uc,
         commit_green=commit_green_uc,
         quarantine=quarantine_uc,
+        preconditions=preconditions_uc,
         spec_source=spec_source,
         spec_history=spec_history,
         vcs=vcs,
@@ -246,5 +267,7 @@ def bootstrap_runtime(
         verify_attempt=verify_attempt_uc,
         commit_green=commit_green_uc,
         quarantine=quarantine_uc,
+        preconditions=preconditions_uc,
+        verification=defences.verification,
         graph_context=graph_context,
     )

@@ -720,10 +720,14 @@ def anchor_problems(
 
 
 def precondition_exit_code(problems: Sequence[PreconditionProblem]) -> int:
-    """Exit with what the first problem asks for: the project's fault is 10, the machine's 40."""
+    """Exit 10 if the project has to change, 40 if only the machine has to.
+
+    The project comes first whatever the order of the checks: fixing the machine alone would
+    still not let the command start.
+    """
     if not problems:
         return int(ExitCode.OK)
-    if problems[0].kind == "environment":
+    if all(problem.kind == "environment" for problem in problems):
         return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
     return int(ExitCode.PRECONDITION)
 
@@ -733,6 +737,8 @@ def missing_executables(
 ) -> list[PreconditionProblem]:
     """Say which commands can't start, by their first word, as `found` resolves it.
 
+    Each label completes "el comando …", as in "del control 'lint'".
+
     One under `{env_dir}` only exists once the environment is built, which checks it by running
     its own questions, so it is left alone here.
     """
@@ -740,7 +746,7 @@ def missing_executables(
     for label, command in commands.items():
         words = shlex.split(command)
         if not words:
-            problems.append(PreconditionProblem("config", f"El comando de {label} está vacío"))
+            problems.append(PreconditionProblem("config", f"El comando {label} está vacío"))
             continue
         program = words[0]
         if _ENV_PLACEHOLDER in program or found(program):
@@ -748,7 +754,7 @@ def missing_executables(
         problems.append(
             PreconditionProblem(
                 "environment",
-                f"No se encuentra '{program}', con el que empieza el comando de {label} "
+                f"No se encuentra '{program}', con el que empieza el comando {label} "
                 f"('{command}'). Instálalo o corrige el comando en lictor.json.",
             )
         )

@@ -1,8 +1,6 @@
 """Command Line Interface for Lictor."""
 
 import json
-import os
-import shlex
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +12,13 @@ from langgraph.types import Command
 
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
-from lictor.application.run_files import exclusive_run, sweep_scratch
+from lictor.application.run_files import (
+    DOCTOR_DIR,
+    aside_dir,
+    exclusive_run,
+    holding_project,
+    sweep_scratch,
+)
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -22,9 +26,15 @@ from lictor.application.usecases.check_project import (
     CheckProjectRequest,
 )
 from lictor.application.usecases.init_project import InitProjectRequest
+from lictor.application.usecases.preconditions import PreconditionsRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
-from lictor.domain.rules import anchor_problems, baseline_head_accepted, describe_score
+from lictor.domain.rules import (
+    anchor_problems,
+    baseline_head_accepted,
+    describe_score,
+    precondition_exit_code,
+)
 from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
 app = typer.Typer(
@@ -117,59 +127,41 @@ def doctor(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Comprueba las precondiciones del entorno sin ejecutar el grafo."""
+    """Comprueba las precondiciones de `lictor run` sin llamar al agente."""
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
         runtime = bootstrap_runtime(resolved_cwd)
-
-        # 1. Configuración válida
         typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
 
-        # 2. Árbol de trabajo git limpio
-        changed = runtime.vcs.status()
-        if changed:
-            typer.echo(
-                f"✗ El repositorio git tiene cambios sin confirmar: {changed}",
-                err=True,
+        # Building takes the temporary directory, which a run starting now would sweep.
+        with holding_project(resolved_cwd) as held:
+            log_dir = aside_dir(resolved_cwd, DOCTOR_DIR)
+            if held:
+                shutil.rmtree(log_dir, ignore_errors=True)
+            request = PreconditionsRequest(
+                run_id=f"doctor-{runtime.clock.generate_run_id()}",
+                environment="throwaway" if held else "none",
+                log_dir=log_dir,
+                skip_reason="no comprobado: hay una ejecución en curso",
             )
-            return 10
-        typer.echo("✓ Árbol git limpio sin cambios pendientes")
+            report = runtime.preconditions.execute(request)
 
-        # 3. Estado del ejecutor
-        health = runtime.executor.health()
-        if not health.ok:
-            typer.echo(
-                f"✗ El ejecutor no está listo: {health.message or health.auth_status}",
-                err=True,
-            )
-            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
-        typer.echo(f"✓ Ejecutor disponible: {health.cli_version} ({health.auth_status})")
+        for check in report.checks:
+            if check.skipped:
+                typer.echo(f"- {check.name}: {check.skipped}")
+            elif check.problems:
+                for problem in check.problems:
+                    typer.echo(f"✗ {check.name}: {problem.message}", err=True)
+            else:
+                typer.echo(f"✓ {check.name}")
 
-        # 4. Comandos de controles
-        for ctrl in runtime.config.controls:
-            cmd_str = ctrl.run.strip()
-            if not cmd_str:
-                typer.echo(f"✗ El control '{ctrl.id}' tiene un comando vacío", err=True)
-                return 10
-            parts = shlex.split(cmd_str)
-            if parts:
-                cmd_bin = parts[0]
-                bin_path = resolved_cwd / cmd_bin
-                is_available = bool(
-                    shutil.which(cmd_bin) or (bin_path.is_file() and os.access(bin_path, os.X_OK))
-                )
-                if not is_available:
-                    typer.echo(
-                        f"✗ El comando del control '{ctrl.id}' ('{cmd_bin}') no está "
-                        "disponible o no es ejecutable",
-                        err=True,
-                    )
-                    return 10
-        typer.echo(f"✓ {len(runtime.config.controls)} controles configurados correctamente")
-
-        typer.echo("Doctor: todas las comprobaciones pasaron con éxito.")
-        return 0
+        code = precondition_exit_code(report.problems)
+        if code:
+            typer.echo("Doctor: hay que resolver lo marcado con ✗.", err=True)
+        else:
+            typer.echo("Doctor: todas las comprobaciones pasaron.")
+        return code
 
     _safe_run(_execute)
 
@@ -377,12 +369,13 @@ def _check_resume_guard(
     if reason is not None:
         return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
-    health = runtime.executor.health()
-    if not health.ok:
-        reason = (
-            f"el ejecutor no está disponible para reanudar: {health.message or health.auth_status}"
-        )
-        return _refuse_resume(runtime, run_id, int(ExitCode.ENVIRONMENT_UNAVAILABLE), reason)
+    # The tree was checked above, with what a crash may leave; the environment is the run's own.
+    report = runtime.preconditions.execute(
+        PreconditionsRequest(run_id=run_id, clean_tree=False, environment="none")
+    )
+    if report.problems:
+        reason = "no se puede reanudar: " + " ".join(p.message for p in report.problems)
+        return _refuse_resume(runtime, run_id, precondition_exit_code(report.problems), reason)
 
     return None
 

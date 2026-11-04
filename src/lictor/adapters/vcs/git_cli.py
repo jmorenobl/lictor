@@ -320,7 +320,8 @@ class GitCli(Vcs):
         if ident.returncode != 0:
             raise EnvironmentUnavailableError(
                 "git no tiene identidad para los commits que hace Lictor: "
-                f"{ident.stderr.strip()} Configura user.name y user.email (git config) y relanza."
+                f"{ident.stderr.strip().rstrip('.')}. Configura user.name y user.email "
+                "(git config) y relanza."
             )
         # The last two fields are the date and the time zone of the moment it was asked.
         return ident.stdout.strip().rsplit(" ", 2)[0]

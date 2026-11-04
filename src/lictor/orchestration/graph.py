@@ -24,6 +24,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
 )
+from lictor.application.usecases.preconditions import CheckPreconditions, PreconditionsRequest
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import (
     Quarantine,
@@ -52,7 +53,14 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
-from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome, suspicious_driver
+from lictor.domain.rules import (
+    Impostors,
+    MapLink,
+    RedOracle,
+    precondition_exit_code,
+    run_outcome,
+    suspicious_driver,
+)
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -147,6 +155,7 @@ class GraphContext:
     verify_attempt: VerifyAttempt
     commit_green: CommitGreen
     quarantine: Quarantine
+    preconditions: CheckPreconditions
     spec_source: SpecSource
     spec_history: SpecHistory
     vcs: Vcs
@@ -209,27 +218,12 @@ class _GraphNodes:
     def preflight(self, state: GraphState) -> dict[str, Any]:
         if state.get("exit_code") is not None:
             return {}
-        changed = self.ctx.vcs.status()
-        if changed:
-            return self._finish(
-                state,
-                int(ExitCode.PRECONDITION),
-                "El árbol de trabajo tiene cambios sin confirmar: "
-                f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
-                report=False,
-            )
-        health = self.ctx.executor.health()
-        if not health.ok:
-            detail = health.message or health.auth_status
-            return {
-                **self._finish(
-                    state,
-                    int(ExitCode.ENVIRONMENT_UNAVAILABLE),
-                    f"el ejecutor no está disponible: {detail}",
-                    report=False,
-                ),
-                "agent_detail": detail,
-            }
+        # The verification environment is built here, before any agent call can be spent.
+        report = self.ctx.preconditions.execute(PreconditionsRequest(run_id=state["run_id"]))
+        problems = report.problems
+        if problems:
+            reason = " ".join(problem.message for problem in problems)
+            return self._finish(state, precondition_exit_code(problems), reason, report=False)
 
         event = new_event(
             self.ctx.clock,
@@ -237,7 +231,7 @@ class _GraphNodes:
             state["run_id"],
             data={
                 "lictor_version": "0.1.0",
-                "cli_version": health.cli_version,
+                "cli_version": report.cli_version,
                 "profile": self.ctx.profile_name,
                 "config_hash": state.get("config_hash", ""),
             },
@@ -762,7 +756,8 @@ def create_graph(
     untrusted = _holding_checkpoint_writes(checkpointer)
     builder = StateGraph(GraphState)
 
-    builder.add_node("preflight", nodes.preflight)
+    # It builds the verification environment, which runs code the project's lock file brings in.
+    builder.add_node("preflight", untrusted(nodes.preflight))
     builder.add_node("load_spec", nodes.load_spec)
     builder.add_node("build_driver", untrusted(nodes.build_driver))
     builder.add_node("red_check", untrusted(nodes.red_check))
