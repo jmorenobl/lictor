@@ -66,7 +66,9 @@ def test_missing_identity_stops_with_40_and_gits_own_reason(
 
     assert outcome.exit_code == 40
     (finished,) = events_of(root, "run.finished")
-    assert "empty ident name" in finished["data"]["reason"]
+    # Ours first, then git's own message, in whatever language git speaks.
+    assert finished["data"]["reason"].startswith("git no tiene identidad")
+    assert "fatal: " in finished["data"]["reason"]
     # The cheap checks come first: nothing is downloaded for a run that can't commit.
     assert events_of(root, "env.built") == []
 

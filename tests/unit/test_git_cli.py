@@ -664,7 +664,8 @@ def test_committer_identity_refuses_what_commit_tree_refuses(
     monkeypatch.setenv("GIT_COMMITTER_NAME", "")
     cli = GitCli(repo_dir=git_repo)
 
-    with pytest.raises(EnvironmentUnavailableError, match="empty ident name"):
+    # git's own words, whatever language it speaks: the reason carries them after ours.
+    with pytest.raises(EnvironmentUnavailableError, match=r"identidad .*: fatal: "):
         cli.committer_identity()
     with pytest.raises(subprocess.CalledProcessError):
         cli.commit_tree(cli.get_tree("HEAD"), "x", empty=True)

@@ -91,7 +91,8 @@ def test_check_prints_the_mutation_score(make_project: ProjectFactory, tmp_path:
     mutation = {
         "id": "mutation",
         "level": "L5",
-        "run": f"{sys.executable} -I {script} {{out}}",
+        # -B: inside Lictor's own verification this interpreter belongs to its hashed environment.
+        "run": f"{sys.executable} -I -B {script} {{out}}",
         "report": "mutation",
         "mode": "measure",
     }

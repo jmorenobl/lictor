@@ -146,7 +146,7 @@ def test_registering_needs_a_clean_tree_and_an_identity(
     code, output = _register(root, "IVA-001", "--yes")
 
     assert code == 40
-    assert "empty ident name" in output
+    assert "git no tiene identidad para los commits que hace Lictor: fatal: " in output
 
 
 def test_a_run_halfway_keeps_its_branch(make_project: ProjectFactory) -> None:
