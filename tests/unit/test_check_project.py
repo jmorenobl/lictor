@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
@@ -9,6 +11,7 @@ from lictor.application.usecases.check_project import (
     CheckProject,
     CheckProjectRequest,
 )
+from lictor.domain.errors import ConfigError
 from lictor.domain.model import CommandOutput
 
 
@@ -135,7 +138,7 @@ def _project(tmp_path: Path, stdout: str, code: int) -> tuple[CheckProject, Chec
 
 def test_check_project_does_not_reuse_an_old_report(tmp_path: Path) -> None:
     use_case, request = _project(tmp_path, "", 0)
-    runs = tmp_path / ".lictor" / "runs" / "check"
+    runs = tmp_path / ".lictor" / "check"
     runs.mkdir(parents=True)
     old = '<testsuite><testcase name="test_viejo"/></testsuite>'
     (runs / "unit.xml").write_text(old, encoding="utf-8")
@@ -189,3 +192,124 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
     assert res.ok is True
     assert len(runner.calls) == 1
     assert res.control_results["lint"].skipped is None
+
+
+OK = CommandOutput(returncode=0, stdout="", stderr="")
+BAD = CommandOutput(returncode=1, stdout="mal", stderr="")
+JUNIT_OK = '<testsuite><testcase name="test_1"/></testsuite>'
+
+
+def _three(runner: FakeRunner) -> tuple[CheckProject, list[CheckControlSpec], CheckAcceptanceSpec]:
+    use_case = CheckProject(runner, {"exit-code": ExitCodeReader(), "junit": JUnitReader()})
+    controls = [
+        CheckControlSpec("lint", "L1", "lint"),
+        CheckControlSpec("types", "L1", "types"),
+        CheckControlSpec("unit", "L2", "unit"),
+    ]
+    return use_case, controls, CheckAcceptanceSpec("acc --junitxml {out}", "junit")
+
+
+def test_keep_going_runs_everything_and_reports_the_first_failure(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.set_response("lint", BAD)
+    runner.set_response("types", BAD)
+    runner.set_response("unit", OK)
+    runner.set_response("acc", CommandOutput(0, stdout=JUNIT_OK, stderr=""))
+    use_case, controls, acceptance = _three(runner)
+
+    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance, keep_going=True))
+
+    assert res.ok is False
+    assert res.failed_at == "lint"
+    assert list(res.control_results) == ["lint", "types", "unit", "acceptance"]
+    assert "Falló lint" in (res.condensed_error or "")
+
+
+def test_without_keep_going_acceptance_doesnt_run_after_a_failure(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.set_response("lint", BAD)
+    use_case, controls, acceptance = _three(runner)
+
+    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance))
+
+    assert list(res.control_results) == ["lint"]
+    assert len(runner.calls) == 1
+
+
+def test_a_failing_acceptance_is_reported_after_passing_controls(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    for name in ("lint", "types", "unit"):
+        runner.set_response(name, OK)
+    failing = '<testsuite><testcase name="t"><failure message="no"/></testcase></testsuite>'
+    runner.set_response("acc", CommandOutput(1, stdout=failing, stderr=""))
+    use_case, controls, acceptance = _three(runner)
+
+    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance))
+
+    assert (res.ok, res.failed_at) == (False, "acceptance")
+
+
+def test_controls_are_chosen_by_id_and_level_together(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.set_response("lint", OK)
+    runner.set_response("unit", OK)
+    use_case, controls, acceptance = _three(runner)
+
+    by_id = use_case.execute(
+        CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["unit", "lint"])
+    )
+    both = use_case.execute(
+        CheckProjectRequest(
+            tmp_path, controls, acceptance, levels=["L1"], control_ids=["unit", "lint"]
+        )
+    )
+
+    assert list(by_id.control_results) == ["lint", "unit"]
+    assert list(both.control_results) == ["lint"]
+
+
+def test_acceptance_is_chosen_by_its_id(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.set_response("acc", CommandOutput(0, stdout=JUNIT_OK, stderr=""))
+    use_case, controls, acceptance = _three(runner)
+
+    res = use_case.execute(
+        CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["acceptance"])
+    )
+
+    assert list(res.control_results) == ["acceptance"]
+
+
+def test_an_id_that_names_nothing_is_refused(tmp_path: Path) -> None:
+    use_case, controls, acceptance = _three(FakeRunner())
+
+    with pytest.raises(ConfigError, match="No hay ningún control mutacion"):
+        use_case.execute(
+            CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["mutacion"])
+        )
+
+
+def test_commands_run_in_the_tree_and_leave_evidence_apart(tmp_path: Path) -> None:
+    tree, evidence = tmp_path / "clon", tmp_path / "proyecto" / ".lictor" / "check"
+    tree.mkdir()
+    runner = FakeRunner()
+    runner.set_response("lint", BAD)
+    use_case, controls, _ = _three(runner)
+
+    res = use_case.execute(
+        CheckProjectRequest(tmp_path / "proyecto", controls[:1], tree=tree, evidence_dir=evidence)
+    )
+
+    assert runner.calls[0]["cwd"] == tree
+    assert (evidence / "lint.log").is_file()
+    assert res.control_results["lint"].output_path == ".lictor/check/lint.log"
+
+
+def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> None:
+    use_case = CheckProject(FakeRunner(), {"junit": JUnitReader()})
+    unit = CheckControlSpec("unit", "L2", "u {out}", "junit", when_exists="tests/unit")
+
+    res = use_case.execute(CheckProjectRequest(tmp_path, [unit], deleted=["tests/unit/test_a.py"]))
+
+    assert res.ok is False
+    assert "elimina tests/unit" in (res.control_results["unit"].error or "")

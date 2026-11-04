@@ -17,6 +17,7 @@ from lictor.domain.model import (
     TestCaseResult,
     Tokens,
     Totals,
+    TreeChange,
 )
 
 
@@ -292,3 +293,8 @@ def test_command_output_started_by_default() -> None:
 
 def test_agent_result_has_no_cli_version_by_default() -> None:
     assert AgentResult(status="ok").cli_version == ""
+
+
+def test_a_tree_change_tells_a_deleted_path() -> None:
+    assert TreeChange("a.py", "000000").is_deleted is True
+    assert TreeChange("a.py", "100644").is_deleted is False

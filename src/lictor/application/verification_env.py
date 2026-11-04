@@ -66,6 +66,25 @@ class VerificationEnvSpec:
 
 
 @dataclass(frozen=True)
+class EnvironmentRunner:
+    """A `CommandRunner` whose commands run inside an environment, as verification runs them.
+
+    The environment decides the variables: whatever a caller passes as `env` is not used.
+    """
+
+    environment: "VerificationEnvironment"
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        return self.environment.run(cmd, cwd, timeout_s)
+
+
+@dataclass(frozen=True)
 class EnvironmentPlace:
     """Where an environment lives, which commit it is built from, and where its build log goes.
 
@@ -143,7 +162,7 @@ class VerificationEnvironment:
             fixed[self.spec.plugin_variable] = ",".join(plugins)
         return inherited | fixed
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int) -> CommandOutput:
+    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
         """Run a verification command inside this environment, with a home nobody has used."""
         with scratch_dir(self.project_root, "home-") as home:
             return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=self.command_env(home))

@@ -54,7 +54,6 @@ from lictor.domain.rules import (
 RoleKind = Literal["implement", "driver"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
-_DELETED_MODE = "000000"
 
 
 class VerificationControlProtocol(Protocol):
@@ -540,11 +539,7 @@ class VerifyAttempt:
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
-        deleted = [
-            change.path
-            for change in self.vcs.changes(self._tree(req))
-            if change.mode == _DELETED_MODE
-        ]
+        deleted = [change.path for change in self.vcs.changes(self._tree(req)) if change.is_deleted]
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"

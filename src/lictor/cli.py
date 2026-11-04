@@ -10,6 +10,7 @@ import typer
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from lictor.adapters.config.models import ControlConfig
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
 from lictor.application.run_files import (
@@ -20,11 +21,8 @@ from lictor.application.run_files import (
     sweep_scratch,
 )
 from lictor.application.usecases.build_report import BuildReportRequest
-from lictor.application.usecases.check_project import (
-    CheckAcceptanceSpec,
-    CheckControlSpec,
-    CheckProjectRequest,
-)
+from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
+from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.application.usecases.preconditions import PreconditionsRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
@@ -173,9 +171,24 @@ def check(
         typer.Option(
             "--level",
             "-l",
-            help="Niveles de control a ejecutar separados por coma (e.g. L1,L2)",
+            help="Niveles de control a ejecutar separados por coma (p. ej. L1,L2)",
         ),
     ] = None,
+    control: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--control",
+            "-c",
+            help="Ejecutar solo este control (repetible); la aceptación es 'acceptance'",
+        ),
+    ] = None,
+    keep_going: Annotated[
+        bool,
+        typer.Option(
+            "--keep-going",
+            help="Seguir tras el primer fallo y mostrar el resultado de todos los controles",
+        ),
+    ] = False,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -185,49 +198,35 @@ def check(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Ejecuta los controles y la aceptación sobre el árbol actual."""
+    """Verifica el proyecto como `lictor run`: en un clon limpio y en el entorno de verificación.
+
+    Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo.
+    """
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
-        runtime = bootstrap_runtime(resolved_cwd)
-
-        controls = [
-            CheckControlSpec(
-                id=c.id,
-                level=c.level,
-                run=c.run,
-                report=c.report,
-                mode=c.mode,
-                empty_exit_codes=c.empty_exit_codes,
-                timeout_s=c.timeout_s,
-                when_exists=c.when_exists,
+        # It builds in the temporary directory, which a run starting now would sweep.
+        with exclusive_run(resolved_cwd, "lictor check"):
+            runtime = bootstrap_runtime(resolved_cwd)
+            config = runtime.config
+            res = runtime.check_working_tree.execute(
+                CheckWorkingTreeRequest(
+                    run_id=f"check-{runtime.clock.generate_run_id()}",
+                    controls=[_check_spec(c) for c in config.controls],
+                    acceptance=CheckAcceptanceSpec(
+                        run=config.acceptance.run,
+                        report=config.acceptance.report,
+                        timeout_s=config.acceptance.timeout_s,
+                    ),
+                    levels=[lvl.strip() for lvl in level.split(",")] if level else None,
+                    control_ids=control or None,
+                    keep_going=keep_going,
+                    error_max_chars=config.limits.error_max_chars,
+                )
             )
-            for c in runtime.config.controls
-        ]
 
-        acceptance = (
-            CheckAcceptanceSpec(
-                run=runtime.config.acceptance.run,
-                report=runtime.config.acceptance.report,
-                timeout_s=runtime.config.acceptance.timeout_s,
-            )
-            if runtime.config.acceptance
-            else None
-        )
-
-        levels = [lvl.strip() for lvl in level.split(",")] if level else None
-
-        res = runtime.check_project.execute(
-            CheckProjectRequest(
-                project_root=resolved_cwd,
-                controls=controls,
-                acceptance=acceptance,
-                levels=levels,
-                error_max_chars=runtime.config.limits.error_max_chars,
-            )
-        )
-
-        for name, cr in res.control_results.items():
+        typer.echo(f"Verificado: {res.subject}")
+        for name, cr in res.check.control_results.items():
             if cr.skipped:
                 typer.echo(f"- {name} omitido: {cr.skipped}")
                 continue
@@ -237,14 +236,29 @@ def check(
             if not cr.ok and cr.output_path:
                 typer.echo(f"  salida: {cr.output_path}")
 
-        if not res.ok:
-            if res.condensed_error:
-                typer.echo(f"\n{res.condensed_error}", err=True)
-            return 10
-
+        if res.tampered:
+            typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+        if not res.check.ok:
+            if res.check.condensed_error:
+                typer.echo(f"\n{res.check.condensed_error}", err=True)
+            return int(ExitCode.PRECONDITION)
         return 0
 
     _safe_run(_execute)
+
+
+def _check_spec(control: ControlConfig) -> CheckControlSpec:
+    return CheckControlSpec(
+        id=control.id,
+        level=control.level,
+        run=control.run,
+        report=control.report,
+        mode=control.mode,
+        empty_exit_codes=control.empty_exit_codes,
+        timeout_s=control.timeout_s,
+        when_exists=control.when_exists,
+    )
 
 
 @app.command()

@@ -7,13 +7,18 @@ from pathlib import Path
 
 from lictor.application.ports import CommandRunner, ResultReader
 from lictor.application.run_files import (
+    CHECK_DIR,
+    aside_dir,
     fill_report_path,
     reader_input,
     relative_to_project,
     save_output,
 )
+from lictor.domain.errors import ConfigError
 from lictor.domain.model import ControlResult
-from lictor.domain.rules import condense_error
+from lictor.domain.rules import condense_error, control_path_status
+
+ACCEPTANCE_ID = "acceptance"
 
 
 @dataclass(frozen=True)
@@ -41,13 +46,23 @@ class CheckAcceptanceSpec:
 
 @dataclass(frozen=True)
 class CheckProjectRequest:
-    """Request payload for CheckProject use case."""
+    """Request payload for CheckProject use case.
+
+    The commands run in `tree`, the project unless said otherwise, and leave their reports and
+    logs in `evidence_dir`. `deleted` are the paths the checked tree removed from HEAD: a control
+    whose `when_exists` path is among them fails instead of being skipped.
+    """
 
     project_root: Path
     controls: Sequence[CheckControlSpec]
     acceptance: CheckAcceptanceSpec | None = None
     levels: Sequence[str] | None = None
     error_max_chars: int = 4000
+    tree: Path | None = None
+    evidence_dir: Path | None = None
+    keep_going: bool = False
+    control_ids: Sequence[str] | None = None
+    deleted: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,8 @@ class CheckProjectResult:
 
 @dataclass(frozen=True)
 class _RunStepParams:
+    tree: Path
+    evidence_dir: Path
     project_root: Path
     command_template: str
     report_format: str
@@ -83,91 +100,114 @@ class CheckProject:
         self.readers = readers
 
     def execute(self, req: CheckProjectRequest) -> CheckProjectResult:
-        """Run all matching controls and acceptance tests."""
-        requested_levels = (
-            {lvl.strip().upper() for lvl in req.levels} if req.levels is not None else None
+        """Run the selected controls, then acceptance; stop at the first blocking failure."""
+        controls, acceptance = self._selected(req)
+        control_results: dict[str, ControlResult] = {}
+        first_failure: tuple[str, ControlResult] | None = None
+
+        for ctrl in controls:
+            result = self._control(req, ctrl)
+            control_results[ctrl.id] = result
+            if not result.ok and ctrl.mode != "measure":
+                first_failure = first_failure or (ctrl.id, result)
+                if not req.keep_going:
+                    break
+
+        if acceptance is not None and (first_failure is None or req.keep_going):
+            result = self._run_command(
+                self._params(req, ACCEPTANCE_ID, acceptance.run, acceptance.report, acceptance)
+            )
+            control_results[ACCEPTANCE_ID] = result
+            if not result.ok:
+                first_failure = first_failure or (ACCEPTANCE_ID, result)
+
+        if first_failure is None:
+            return CheckProjectResult(ok=True, control_results=control_results)
+        failed_at, failed = first_failure
+        condensed = condense_error(
+            failed_at=failed_at,
+            raw_error=failed.error or f"Falló {failed_at}",
+            test_cases=failed.test_cases,
+            max_chars=req.error_max_chars,
+        )
+        return CheckProjectResult(
+            ok=False,
+            failed_at=failed_at,
+            control_results=control_results,
+            condensed_error=condensed,
         )
 
-        filtered_controls = [
+    def _selected(
+        self, req: CheckProjectRequest
+    ) -> tuple[list[CheckControlSpec], CheckAcceptanceSpec | None]:
+        """Apply `levels` and `control_ids` together; an id that names nothing is refused."""
+        levels = {lvl.strip().upper() for lvl in req.levels} if req.levels is not None else None
+        ids = set(req.control_ids) if req.control_ids is not None else None
+        if ids is not None:
+            known = {c.id for c in req.controls} | {ACCEPTANCE_ID}
+            unknown = sorted(ids - known)
+            if unknown:
+                raise ConfigError(
+                    f"No hay ningún control {', '.join(unknown)}. "
+                    f"Los controles son: {', '.join(sorted(known))}."
+                )
+        controls = [
             c
             for c in req.controls
-            if requested_levels is None or c.level.strip().upper() in requested_levels
+            if (levels is None or c.level.strip().upper() in levels)
+            and (ids is None or c.id in ids)
         ]
+        wants_acceptance = (levels is None or {"L3", "ACCEPTANCE"} & levels) and (
+            ids is None or ACCEPTANCE_ID in ids
+        )
+        return controls, req.acceptance if wants_acceptance else None
 
-        control_results: dict[str, ControlResult] = {}
-        for ctrl in filtered_controls:
-            # The working tree has no base to compare with: a missing path is simply missing.
-            if ctrl.when_exists and not os.path.lexists(req.project_root / ctrl.when_exists):
-                reason = f"No existe {ctrl.when_exists} en el árbol de trabajo"
-                control_results[ctrl.id] = ControlResult(ok=True, mode=ctrl.mode, skipped=reason)
-                continue
-            c_res = self._run_command(
-                _RunStepParams(
-                    project_root=req.project_root,
-                    command_template=ctrl.run,
-                    report_format=ctrl.report,
-                    timeout_s=ctrl.timeout_s,
-                    empty_exit_codes=ctrl.empty_exit_codes,
-                    step_id=ctrl.id,
-                    mode=ctrl.mode,
+    def _control(self, req: CheckProjectRequest, ctrl: CheckControlSpec) -> ControlResult:
+        """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
+        tree = req.tree or req.project_root
+        if ctrl.when_exists:
+            in_tree = os.path.lexists(tree / ctrl.when_exists)
+            status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=req.deleted)
+            if status == "absent":
+                reason = f"No existe {ctrl.when_exists} en lo verificado"
+                return ControlResult(ok=True, mode=ctrl.mode, skipped=reason)
+            if status == "removed":
+                reason = (
+                    f"Lo verificado elimina {ctrl.when_exists}, que existía en HEAD: "
+                    f"el control {ctrl.id} ya no puede ejecutarse"
                 )
-            )
-            control_results[ctrl.id] = c_res
-            if not c_res.ok and ctrl.mode != "measure":
-                condensed = condense_error(
-                    failed_at=ctrl.id,
-                    raw_error=c_res.error or "Control falló",
-                    test_cases=c_res.test_cases,
-                    max_chars=req.error_max_chars,
-                )
-                return CheckProjectResult(
-                    ok=False,
-                    failed_at=ctrl.id,
-                    control_results=control_results,
-                    condensed_error=condensed,
-                )
+                return ControlResult(ok=False, mode=ctrl.mode, error=reason)
+        return self._run_command(self._params(req, ctrl.id, ctrl.run, ctrl.report, ctrl))
 
-        should_run_acceptance = req.acceptance is not None and (
-            requested_levels is None or "L3" in requested_levels or "ACCEPTANCE" in requested_levels
+    def _params(
+        self,
+        req: CheckProjectRequest,
+        step_id: str,
+        run: str,
+        report: str,
+        spec: CheckControlSpec | CheckAcceptanceSpec,
+    ) -> _RunStepParams:
+        control = spec if isinstance(spec, CheckControlSpec) else None
+        return _RunStepParams(
+            tree=req.tree or req.project_root,
+            evidence_dir=req.evidence_dir or aside_dir(req.project_root, CHECK_DIR),
+            project_root=req.project_root,
+            command_template=run,
+            report_format=report,
+            timeout_s=spec.timeout_s,
+            empty_exit_codes=control.empty_exit_codes if control else (),
+            step_id=step_id,
+            mode=control.mode if control else "block",
         )
 
-        if should_run_acceptance and req.acceptance is not None:
-            acc_res = self._run_command(
-                _RunStepParams(
-                    project_root=req.project_root,
-                    command_template=req.acceptance.run,
-                    report_format=req.acceptance.report,
-                    timeout_s=req.acceptance.timeout_s,
-                    empty_exit_codes=(),
-                    step_id="acceptance",
-                )
-            )
-            control_results["acceptance"] = acc_res
-            if not acc_res.ok:
-                condensed = condense_error(
-                    failed_at="acceptance",
-                    raw_error=acc_res.error or "Aceptación falló",
-                    test_cases=acc_res.test_cases,
-                    max_chars=req.error_max_chars,
-                )
-                return CheckProjectResult(
-                    ok=False,
-                    failed_at="acceptance",
-                    control_results=control_results,
-                    condensed_error=condensed,
-                )
-
-        return CheckProjectResult(ok=True, control_results=control_results)
-
     def _run_command(self, params: _RunStepParams) -> ControlResult:
-        runs_dir = params.project_root / ".lictor" / "runs" / "check"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        out_file = runs_dir / f"{params.step_id}.xml"
-        log_file = runs_dir / f"{params.step_id}.log"
+        params.evidence_dir.mkdir(parents=True, exist_ok=True)
+        out_file = params.evidence_dir / f"{params.step_id}.xml"
+        log_file = params.evidence_dir / f"{params.step_id}.log"
 
         cmd_args = fill_report_path(params.command_template, out_file)
 
-        cmd_out = self.runner.run(cmd=cmd_args, cwd=params.project_root, timeout_s=params.timeout_s)
+        cmd_out = self.runner.run(cmd=cmd_args, cwd=params.tree, timeout_s=params.timeout_s)
         save_output(log_file, cmd_out)
 
         reader = self.readers.get(params.report_format)

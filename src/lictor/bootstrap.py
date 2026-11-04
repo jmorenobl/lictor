@@ -31,11 +31,11 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
-from lictor.application.run_files import DOCTOR_DIR, aside_dir
+from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
-from lictor.application.usecases.check_project import CheckProject
 from lictor.application.usecases.check_red import CheckRed
+from lictor.application.usecases.check_working_tree import CheckWorkingTree
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.init_project import InitProject
@@ -63,7 +63,6 @@ class BootstrapResult:
     spec_source: SpecSource
     executor: Executor
     init_project: InitProject
-    check_project: CheckProject
     build_report: BuildReport
     prepare_driver: PrepareDriver
     check_red: CheckRed
@@ -72,6 +71,7 @@ class BootstrapResult:
     commit_green: CommitGreen
     quarantine: Quarantine
     preconditions: CheckPreconditions
+    check_working_tree: CheckWorkingTree
     verification: VerificationEnvSpec
     graph_context: GraphContext
 
@@ -129,7 +129,6 @@ def bootstrap_runtime(
 
     initializer = ProfileConfigInitializer()
     init_uc = InitProject(initializer=initializer)
-    check_uc = CheckProject(runner=runner, readers=readers)
     report_uc = BuildReport(event_log=active_event_log)
 
     prepare_driver_uc = PrepareDriver(
@@ -183,6 +182,18 @@ def bootstrap_runtime(
     quarantine_uc = Quarantine(
         event_log=active_event_log,
         clock=active_clock,
+    )
+
+    check_dir = aside_dir(resolved_root, CHECK_DIR)
+    check_audit = AuditSink(JsonlEventLog(check_dir / "journal.jsonl"), active_clock)
+    check_working_tree_uc = CheckWorkingTree(
+        vcs=vcs,
+        environment=VerificationEnvironment(
+            vcs, runner, check_audit, resolved_root, defences.verification
+        ),
+        readers=readers,
+        project_root=resolved_root,
+        evidence_dir=check_dir,
     )
 
     commands = {f"del control '{c.id}'": c.run for c in active_config.controls}
@@ -259,7 +270,6 @@ def bootstrap_runtime(
         spec_source=spec_source,
         executor=executor,
         init_project=init_uc,
-        check_project=check_uc,
         build_report=report_uc,
         prepare_driver=prepare_driver_uc,
         check_red=check_red_uc,
@@ -268,6 +278,7 @@ def bootstrap_runtime(
         commit_green=commit_green_uc,
         quarantine=quarantine_uc,
         preconditions=preconditions_uc,
+        check_working_tree=check_working_tree_uc,
         verification=defences.verification,
         graph_context=graph_context,
     )

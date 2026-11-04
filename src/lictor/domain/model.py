@@ -328,6 +328,7 @@ class RepoPin:
 
 _SYMLINK_MODE = "120000"
 _GITLINK_MODE = "160000"
+_DELETED_MODE = "000000"
 
 
 @dataclass(frozen=True)
@@ -350,6 +351,11 @@ class TreeChange:
     def is_link(self) -> bool:
         """Tell links and nested repositories: what they point to is not in the commit."""
         return self.mode in (_SYMLINK_MODE, _GITLINK_MODE)
+
+    @property
+    def is_deleted(self) -> bool:
+        """Tell a path the tree no longer has."""
+        return self.mode == _DELETED_MODE
 
 
 @dataclass(frozen=True)
