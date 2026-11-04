@@ -13,7 +13,7 @@ import shlex
 import shutil
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from pathlib import Path
 from typing import NoReturn
 
@@ -21,8 +21,12 @@ from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
+from lictor.domain.rules import runs_to_prune
 
 DRIVER_OWNER = "driver"
+# What `doctor` and `check` leave, apart from any run's and replaced by the next one.
+DOCTOR_DIR = "doctor"
+CHECK_DIR = "check"
 RUN_LOCK = "run.lock"
 PRIVATE_MODE = 0o700
 
@@ -30,6 +34,11 @@ PRIVATE_MODE = 0o700
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
     """Return the common prefix of everything an attempt leaves in `runs/`."""
     return project_root / ".lictor" / "runs" / run_id / owner / f"{attempt:03d}"
+
+
+def aside_dir(project_root: Path, name: str) -> Path:
+    """Return where a command that isn't a run keeps what it leaves, under `.lictor/`."""
+    return project_root / ".lictor" / name
 
 
 def unused_path(path: Path, start: int = 0) -> Path:
@@ -42,6 +51,30 @@ def unused_path(path: Path, start: int = 0) -> Path:
         if not candidate.exists():
             return candidate
         retry += 1
+
+
+def prune_runs(
+    project_root: Path,
+    keep: int,
+    protected: Collection[str],
+    record: Callable[[list[str]], None],
+) -> list[str]:
+    """Retire the evidence of the runs past the `keep` most recent, whole, and say which.
+
+    `record` writes them down before anything is deleted: a kill halfway leaves the journal
+    naming them, and the next sweep finishes the job. The journal keeps every event and the
+    hash of every step, so the report can tell retired evidence from altered evidence.
+    """
+    runs_dir = project_root / ".lictor" / "runs"
+    if not runs_dir.is_dir():
+        return []
+    names = [p.name for p in runs_dir.iterdir() if p.is_dir() and not p.is_symlink()]
+    pruned = runs_to_prune(names, keep, protected)
+    if pruned:
+        record(pruned)
+        for name in pruned:
+            shutil.rmtree(runs_dir / name, ignore_errors=True)
+    return pruned
 
 
 def new_step_dir(path: Path) -> Path:
@@ -132,8 +165,8 @@ def sweep_scratch(project_root: Path) -> None:
 
 
 @contextlib.contextmanager
-def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
-    """Hold the project for one command, or refuse at once if another one holds it.
+def holding_project(project_root: Path) -> Iterator[bool]:
+    """Try to hold the project, and say whether it was free; never wait for it.
 
     Without it a second `lictor run` swept the copy and the clone of the first one midway. The
     kernel drops the lock with the process, so a kill leaves nothing to clean, and the descriptor
@@ -146,15 +179,30 @@ def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as err:
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def exclusive_run(project_root: Path, command: str) -> Iterator[None]:
+    """Hold the project for one command, or refuse at once if another one holds it."""
+    with holding_project(project_root) as held:
+        if not held:
             raise RunInProgressError(
                 "otra ejecución de Lictor está en curso en este proyecto (tiene el cerrojo "
                 f".lictor/{RUN_LOCK}). No se ha tocado nada: espera a que termine o detenla, y "
                 f"vuelve a lanzar `{command}`."
-            ) from err
+            )
         yield
-    finally:
-        os.close(fd)
+
+
+def prepare_scratch(project_root: Path) -> None:
+    """Make sure the temporary directory is private, before anything needs it."""
+    _private_root(project_root)
 
 
 @contextlib.contextmanager

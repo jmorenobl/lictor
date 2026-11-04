@@ -11,7 +11,9 @@ from lictor.application.run_files import (
     _scratch_root,
     attempt_prefix,
     exclusive_run,
+    holding_project,
     new_step_dir,
+    prune_runs,
     relative_to_project,
     save_output,
     scratch_dir,
@@ -275,3 +277,51 @@ def test_the_run_lock_is_not_state_the_integrity_snapshot_guards(tmp_path: Path)
         pass
 
     assert snapshot.verify_and_restore()
+
+
+def test_holding_the_project_says_whether_it_was_free(tmp_path: Path) -> None:
+    with holding_project(tmp_path) as first, holding_project(tmp_path) as second:
+        assert (first, second) == (True, False)
+    with holding_project(tmp_path) as again:
+        assert again is True
+
+
+RUN_IDS = [f"2026110{d}-120000-abc{d}" for d in range(1, 5)]
+
+
+def test_old_runs_are_recorded_then_removed_whole(tmp_path: Path) -> None:
+    runs = tmp_path / ".lictor" / "runs"
+    for run_id in RUN_IDS:
+        (runs / run_id / "IVA-001").mkdir(parents=True)
+    (runs / "check").mkdir()
+    seen: list[list[str]] = []
+
+    def record(pruned: list[str]) -> None:
+        seen.append(pruned)
+        assert all((runs / run_id).is_dir() for run_id in pruned)  # still there
+
+    pruned = prune_runs(tmp_path, 1, {RUN_IDS[0]}, record)
+
+    assert pruned == RUN_IDS[1:3]
+    assert seen == [RUN_IDS[1:3]]
+    assert sorted(p.name for p in runs.iterdir()) == sorted([RUN_IDS[0], RUN_IDS[3], "check"])
+
+
+def test_nothing_to_prune_records_nothing(tmp_path: Path) -> None:
+    seen: list[list[str]] = []
+    assert prune_runs(tmp_path, 1, (), seen.append) == []
+    (tmp_path / ".lictor" / "runs" / RUN_IDS[0]).mkdir(parents=True)
+    assert prune_runs(tmp_path, 1, (), seen.append) == []
+    assert seen == []
+
+
+def test_a_link_shaped_like_a_run_is_left_alone(tmp_path: Path) -> None:
+    runs = tmp_path / ".lictor" / "runs"
+    target = tmp_path / "fuera"
+    (target / "dato").mkdir(parents=True)
+    runs.mkdir(parents=True)
+    (runs / RUN_IDS[0]).symlink_to(target)
+    (runs / RUN_IDS[1]).mkdir()
+
+    assert prune_runs(tmp_path, 0, (), lambda _pruned: None) == [RUN_IDS[1]]
+    assert (target / "dato").is_dir()

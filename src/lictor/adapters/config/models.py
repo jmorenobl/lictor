@@ -13,7 +13,7 @@ MapLinkKind = Literal["name", "scenario"]
 BackendKind = Literal["claude-cli", "fake"]
 BackendAuth = Literal["subscription", "api_key"]
 
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 _SHORT_MODEL_ALIASES = frozenset(
     {
@@ -207,6 +207,8 @@ class ControlConfig(BaseModel):
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
+    # The lowest mutation score that passes, in percent; only a mutation report has one.
+    min_score: float | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -219,6 +221,9 @@ class ControlConfig(BaseModel):
     def _validate_junit_out(self) -> Self:
         if self.report != "exit-code" and "{out}" not in self.run:
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
+            raise ValueError(msg)
+        if self.min_score is not None and self.report != "mutation":
+            msg = f"El control '{self.id}' declara min_score, que solo vale con report='mutation'"
             raise ValueError(msg)
         return self
 
@@ -306,6 +311,15 @@ class Profile(BaseModel):
         return _validate_regexes(patterns)
 
 
+class RetentionConfig(BaseModel):
+    """Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Counting the run that starts: it is only read then, so it doesn't decide a resume.
+    keep_runs: int = Field(default=10, ge=1)
+
+
 class LictorConfig(BaseModel):
     """Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil."""
 
@@ -315,6 +329,7 @@ class LictorConfig(BaseModel):
     profile: str = Field(min_length=1)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]

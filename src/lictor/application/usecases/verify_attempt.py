@@ -44,6 +44,7 @@ from lictor.domain.rules import (
     collateral_greens,
     condense_error,
     control_path_status,
+    enforce_min_score,
     forbidden_paths,
     map_test_cases_to_scenarios,
     path_within,
@@ -54,7 +55,6 @@ from lictor.domain.rules import (
 RoleKind = Literal["implement", "driver"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
-_DELETED_MODE = "000000"
 
 
 class VerificationControlProtocol(Protocol):
@@ -84,6 +84,9 @@ class VerificationControlProtocol(Protocol):
     @property
     def when_exists(self) -> str | None: ...
 
+    @property
+    def min_score(self) -> float | None: ...
+
 
 @dataclass(frozen=True)
 class VerificationControl:
@@ -97,6 +100,7 @@ class VerificationControl:
     empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
     when_exists: str | None = None
+    min_score: float | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -540,11 +544,7 @@ class VerifyAttempt:
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
-        deleted = [
-            change.path
-            for change in self.vcs.changes(self._tree(req))
-            if change.mode == _DELETED_MODE
-        ]
+        deleted = [change.path for change in self.vcs.changes(self._tree(req)) if change.is_deleted]
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
@@ -597,7 +597,7 @@ class VerifyAttempt:
             empty_exit_codes=ctrl.empty_exit_codes,
         )
 
-        return _ControlRun(recorded(c_res), output=cmd_out)
+        return _ControlRun(recorded(enforce_min_score(c_res, ctrl.min_score)), output=cmd_out)
 
     def _run_acceptance(
         self,

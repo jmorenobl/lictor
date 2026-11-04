@@ -26,6 +26,7 @@ from lictor.adapters.config.loader import (
     resolve_defences,
 )
 from lictor.adapters.config.models import (
+    DEFAULT_MODEL,
     AcceptanceConfig,
     BackendConfig,
     ControlConfig,
@@ -35,6 +36,7 @@ from lictor.adapters.config.models import (
     Profile,
     ProfileVerification,
     ProjectVerification,
+    RetentionConfig,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
@@ -218,6 +220,7 @@ def test_backend_model_rejects_short_aliases(short_alias: str) -> None:
     "full_model_id",
     [
         "claude-sonnet-4-5-20250929",
+        "claude-sonnet-5-5",
         "claude-opus-4-6",
         "claude-haiku-4-5-20251001",
     ],
@@ -225,6 +228,11 @@ def test_backend_model_rejects_short_aliases(short_alias: str) -> None:
 def test_backend_model_accepts_full_ids(full_model_id: str) -> None:
     backend = BackendConfig(model=full_model_id)
     assert backend.model == full_model_id
+
+
+def test_the_default_model_is_a_full_id_the_validator_accepts() -> None:
+    # Pydantic doesn't validate defaults: this is what checks the one `lictor init` writes.
+    assert BackendConfig(model=DEFAULT_MODEL).model == DEFAULT_MODEL
 
 
 def test_detect_profile_by_pyproject_toml(tmp_path: Path) -> None:
@@ -275,6 +283,18 @@ def test_load_config_from_repo_root_lictor_json() -> None:
     assert cfg.profile == "python-uv@0.1"
     assert cfg.paths.writable == ["src/", "tests/unit/"]
     assert any(c.id == "architecture" for c in cfg.controls)
+
+
+def test_the_ci_self_verification_runs_every_control_of_lictor_json() -> None:
+    """The CI filters by level to skip the acceptance; a control at another level would be lost."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    commands = [line for line in ci.splitlines() if "lictor check" in line]
+    assert len(commands) == 1, commands
+    tokens = shlex.split(commands[0].split("run:", 1)[1])
+    levels = set(tokens[tokens.index("--level") + 1].split(","))
+    assert "L3" not in levels
+    controls = load_config(REPO_ROOT / "lictor.json").controls
+    assert {c.id: c.level for c in controls if c.level not in levels} == {}
 
 
 def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:
@@ -721,6 +741,23 @@ def test_fingerprint_changes_with_lictor_json(tmp_path: Path) -> None:
     assert _fingerprint(_project(tmp_path, verification={"env": {"MIO": "1"}})) != before
 
 
+def test_fingerprint_ignores_the_retention_which_only_a_new_run_reads(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    before = _fingerprint(root)
+
+    assert _fingerprint(_project(tmp_path, retention={"keep_runs": 3})) == before
+
+
+@pytest.mark.parametrize("keep", [0, -1])
+def test_at_least_one_run_is_kept(keep: int) -> None:
+    with pytest.raises(ValidationError):
+        RetentionConfig(keep_runs=keep)
+
+
+def test_ten_runs_are_kept_by_default() -> None:
+    assert RetentionConfig().keep_runs == 10
+
+
 def test_fingerprint_does_not_depend_on_the_key_order_of_the_profile(tmp_path: Path) -> None:
     root = _project(tmp_path)
     profiles = _profiles_copy(tmp_path / "perfiles")
@@ -921,3 +958,16 @@ def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> N
     else:
         with pytest.raises(ValidationError, match="greater than or equal to 500"):
             LimitsConfig(error_max_chars=chars)
+
+
+def test_min_score_belongs_to_a_mutation_control() -> None:
+    mutation = {"id": "m", "level": "L5", "run": "x {out}", "report": "mutation"}
+    assert ControlConfig(**mutation, min_score=95).min_score == 95
+    with pytest.raises(ValidationError, match="solo vale con report='mutation'"):
+        ControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
+
+
+@pytest.mark.parametrize("minimum", [-1, 100.5])
+def test_min_score_is_a_percentage(minimum: float) -> None:
+    with pytest.raises(ValidationError):
+        ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)

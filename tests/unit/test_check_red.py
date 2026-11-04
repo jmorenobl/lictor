@@ -710,9 +710,9 @@ def test_check_red_new_scenario_passing_on_the_last_attempt_stops_with_the_hint(
 
     message = str(raised.value)
     assert raised.value.exit_code == 10
-    fix, register = message.index("Corrige el test"), message.index("Solo si el escenario ya")
+    fix, register = message.index("Corrige el test"), message.index("Solo si el código ya")
     assert fix < register
-    assert '--trailer "Scenario: <id>"' in message
+    assert "`lictor register IVA-002`" in message
     assert _rejection(event_log).data["final"] is True
 
 
@@ -735,7 +735,7 @@ def test_check_red_reopened_scenario_passing_with_a_fresh_driver_stops_for_a_per
 
     message = str(raised.value)
     assert message.startswith("La especificación de IVA-002 cambió y su test pasa")
-    assert '--trailer "Scenario: <id>"' in message
+    assert "`lictor register IVA-002`" in message
     assert "Si no, su test no detecta el cambio" in message
     rejection = _rejection(event_log)
     assert (rejection.data["reason"], rejection.data["final"]) == ("especificacion_cambiada", True)

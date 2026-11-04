@@ -1419,3 +1419,17 @@ def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
     assert control_summaries(verifier.execute(req))["lint"]["score"] is None
+
+
+def test_a_blocking_mutation_control_below_its_minimum_fails_the_attempt(tmp_path: Path) -> None:
+    control = VerificationControl(
+        id="mut", level="L5", run="mut {out}", report="mutation", min_score=95
+    )
+    stats = '{"killed": 9, "survived": 1, "total": 10}'
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": (stats, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(control,))
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "mut")
+    assert "no llega al mínimo de 95 %" in (result.condensed_error or "")

@@ -21,13 +21,14 @@ commands get it from memory and not from the manifest, because project code runs
 can reach that file.
 """
 
+import contextlib
 import json
 import os
 import re
 import shlex
 import shutil
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
@@ -64,6 +65,38 @@ class VerificationEnvSpec:
     plugins_command: str = ""
 
 
+@dataclass(frozen=True)
+class EnvironmentRunner:
+    """A `CommandRunner` whose commands run inside an environment, as verification runs them.
+
+    The environment decides the variables: whatever a caller passes as `env` is not used.
+    """
+
+    environment: "VerificationEnvironment"
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        return self.environment.run(cmd, cwd, timeout_s)
+
+
+@dataclass(frozen=True)
+class EnvironmentPlace:
+    """Where an environment lives, which commit it is built from, and where its build log goes.
+
+    Without `log_dir`, the log is the run's, under `runs/<run_id>/env/`.
+    """
+
+    env_dir: Path
+    manifest: Path
+    rev: str = "HEAD"
+    log_dir: Path | None = None
+
+
 class VerificationEnvironment:
     """Builds the verification environment and tells whether it is still what was built."""
 
@@ -80,9 +113,37 @@ class VerificationEnvironment:
         self.audit = audit
         self.project_root = project_root
         self.spec = spec
-        self.env_dir = project_root / ".lictor" / "verify-env"
-        self.manifest = project_root / ".lictor" / "verify_env.json"
         self._installed_plugins: list[str] = []
+        self._move_to(
+            EnvironmentPlace(
+                project_root / ".lictor" / "verify-env",
+                project_root / ".lictor" / "verify_env.json",
+            )
+        )
+
+    def _move_to(self, place: EnvironmentPlace) -> None:
+        self.place = place
+        self.env_dir = place.env_dir
+        self.manifest = place.manifest
+
+    @contextlib.contextmanager
+    def throwaway(self, rev: str, log_dir: Path) -> Iterator["VerificationEnvironment"]:
+        """Yield an environment for `rev`, apart from any run's and gone afterwards.
+
+        For the commands that aren't a run, `doctor` and `check`: a paused run keeps its own, and
+        `ensure` builds this one the first time. Its build log goes to `log_dir`.
+        """
+        with scratch_dir(self.project_root, "env-") as tmp:
+            other = VerificationEnvironment(
+                self.vcs, self.runner, self.audit, self.project_root, self.spec
+            )
+            other._move_to(EnvironmentPlace(tmp / "env", tmp / "env.json", rev, log_dir))
+            yield other
+
+    def search_path(self) -> str:
+        """Return where a verification command looks for its program, as `Popen` reads it."""
+        env = self.command_env(Path(HOME_DIR_PLACEHOLDER))
+        return os.pathsep.join(os.get_exec_path(env))
 
     def _fixed_env(self, home: Path) -> dict[str, str]:
         return {
@@ -101,7 +162,7 @@ class VerificationEnvironment:
             fixed[self.spec.plugin_variable] = ",".join(plugins)
         return inherited | fixed
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int) -> CommandOutput:
+    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
         """Run a verification command inside this environment, with a home nobody has used."""
         with scratch_dir(self.project_root, "home-") as home:
             return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=self.command_env(home))
@@ -176,7 +237,7 @@ class VerificationEnvironment:
 
         tokens = self._tokens(self.spec.prepare)
         with (
-            verification_tree(self.vcs, "HEAD", self.project_root) as tree,
+            verification_tree(self.vcs, self.place.rev, self.project_root) as tree,
             scratch_dir(self.project_root, "home-") as home,
         ):
             output = self.runner.run(
@@ -186,7 +247,8 @@ class VerificationEnvironment:
                 env=self._prepare_env(run_id, home),
             )
 
-        log = unused_path(self.project_root / ".lictor" / "runs" / run_id / "env" / "build.log")
+        log_dir = self.place.log_dir or self.project_root / ".lictor" / "runs" / run_id / "env"
+        log = unused_path(log_dir / "build.log")
         save_output(log, output)
         if output.returncode != 0:
             tail = "\n".join(output.stderr.strip().splitlines()[-_MAX_ERROR_LINES:])

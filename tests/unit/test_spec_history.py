@@ -13,9 +13,15 @@ FILES = {
 HASHES = {"v1": {"A-1": "h1", "A-2": "h2"}, "v2": {"A-1": "h1b"}, "o1": {"B-1": "hb", "A-1": "x"}}
 
 
-def _history(commits: list[tuple[str, list[str]]]) -> tuple[SpecHistory, MagicMock, MagicMock]:
+def _history(
+    commits: list[tuple[str, list[str]]],
+    others: dict[str, list[tuple[str, list[str]]]] | None = None,
+) -> tuple[SpecHistory, MagicMock, MagicMock]:
     vcs = MagicMock(spec=Vcs)
-    vcs.trailer_commits.return_value = commits
+    # Lictor writes Lictor-Run on every green it commits; a case says otherwise in `others`.
+    trailers = {"Scenario": commits, "Lictor-Run": [(sha, ["r"]) for sha, _ in commits]}
+    trailers.update(others or {})
+    vcs.trailer_commits.side_effect = lambda key: trailers.get(key, [])
     vcs.list_files.side_effect = lambda sha, directory: (
         [path for (commit, path) in FILES if commit == sha] + [f"{directory}/README.md"]
     )
@@ -35,7 +41,7 @@ def test_each_scenario_takes_its_most_recent_green_commit() -> None:
         "A-2": GreenRecord("c1", "h2"),
         "B-1": GreenRecord("c1", "hb"),
     }
-    vcs.trailer_commits.assert_called_once_with("Scenario")
+    vcs.trailer_commits.assert_any_call("Scenario")
     assert {call.args[1] for call in vcs.list_files.call_args_list} == {"features"}
 
 
@@ -66,3 +72,26 @@ def test_files_are_hashed_once_per_commit() -> None:
     assert spec_source.spec_hashes.call_count == 2
     assert vcs.read_file.call_count == 2
     assert all(not call.args[1].endswith("README.md") for call in vcs.read_file.call_args_list)
+
+
+def test_a_green_lictor_didnt_commit_is_marked_with_who_asserted_it() -> None:
+    history, _, _ = _history(
+        [("c2", ["A-1"]), ("c1", ["A-2", "B-1"])],
+        {
+            "Lictor-Run": [("c1", ["r1"])],
+            "Lictor-Asserted-By": [("c2", ["Ana <ana@example.com>"])],
+        },
+    )
+
+    records = history.records()
+
+    assert records["A-1"] == GreenRecord("c2", "h1b", False, "Ana <ana@example.com>")
+    assert records["A-2"] == GreenRecord("c1", "h2", True, None)
+
+
+def test_a_green_without_either_trailer_was_registered_by_hand_by_someone() -> None:
+    history, _, _ = _history(
+        [("c1", ["A-2"])], {"Lictor-Run": [], "Lictor-Asserted-By": [("c1", [])]}
+    )
+
+    assert history.records()["A-2"] == GreenRecord("c1", "h2", False, None)

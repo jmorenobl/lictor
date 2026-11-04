@@ -1,7 +1,7 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,7 +16,7 @@ from langgraph.types import interrupt
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
-from lictor.application.spec_history import SpecHistory
+from lictor.application.spec_history import GreenRecord, SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
@@ -24,6 +24,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
 )
+from lictor.application.usecases.preconditions import CheckPreconditions, PreconditionsRequest
 from lictor.application.usecases.prepare_driver import PrepareDriver, PrepareDriverRequest
 from lictor.application.usecases.quarantine import (
     Quarantine,
@@ -52,7 +53,14 @@ from lictor.domain.routing import (
     route_red_check,
     route_verify,
 )
-from lictor.domain.rules import Impostors, MapLink, RedOracle, run_outcome, suspicious_driver
+from lictor.domain.rules import (
+    Impostors,
+    MapLink,
+    RedOracle,
+    precondition_exit_code,
+    run_outcome,
+    suspicious_driver,
+)
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -147,6 +155,7 @@ class GraphContext:
     verify_attempt: VerifyAttempt
     commit_green: CommitGreen
     quarantine: Quarantine
+    preconditions: CheckPreconditions
     spec_source: SpecSource
     spec_history: SpecHistory
     vcs: Vcs
@@ -209,27 +218,12 @@ class _GraphNodes:
     def preflight(self, state: GraphState) -> dict[str, Any]:
         if state.get("exit_code") is not None:
             return {}
-        changed = self.ctx.vcs.status()
-        if changed:
-            return self._finish(
-                state,
-                int(ExitCode.PRECONDITION),
-                "El árbol de trabajo tiene cambios sin confirmar: "
-                f"{', '.join(changed)}. Confírmalos o descártalos antes de ejecutar.",
-                report=False,
-            )
-        health = self.ctx.executor.health()
-        if not health.ok:
-            detail = health.message or health.auth_status
-            return {
-                **self._finish(
-                    state,
-                    int(ExitCode.ENVIRONMENT_UNAVAILABLE),
-                    f"el ejecutor no está disponible: {detail}",
-                    report=False,
-                ),
-                "agent_detail": detail,
-            }
+        # The verification environment is built here, before any agent call can be spent.
+        report = self.ctx.preconditions.execute(PreconditionsRequest(run_id=state["run_id"]))
+        problems = report.problems
+        if problems:
+            reason = " ".join(problem.message for problem in problems)
+            return self._finish(state, precondition_exit_code(problems), reason, report=False)
 
         event = new_event(
             self.ctx.clock,
@@ -237,7 +231,7 @@ class _GraphNodes:
             state["run_id"],
             data={
                 "lictor_version": "0.1.0",
-                "cli_version": health.cli_version,
+                "cli_version": report.cli_version,
                 "profile": self.ctx.profile_name,
                 "config_hash": state.get("config_hash", ""),
             },
@@ -276,7 +270,13 @@ class _GraphNodes:
             data={
                 "scenario_count": len(scenarios),
                 "scenarios": [
-                    {"id": s.id.value, "name": s.name, "file": s.file, "line": s.line}
+                    {
+                        "id": s.id.value,
+                        "name": s.name,
+                        "file": s.file,
+                        "line": s.line,
+                        **_green_of(records, classes, s.id.value),
+                    }
                     for s in scenarios
                 ],
             },
@@ -692,6 +692,17 @@ class _GraphNodes:
         return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
 
 
+def _green_of(
+    records: Mapping[str, GreenRecord], classes: Mapping[str, str], sid: str
+) -> dict[str, Any]:
+    """Say which commit a green scenario is green from, and whether Lictor made it."""
+    if classes.get(sid) != "green":
+        return {}
+    record = records[sid]
+    green = {"commit": record.commit, "by_lictor": record.by_lictor}
+    return {"green": {**green, "asserted_by": record.asserted_by}}
+
+
 def _scenario_files(state: GraphState) -> dict[str, str]:
     """Each scenario's feature file: the one its test must execute it from."""
     return {s["id"]: s["file"] for s in state.get("scenarios", [])}
@@ -762,7 +773,8 @@ def create_graph(
     untrusted = _holding_checkpoint_writes(checkpointer)
     builder = StateGraph(GraphState)
 
-    builder.add_node("preflight", nodes.preflight)
+    # It builds the verification environment, which runs code the project's lock file brings in.
+    builder.add_node("preflight", untrusted(nodes.preflight))
     builder.add_node("load_spec", nodes.load_spec)
     builder.add_node("build_driver", untrusted(nodes.build_driver))
     builder.add_node("red_check", untrusted(nodes.red_check))

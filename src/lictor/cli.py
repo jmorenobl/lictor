@@ -1,9 +1,8 @@
 """Command Line Interface for Lictor."""
 
 import json
-import os
-import shlex
 import shutil
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -12,19 +11,30 @@ import typer
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from lictor.adapters.config.models import ControlConfig
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
-from lictor.application.run_files import exclusive_run, sweep_scratch
-from lictor.application.usecases.build_report import BuildReportRequest
-from lictor.application.usecases.check_project import (
-    CheckAcceptanceSpec,
-    CheckControlSpec,
-    CheckProjectRequest,
+from lictor.application.run_files import (
+    DOCTOR_DIR,
+    aside_dir,
+    exclusive_run,
+    holding_project,
+    prune_runs,
+    sweep_scratch,
 )
+from lictor.application.usecases.build_report import BuildReportRequest
+from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
+from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest
+from lictor.application.usecases.preconditions import PreconditionsRequest
 from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
 from lictor.domain.errors import ExitCode, LictorError
-from lictor.domain.rules import anchor_problems, baseline_head_accepted, describe_score
+from lictor.domain.rules import (
+    anchor_problems,
+    baseline_head_accepted,
+    describe_score,
+    precondition_exit_code,
+)
 from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
 
 app = typer.Typer(
@@ -117,59 +127,41 @@ def doctor(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Comprueba las precondiciones del entorno sin ejecutar el grafo."""
+    """Comprueba las precondiciones de `lictor run` sin llamar al agente."""
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
         runtime = bootstrap_runtime(resolved_cwd)
-
-        # 1. Configuración válida
         typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
 
-        # 2. Árbol de trabajo git limpio
-        changed = runtime.vcs.status()
-        if changed:
-            typer.echo(
-                f"✗ El repositorio git tiene cambios sin confirmar: {changed}",
-                err=True,
+        # Building takes the temporary directory, which a run starting now would sweep.
+        with holding_project(resolved_cwd) as held:
+            log_dir = aside_dir(resolved_cwd, DOCTOR_DIR)
+            if held:
+                shutil.rmtree(log_dir, ignore_errors=True)
+            request = PreconditionsRequest(
+                run_id=f"doctor-{runtime.clock.generate_run_id()}",
+                environment="throwaway" if held else "none",
+                log_dir=log_dir,
+                skip_reason="no comprobado: hay una ejecución en curso",
             )
-            return 10
-        typer.echo("✓ Árbol git limpio sin cambios pendientes")
+            report = runtime.preconditions.execute(request)
 
-        # 3. Estado del ejecutor
-        health = runtime.executor.health()
-        if not health.ok:
-            typer.echo(
-                f"✗ El ejecutor no está listo: {health.message or health.auth_status}",
-                err=True,
-            )
-            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
-        typer.echo(f"✓ Ejecutor disponible: {health.cli_version} ({health.auth_status})")
+        for check in report.checks:
+            if check.skipped:
+                typer.echo(f"- {check.name}: {check.skipped}")
+            elif check.problems:
+                for problem in check.problems:
+                    typer.echo(f"✗ {check.name}: {problem.message}", err=True)
+            else:
+                typer.echo(f"✓ {check.name}")
 
-        # 4. Comandos de controles
-        for ctrl in runtime.config.controls:
-            cmd_str = ctrl.run.strip()
-            if not cmd_str:
-                typer.echo(f"✗ El control '{ctrl.id}' tiene un comando vacío", err=True)
-                return 10
-            parts = shlex.split(cmd_str)
-            if parts:
-                cmd_bin = parts[0]
-                bin_path = resolved_cwd / cmd_bin
-                is_available = bool(
-                    shutil.which(cmd_bin) or (bin_path.is_file() and os.access(bin_path, os.X_OK))
-                )
-                if not is_available:
-                    typer.echo(
-                        f"✗ El comando del control '{ctrl.id}' ('{cmd_bin}') no está "
-                        "disponible o no es ejecutable",
-                        err=True,
-                    )
-                    return 10
-        typer.echo(f"✓ {len(runtime.config.controls)} controles configurados correctamente")
-
-        typer.echo("Doctor: todas las comprobaciones pasaron con éxito.")
-        return 0
+        code = precondition_exit_code(report.problems)
+        if code:
+            typer.echo("Doctor: hay que resolver lo marcado con ✗.", err=True)
+        else:
+            typer.echo("Doctor: todas las comprobaciones pasaron.")
+        return code
 
     _safe_run(_execute)
 
@@ -181,9 +173,24 @@ def check(
         typer.Option(
             "--level",
             "-l",
-            help="Niveles de control a ejecutar separados por coma (e.g. L1,L2)",
+            help="Niveles de control a ejecutar separados por coma (p. ej. L1,L2)",
         ),
     ] = None,
+    control: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--control",
+            "-c",
+            help="Ejecutar solo este control (repetible); la aceptación es 'acceptance'",
+        ),
+    ] = None,
+    keep_going: Annotated[
+        bool,
+        typer.Option(
+            "--keep-going",
+            help="Seguir tras el primer fallo y mostrar el resultado de todos los controles",
+        ),
+    ] = False,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -193,49 +200,35 @@ def check(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Ejecuta los controles y la aceptación sobre el árbol actual."""
+    """Verifica el proyecto como `lictor run`: en un clon limpio y en el entorno de verificación.
+
+    Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo.
+    """
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
-        runtime = bootstrap_runtime(resolved_cwd)
-
-        controls = [
-            CheckControlSpec(
-                id=c.id,
-                level=c.level,
-                run=c.run,
-                report=c.report,
-                mode=c.mode,
-                empty_exit_codes=c.empty_exit_codes,
-                timeout_s=c.timeout_s,
-                when_exists=c.when_exists,
+        # It builds in the temporary directory, which a run starting now would sweep.
+        with exclusive_run(resolved_cwd, "lictor check"):
+            runtime = bootstrap_runtime(resolved_cwd)
+            config = runtime.config
+            res = runtime.check_working_tree.execute(
+                CheckWorkingTreeRequest(
+                    run_id=f"check-{runtime.clock.generate_run_id()}",
+                    controls=[_check_spec(c) for c in config.controls],
+                    acceptance=CheckAcceptanceSpec(
+                        run=config.acceptance.run,
+                        report=config.acceptance.report,
+                        timeout_s=config.acceptance.timeout_s,
+                    ),
+                    levels=[lvl.strip() for lvl in level.split(",")] if level else None,
+                    control_ids=control or None,
+                    keep_going=keep_going,
+                    error_max_chars=config.limits.error_max_chars,
+                )
             )
-            for c in runtime.config.controls
-        ]
 
-        acceptance = (
-            CheckAcceptanceSpec(
-                run=runtime.config.acceptance.run,
-                report=runtime.config.acceptance.report,
-                timeout_s=runtime.config.acceptance.timeout_s,
-            )
-            if runtime.config.acceptance
-            else None
-        )
-
-        levels = [lvl.strip() for lvl in level.split(",")] if level else None
-
-        res = runtime.check_project.execute(
-            CheckProjectRequest(
-                project_root=resolved_cwd,
-                controls=controls,
-                acceptance=acceptance,
-                levels=levels,
-                error_max_chars=runtime.config.limits.error_max_chars,
-            )
-        )
-
-        for name, cr in res.control_results.items():
+        typer.echo(f"Verificado: {res.subject}")
+        for name, cr in res.check.control_results.items():
             if cr.skipped:
                 typer.echo(f"- {name} omitido: {cr.skipped}")
                 continue
@@ -245,14 +238,30 @@ def check(
             if not cr.ok and cr.output_path:
                 typer.echo(f"  salida: {cr.output_path}")
 
-        if not res.ok:
-            if res.condensed_error:
-                typer.echo(f"\n{res.condensed_error}", err=True)
-            return 10
-
+        if res.tampered:
+            typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+        if not res.check.ok:
+            if res.check.condensed_error:
+                typer.echo(f"\n{res.check.condensed_error}", err=True)
+            return int(ExitCode.PRECONDITION)
         return 0
 
     _safe_run(_execute)
+
+
+def _check_spec(control: ControlConfig) -> CheckControlSpec:
+    return CheckControlSpec(
+        id=control.id,
+        level=control.level,
+        run=control.run,
+        report=control.report,
+        mode=control.mode,
+        empty_exit_codes=control.empty_exit_codes,
+        timeout_s=control.timeout_s,
+        when_exists=control.when_exists,
+        min_score=control.min_score,
+    )
 
 
 @app.command()
@@ -377,12 +386,13 @@ def _check_resume_guard(
     if reason is not None:
         return _refuse_resume(runtime, run_id, int(ExitCode.PRECONDITION), reason)
 
-    health = runtime.executor.health()
-    if not health.ok:
-        reason = (
-            f"el ejecutor no está disponible para reanudar: {health.message or health.auth_status}"
-        )
-        return _refuse_resume(runtime, run_id, int(ExitCode.ENVIRONMENT_UNAVAILABLE), reason)
+    # The tree was checked above, with what a crash may leave; the environment is the run's own.
+    report = runtime.preconditions.execute(
+        PreconditionsRequest(run_id=run_id, clean_tree=False, environment="none")
+    )
+    if report.problems:
+        reason = "no se puede reanudar: " + " ".join(p.message for p in report.problems)
+        return _refuse_resume(runtime, run_id, precondition_exit_code(report.problems), reason)
 
     return None
 
@@ -468,6 +478,28 @@ def _resume_run(
     return _finished_exit_code(updated_state.values)
 
 
+def _retire_old_runs(
+    runtime: BootstrapResult, resolved_cwd: Path, run_id: str, current_run_file: Path
+) -> None:
+    """Keep the most recent runs' evidence, the new one counting, and never the last run's."""
+    keep = runtime.config.retention.keep_runs
+    previous = (
+        current_run_file.read_text(encoding="utf-8").strip() if current_run_file.is_file() else ""
+    )
+
+    def record(pruned: list[str]) -> None:
+        runtime.event_log.append(
+            new_event(
+                runtime.clock,
+                "lictor.runs.pruned.v1",
+                run_id,
+                data={"pruned": pruned, "keep_runs": keep},
+            )
+        )
+
+    prune_runs(resolved_cwd, keep - 1, {previous}, record)
+
+
 def _start_new_run(
     runtime: BootstrapResult,
     graph: Any,
@@ -475,6 +507,7 @@ def _start_new_run(
     resolved_cwd: Path,
 ) -> int:
     run_id = runtime.clock.generate_run_id()
+    _retire_old_runs(runtime, resolved_cwd, run_id, current_run_file)
     current_run_file.write_text(run_id, encoding="utf-8")
     init_state = {
         "run_id": run_id,
@@ -518,23 +551,99 @@ def _run_holding_project(resolved_cwd: Path, force_new: bool) -> int:
     graph = create_graph(runtime.graph_context, checkpointer=saver)
     sweep_scratch(resolved_cwd)
 
-    existing_run_id: str | None = None
-    if current_run_file.is_file() and not force_new:
-        candidate = current_run_file.read_text(encoding="utf-8").strip()
-        if candidate:
-            existing_run_id = candidate
-
-    if existing_run_id is not None:
-        chk_config: RunnableConfig = {"configurable": {"thread_id": existing_run_id}}
-        state_snapshot = graph.get_state(config=chk_config)
-
-        if state_snapshot and state_snapshot.values:
-            has_exit = state_snapshot.values.get("exit_code") is not None
-            has_next = bool(state_snapshot.next)
-            if not (has_exit and not has_next):
-                return _resume_run(runtime, graph, existing_run_id, resolved_cwd, state_snapshot)
+    resumable = None if force_new else _resumable_run(graph, current_run_file)
+    if resumable is not None:
+        run_id, state_snapshot = resumable
+        return _resume_run(runtime, graph, run_id, resolved_cwd, state_snapshot)
 
     return _start_new_run(runtime, graph, current_run_file, resolved_cwd)
+
+
+def _resumable_run(graph: Any, current_run_file: Path) -> tuple[str, Any] | None:
+    """Return the run `lictor run` would resume, with its state, if there is one."""
+    if not current_run_file.is_file():
+        return None
+    run_id = current_run_file.read_text(encoding="utf-8").strip()
+    if not run_id:
+        return None
+    chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+    state_snapshot = graph.get_state(config=chk_config)
+    if not (state_snapshot and state_snapshot.values):
+        return None
+    finished = state_snapshot.values.get("exit_code") is not None and not state_snapshot.next
+    return None if finished else (run_id, state_snapshot)
+
+
+@app.command()
+def register(
+    scenarios: Annotated[
+        list[str],
+        typer.Argument(help="IDs de los escenarios que el código ya cumple (p. ej. IVA-001)"),
+    ],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Confirmar sin preguntar lo que se afirma"),
+    ] = False,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Registra en verde escenarios que el código ya cumple, como afirmación tuya.
+
+    Lictor no puede distinguir un test que pasa porque el código ya cumple el escenario de uno que
+    no comprueba nada. Úsalo al adoptar Lictor en un proyecto con código, antes de `lictor run`.
+    """
+
+    def _execute() -> int:
+        resolved_cwd = cwd.resolve()
+        lictor_dir = resolved_cwd / ".lictor"
+        # It moves the branch, which a run in progress has anchored.
+        with exclusive_run(resolved_cwd, "lictor register"):
+            runtime = bootstrap_runtime(resolved_cwd)
+            graph = create_graph(
+                runtime.graph_context,
+                checkpointer=get_sqlite_saver(lictor_dir / "checkpoints.sqlite"),
+            )
+            if _resumable_run(graph, lictor_dir / "current_run") is not None:
+                typer.echo(
+                    "Error: hay una ejecución a medias y registrar movería la rama que ancló. "
+                    "Termínala con `lictor run` o empieza otra con `lictor run --new`.",
+                    err=True,
+                )
+                return int(ExitCode.PRECONDITION)
+            plan = runtime.register_scenarios.plan(scenarios)
+            if plan.problems:
+                for problem in plan.problems:
+                    typer.echo(f"✗ {problem.message}", err=True)
+                return precondition_exit_code(plan.problems)
+            for statement in plan.statements():
+                typer.echo(f"- {statement}")
+            if not yes and not _confirmed():
+                typer.echo("No se ha registrado nada.", err=True)
+                return int(ExitCode.PRECONDITION)
+            sha = runtime.register_scenarios.execute(
+                plan, f"register-{runtime.clock.generate_run_id()}"
+            )
+        typer.echo(
+            f"Registrados en {sha[:12]}: {', '.join(plan.scenarios)}. "
+            "El informe los mostrará como registrados a mano."
+        )
+        return 0
+
+    _safe_run(_execute)
+
+
+def _confirmed() -> bool:
+    """Ask in a terminal; without one, refuse rather than assert on someone's behalf."""
+    if not sys.stdin.isatty():
+        typer.echo("Sin terminal para confirmarlo: vuelve a lanzarlo con --yes.", err=True)
+        return False
+    return typer.confirm("¿Lo afirmas?", default=False)
 
 
 @app.command()
@@ -583,6 +692,12 @@ def status(
             "status": state_vals.get("status", {}),
             "reasons": state_vals.get("reasons", {}),
             "totals": state_vals.get("totals", {}),
+            # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
+            "registered_by_hand": sorted(
+                sid
+                for sid, record in runtime.spec_history.records().items()
+                if not record.by_lictor
+            ),
         }
 
         if as_json:
@@ -594,8 +709,10 @@ def status(
             if payload["exit_reason"]:
                 typer.echo(f"Motivo: {payload['exit_reason']}")
             typer.echo("Escenarios:")
+            by_hand = set(payload["registered_by_hand"])
             for sid, st in payload["status"].items():
-                typer.echo(f"  - {sid}: {st}")
+                mark = " (registrado a mano)" if sid in by_hand and st == "green" else ""
+                typer.echo(f"  - {sid}: {st}{mark}")
         return 0
 
     _safe_run(_execute)

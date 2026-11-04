@@ -151,6 +151,17 @@ class Vcs(Protocol):
         """Return the first parent of a commit, or "" for a root commit."""
         ...
 
+    def is_executable(self, rev: str, path: str) -> bool:
+        """Tell whether `path` is an executable file in the tree of `rev`."""
+        ...
+
+    def committer_identity(self) -> str:
+        """Return who `commit_tree` would record as committer, or say why git refuses.
+
+        Raises `EnvironmentUnavailableError` with git's own message when there is none.
+        """
+        ...
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         ...

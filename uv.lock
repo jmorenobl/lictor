@@ -958,6 +958,7 @@ source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
     { name = "gherkin-official" },
+    { name = "langchain-core" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "pydantic" },
@@ -981,6 +982,7 @@ dev = [
 requires-dist = [
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "gherkin-official", specifier = ">=42.0.1" },
+    { name = "langchain-core", specifier = ">=1.4.7,<2" },
     { name = "langgraph", specifier = ">=1.2.18" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.2,<4" },
     { name = "pydantic", specifier = ">=2" },

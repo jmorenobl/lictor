@@ -1,6 +1,7 @@
 """Unit tests for the verification environment: hash, rebuild and failure to prepare."""
 
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +14,11 @@ from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.application.ports import AuditSink, Clock, EventLog, Vcs
 from lictor.application.seal import hash_tree
-from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.application.verification_env import (
+    EnvironmentRunner,
+    VerificationEnvironment,
+    VerificationEnvSpec,
+)
 from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput
 
@@ -699,6 +704,18 @@ def test_run_injects_the_environment(tmp_path: Path) -> None:
     assert runner.calls[0]["timeout_s"] == 5
 
 
+def test_a_runner_over_the_environment_keeps_the_timeout_and_ignores_the_callers_env(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner()
+    environment, _ = _environment(tmp_path, runner)
+
+    EnvironmentRunner(environment).run(["suite"], tmp_path, 7, env={"INTRUSO": "1"})
+
+    assert runner.calls[0]["timeout_s"] == 7
+    assert runner.calls[0]["env"] == {"ENV_AT": f"{environment.env_dir}/bin", "PLAIN": "1"}
+
+
 def test_hash_tree_covers_path_mode_link_and_content(tmp_path: Path) -> None:
     root = tmp_path / "t"
     root.mkdir()
@@ -731,3 +748,36 @@ def test_hash_tree_covers_path_mode_link_and_content(tmp_path: Path) -> None:
 
 def test_hash_tree_of_a_missing_directory_is_stable(tmp_path: Path) -> None:
     assert hash_tree(tmp_path / "falta") == hash_tree(tmp_path / "tampoco")
+
+
+def test_a_throwaway_is_built_from_its_commit_apart_from_the_runs(tmp_path: Path) -> None:
+    builder = _Builder()
+    environment, _ = _environment(tmp_path, builder)
+    logs = tmp_path / ".lictor" / "doctor"
+
+    with environment.throwaway("abc123", logs) as throwaway:
+        throwaway.ensure("d1")
+        built_in = throwaway.env_dir
+        assert (built_in / "paquete.py").is_file()
+        assert throwaway.manifest.parent == built_in.parent
+
+    cast(MagicMock, environment.vcs).export_tree.assert_called_once()
+    assert cast(MagicMock, environment.vcs).export_tree.call_args.args[0] == "abc123"
+    assert not built_in.is_relative_to(tmp_path)
+    assert not built_in.exists()
+    assert (logs / "build.log").is_file()
+    assert not environment.env_dir.exists()
+    assert not environment.manifest.exists()
+
+
+def test_commands_look_for_their_program_on_the_path_they_get(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", "/uno:/dos")
+    inherited, _ = _environment(tmp_path, _Builder(), replace(SPEC, inherit=("PATH",)))
+    fixed, _ = _environment(tmp_path, _Builder(), replace(SPEC, env={"PATH": "/tres"}))
+    bare, _ = _environment(tmp_path, _Builder(), VerificationEnvSpec())
+
+    assert inherited.search_path() == "/uno:/dos"
+    assert fixed.search_path() == "/tres"
+    assert bare.search_path() == os.pathsep.join(os.get_exec_path({}))

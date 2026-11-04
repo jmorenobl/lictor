@@ -1,0 +1,25 @@
+[project]
+name = "biblioteca"
+version = "0.1.0"
+description = "Ejemplo de Lictor: adoptar un proyecto con código y escenarios que ya pasan"
+readme = "README.md"
+authors = [
+    { name = "Jorge MB", email = "jmorenobl@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-bdd>=9.0.0",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

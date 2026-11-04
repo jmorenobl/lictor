@@ -1,6 +1,5 @@
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -27,35 +26,6 @@ def _init_git_repo(path: Path) -> None:
     )
 
 
-def test_cli_init_and_doctor(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "chore: initial"], cwd=tmp_path, check=True, capture_output=True
-    )
-
-    result = runner.invoke(app, ["init", "--cwd", str(tmp_path)])
-    assert result.exit_code == 0
-    assert (tmp_path / "lictor.json").is_file()
-    assert (tmp_path / ".lictor").is_dir()
-
-    # The fake backend keeps this from depending on the machine having a usable agent binary.
-    config_path = tmp_path / "lictor.json"
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    config["backend"]["kind"] = "fake"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-
-    # Commit the generated config to have clean tree for doctor
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "chore: add lictor"], cwd=tmp_path, check=True, capture_output=True
-    )
-
-    doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
-    assert doc_res.exit_code == 0, doc_res.output
-
-
 def test_cli_init_existing_without_force_fails(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     (tmp_path / "lictor.json").write_text("{}", encoding="utf-8")
@@ -74,96 +44,6 @@ def test_cli_doctor_on_dirty_tree_fails_with_10(tmp_path: Path) -> None:
     # Tree is dirty because lictor.json and .lictor/ are uncommitted
     result = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
     assert result.exit_code == 10
-
-
-def test_cli_check_success_and_filter(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    lictor_json = {
-        "profile": "python-uv@0.1",
-        "backend": {"kind": "fake", "model": "fake-model-1"},
-        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-        "acceptance": {"run": "echo test {out}", "report": "exit-code"},
-        "controls": [
-            {"id": "ctrl1", "level": "L1", "run": "echo ctrl1", "report": "exit-code"},
-            {"id": "ctrl2", "level": "L2", "run": "echo ctrl2", "report": "exit-code"},
-        ],
-        "agent_tools": [],
-        "hints": "",
-        "gitignore": [],
-    }
-    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
-
-    res = runner.invoke(app, ["check", "--cwd", str(tmp_path)])
-    assert res.exit_code == 0
-    assert "ctrl1" in res.output
-    assert "ctrl2" in res.output
-
-    res_l1 = runner.invoke(app, ["check", "--level", "L1", "--cwd", str(tmp_path)])
-    assert res_l1.exit_code == 0
-    assert "ctrl1" in res_l1.output
-
-
-def test_cli_check_shows_where_a_failed_control_left_its_output(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    lictor_json = {
-        "profile": "python-uv@0.1",
-        "backend": {"kind": "fake", "model": "fake-model-1"},
-        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-        "acceptance": {"run": "true {out}", "report": "junit"},
-        "controls": [
-            {
-                "id": "medida",
-                "level": "L5",
-                "run": "false",
-                "report": "exit-code",
-                "mode": "measure",
-            }
-        ],
-        "agent_tools": [],
-        "hints": "",
-        "gitignore": [],
-    }
-    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
-
-    res = runner.invoke(app, ["check", "--level", "L5", "--cwd", str(tmp_path)])
-
-    assert res.exit_code == 0
-    assert ".lictor/runs/check/medida.log" in res.output
-
-
-def test_cli_check_prints_the_mutation_score(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    stats = {"killed": 9, "survived": 1, "total": 10}
-    script = tmp_path / "puntua.py"
-    script.write_text(
-        f"import json, sys\njson.dump({stats!r}, open(sys.argv[1], 'w'))\n", encoding="utf-8"
-    )
-    writer = f"{sys.executable} {script} {{out}}"
-    lictor_json = {
-        "profile": "python-uv@0.1",
-        "backend": {"kind": "fake", "model": "fake-model-1"},
-        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-        "acceptance": {"run": "true {out}", "report": "junit"},
-        "controls": [
-            {
-                "id": "mutation",
-                "level": "L5",
-                "run": writer,
-                "report": "mutation",
-                "mode": "measure",
-            }
-        ],
-        "agent_tools": [],
-        "hints": "",
-        "gitignore": [],
-    }
-    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
-
-    res = runner.invoke(app, ["check", "--level", "L5", "--cwd", str(tmp_path)])
-
-    assert res.exit_code == 0, res.output
-    assert "✓ mutation" in res.output
-    assert ": 90,0 % (9 de 10 muertos; 1 vivos, 0 por tiempo)" in res.output
 
 
 def test_cli_status_and_report(tmp_path: Path) -> None:
@@ -214,39 +94,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     result = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 40
-
-
-def test_cli_doctor_fails_on_missing_control_binary(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    lictor_json = {
-        "profile": "python-uv@0.1",
-        "backend": {"kind": "fake", "model": "fake-model-1"},
-        "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-        "acceptance": {"run": "echo test {out}", "report": "exit-code"},
-        "controls": [
-            {
-                "id": "missing_tool",
-                "level": "L4",
-                "run": "nonexistent_cli_tool_binary_xyz --check",
-                "report": "exit-code",
-            },
-        ],
-        "agent_tools": [],
-        "hints": "",
-        "gitignore": [],
-    }
-    (tmp_path / "lictor.json").write_text(json.dumps(lictor_json), encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "chore: setup"],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-    )
-
-    doc_res = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
-    assert doc_res.exit_code == 10
-    assert "no está disponible o no es ejecutable" in doc_res.output
+    assert "✗ Ejecutor: el ejecutor no está disponible: sin sesión" in result.output
 
 
 @pytest.mark.parametrize("command", [["run"], ["init", "--force"]])

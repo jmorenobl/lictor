@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.vcs.git_cli import GitCli
-from lictor.domain.errors import CandidateError
+from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import Candidate
 
 GIT_BIN = shutil.which("git") or "git"
@@ -634,3 +634,44 @@ def test_parent_of_a_root_commit_is_empty(git_repo: Path) -> None:
         text=True,
     ).stdout.split()[0]
     assert cli.parent_of(root) == ""
+
+
+def test_is_executable_reads_the_mode_in_the_commit(git_repo: Path) -> None:
+    script = git_repo / "run.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o755)
+    (git_repo / "plain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "scripts"], cwd=git_repo, check=True)
+    (git_repo / "plain.sh").chmod(0o755)
+    (git_repo / "untracked.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (git_repo / "untracked.sh").chmod(0o755)
+    cli = GitCli(repo_dir=git_repo)
+
+    assert cli.is_executable("HEAD", "run.sh") is True
+    assert cli.is_executable("HEAD", "plain.sh") is False
+    assert cli.is_executable("HEAD", "untracked.sh") is False
+    assert cli.is_executable("HEAD", "README.md") is False
+
+
+def test_committer_identity_is_the_configured_one(git_repo: Path) -> None:
+    assert GitCli(repo_dir=git_repo).committer_identity() == "Test User <test@example.com>"
+
+
+def test_committer_identity_refuses_what_commit_tree_refuses(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "")
+    cli = GitCli(repo_dir=git_repo)
+
+    # git's own words, whatever language it speaks: the reason carries them after ours.
+    with pytest.raises(EnvironmentUnavailableError, match=r"identidad .*: fatal: "):
+        cli.committer_identity()
+    with pytest.raises(subprocess.CalledProcessError):
+        cli.commit_tree(cli.get_tree("HEAD"), "x", empty=True)
+
+
+def test_a_repository_without_commits_has_no_trailer_commits(tmp_path: Path) -> None:
+    subprocess.run([GIT_BIN, "init", "-q"], cwd=tmp_path, check=True)
+
+    assert GitCli(repo_dir=tmp_path).trailer_commits("Scenario") == []

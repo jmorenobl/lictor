@@ -62,7 +62,7 @@
           "type": "string"
         },
         "model": {
-          "default": "claude-sonnet-4-5-20250929",
+          "default": "claude-sonnet-5-5",
           "title": "Model",
           "type": "string"
         },
@@ -157,6 +157,20 @@
           ],
           "default": null,
           "title": "When Exists"
+        },
+        "min_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Score"
         }
       },
       "required": [
@@ -259,6 +273,20 @@
       },
       "title": "ProjectVerification",
       "type": "object"
+    },
+    "RetentionConfig": {
+      "additionalProperties": false,
+      "description": "Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/.",
+      "properties": {
+        "keep_runs": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Keep Runs",
+          "type": "integer"
+        }
+      },
+      "title": "RetentionConfig",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -279,6 +307,9 @@
     },
     "limits": {
       "$ref": "#/$defs/LimitsConfig"
+    },
+    "retention": {
+      "$ref": "#/$defs/RetentionConfig"
     },
     "paths": {
       "$ref": "#/$defs/PathsConfig"

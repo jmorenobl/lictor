@@ -190,17 +190,22 @@ Característica: IVA de una factura
 # Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
 uv run lictor init
 
-# Verifica que el entorno, git, ejecutor y herramientas de control estén listos
+# Comprueba lo mismo que `lictor run` antes de llamar al agente, entorno de verificación incluido
 uv run lictor doctor
 ```
 
 ```text
 ✓ Configuración válida: perfil 'python-uv@0.1'
-✓ Árbol git limpio sin cambios pendientes
-✓ Ejecutor disponible: claude 2.x.x (subscription)
-✓ 3 controles configurados correctamente
-Doctor: todas las comprobaciones pasaron con éxito.
+✓ Árbol git limpio
+✓ Identidad git
+✓ Ejecutor
+✓ Directorio temporal
+✓ Comandos de verificación
+✓ Entorno de verificación
+Doctor: todas las comprobaciones pasaron.
 ```
+
+`doctor` construye de verdad el entorno de verificación, en un directorio desechable, sin tocar el de una ejecución. Si hay una ejecución en curso, comprueba todo lo demás y deja el entorno como «no comprobado».
 
 ### 3️⃣ Ejecuta el ciclo autónomo y consulta el informe
 
@@ -270,8 +275,9 @@ uv run lictor report
 | Comando | Opciones | Descripción |
 | :--- | :--- | :--- |
 | `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado) y actualiza `.gitignore`. |
-| `lictor doctor` | — | Verifica las precondiciones del entorno (validez de `lictor.json`, árbol `git` limpio, salud del agente y binarios de controles) sin ejecutar el grafo. |
-| `lictor check` | `--level, -l <niveles>` | Ejecuta los controles deterministas (filtrables por coma, p. ej. `--level L1,L2`) y la suite de aceptación sobre el árbol actual. |
+| `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, árbol `git` limpio, identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
+| `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
+| `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |
 | `lictor run` | `--new` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. |
 | `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos. |
 | `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl` y muestra su ruta. |
@@ -284,10 +290,10 @@ Diseñados para integrarse de forma predecible en pipelines de CI/CD y scripts d
 | :---: | :--- | :--- |
 | **`0`** | `OK` | Todos los escenarios (o controles en `lictor check`) pasaron en verde. |
 | **`1`** | `INTERNAL_ERROR` | Error interno inesperado del runtime. |
-| **`10`** | `PRECONDITION` | Fallo de precondición: árbol `git` sucio, configuración inválida, spec/driver inválido o sello alterado (`SealTamperedError`). |
+| **`10`** | `PRECONDITION` | Hay que cambiar algo del proyecto: árbol `git` sucio, configuración inválida o un comando vacío, spec/driver inválido o sello alterado (`SealTamperedError`). En `lictor check`, un control bloqueante que falla. |
 | **`11`** | `SPEC_CONFLICT` | Al menos un escenario entró en cuarentena porque el agente declaró contradicción o imposibilidad (`LICTOR: SPEC_CONFLICT`). |
 | **`30`** | `QUARANTINED` | Al menos un escenario quedó en cuarentena tras agotar `max_attempts`. Si todos sus intentos fallaron por un error del propio driver, el motivo es `driver_sospechoso`. |
-| **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde, o no se pudo preparar el entorno de verificación. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
+| **`40`** | `ENVIRONMENT_UNAVAILABLE` | No se pudo ejecutar por el entorno, al arrancar o a mitad de ejecución: el agente no tiene sesión o no responde, git no tiene identidad para los commits, falta un programa de los controles o de la aceptación, el directorio temporal no es privado, o no se pudo preparar el entorno de verificación. No es un fallo del trabajo y no penaliza escenarios: no gasta intentos ni pone nada en cuarentena. Arregla el entorno y relanza `lictor run`; `lictor doctor` dice qué falla. |
 | **`50`** | `RATE_LIMITED` | Ejecución pausada en checkpoint por límite de cuota de la suscripción/API. Reanudable ejecutando `lictor run`. |
 
 ---
@@ -310,7 +316,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Enlaza cada test con el escenario de Gherkin que ejecutó (en `python-uv`, el que informa el plugin del perfil; sin él, por el `@ID-NNN` del nombre): exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. Los pendientes que el mismo árbol también hace pasar se registran como verdes colaterales sin llamar al agente. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio y los módulos pequeños de la aplicación para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Registra resultado, salida y puntuación: `scripts/mutation_score.py` deja los recuentos donde los lee el lector `mutation` (si la exportación falla, no deja informe y el control falla), y el informe muestra, en «Puntuaciones» sea cual sea el modo, por ejemplo, «94,7 % (1082 de 1142 muertos; 60 vivos, 0 por tiempo)». Aún no hay umbral. | `measure` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio y los módulos pequeños de la aplicación para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Registra resultado, salida y puntuación: `scripts/mutation_score.py` deja los recuentos donde los lee el lector `mutation` (si la exportación falla, no deja informe y el control falla), y el informe muestra, en «Puntuaciones» sea cual sea el modo, por ejemplo, «96,1 % (1585 de 1649 muertos; 64 vivos, 0 por tiempo)», y deja la lista de supervivientes en `mutation-survivors.txt`. Con `min_score` el control falla por debajo de ese porcentaje: el de Lictor exige un 95 %. | `block` (con `min_score`) o `measure` |
 
 ---
 
@@ -319,7 +325,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 El archivo `lictor.json` define el perfil del proyecto, el backend del agente, los límites de intentos, las fronteras de rutas y los controles. Puedes consultar su esquema formal en [`schema/lictor.schema.json`](schema/lictor.schema.json).
 
 > [!IMPORTANT]
-> - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-4-5-20250929`) y rechaza alias mutables como `sonnet` o `latest`.
+> - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-5-5`) y rechaza alias mutables como `sonnet` o `latest`.
 > - **Fronteras disjuntas:** `paths.writable` nunca puede solaparse con `paths.protected` ni con `paths.driver`.
 > - **Marcador JUnit:** Todo control o suite de aceptación con `"report": "junit"` debe incluir `{out}` en su comando `run`.
 
@@ -334,7 +340,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "profile": "python-uv@0.1",
   "backend": {
     "kind": "claude-cli",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-5-5",
     "auth": "subscription",
     "max_turns": 40,
     "timeout_s": 1800
@@ -382,7 +388,7 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. La única excepción al HEAD registrado es el commit vacío con el que el rojo registra verdes sin agente, si la ejecución murió justo después: se acepta solo con el rojo pendiente, sobre la cabeza registrada y con su mismo árbol, y el rojo repetido vuelve a probar cada verde.
 
-**Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` mira el árbol de trabajo. Así un proyecto sin `tests/unit` no bloquea al agente.
+**Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` aplica la misma regla a lo que verifica. Así un proyecto sin `tests/unit` no bloquea al agente.
 
 ### El oráculo y el ciclo de escenarios
 
@@ -392,7 +398,18 @@ El driver sellado es el oráculo: lo que decide si un escenario está en verde. 
 - **Rojo válido (`red_kinds`).** Un pendiente falla por una aserción o por `NotImplementedError` lanzado desde `paths.writable`, fuera del driver. Un error del propio test se rechaza. El plugin `lictor_outcome` del perfil informa la clase y el origen de cada fallo como propiedades del JUnit, por la clase de la excepción y nunca por el texto.
 - **Impostores (`impostors`).** Antes de sellar un driver nuevo, Lictor repite la aceptación en clones donde cada `raise NotImplementedError` de una línea se sustituye por `return None` y por `return True`. Cada escenario nuevo tiene que fallar con alguno de los dos: si pasa con ambos, su test ignora el resultado. Cualquier fallo cuenta, así que no atrapan un test sin aserción que solo lee el resultado (`calc(...).total` falla con los dos).
 
-Un escenario está en verde mientras lo que exige no cambie: Lictor calcula una huella de sus pasos, tablas, docstrings, antecedentes y ejemplos (sin nombres, tags, comentarios, espacios ni idioma) en el árbol de su commit verde y la compara con la actual. Si difiere, el escenario se **reabre**: el driver se reconstruye con esa indicación y, si su test falla como un rojo válido, vuelve a implementarse. Si su test sigue pasando con el driver nuevo, Lictor para con exit 10 sin reintentar: el paso puede conservar el valor antiguo, y solo tú sabes si el cambio fue de redacción. Si la implementación ya cumple la nueva especificación, regístralo con `git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>"` y relanza; si no, su test no detecta el cambio. Un escenario nuevo que pasa con un driver nuevo es casi siempre un test vacío: el driver se rechaza y el agente lo vuelve a intentar, y solo al agotar los intentos se para con exit 10. Un pendiente que el driver sellado ya hace pasar se registra como verde colateral (trailer `Lictor-Collateral`). Si todos los intentos de un escenario fallan con un error del propio driver, la cuarentena lo dice: posible driver defectuoso, sin asegurarlo (exit 30). No lo detecta si el driver tiene una aserción imposible de cumplir o un `pytest.fail` en un paso.
+Un escenario está en verde mientras lo que exige no cambie: Lictor calcula una huella de sus pasos, tablas, docstrings, antecedentes y ejemplos (sin nombres, tags, comentarios, espacios ni idioma) en el árbol de su commit verde y la compara con la actual. Si difiere, el escenario se **reabre**: el driver se reconstruye con esa indicación y, si su test falla como un rojo válido, vuelve a implementarse. Si su test sigue pasando con el driver nuevo, Lictor para con exit 10 sin reintentar: el paso puede conservar el valor antiguo, y solo tú sabes si el cambio fue de redacción. Si la implementación ya cumple la nueva especificación, regístralo con `lictor register <id>` y relanza; si no, su test no detecta el cambio. Un escenario nuevo que pasa con un driver nuevo es casi siempre un test vacío: el driver se rechaza y el agente lo vuelve a intentar, y solo al agotar los intentos se para con exit 10. Un pendiente que el driver sellado ya hace pasar se registra como verde colateral (trailer `Lictor-Collateral`). Si todos los intentos de un escenario fallan con un error del propio driver, la cuarentena lo dice: posible driver defectuoso, sin asegurarlo (exit 30). No lo detecta si el driver tiene una aserción imposible de cumplir o un `pytest.fail` en un paso.
+
+### Adoptar Lictor en un proyecto existente
+
+Con un driver nuevo, Lictor no puede distinguir un test que pasa porque el código ya cumple el escenario de uno que no comprueba nada: por eso nunca pone en verde, por su cuenta, un escenario nuevo que ya pasa. En un proyecto que ya tiene código, registra tú, **antes de la primera ejecución**, los escenarios que el código ya cumple:
+
+```bash
+lictor register PRE-001 PRE-002 PRE-003
+lictor run
+```
+
+`lictor register` comprueba que los escenarios existen y no están en verde, te explica lo que afirmas y te pide confirmación (`--yes` para no preguntar). Hace un solo commit vacío con un trailer `Scenario:` por escenario y `Lictor-Asserted-By` con tu identidad git. El driver que Lictor escriba después solo tendrá que pasar esos escenarios, como cualquier verde. `report.md` y `lictor status` los muestran como **registrados a mano**: todo verde cuyo commit no lleva `Lictor-Run`, que Lictor pone en todos los suyos. La marca es informativa: los trailers los puede escribir cualquiera con git. [`examples/prestamos-biblioteca/`](examples/prestamos-biblioteca/) es un ejemplo con código previo, `Antecedentes` y `Regla`.
 
 `Scenario Outline` no se admite: `lictor run` lo rechaza al cargar la especificación (exit 10). Cada escenario necesita exactamente un test, y un esquema genera uno por fila de sus ejemplos.
 
@@ -418,7 +435,9 @@ Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación b�
 | `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
 | `.lictor/verify-env/` | Entorno de verificación, construido una vez por ejecución fuera del clon. |
 | `.lictor/verify_env.json` | Hash esperado de ese entorno y plugins que tiene instalados. |
-| `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente y su stderr (`NNN-implement.json`, `NNN-implement.stderr.log`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. |
+| `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente y su stderr (`NNN-implement.json`, `NNN-implement.stderr.log`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. Al empezar una ejecución nueva se conservan las `retention.keep_runs` más recientes (10 por defecto, contando la nueva) y nunca la de `current_run`; la bitácora registra lo retirado (`runs.pruned`) y el informe lo distingue de la evidencia alterada. |
+| `.lictor/check/` | Lo que deja el último `lictor check`: informes y salida de cada control, el log del entorno y su bitácora. Cada `check` sustituye al anterior. |
+| `.lictor/doctor/` | El log y la bitácora del entorno desechable del último `lictor doctor`. |
 
 </details>
 
@@ -459,9 +478,11 @@ flowchart TB
 │   └── lictor.schema.json      # JSON Schema formal de lictor.json
 ├── docs/
 │   ├── assets/banner.svg       # Banner vectorial del repositorio
-│   └── adr/                    # Architecture Decision Records (ADR-0001 a ADR-0003)
+│   └── adr/                    # Architecture Decision Records (ADR-0001 a ADR-0006)
+├── CHANGELOG.md                # Registro de cambios
 ├── examples/
-│   └── demo-iva/               # Proyecto de demostración con escenarios Gherkin
+│   ├── demo-iva/               # Proyecto de demostración con escenarios Gherkin
+│   └── prestamos-biblioteca/   # Adoptar Lictor en un proyecto con código y escenarios que ya pasan
 ├── src/lictor/
 │   ├── domain/                 # Dominio puro: model.py, rules.py, routing.py, errors.py
 │   ├── application/
@@ -492,6 +513,9 @@ flowchart TB
 - 📌 **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
 - 📌 **[ADR-0004](docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
 - 📝 **[ADR-0005](docs/adr/ADR-0005-clon-y-rama-propios.md):** Cada ejecución trabaja en su propio clon y en su propia rama (propuesta).
+- 📌 **[ADR-0006](docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
+
+Los cambios de cada versión están en [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -500,11 +524,16 @@ flowchart TB
 Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` definido en [`lictor.json`](lictor.json):
 
 ```bash
-# Ejecutar todos los controles de calidad con el propio Lictor
-uv run lictor check
+# Todos los controles de calidad y la aceptación, en un clon limpio y en el entorno de verificación,
+# sin parar en el primer fallo
+uv run lictor check --keep-going
 
-# O filtrar por niveles específicos (por ejemplo, L1 y L2)
+# Lo que ejecuta el CI: todo salvo la aceptación, cuya suite ya corre el control de cobertura
+uv run lictor check --keep-going --level L1,L2,L4,L5
+
+# O filtrar por niveles o por control
 uv run lictor check --level L1,L2
+uv run lictor check --control types --control unit
 ```
 
 <details>
@@ -534,8 +563,6 @@ gitleaks detect --no-banner
 # L5: Pruebas de mutación sobre el dominio y los módulos pequeños de la aplicación
 uv run python scripts/mutation_score.py mutants/score.json
 
-# Todos los controles de lictor.json en un clon limpio de HEAD, en el entorno de verificación real
-uv run python scripts/verify_self.py
 ```
 
 </details>

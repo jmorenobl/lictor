@@ -5,7 +5,15 @@ from typing import Any, Literal
 import pytest
 
 from lictor.domain.errors import DriverError, ExitCode
-from lictor.domain.model import AgentSignal, AgentStatus, MutationScore, ScenarioId, TestCaseResult
+from lictor.domain.model import (
+    AgentSignal,
+    AgentStatus,
+    ControlResult,
+    MutationScore,
+    PreconditionProblem,
+    ScenarioId,
+    TestCaseResult,
+)
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
     SUSPICIOUS_DRIVER,
@@ -23,6 +31,7 @@ from lictor.domain.rules import (
     control_path_status,
     count_agent_failures,
     describe_score,
+    enforce_min_score,
     forbidden_paths,
     impostor_problem,
     impostor_source,
@@ -31,12 +40,17 @@ from lictor.domain.rules import (
     judge_red,
     keeps_attempt,
     map_test_cases_to_scenarios,
+    missing_executables,
     model_responded,
     mutation_score,
     path_within,
+    precondition_exit_code,
     red_failure_problem,
+    registration_problems,
     render_full_error,
     run_outcome,
+    runs_to_prune,
+    score_meets,
     suite_crash_reason,
     suspicious_driver,
     unmapped_cases,
@@ -1295,3 +1309,174 @@ def test_the_smallest_error_budget_keeps_the_reason_and_the_first_case() -> None
     assert "Fallaron 3 casos de test" in text
     assert "test_iva_001" in text
     assert "AssertionError: xxxxxxxx" in text
+
+
+def test_no_problem_exits_zero() -> None:
+    assert precondition_exit_code([]) == 0
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected"),
+    [
+        (["environment"], 40),
+        (["environment", "environment"], 40),
+        (["config"], 10),
+        (["repository"], 10),
+        (["environment", "config"], 10),
+        (["environment", "repository", "environment"], 10),
+    ],
+)
+def test_the_project_decides_before_the_machine(
+    kinds: list[Literal["config", "repository", "environment"]], expected: int
+) -> None:
+    problems = [PreconditionProblem(kind, "x") for kind in kinds]
+
+    assert precondition_exit_code(problems) == expected
+
+
+def test_a_command_whose_program_is_found_is_no_problem() -> None:
+    assert (
+        missing_executables(
+            {"del control 'lint'": "uv run ruff check src"}, lambda word: word == "uv"
+        )
+        == []
+    )
+
+
+def test_a_command_whose_program_is_missing_names_it_and_the_command() -> None:
+    problems = missing_executables(
+        {"del control 'secrets'": "gitleaks detect --no-banner"}, lambda _word: False
+    )
+
+    assert problems == [
+        PreconditionProblem(
+            "environment",
+            "No se encuentra 'gitleaks', con el que empieza el comando del control 'secrets' "
+            "('gitleaks detect --no-banner'). Instálalo o corrige el comando en lictor.json.",
+        )
+    ]
+
+
+def test_an_empty_command_is_a_configuration_problem() -> None:
+    asked: list[str] = []
+
+    problems = missing_executables(
+        {"de la aceptación": "  "}, lambda word: asked.append(word) is None
+    )
+
+    assert problems == [PreconditionProblem("config", "El comando de la aceptación está vacío")]
+    assert asked == []
+
+
+def test_only_the_first_word_is_resolved() -> None:
+    asked: list[str] = []
+
+    missing_executables(
+        {"a": "'./scripts/run tests.sh' --flag x", "b": "uv run pytest"},
+        lambda word: asked.append(word) is None,
+    )
+
+    assert asked == ["./scripts/run tests.sh", "uv"]
+
+
+def test_a_program_inside_the_environment_is_left_for_the_build() -> None:
+    asked: list[str] = []
+
+    problems = missing_executables(
+        {"x": "{env_dir}/bin/python -c 1"}, lambda word: asked.append(word) is None
+    )
+
+    assert problems == []
+    assert asked == []
+
+
+def test_every_command_is_checked() -> None:
+    problems = missing_executables({"a": "x", "b": "", "c": "y"}, lambda _word: False)
+
+    assert [p.kind for p in problems] == ["environment", "config", "environment"]
+
+
+RUNS = [f"2026110{d}-120000-abc{d}" for d in range(1, 6)]
+
+
+def test_runs_past_the_most_recent_are_pruned_oldest_first() -> None:
+    assert runs_to_prune(list(reversed(RUNS)), keep=2, protected=()) == RUNS[:3]
+
+
+def test_keeping_as_many_runs_as_there_are_prunes_nothing() -> None:
+    assert runs_to_prune(RUNS, keep=5, protected=()) == []
+    assert runs_to_prune(RUNS, keep=4, protected=()) == RUNS[:1]
+
+
+def test_keeping_none_prunes_all_but_the_protected() -> None:
+    assert runs_to_prune(RUNS, keep=0, protected=[RUNS[0]]) == RUNS[1:]
+    assert runs_to_prune(RUNS, keep=-1, protected=()) == RUNS
+
+
+def test_a_protected_run_is_never_pruned_and_still_counts() -> None:
+    assert runs_to_prune(RUNS, keep=1, protected=[RUNS[1]]) == [RUNS[0], RUNS[2], RUNS[3]]
+
+
+def test_names_without_the_shape_of_a_run_are_left_alone() -> None:
+    others = ["check", "20261101-120000-abc", "x20261101-120000-abc1", "20261101-120000-abc1x"]
+
+    assert runs_to_prune([*others, *RUNS], keep=4, protected=()) == RUNS[:1]
+
+
+@pytest.mark.parametrize(
+    ("percent", "minimum", "expected"),
+    [(95.0, 95.0, True), (94.99, 95.0, False), (96.3, 95.0, True), (0.0, None, True)],
+)
+def test_a_score_meets_its_minimum_when_it_reaches_it(
+    percent: float, minimum: float | None, expected: bool
+) -> None:
+    assert score_meets(MutationScore(percent=percent), minimum) is expected
+
+
+CLASSES: dict[str, ScenarioClass] = {"A-1": "new", "A-2": "reopened", "A-3": "green"}
+
+
+def test_new_and_reopened_scenarios_can_be_registered() -> None:
+    assert registration_problems(["A-1", "A-2", "A-1"], CLASSES) == []
+
+
+def test_registering_nothing_is_refused() -> None:
+    assert registration_problems([], CLASSES) == ["Indica al menos un escenario que registrar."]
+
+
+def test_every_scenario_that_cant_be_registered_is_named_once() -> None:
+    assert registration_problems(["A-3", "X-9", "A-1", "X-9"], CLASSES) == [
+        "A-3 ya está en verde para su especificación actual.",
+        "No existe el escenario X-9 en features/ de HEAD.",
+    ]
+
+
+SCORE_94 = mutation_score({"killed": 94, "survived": 6, "total": 100})
+
+
+def test_a_score_below_the_minimum_fails_the_control_and_says_both() -> None:
+    result = enforce_min_score(ControlResult(ok=True, score=SCORE_94), 95.5)
+
+    assert result.ok is False
+    assert result.error == (
+        "La puntuación de mutación, 94,0 % (94 de 100 muertos; 6 vivos, 0 por tiempo), "
+        "no llega al mínimo de 95,5 %"
+    )
+    assert result.score == SCORE_94
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ControlResult(ok=True, score=SCORE_94),
+        ControlResult(ok=False, error="la pasada cayó", score=SCORE_94),
+        ControlResult(ok=True),
+    ],
+)
+def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -> None:
+    minimum = None if result.ok and result.score else 99.0
+    assert enforce_min_score(result, minimum) == result
+
+
+def test_a_score_at_the_minimum_passes() -> None:
+    assert enforce_min_score(ControlResult(ok=True, score=SCORE_94), 94).ok is True

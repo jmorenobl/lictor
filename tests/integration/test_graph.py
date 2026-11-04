@@ -23,6 +23,7 @@ from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.usecases.implement_scenario import ImplementScenario
+from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
@@ -183,10 +184,11 @@ Característica: IVA de facturas
         clock=clock,
     )
     spec_history = SpecHistory(vcs, spec_source)
+    environment = VerificationEnvironment(
+        vcs, runner, AuditSink(event_log, clock), tmp_path, VerificationEnvSpec()
+    )
     check_red = CheckRed(
-        environment=VerificationEnvironment(
-            vcs, runner, AuditSink(event_log, clock), tmp_path, VerificationEnvSpec()
-        ),
+        environment=environment,
         reader=reader,
         vcs=vcs,
         history=spec_history,
@@ -242,6 +244,7 @@ Característica: IVA de facturas
         verify_attempt=verify_attempt,
         commit_green=commit_green,
         quarantine=quarantine,
+        preconditions=CheckPreconditions(vcs, executor, environment, tmp_path),
         spec_source=spec_source,
         spec_history=spec_history,
         vcs=vcs,
