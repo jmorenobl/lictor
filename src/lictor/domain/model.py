@@ -206,6 +206,20 @@ class Health:
     message: str | None = None
 
 
+PreconditionKind = Literal["config", "repository", "environment"]
+
+
+@dataclass(frozen=True)
+class PreconditionProblem:
+    """Something that keeps a command from starting, and who has to fix it.
+
+    `config` and `repository` are fixed in the project; `environment` is fixed on the machine.
+    """
+
+    kind: PreconditionKind
+    message: str
+
+
 @dataclass(frozen=True)
 class MutationScore:
     """Mutants of a mutation run by outcome, and the share the tests killed."""

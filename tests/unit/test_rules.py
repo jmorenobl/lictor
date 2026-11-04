@@ -5,7 +5,14 @@ from typing import Any, Literal
 import pytest
 
 from lictor.domain.errors import DriverError, ExitCode
-from lictor.domain.model import AgentSignal, AgentStatus, MutationScore, ScenarioId, TestCaseResult
+from lictor.domain.model import (
+    AgentSignal,
+    AgentStatus,
+    MutationScore,
+    PreconditionProblem,
+    ScenarioId,
+    TestCaseResult,
+)
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
     SUSPICIOUS_DRIVER,
@@ -31,12 +38,16 @@ from lictor.domain.rules import (
     judge_red,
     keeps_attempt,
     map_test_cases_to_scenarios,
+    missing_executables,
     model_responded,
     mutation_score,
     path_within,
+    precondition_exit_code,
     red_failure_problem,
     render_full_error,
     run_outcome,
+    runs_to_prune,
+    score_meets,
     suite_crash_reason,
     suspicious_driver,
     unmapped_cases,
@@ -1295,3 +1306,109 @@ def test_the_smallest_error_budget_keeps_the_reason_and_the_first_case() -> None
     assert "Fallaron 3 casos de test" in text
     assert "test_iva_001" in text
     assert "AssertionError: xxxxxxxx" in text
+
+
+def test_no_problem_exits_zero() -> None:
+    assert precondition_exit_code([]) == 0
+
+
+@pytest.mark.parametrize(
+    ("first", "expected"), [("environment", 40), ("config", 10), ("repository", 10)]
+)
+def test_the_first_problem_decides_the_exit_code(
+    first: Literal["config", "repository", "environment"], expected: int
+) -> None:
+    other: Literal["config", "environment"] = "config" if first == "environment" else "environment"
+    problems = [PreconditionProblem(first, "uno"), PreconditionProblem(other, "dos")]
+
+    assert precondition_exit_code(problems) == expected
+
+
+def test_a_command_whose_program_is_found_is_no_problem() -> None:
+    assert missing_executables({"lint": "uv run ruff check src"}, lambda word: word == "uv") == []
+
+
+def test_a_command_whose_program_is_missing_names_it_and_the_command() -> None:
+    problems = missing_executables({"secrets": "gitleaks detect --no-banner"}, lambda _word: False)
+
+    assert problems == [
+        PreconditionProblem(
+            "environment",
+            "No se encuentra 'gitleaks', con el que empieza el comando de secrets "
+            "('gitleaks detect --no-banner'). Instálalo o corrige el comando en lictor.json.",
+        )
+    ]
+
+
+def test_an_empty_command_is_a_configuration_problem() -> None:
+    asked: list[str] = []
+
+    problems = missing_executables({"lint": "  "}, lambda word: asked.append(word) is None)
+
+    assert problems == [PreconditionProblem("config", "El comando de lint está vacío")]
+    assert asked == []
+
+
+def test_only_the_first_word_is_resolved() -> None:
+    asked: list[str] = []
+
+    missing_executables(
+        {"a": "'./scripts/run tests.sh' --flag x", "b": "uv run pytest"},
+        lambda word: asked.append(word) is None,
+    )
+
+    assert asked == ["./scripts/run tests.sh", "uv"]
+
+
+def test_a_program_inside_the_environment_is_left_for_the_build() -> None:
+    asked: list[str] = []
+
+    problems = missing_executables(
+        {"x": "{env_dir}/bin/python -c 1"}, lambda word: asked.append(word) is None
+    )
+
+    assert problems == []
+    assert asked == []
+
+
+def test_every_command_is_checked() -> None:
+    problems = missing_executables({"a": "x", "b": "", "c": "y"}, lambda _word: False)
+
+    assert [p.kind for p in problems] == ["environment", "config", "environment"]
+
+
+RUNS = [f"2026110{d}-120000-abc{d}" for d in range(1, 6)]
+
+
+def test_runs_past_the_most_recent_are_pruned_oldest_first() -> None:
+    assert runs_to_prune(list(reversed(RUNS)), keep=2, protected=()) == RUNS[:3]
+
+
+def test_keeping_as_many_runs_as_there_are_prunes_nothing() -> None:
+    assert runs_to_prune(RUNS, keep=5, protected=()) == []
+    assert runs_to_prune(RUNS, keep=4, protected=()) == RUNS[:1]
+
+
+def test_keeping_none_prunes_all_but_the_protected() -> None:
+    assert runs_to_prune(RUNS, keep=0, protected=[RUNS[0]]) == RUNS[1:]
+    assert runs_to_prune(RUNS, keep=-1, protected=()) == RUNS
+
+
+def test_a_protected_run_is_never_pruned_and_still_counts() -> None:
+    assert runs_to_prune(RUNS, keep=1, protected=[RUNS[1]]) == [RUNS[0], RUNS[2], RUNS[3]]
+
+
+def test_names_without_the_shape_of_a_run_are_left_alone() -> None:
+    others = ["check", "20261101-120000-abc", "x20261101-120000-abc1", "20261101-120000-abc1x"]
+
+    assert runs_to_prune([*others, *RUNS], keep=4, protected=()) == RUNS[:1]
+
+
+@pytest.mark.parametrize(
+    ("percent", "minimum", "expected"),
+    [(95.0, 95.0, True), (94.99, 95.0, False), (96.3, 95.0, True), (0.0, None, True)],
+)
+def test_a_score_meets_its_minimum_when_it_reaches_it(
+    percent: float, minimum: float | None, expected: bool
+) -> None:
+    assert score_meets(MutationScore(percent=percent), minimum) is expected

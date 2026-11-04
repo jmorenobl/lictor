@@ -2,7 +2,8 @@
 
 import fnmatch
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import shlex
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
@@ -12,6 +13,7 @@ from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
     MutationScore,
+    PreconditionProblem,
     ScenarioId,
     TestCaseResult,
 )
@@ -31,6 +33,9 @@ _OMISSION_RESERVE = 60
 _FAILED_STATUSES = ("failure", "error")
 _NOT_IMPLEMENTED = "not_implemented"
 SUSPICIOUS_DRIVER = "driver_sospechoso"
+# What the clock generates: the date first, so that sorting the names sorts the runs.
+RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
+_ENV_PLACEHOLDER = "{env_dir}"
 
 
 def _normalize(text: str) -> str:
@@ -712,3 +717,53 @@ def anchor_problems(
     if anchor.get("seal") and observed.get("seal") != anchor["seal"]:
         problems.append(".lictor/seal.json no es el que escribió la ejecución")
     return problems
+
+
+def precondition_exit_code(problems: Sequence[PreconditionProblem]) -> int:
+    """Exit with what the first problem asks for: the project's fault is 10, the machine's 40."""
+    if not problems:
+        return int(ExitCode.OK)
+    if problems[0].kind == "environment":
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+    return int(ExitCode.PRECONDITION)
+
+
+def missing_executables(
+    commands: Mapping[str, str], found: Callable[[str], bool]
+) -> list[PreconditionProblem]:
+    """Say which commands can't start, by their first word, as `found` resolves it.
+
+    One under `{env_dir}` only exists once the environment is built, which checks it by running
+    its own questions, so it is left alone here.
+    """
+    problems: list[PreconditionProblem] = []
+    for label, command in commands.items():
+        words = shlex.split(command)
+        if not words:
+            problems.append(PreconditionProblem("config", f"El comando de {label} está vacío"))
+            continue
+        program = words[0]
+        if _ENV_PLACEHOLDER in program or found(program):
+            continue
+        problems.append(
+            PreconditionProblem(
+                "environment",
+                f"No se encuentra '{program}', con el que empieza el comando de {label} "
+                f"('{command}'). Instálalo o corrige el comando en lictor.json.",
+            )
+        )
+    return problems
+
+
+def runs_to_prune(run_ids: Collection[str], keep: int, protected: Collection[str]) -> list[str]:
+    """Return the runs past the `keep` most recent, oldest first, sparing the protected ones.
+
+    Only names with the shape of a run id count: anything else under `runs/` isn't a run's.
+    """
+    runs = sorted((rid for rid in run_ids if RUN_ID.fullmatch(rid)), reverse=True)
+    return sorted(rid for rid in runs[max(keep, 0) :] if rid not in protected)
+
+
+def score_meets(score: MutationScore, minimum: float | None) -> bool:
+    """Tell whether a mutation score reaches the minimum its control declares, if any."""
+    return minimum is None or score.percent >= minimum
