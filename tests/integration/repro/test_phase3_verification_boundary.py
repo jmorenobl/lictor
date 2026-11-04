@@ -1,6 +1,5 @@
 """Phase 3 (C1, C2, A9): a green commit means that exact tree passed, out of the agent's reach."""
 
-import importlib.util
 import json
 import os
 import shlex
@@ -8,12 +7,13 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
+from typer.testing import CliRunner
 
 from lictor.adapters.config.loader import load_config
+from lictor.cli import app
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import AgentStatus, AgentTask
 from tests.integration.repro.conftest import ProjectFactory
@@ -785,23 +785,17 @@ def test_architecture_control_is_out_of_the_agents_reach() -> None:
     assert not any(path.startswith("scripts") for path in config.paths.writable)
 
 
-def _load_verify_self(root: Path) -> ModuleType:
-    path = REPO_ROOT / "scripts" / "verify_self.py"
-    spec = importlib.util.spec_from_file_location("verify_self", path)
-    require(spec and spec.loader, "el script debía cargarse")
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.REPO_ROOT = root
-    return module
+def _check(root: Path, *controls: str) -> tuple[int, str]:
+    args = [arg for control in controls for arg in ("--control", control)]
+    result = CliRunner().invoke(app, ["check", "--cwd", str(root), *args])
+    return result.exit_code, result.output
 
 
 def _exit_control(control_id: str, command: str, mode: str = "block") -> dict[str, str]:
     return {"id": control_id, "level": "L2", "run": command, "report": "exit-code", "mode": mode}
 
 
-def test_verify_self_runs_the_controls_in_the_real_environment(
+def test_check_runs_the_controls_in_the_real_environment(
     make_project: ProjectFactory, tmp_path: Path
 ) -> None:
     probe = tmp_path / "sonda"
@@ -809,23 +803,28 @@ def test_verify_self_runs_the_controls_in_the_real_environment(
     measured = _exit_control("mide", "false", "measure")
     seen = _exit_control("sonda", f"sh -c 'pwd > {probe}; env >> {probe}'")
     root = make_project(extra_controls=[fails, measured, seen])
-    verify_self = _load_verify_self(root)
 
-    assert verify_self.main(["sonda", "mide"]) == 0
-    assert verify_self.main(["falla"]) == 1
+    assert _check(root, "sonda", "mide")[0] == 0
+    assert _check(root, "falla")[0] == 10
 
     cwd, *variables = probe.read_text(encoding="utf-8").splitlines()
+    environment = dict(line.split("=", 1) for line in variables if "=" in line)
     assert cwd != str(root.resolve())
-    assert f"UV_PROJECT_ENVIRONMENT={root.resolve() / VERIFY_ENV}" in variables
+    # A throwaway environment, apart from any run's and from the project.
+    assert not Path(environment["UV_PROJECT_ENVIRONMENT"]).is_relative_to(root.resolve())
+    assert environment["UV_NO_SYNC"] == "1"
 
 
-def test_verify_self_fails_if_a_control_tampers_with_the_environment(
-    make_project: ProjectFactory, tmp_path: Path
+def test_check_fails_if_a_control_tampers_with_the_environment(
+    make_project: ProjectFactory,
 ) -> None:
-    venv = tmp_path / "demo-iva" / VERIFY_ENV / "pyvenv.cfg"
-    root = make_project(extra_controls=[_exit_control("toca", f"sh -c 'echo \\# >> {venv}'")])
+    tamper = "sh -c 'echo \\# >> \"$UV_PROJECT_ENVIRONMENT/pyvenv.cfg\"'"
+    root = make_project(extra_controls=[_exit_control("toca", tamper)])
 
-    assert _load_verify_self(root).main(["toca"]) == 1
+    code, output = _check(root, "toca")
+
+    assert code == 40
+    assert "L0-entorno" in output
 
 
 def test_project_without_pythonpath_of_its_own_reaches_the_sources(
