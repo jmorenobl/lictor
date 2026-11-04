@@ -36,8 +36,9 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy --strict src scripts
       - run: uv run python scripts/check_architecture.py
-      - run: uv run pytest tests -n auto --cov=lictor --cov-branch --cov-fail-under=90 -q
-      - run: uv run coverage report --include="*/lictor/domain/*" --fail-under=95
+      # Coverage, with its thresholds, is enforced once by the self-verification (the `coverage`
+      # and `coverage-domain` controls of lictor.json); measuring it here too doubled the cost.
+      - run: uv run pytest tests -n auto -q
 
   supply-chain:
     name: Dependencias y secretos
