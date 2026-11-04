@@ -13,7 +13,7 @@ MapLinkKind = Literal["name", "scenario"]
 BackendKind = Literal["claude-cli", "fake"]
 BackendAuth = Literal["subscription", "api_key"]
 
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 _SHORT_MODEL_ALIASES = frozenset(
     {

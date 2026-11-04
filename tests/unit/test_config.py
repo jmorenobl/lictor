@@ -26,6 +26,7 @@ from lictor.adapters.config.loader import (
     resolve_defences,
 )
 from lictor.adapters.config.models import (
+    DEFAULT_MODEL,
     AcceptanceConfig,
     BackendConfig,
     ControlConfig,
@@ -218,6 +219,7 @@ def test_backend_model_rejects_short_aliases(short_alias: str) -> None:
     "full_model_id",
     [
         "claude-sonnet-4-5-20250929",
+        "claude-sonnet-5-5",
         "claude-opus-4-6",
         "claude-haiku-4-5-20251001",
     ],
@@ -225,6 +227,11 @@ def test_backend_model_rejects_short_aliases(short_alias: str) -> None:
 def test_backend_model_accepts_full_ids(full_model_id: str) -> None:
     backend = BackendConfig(model=full_model_id)
     assert backend.model == full_model_id
+
+
+def test_the_default_model_is_a_full_id_the_validator_accepts() -> None:
+    # Pydantic doesn't validate defaults: this is what checks the one `lictor init` writes.
+    assert BackendConfig(model=DEFAULT_MODEL).model == DEFAULT_MODEL
 
 
 def test_detect_profile_by_pyproject_toml(tmp_path: Path) -> None:

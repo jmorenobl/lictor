@@ -62,7 +62,7 @@
           "type": "string"
         },
         "model": {
-          "default": "claude-sonnet-4-5-20250929",
+          "default": "claude-sonnet-5-5",
           "title": "Model",
           "type": "string"
         },

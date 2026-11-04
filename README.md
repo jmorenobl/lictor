@@ -319,7 +319,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 El archivo `lictor.json` define el perfil del proyecto, el backend del agente, los límites de intentos, las fronteras de rutas y los controles. Puedes consultar su esquema formal en [`schema/lictor.schema.json`](schema/lictor.schema.json).
 
 > [!IMPORTANT]
-> - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-4-5-20250929`) y rechaza alias mutables como `sonnet` o `latest`.
+> - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-5-5`) y rechaza alias mutables como `sonnet` o `latest`.
 > - **Fronteras disjuntas:** `paths.writable` nunca puede solaparse con `paths.protected` ni con `paths.driver`.
 > - **Marcador JUnit:** Todo control o suite de aceptación con `"report": "junit"` debe incluir `{out}` en su comando `run`.
 
@@ -334,7 +334,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "profile": "python-uv@0.1",
   "backend": {
     "kind": "claude-cli",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-5-5",
     "auth": "subscription",
     "max_turns": 40,
     "timeout_s": 1800
