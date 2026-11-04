@@ -13,7 +13,7 @@ import shlex
 import shutil
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from pathlib import Path
 from typing import NoReturn
 
@@ -21,6 +21,7 @@ from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
+from lictor.domain.rules import runs_to_prune
 
 DRIVER_OWNER = "driver"
 # What `doctor` and `check` leave, apart from any run's and replaced by the next one.
@@ -50,6 +51,30 @@ def unused_path(path: Path, start: int = 0) -> Path:
         if not candidate.exists():
             return candidate
         retry += 1
+
+
+def prune_runs(
+    project_root: Path,
+    keep: int,
+    protected: Collection[str],
+    record: Callable[[list[str]], None],
+) -> list[str]:
+    """Retire the evidence of the runs past the `keep` most recent, whole, and say which.
+
+    `record` writes them down before anything is deleted: a kill halfway leaves the journal
+    naming them, and the next sweep finishes the job. The journal keeps every event and the
+    hash of every step, so the report can tell retired evidence from altered evidence.
+    """
+    runs_dir = project_root / ".lictor" / "runs"
+    if not runs_dir.is_dir():
+        return []
+    names = [p.name for p in runs_dir.iterdir() if p.is_dir() and not p.is_symlink()]
+    pruned = runs_to_prune(names, keep, protected)
+    if pruned:
+        record(pruned)
+        for name in pruned:
+            shutil.rmtree(runs_dir / name, ignore_errors=True)
+    return pruned
 
 
 def new_step_dir(path: Path) -> Path:

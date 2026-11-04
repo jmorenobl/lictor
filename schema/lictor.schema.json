@@ -259,6 +259,20 @@
       },
       "title": "ProjectVerification",
       "type": "object"
+    },
+    "RetentionConfig": {
+      "additionalProperties": false,
+      "description": "Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/.",
+      "properties": {
+        "keep_runs": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Keep Runs",
+          "type": "integer"
+        }
+      },
+      "title": "RetentionConfig",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -279,6 +293,9 @@
     },
     "limits": {
       "$ref": "#/$defs/LimitsConfig"
+    },
+    "retention": {
+      "$ref": "#/$defs/RetentionConfig"
     },
     "paths": {
       "$ref": "#/$defs/PathsConfig"

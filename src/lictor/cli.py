@@ -18,6 +18,7 @@ from lictor.application.run_files import (
     aside_dir,
     exclusive_run,
     holding_project,
+    prune_runs,
     sweep_scratch,
 )
 from lictor.application.usecases.build_report import BuildReportRequest
@@ -475,6 +476,28 @@ def _resume_run(
     return _finished_exit_code(updated_state.values)
 
 
+def _retire_old_runs(
+    runtime: BootstrapResult, resolved_cwd: Path, run_id: str, current_run_file: Path
+) -> None:
+    """Keep the most recent runs' evidence, the new one counting, and never the last run's."""
+    keep = runtime.config.retention.keep_runs
+    previous = (
+        current_run_file.read_text(encoding="utf-8").strip() if current_run_file.is_file() else ""
+    )
+
+    def record(pruned: list[str]) -> None:
+        runtime.event_log.append(
+            new_event(
+                runtime.clock,
+                "lictor.runs.pruned.v1",
+                run_id,
+                data={"pruned": pruned, "keep_runs": keep},
+            )
+        )
+
+    prune_runs(resolved_cwd, keep - 1, {previous}, record)
+
+
 def _start_new_run(
     runtime: BootstrapResult,
     graph: Any,
@@ -482,6 +505,7 @@ def _start_new_run(
     resolved_cwd: Path,
 ) -> int:
     run_id = runtime.clock.generate_run_id()
+    _retire_old_runs(runtime, resolved_cwd, run_id, current_run_file)
     current_run_file.write_text(run_id, encoding="utf-8")
     init_state = {
         "run_id": run_id,

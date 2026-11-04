@@ -322,7 +322,9 @@ def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
         source.name: hashlib.sha256(source.read_bytes()).hexdigest()
         for source in defences.verification.files
     }
-    payload = {"config": config.model_dump(mode="json"), "defences": resolved}
+    # Retention is read only when a run starts: changing it mustn't keep one from resuming.
+    project = config.model_dump(mode="json", exclude={"retention"})
+    payload = {"config": project, "defences": resolved}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

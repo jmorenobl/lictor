@@ -1,6 +1,7 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -64,17 +65,64 @@ def _journal_lines(damage: JournalDamage) -> list[str]:
     ]
 
 
-def _altered_evidence(events: list[Event], project_root: Path) -> list[str]:
-    """List the steps in `runs/` that no longer hold what the journal recorded."""
+_RUNS_DIR = (".lictor", "runs")
+_EVIDENCE_MATCHES = "- *`runs/` coincide con lo registrado en la bitácora.*"
+
+
+def _retired_runs(events: list[Event]) -> dict[str, Event]:
+    """Map each run whose evidence a later run retired to the event that says so."""
+    retired: dict[str, Event] = {}
+    for event in events:
+        pruned = event.data.get("pruned")
+        if event.type == "lictor.runs.pruned.v1" and isinstance(pruned, list):
+            retired.update({str(run_id): event for run_id in pruned})
+    return retired
+
+
+def _run_of(evidence_path: str) -> str:
+    """Return the run an evidence path belongs to: `.lictor/runs/<run_id>/...`."""
+    parts = Path(evidence_path).parts
+    root = len(_RUNS_DIR)
+    return parts[root] if len(parts) > root and parts[:root] == _RUNS_DIR else ""
+
+
+def _altered_evidence(
+    events: list[Event], project_root: Path, retired: Mapping[str, Event]
+) -> list[str]:
+    """List the steps in `runs/` that no longer hold what the journal recorded.
+
+    A step missing from a run the retention retired isn't altered: the whole run went at once,
+    and a step that differs, or is missing from a run that was kept, still is.
+    """
     altered: list[str] = []
     for event in events:
         evidence = event.data.get("evidence")
         if not isinstance(evidence, dict) or "path" not in evidence:
             continue
-        step_dir = project_root / str(evidence["path"])
-        if not step_dir.is_dir() or hash_tree(step_dir) != evidence.get("hash"):
-            altered.append(str(evidence["path"]))
+        path = str(evidence["path"])
+        step_dir = project_root / path
+        if not step_dir.is_dir():
+            if _run_of(path) not in retired:
+                altered.append(path)
+        elif hash_tree(step_dir) != evidence.get("hash"):
+            altered.append(path)
     return sorted(set(altered))
+
+
+def _evidence_lines(info: Mapping[str, Any]) -> list[str]:
+    altered = [f"- **Alterada tras registrarse**: `{path}`" for path in info["altered_evidence"]]
+    retired: list[str] = info["retired_evidence"]
+    return [*retired, *altered] or [_EVIDENCE_MATCHES]
+
+
+def _retirement_notes(events: list[Event], retired: Mapping[str, Event]) -> list[str]:
+    runs = sorted({event.runid for event in events if event.runid and event.runid in retired})
+    return [
+        f"- *La evidencia de la ejecución {run_id} se retiró el {retired[run_id].time} al "
+        f"conservar las {retired[run_id].data.get('keep_runs')} más recientes; la bitácora "
+        "conserva sus eventos y el hash de cada paso.*"
+        for run_id in runs
+    ]
 
 
 class BuildReport:
@@ -115,7 +163,9 @@ class BuildReport:
 
     def _render_report(self, events: list[Event], project_root: Path) -> str:
         data = self._aggregate_metrics(events)
-        data["altered_evidence"] = _altered_evidence(events, project_root)
+        retired = _retired_runs(self.event_log.events())
+        data["altered_evidence"] = _altered_evidence(events, project_root, retired)
+        data["retired_evidence"] = _retirement_notes(events, retired)
         data["journal_damage"] = self.event_log.damage()
         return self._format_markdown(data)
 
@@ -405,11 +455,7 @@ class BuildReport:
         lines.extend(["", "## Integridad de la bitácora"])
         lines.extend(_journal_lines(info["journal_damage"]))
 
-        lines.extend(["", "## Integridad de la evidencia"])
-        lines.extend(
-            [f"- **Alterada tras registrarse**: `{path}`" for path in info["altered_evidence"]]
-            or ["- *`runs/` coincide con lo registrado en la bitácora.*"]
-        )
+        lines.extend(["", "## Integridad de la evidencia", *_evidence_lines(info)])
 
         lines.extend(
             [

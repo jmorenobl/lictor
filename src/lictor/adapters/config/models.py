@@ -306,6 +306,15 @@ class Profile(BaseModel):
         return _validate_regexes(patterns)
 
 
+class RetentionConfig(BaseModel):
+    """Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Counting the run that starts: it is only read then, so it doesn't decide a resume.
+    keep_runs: int = Field(default=10, ge=1)
+
+
 class LictorConfig(BaseModel):
     """Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil."""
 
@@ -315,6 +324,7 @@ class LictorConfig(BaseModel):
     profile: str = Field(min_length=1)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]

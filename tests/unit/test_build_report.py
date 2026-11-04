@@ -497,3 +497,53 @@ def test_an_event_repeated_by_a_resumed_node_counts_once(tmp_path: Path) -> None
 
     rows = report.split("## Verificaciones")[1].split("##")[0]
     assert rows.count("| IVA-001 | 1 | verde | - |") == 1
+
+
+def _pruned(runs: list[str], keep: int = 3) -> Event:
+    return Event(
+        id="p",
+        type="lictor.runs.pruned.v1",
+        source="lictor/0.1.0",
+        time="2026-11-04T09:00:00Z",
+        runid="run-9",
+        data={"pruned": runs, "keep_runs": keep},
+    )
+
+
+def test_evidence_of_a_retired_run_is_retired_not_altered(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path, [_verified(".lictor/runs/run-1/IVA-001/001-verify", "x"), _pruned(["run-1"])]
+    )
+
+    assert "Alterada" not in report
+    assert (
+        "La evidencia de la ejecución run-1 se retiró el 2026-11-04T09:00:00Z al conservar las "
+        "3 más recientes" in report
+    )
+    assert "coincide con lo registrado" not in report
+
+
+def test_a_step_that_differs_in_a_retired_run_is_still_altered(tmp_path: Path) -> None:
+    step = tmp_path / ".lictor" / "runs" / "run-1" / "IVA-001" / "001-verify"
+    step.mkdir(parents=True)
+    (step / "acceptance.log").write_text("cambiado", encoding="utf-8")
+    path = ".lictor/runs/run-1/IVA-001/001-verify"
+
+    report = _report(tmp_path, [_verified(path, "otro"), _pruned(["run-1"])])
+
+    assert f"- **Alterada tras registrarse**: `{path}`" in report
+
+
+def test_a_step_missing_from_a_run_that_wasnt_retired_is_altered(tmp_path: Path) -> None:
+    path = ".lictor/runs/run-1/IVA-001/001-verify"
+
+    report = _report(tmp_path, [_verified(path, "x"), _pruned(["run-0"])])
+
+    assert f"- **Alterada tras registrarse**: `{path}`" in report
+    assert "se retiró" not in report
+
+
+def test_evidence_outside_runs_is_never_taken_for_retired(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_verified("otra/run-1/paso", "x"), _pruned(["run-1"])])
+
+    assert "- **Alterada tras registrarse**: `otra/run-1/paso`" in report

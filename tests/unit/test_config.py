@@ -36,6 +36,7 @@ from lictor.adapters.config.models import (
     Profile,
     ProfileVerification,
     ProjectVerification,
+    RetentionConfig,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
@@ -726,6 +727,23 @@ def test_fingerprint_changes_with_lictor_json(tmp_path: Path) -> None:
     before = _fingerprint(root)
 
     assert _fingerprint(_project(tmp_path, verification={"env": {"MIO": "1"}})) != before
+
+
+def test_fingerprint_ignores_the_retention_which_only_a_new_run_reads(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    before = _fingerprint(root)
+
+    assert _fingerprint(_project(tmp_path, retention={"keep_runs": 3})) == before
+
+
+@pytest.mark.parametrize("keep", [0, -1])
+def test_at_least_one_run_is_kept(keep: int) -> None:
+    with pytest.raises(ValidationError):
+        RetentionConfig(keep_runs=keep)
+
+
+def test_ten_runs_are_kept_by_default() -> None:
+    assert RetentionConfig().keep_runs == 10
 
 
 def test_fingerprint_does_not_depend_on_the_key_order_of_the_profile(tmp_path: Path) -> None:
