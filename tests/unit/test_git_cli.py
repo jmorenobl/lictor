@@ -668,3 +668,9 @@ def test_committer_identity_refuses_what_commit_tree_refuses(
         cli.committer_identity()
     with pytest.raises(subprocess.CalledProcessError):
         cli.commit_tree(cli.get_tree("HEAD"), "x", empty=True)
+
+
+def test_a_repository_without_commits_has_no_trailer_commits(tmp_path: Path) -> None:
+    subprocess.run([GIT_BIN, "init", "-q"], cwd=tmp_path, check=True)
+
+    assert GitCli(repo_dir=tmp_path).trailer_commits("Scenario") == []

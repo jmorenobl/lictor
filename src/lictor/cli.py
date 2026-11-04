@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -549,23 +550,99 @@ def _run_holding_project(resolved_cwd: Path, force_new: bool) -> int:
     graph = create_graph(runtime.graph_context, checkpointer=saver)
     sweep_scratch(resolved_cwd)
 
-    existing_run_id: str | None = None
-    if current_run_file.is_file() and not force_new:
-        candidate = current_run_file.read_text(encoding="utf-8").strip()
-        if candidate:
-            existing_run_id = candidate
-
-    if existing_run_id is not None:
-        chk_config: RunnableConfig = {"configurable": {"thread_id": existing_run_id}}
-        state_snapshot = graph.get_state(config=chk_config)
-
-        if state_snapshot and state_snapshot.values:
-            has_exit = state_snapshot.values.get("exit_code") is not None
-            has_next = bool(state_snapshot.next)
-            if not (has_exit and not has_next):
-                return _resume_run(runtime, graph, existing_run_id, resolved_cwd, state_snapshot)
+    resumable = None if force_new else _resumable_run(graph, current_run_file)
+    if resumable is not None:
+        run_id, state_snapshot = resumable
+        return _resume_run(runtime, graph, run_id, resolved_cwd, state_snapshot)
 
     return _start_new_run(runtime, graph, current_run_file, resolved_cwd)
+
+
+def _resumable_run(graph: Any, current_run_file: Path) -> tuple[str, Any] | None:
+    """Return the run `lictor run` would resume, with its state, if there is one."""
+    if not current_run_file.is_file():
+        return None
+    run_id = current_run_file.read_text(encoding="utf-8").strip()
+    if not run_id:
+        return None
+    chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+    state_snapshot = graph.get_state(config=chk_config)
+    if not (state_snapshot and state_snapshot.values):
+        return None
+    finished = state_snapshot.values.get("exit_code") is not None and not state_snapshot.next
+    return None if finished else (run_id, state_snapshot)
+
+
+@app.command()
+def register(
+    scenarios: Annotated[
+        list[str],
+        typer.Argument(help="IDs de los escenarios que el código ya cumple (p. ej. IVA-001)"),
+    ],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Confirmar sin preguntar lo que se afirma"),
+    ] = False,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Registra en verde escenarios que el código ya cumple, como afirmación tuya.
+
+    Lictor no puede distinguir un test que pasa porque el código ya cumple el escenario de uno que
+    no comprueba nada. Úsalo al adoptar Lictor en un proyecto con código, antes de `lictor run`.
+    """
+
+    def _execute() -> int:
+        resolved_cwd = cwd.resolve()
+        lictor_dir = resolved_cwd / ".lictor"
+        # It moves the branch, which a run in progress has anchored.
+        with exclusive_run(resolved_cwd, "lictor register"):
+            runtime = bootstrap_runtime(resolved_cwd)
+            graph = create_graph(
+                runtime.graph_context,
+                checkpointer=get_sqlite_saver(lictor_dir / "checkpoints.sqlite"),
+            )
+            if _resumable_run(graph, lictor_dir / "current_run") is not None:
+                typer.echo(
+                    "Error: hay una ejecución a medias y registrar movería la rama que ancló. "
+                    "Termínala con `lictor run` o empieza otra con `lictor run --new`.",
+                    err=True,
+                )
+                return int(ExitCode.PRECONDITION)
+            plan = runtime.register_scenarios.plan(scenarios)
+            if plan.problems:
+                for problem in plan.problems:
+                    typer.echo(f"✗ {problem.message}", err=True)
+                return precondition_exit_code(plan.problems)
+            for statement in plan.statements():
+                typer.echo(f"- {statement}")
+            if not yes and not _confirmed():
+                typer.echo("No se ha registrado nada.", err=True)
+                return int(ExitCode.PRECONDITION)
+            sha = runtime.register_scenarios.execute(
+                plan, f"register-{runtime.clock.generate_run_id()}"
+            )
+        typer.echo(
+            f"Registrados en {sha[:12]}: {', '.join(plan.scenarios)}. "
+            "El informe los mostrará como registrados a mano."
+        )
+        return 0
+
+    _safe_run(_execute)
+
+
+def _confirmed() -> bool:
+    """Ask in a terminal; without one, refuse rather than assert on someone's behalf."""
+    if not sys.stdin.isatty():
+        typer.echo("Sin terminal para confirmarlo: vuelve a lanzarlo con --yes.", err=True)
+        return False
+    return typer.confirm("¿Lo afirmas?", default=False)
 
 
 @app.command()
@@ -614,6 +691,12 @@ def status(
             "status": state_vals.get("status", {}),
             "reasons": state_vals.get("reasons", {}),
             "totals": state_vals.get("totals", {}),
+            # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
+            "registered_by_hand": sorted(
+                sid
+                for sid, record in runtime.spec_history.records().items()
+                if not record.by_lictor
+            ),
         }
 
         if as_json:
@@ -625,8 +708,10 @@ def status(
             if payload["exit_reason"]:
                 typer.echo(f"Motivo: {payload['exit_reason']}")
             typer.echo("Escenarios:")
+            by_hand = set(payload["registered_by_hand"])
             for sid, st in payload["status"].items():
-                typer.echo(f"  - {sid}: {st}")
+                mark = " (registrado a mano)" if sid in by_hand and st == "green" else ""
+                typer.echo(f"  - {sid}: {st}{mark}")
         return 0
 
     _safe_run(_execute)

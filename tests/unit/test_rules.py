@@ -44,6 +44,7 @@ from lictor.domain.rules import (
     path_within,
     precondition_exit_code,
     red_failure_problem,
+    registration_problems,
     render_full_error,
     run_outcome,
     runs_to_prune,
@@ -1428,3 +1429,21 @@ def test_a_score_meets_its_minimum_when_it_reaches_it(
     percent: float, minimum: float | None, expected: bool
 ) -> None:
     assert score_meets(MutationScore(percent=percent), minimum) is expected
+
+
+CLASSES: dict[str, ScenarioClass] = {"A-1": "new", "A-2": "reopened", "A-3": "green"}
+
+
+def test_new_and_reopened_scenarios_can_be_registered() -> None:
+    assert registration_problems(["A-1", "A-2", "A-1"], CLASSES) == []
+
+
+def test_registering_nothing_is_refused() -> None:
+    assert registration_problems([], CLASSES) == ["Indica al menos un escenario que registrar."]
+
+
+def test_every_scenario_that_cant_be_registered_is_named_once() -> None:
+    assert registration_problems(["A-3", "X-9", "A-1", "X-9"], CLASSES) == [
+        "A-3 ya está en verde para su especificación actual.",
+        "No existe el escenario X-9 en features/ de HEAD.",
+    ]

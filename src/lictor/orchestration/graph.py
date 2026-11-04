@@ -1,7 +1,7 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,7 +16,7 @@ from langgraph.types import interrupt
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
-from lictor.application.spec_history import SpecHistory
+from lictor.application.spec_history import GreenRecord, SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
@@ -270,7 +270,13 @@ class _GraphNodes:
             data={
                 "scenario_count": len(scenarios),
                 "scenarios": [
-                    {"id": s.id.value, "name": s.name, "file": s.file, "line": s.line}
+                    {
+                        "id": s.id.value,
+                        "name": s.name,
+                        "file": s.file,
+                        "line": s.line,
+                        **_green_of(records, classes, s.id.value),
+                    }
                     for s in scenarios
                 ],
             },
@@ -684,6 +690,17 @@ class _GraphNodes:
         if exit_val is not None:
             return self._finish(state, exit_val, state.get("exit_reason", ""))
         return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
+
+
+def _green_of(
+    records: Mapping[str, GreenRecord], classes: Mapping[str, str], sid: str
+) -> dict[str, Any]:
+    """Say which commit a green scenario is green from, and whether Lictor made it."""
+    if classes.get(sid) != "green":
+        return {}
+    record = records[sid]
+    green = {"commit": record.commit, "by_lictor": record.by_lictor}
+    return {"green": {**green, "asserted_by": record.asserted_by}}
 
 
 def _scenario_files(state: GraphState) -> dict[str, str]:

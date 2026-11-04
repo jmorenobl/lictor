@@ -44,9 +44,9 @@ from lictor.domain.rules import (
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
 _REGISTER_HINT = (
-    "Corrige el test para que compruebe el resultado. Solo si el escenario ya estaba implementado "
-    "por un commit anterior, regístralo y relanza: "
-    'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>".'
+    "Corrige el test para que compruebe el resultado. Solo si el código ya cumplía el escenario "
+    "antes de esta ejecución, regístralo tú y relanza: `lictor register {ids}`. Al adoptar Lictor "
+    "en un proyecto con código, hazlo antes de la primera ejecución."
 )
 
 RejectionKind = Literal[
@@ -529,17 +529,18 @@ def _unproven_reason(
         for sid in scenarios
     ]
     if request.driver_attempts >= request.max_driver_attempts:
-        lines.append(_REGISTER_HINT)  # the last attempt: the person who reads the stop decides
+        # The last attempt: the person who reads the stop decides.
+        lines.append(_REGISTER_HINT.format(ids=" ".join(scenarios)))
     return "\n".join(lines)
 
 
 def _respecified_reason(scenarios: Sequence[str]) -> str:
     names = ", ".join(scenarios)
+    ids = " ".join(scenarios)
     return (
         f"La especificación de {names} cambió y su test pasa con un driver nuevo: nada distingue "
         "una implementación que ya cumple la nueva de un test que no detecta el cambio. Si la "
-        "implementación ya la cumple, regístralos y relanza: "
-        'git commit --allow-empty -m "<mensaje>" --trailer "Scenario: <id>". '
+        f"implementación ya la cumple, regístralos tú y relanza: `lictor register {ids}`. "
         "Si no, su test no detecta el cambio: corrígelo."
     )
 

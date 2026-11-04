@@ -66,6 +66,10 @@ def _journal_lines(damage: JournalDamage) -> list[str]:
 
 
 _RUNS_DIR = (".lictor", "runs")
+_BY_HAND_NOTE = (
+    "- *Un verde cuyo commit no lleva `Lictor-Run` lo registró una persona, con `lictor register` "
+    "o con git. La marca es informativa: cualquiera puede escribir trailers.*"
+)
 _EVIDENCE_MATCHES = "- *`runs/` coincide con lo registrado en la bitácora.*"
 
 
@@ -107,6 +111,25 @@ def _altered_evidence(
         elif hash_tree(step_dir) != evidence.get("hash"):
             altered.append(path)
     return sorted(set(altered))
+
+
+def _green_sections(info: Mapping[str, Any]) -> list[str]:
+    """The scenarios that changed or went green some other way than through the agent."""
+    by_hand: list[str] = info["by_hand"]
+    return [
+        "",
+        "## Escenarios reabiertos",
+        *(info["reopened"] or ["- *Ningún escenario reabierto.*"]),
+        "",
+        "## Verdes registrados de nuevo",
+        *(info["reregistered"] or ["- *Ningún verde registrado de nuevo.*"]),
+        "",
+        "## Verdes registrados a mano",
+        *([*by_hand, _BY_HAND_NOTE] if by_hand else ["- *Ningún verde registrado a mano.*"]),
+        "",
+        "## Verdes colaterales",
+        *(info["collateral"] or ["- *Ningún verde colateral.*"]),
+    ]
 
 
 def _evidence_lines(info: Mapping[str, Any]) -> list[str]:
@@ -189,6 +212,7 @@ class BuildReport:
             "rejected_drivers": [],
             "reopened": [],
             "reregistered": [],
+            "by_hand": [],
             "collateral": [],
         }
 
@@ -238,6 +262,21 @@ class BuildReport:
                             "verify_ms": 0,
                             "commit": "-",
                         }
+                        self._previous_green(sid, s.get("green"), info)
+
+    def _previous_green(self, sid: str, green: object, info: dict[str, Any]) -> None:
+        """Show a scenario green from an earlier commit, and whether a person registered it."""
+        if not isinstance(green, dict):
+            return
+        commit = str(green.get("commit", "-"))
+        info["scenarios"][sid]["status"] = "green"
+        info["scenarios"][sid]["commit"] = commit
+        if green.get("by_lictor") is False:
+            who = green.get("asserted_by")
+            by = f" por {who}" if who else ""
+            info["by_hand"].append(
+                f"- **{sid}**: registrado a mano en `{commit[:12]}`{by}; Lictor no lo ha probado"
+            )
 
     def _on_scenario_green(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
@@ -414,14 +453,7 @@ class BuildReport:
                     lines.append(f"  {q_data['last_error']}")
                     lines.append("  ```")
 
-        lines.extend(["", "## Escenarios reabiertos"])
-        lines.extend(info["reopened"] or ["- *Ningún escenario reabierto.*"])
-
-        lines.extend(["", "## Verdes registrados de nuevo"])
-        lines.extend(info["reregistered"] or ["- *Ningún verde registrado de nuevo.*"])
-
-        lines.extend(["", "## Verdes colaterales"])
-        lines.extend(info["collateral"] or ["- *Ningún verde colateral.*"])
+        lines.extend(_green_sections(info))
 
         lines.extend(["", "## Intentos fallidos por nivel"])
         if not info["failed_by_level"]:

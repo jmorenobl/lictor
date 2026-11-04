@@ -42,6 +42,7 @@ from lictor.application.usecases.init_project import InitProject
 from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
+from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import ConfigError
@@ -72,6 +73,8 @@ class BootstrapResult:
     quarantine: Quarantine
     preconditions: CheckPreconditions
     check_working_tree: CheckWorkingTree
+    register_scenarios: RegisterScenarios
+    spec_history: SpecHistory
     verification: VerificationEnvSpec
     graph_context: GraphContext
 
@@ -279,6 +282,8 @@ def bootstrap_runtime(
         quarantine=quarantine_uc,
         preconditions=preconditions_uc,
         check_working_tree=check_working_tree_uc,
+        register_scenarios=RegisterScenarios(vcs, spec_history, audit_sink, resolved_root),
+        spec_history=spec_history,
         verification=defences.verification,
         graph_context=graph_context,
     )

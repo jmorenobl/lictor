@@ -292,7 +292,12 @@ class GitCli(Vcs):
         return values
 
     def trailer_commits(self, key: str) -> list[tuple[str, list[str]]]:
-        """Read every commit with the trailer in one call: NUL ends a record, LF a value."""
+        """Read every commit with the trailer in one call: NUL ends a record, LF a value.
+
+        A repository without commits has none, rather than an error.
+        """
+        if self._run_git(["rev-parse", "--verify", "-q", "HEAD"], check=False).returncode != 0:
+            return []
         log = self._run_git(["log", f"--format=%H%n%(trailers:key={key},valueonly)%x00"]).stdout
         found: list[tuple[str, list[str]]] = []
         for record in log.split("\0"):

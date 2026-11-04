@@ -773,3 +773,19 @@ def runs_to_prune(run_ids: Collection[str], keep: int, protected: Collection[str
 def score_meets(score: MutationScore, minimum: float | None) -> bool:
     """Tell whether a mutation score reaches the minimum its control declares, if any."""
     return minimum is None or score.percent >= minimum
+
+
+def registration_problems(
+    requested: Sequence[str], classes: Mapping[str, ScenarioClass]
+) -> list[str]:
+    """Say why some of the scenarios a person asks to register can't be: all or nothing."""
+    if not requested:
+        return ["Indica al menos un escenario que registrar."]
+    problems: list[str] = []
+    for sid in dict.fromkeys(requested):
+        cls = classes.get(sid)
+        if cls is None:
+            problems.append(f"No existe el escenario {sid} en features/ de HEAD.")
+        elif cls == "green":
+            problems.append(f"{sid} ya está en verde para su especificación actual.")
+    return problems

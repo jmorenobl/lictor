@@ -16,12 +16,23 @@ FEATURES_DIR = "features"
 _FEATURE_SUFFIX = ".feature"
 
 
+RUN_TRAILER = "Lictor-Run"
+ASSERTED_TRAILER = "Lictor-Asserted-By"
+
+
 @dataclass(frozen=True)
 class GreenRecord:
-    """The commit that last made a scenario green, and what it demanded there."""
+    """The commit that last made a scenario green, and what it demanded there.
+
+    `by_lictor` says whether Lictor made that commit, as its `Lictor-Run` trailer claims; a
+    person who registered it says who in `asserted_by`. Both are only informative: anyone can
+    write a trailer.
+    """
 
     commit: str
     spec_hash: str | None
+    by_lictor: bool = True
+    asserted_by: str | None = None
 
 
 class SpecHistory:
@@ -38,7 +49,14 @@ class SpecHistory:
         for sha, scenario_ids in self.vcs.trailer_commits("Scenario"):
             for sid in scenario_ids:
                 latest.setdefault(sid, sha)
-        return {sid: GreenRecord(sha, self._hashes_at(sha).get(sid)) for sid, sha in latest.items()}
+        by_lictor = {sha for sha, _ in self.vcs.trailer_commits(RUN_TRAILER)}
+        asserted = {sha: who[0] for sha, who in self.vcs.trailer_commits(ASSERTED_TRAILER) if who}
+        return {
+            sid: GreenRecord(
+                sha, self._hashes_at(sha).get(sid), sha in by_lictor, asserted.get(sha)
+            )
+            for sid, sha in latest.items()
+        }
 
     def classify(self, current: Mapping[str, str]) -> dict[str, ScenarioClass]:
         """Say which scenarios are green, which were green for another spec, and which never."""
