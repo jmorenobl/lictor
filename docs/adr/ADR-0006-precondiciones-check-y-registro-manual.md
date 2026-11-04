@@ -31,7 +31,7 @@ La auditoría de la v0.1 y el plan de corrección dejaron tres problemas en la f
 
    No queda modo «en el árbol de trabajo»: un mismo ✓ no puede significar dos cosas.
 
-   `check` toma el cerrojo, admite `--keep-going` y `--control`, y deja su evidencia en `.lictor/check/`, que cada `check` sustituye. Códigos: 0, 10 si falla un control bloqueante y 40 si el entorno falla. La autoverificación de Lictor en el CI es `lictor check --keep-going`.
+   `check` toma el cerrojo, admite `--keep-going` y `--control`, y deja su evidencia en `.lictor/check/`, que cada `check` sustituye. Códigos: 0, 10 si falla un control bloqueante y 40 si el entorno falla. La autoverificación de Lictor en el CI es `lictor check --keep-going --level L1,L2,L4,L5`: todos los controles salvo la aceptación, porque el control `coverage` ya ejecuta `tests/integration` y falla con cualquier test fallido.
 3. **`lictor register <ID>...` registra escenarios como verdes por afirmación de una persona.**
    - Requisitos: toma el cerrojo, no hay ninguna ejecución reanudable, el árbol está limpio y git tiene identidad.
    - Es todo o nada.

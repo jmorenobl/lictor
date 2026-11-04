@@ -525,8 +525,11 @@ Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` defin
 
 ```bash
 # Todos los controles de calidad y la aceptación, en un clon limpio y en el entorno de verificación,
-# sin parar en el primer fallo: es lo que ejecuta el CI
+# sin parar en el primer fallo
 uv run lictor check --keep-going
+
+# Lo que ejecuta el CI: todo salvo la aceptación, cuya suite ya corre el control de cobertura
+uv run lictor check --keep-going --level L1,L2,L4,L5
 
 # O filtrar por niveles o por control
 uv run lictor check --level L1,L2

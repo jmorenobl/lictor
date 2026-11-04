@@ -66,7 +66,7 @@ corrección que siguió a una auditoría de la base (#1 a #6).
 
 ### Eliminado
 
-- `scripts/verify_self.py`: lo sustituye `lictor check --keep-going` (#6).
+- `scripts/verify_self.py`: lo sustituye `lictor check --keep-going --level L1,L2,L4,L5` (#6).
 - El adaptador ya no limpia ni revierte el árbol de trabajo del proyecto (`reset_to_head`) (#2).
 
 ### Corregido
