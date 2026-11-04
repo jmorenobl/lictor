@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import Vcs
-from lictor.domain.errors import CandidateError
+from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import Candidate, RepoPin, TreeChange
 
 _MIN_PORCELAIN_LINE_LEN = 4
@@ -31,6 +31,7 @@ _CONTROL_FILES = ("HEAD", "config")
 _CONTROL_DIRS = ("hooks", "info")
 _EXPORT_REF = "refs/lictor/verified"
 _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+_EXECUTABLE_MODE = "100755"
 
 
 class GitCli(Vcs):
@@ -307,6 +308,22 @@ class GitCli(Vcs):
             ["ls-tree", "-r", "-z", "--name-only", f"{rev}^{{tree}}", "--", directory]
         ).stdout
         return [path for path in raw.split("\0") if path]
+
+    def is_executable(self, rev: str, path: str) -> bool:
+        """Look the file up in the commit, not on disk: a clone only has what was committed."""
+        entry = self._run_git(["ls-tree", "-z", f"{rev}^{{tree}}", "--", path]).stdout
+        return entry.split(" ", 1)[0] == _EXECUTABLE_MODE
+
+    def committer_identity(self) -> str:
+        """Ask git with the same call `commit_tree` makes, so both apply the same rules."""
+        ident = self._run_git(["var", "GIT_COMMITTER_IDENT"], check=False)
+        if ident.returncode != 0:
+            raise EnvironmentUnavailableError(
+                "git no tiene identidad para los commits que hace Lictor: "
+                f"{ident.stderr.strip()} Configura user.name y user.email (git config) y relanza."
+            )
+        # The last two fields are the date and the time zone of the moment it was asked.
+        return ident.stdout.strip().rsplit(" ", 2)[0]
 
     def read_file(self, rev: str, path: str) -> str:
         """Read a file of a commit with no filter, its line endings read as `read_text` would."""
