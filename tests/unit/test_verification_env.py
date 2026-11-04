@@ -14,7 +14,11 @@ from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.application.ports import AuditSink, Clock, EventLog, Vcs
 from lictor.application.seal import hash_tree
-from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.application.verification_env import (
+    EnvironmentRunner,
+    VerificationEnvironment,
+    VerificationEnvSpec,
+)
 from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput
 
@@ -698,6 +702,18 @@ def test_run_injects_the_environment(tmp_path: Path) -> None:
 
     assert runner.calls[0]["env"] == {"ENV_AT": f"{environment.env_dir}/bin", "PLAIN": "1"}
     assert runner.calls[0]["timeout_s"] == 5
+
+
+def test_a_runner_over_the_environment_keeps_the_timeout_and_ignores_the_callers_env(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner()
+    environment, _ = _environment(tmp_path, runner)
+
+    EnvironmentRunner(environment).run(["suite"], tmp_path, 7, env={"INTRUSO": "1"})
+
+    assert runner.calls[0]["timeout_s"] == 7
+    assert runner.calls[0]["env"] == {"ENV_AT": f"{environment.env_dir}/bin", "PLAIN": "1"}
 
 
 def test_hash_tree_covers_path_mode_link_and_content(tmp_path: Path) -> None:
