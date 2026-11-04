@@ -285,6 +285,18 @@ def test_load_config_from_repo_root_lictor_json() -> None:
     assert any(c.id == "architecture" for c in cfg.controls)
 
 
+def test_the_ci_self_verification_runs_every_control_of_lictor_json() -> None:
+    """The CI filters by level to skip the acceptance; a control at another level would be lost."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    commands = [line for line in ci.splitlines() if "lictor check" in line]
+    assert len(commands) == 1, commands
+    tokens = shlex.split(commands[0].split("run:", 1)[1])
+    levels = set(tokens[tokens.index("--level") + 1].split(","))
+    assert "L3" not in levels
+    controls = load_config(REPO_ROOT / "lictor.json").controls
+    assert {c.id: c.level for c in controls if c.level not in levels} == {}
+
+
 def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_config(tmp_path / "missing.json")
