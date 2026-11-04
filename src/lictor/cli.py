@@ -260,6 +260,7 @@ def _check_spec(control: ControlConfig) -> CheckControlSpec:
         empty_exit_codes=control.empty_exit_codes,
         timeout_s=control.timeout_s,
         when_exists=control.when_exists,
+        min_score=control.min_score,
     )
 
 

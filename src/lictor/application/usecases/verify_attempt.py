@@ -44,6 +44,7 @@ from lictor.domain.rules import (
     collateral_greens,
     condense_error,
     control_path_status,
+    enforce_min_score,
     forbidden_paths,
     map_test_cases_to_scenarios,
     path_within,
@@ -83,6 +84,9 @@ class VerificationControlProtocol(Protocol):
     @property
     def when_exists(self) -> str | None: ...
 
+    @property
+    def min_score(self) -> float | None: ...
+
 
 @dataclass(frozen=True)
 class VerificationControl:
@@ -96,6 +100,7 @@ class VerificationControl:
     empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
     when_exists: str | None = None
+    min_score: float | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -592,7 +597,7 @@ class VerifyAttempt:
             empty_exit_codes=ctrl.empty_exit_codes,
         )
 
-        return _ControlRun(recorded(c_res), output=cmd_out)
+        return _ControlRun(recorded(enforce_min_score(c_res, ctrl.min_score)), output=cmd_out)
 
     def _run_acceptance(
         self,

@@ -82,3 +82,10 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: uv sync --all-groups --frozen
       - run: uv run lictor check --keep-going
+      # Logs, reports and the mutation survivors: what tells two passes or two platforms apart.
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: autoverificacion
+          path: .lictor/check/
+          retention-days: 30

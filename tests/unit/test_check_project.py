@@ -1,9 +1,11 @@
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
+from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -313,3 +315,31 @@ def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> 
 
     assert res.ok is False
     assert "elimina tests/unit" in (res.control_results["unit"].error or "")
+
+
+class _MutationRunner(FakeRunner):
+    """Writes the counts a mutation pass leaves at `{out}`."""
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        Path(cmd[-1]).write_text('{"killed": 9, "survived": 1, "total": 10}', encoding="utf-8")
+        return super().run(cmd, cwd, timeout_s, env)
+
+
+@pytest.mark.parametrize(("minimum", "ok"), [(95, False), (90, True), (None, True)])
+def test_a_mutation_control_passes_only_from_its_minimum(
+    tmp_path: Path, minimum: float | None, ok: bool
+) -> None:
+    use_case = CheckProject(_MutationRunner(), {"mutation": MutationReader()})
+    control = CheckControlSpec("mut", "L5", "mut {out}", "mutation", min_score=minimum)
+
+    res = use_case.execute(CheckProjectRequest(tmp_path, [control]))
+
+    assert res.ok is ok
+    error = res.control_results["mut"].error or ""
+    assert ("no llega al mínimo de 95 %" in error) is not ok

@@ -16,7 +16,7 @@ from lictor.application.run_files import (
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import ControlResult
-from lictor.domain.rules import condense_error, control_path_status
+from lictor.domain.rules import condense_error, control_path_status, enforce_min_score
 
 ACCEPTANCE_ID = "acceptance"
 
@@ -33,6 +33,7 @@ class CheckControlSpec:
     empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
     when_exists: str | None = None
+    min_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class _RunStepParams:
     empty_exit_codes: Sequence[int]
     step_id: str
     mode: str = "block"
+    min_score: float | None = None
 
 
 class CheckProject:
@@ -198,6 +200,7 @@ class CheckProject:
             empty_exit_codes=control.empty_exit_codes if control else (),
             step_id=step_id,
             mode=control.mode if control else "block",
+            min_score=control.min_score if control else None,
         )
 
     def _run_command(self, params: _RunStepParams) -> ControlResult:
@@ -218,13 +221,14 @@ class CheckProject:
 
         content = reader_input(params.report_format, params.command_template, out_file, cmd_out)
 
+        result = reader.read(
+            output=content,
+            exit_code=cmd_out.returncode,
+            duration_ms=cmd_out.duration_ms,
+            empty_exit_codes=params.empty_exit_codes,
+        )
         return replace(
-            reader.read(
-                output=content,
-                exit_code=cmd_out.returncode,
-                duration_ms=cmd_out.duration_ms,
-                empty_exit_codes=params.empty_exit_codes,
-            ),
+            enforce_min_score(result, params.min_score),
             exit_code=cmd_out.returncode,
             mode=params.mode,
             output_path=relative_to_project(log_file, params.project_root),

@@ -207,6 +207,8 @@ class ControlConfig(BaseModel):
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
+    # The lowest mutation score that passes, in percent; only a mutation report has one.
+    min_score: float | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -219,6 +221,9 @@ class ControlConfig(BaseModel):
     def _validate_junit_out(self) -> Self:
         if self.report != "exit-code" and "{out}" not in self.run:
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
+            raise ValueError(msg)
+        if self.min_score is not None and self.report != "mutation":
+            msg = f"El control '{self.id}' declara min_score, que solo vale con report='mutation'"
             raise ValueError(msg)
         return self
 

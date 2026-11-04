@@ -8,6 +8,7 @@ from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
+    ControlResult,
     MutationScore,
     PreconditionProblem,
     ScenarioId,
@@ -30,6 +31,7 @@ from lictor.domain.rules import (
     control_path_status,
     count_agent_failures,
     describe_score,
+    enforce_min_score,
     forbidden_paths,
     impostor_problem,
     impostor_source,
@@ -1447,3 +1449,34 @@ def test_every_scenario_that_cant_be_registered_is_named_once() -> None:
         "A-3 ya está en verde para su especificación actual.",
         "No existe el escenario X-9 en features/ de HEAD.",
     ]
+
+
+SCORE_94 = mutation_score({"killed": 94, "survived": 6, "total": 100})
+
+
+def test_a_score_below_the_minimum_fails_the_control_and_says_both() -> None:
+    result = enforce_min_score(ControlResult(ok=True, score=SCORE_94), 95.5)
+
+    assert result.ok is False
+    assert result.error == (
+        "La puntuación de mutación, 94,0 % (94 de 100 muertos; 6 vivos, 0 por tiempo), "
+        "no llega al mínimo de 95,5 %"
+    )
+    assert result.score == SCORE_94
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ControlResult(ok=True, score=SCORE_94),
+        ControlResult(ok=False, error="la pasada cayó", score=SCORE_94),
+        ControlResult(ok=True),
+    ],
+)
+def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -> None:
+    minimum = None if result.ok and result.score else 99.0
+    assert enforce_min_score(result, minimum) == result
+
+
+def test_a_score_at_the_minimum_passes() -> None:
+    assert enforce_min_score(ControlResult(ok=True, score=SCORE_94), 94).ok is True

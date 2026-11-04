@@ -946,3 +946,16 @@ def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> N
     else:
         with pytest.raises(ValidationError, match="greater than or equal to 500"):
             LimitsConfig(error_max_chars=chars)
+
+
+def test_min_score_belongs_to_a_mutation_control() -> None:
+    mutation = {"id": "m", "level": "L5", "run": "x {out}", "report": "mutation"}
+    assert ControlConfig(**mutation, min_score=95).min_score == 95
+    with pytest.raises(ValidationError, match="solo vale con report='mutation'"):
+        ControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
+
+
+@pytest.mark.parametrize("minimum", [-1, 100.5])
+def test_min_score_is_a_percentage(minimum: float) -> None:
+    with pytest.raises(ValidationError):
+        ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)

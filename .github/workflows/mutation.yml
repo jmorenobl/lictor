@@ -28,3 +28,11 @@ jobs:
       - run: uv run python scripts/mutation_score.py "$RUNNER_TEMP/mutation.json"
       - if: always()
         run: cat "$RUNNER_TEMP/mutation.json"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutacion
+          path: |
+            ${{ runner.temp }}/mutation.json
+            ${{ runner.temp }}/mutation-survivors.txt
+          retention-days: 90

@@ -157,6 +157,20 @@
           ],
           "default": null,
           "title": "When Exists"
+        },
+        "min_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Score"
         }
       },
       "required": [

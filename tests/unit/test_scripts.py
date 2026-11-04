@@ -77,6 +77,7 @@ case "$1" in
     mkdir -p mutants
     echo '{{"killed": 3, "total": 4}}' > mutants/mutmut-cicd-stats.json
     ;;
+  results) echo "    lictor.domain.rules.x_f__mutmut_1: survived" ;;
 esac
 """
 
@@ -95,8 +96,11 @@ def test_mutation_score_exports_the_counts_and_keeps_the_pass_exit_code(
     code = _load("mutation_score").main([str(report)], mutmut=[str(tool)], root=tmp_path)
 
     assert code == run_exit
-    assert (tmp_path / "llamadas").read_text(encoding="utf-8") == "run\nexport-cicd-stats\n"
+    calls = (tmp_path / "llamadas").read_text(encoding="utf-8")
+    assert calls == "run\nexport-cicd-stats\nresults\n"
     assert report.read_text(encoding="utf-8").strip() == '{"killed": 3, "total": 4}'
+    survivors = report.with_name("mutation-survivors.txt").read_text(encoding="utf-8")
+    assert survivors == "    lictor.domain.rules.x_f__mutmut_1: survived\n"
 
 
 def test_mutation_score_leaves_no_report_when_nothing_was_exported(tmp_path: Path) -> None:
@@ -145,3 +149,21 @@ def test_mutation_score_fails_if_the_export_leaves_no_file(tmp_path: Path) -> No
 
 def test_mutation_score_needs_the_report_path() -> None:
     assert _load("mutation_score").main([]) == 2
+
+
+def test_mutation_score_keeps_the_score_when_the_survivors_cant_be_listed(tmp_path: Path) -> None:
+    tool = tmp_path / "mutmut"
+    script = FAKE_MUTMUT.format(run_exit=0).replace(
+        '  results) echo "    lictor.domain.rules.x_f__mutmut_1: survived" ;;',
+        "  results) exit 7 ;;",
+    )
+    tool.write_text(script, encoding="utf-8")
+    tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+    report = tmp_path / "score.json"
+    report.with_name("mutation-survivors.txt").write_text("de otra pasada", encoding="utf-8")
+
+    code = _load("mutation_score").main([str(report)], mutmut=[str(tool)], root=tmp_path)
+
+    assert code == 0
+    assert report.is_file()
+    assert not report.with_name("mutation-survivors.txt").exists()

@@ -4,7 +4,7 @@ import fnmatch
 import re
 import shlex
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
@@ -12,6 +12,7 @@ from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
+    ControlResult,
     MutationScore,
     PreconditionProblem,
     ScenarioId,
@@ -789,3 +790,19 @@ def registration_problems(
         elif cls == "green":
             problems.append(f"{sid} ya está en verde para su especificación actual.")
     return problems
+
+
+def enforce_min_score(result: ControlResult, minimum: float | None) -> ControlResult:
+    """Fail a control whose mutation score is below the minimum it declares.
+
+    A result that already failed, or has no score, is left as it is: a pass that crashed says so
+    itself, and only a mutation report carries a score.
+    """
+    if not result.ok or result.score is None or score_meets(result.score, minimum):
+        return result
+    floor = f"{minimum:g}".replace(".", ",")
+    error = (
+        f"La puntuación de mutación, {describe_score(result.score)}, no llega al mínimo de "
+        f"{floor} %"
+    )
+    return replace(result, ok=False, error=error)
