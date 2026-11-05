@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import lictor
 from lictor.cli import app
 from lictor.domain.model import AgentStatus, AgentTask
 from lictor.domain.rules import NO_COMMITS
@@ -38,7 +39,15 @@ from tests.integration.repro.harness import (
     write,
 )
 
-LICTOR = [sys.executable, "-c", "from lictor.cli import app; app()"]
+# The verification environment doesn't install the project: the child finds it where this process
+# did, appended at the end of its path as `lictor_project_path` does. `-B` keeps bytecode out of it.
+SRC = str(Path(lictor.__file__).resolve().parents[1])
+LICTOR = [
+    sys.executable,
+    "-B",
+    "-c",
+    f"import sys; sys.path.append({SRC!r}); from lictor.cli import app; app()",
+]
 
 
 def _lictor(root: Path, *args: str) -> subprocess.CompletedProcess[str]:

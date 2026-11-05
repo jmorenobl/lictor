@@ -9,6 +9,7 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 
+import lictor
 from lictor.orchestration.graph import get_sqlite_saver, read_only_sqlite_saver
 
 THREAD: RunnableConfig = {"configurable": {"thread_id": "run-1", "checkpoint_ns": ""}}
@@ -29,9 +30,12 @@ def test_no_checkpoint_gives_no_saver_and_creates_nothing(tmp_path: Path) -> Non
     assert not (tmp_path / ".lictor").exists()
 
 
+# The verification environment doesn't install the project: the child appends where it is.
+SRC = str(Path(lictor.__file__).resolve().parents[1])
 READ_IN_ANOTHER_PROCESS = """
 import sys
 from pathlib import Path
+sys.path.append(sys.argv[2])
 from lictor.orchestration.graph import read_only_sqlite_saver
 reader = read_only_sqlite_saver(Path(sys.argv[1]))
 found = reader.get_tuple({"configurable": {"thread_id": "run-1", "checkpoint_ns": ""}})
@@ -51,7 +55,14 @@ def test_reading_while_a_run_holds_the_checkpoint_changes_nothing_it_guards(
     assert before["checkpoints.sqlite-wal"], "the run's writes must still be in the WAL"
 
     read = subprocess.run(
-        [sys.executable, "-c", READ_IN_ANOTHER_PROCESS, str(lictor_dir / "checkpoints.sqlite")],
+        [
+            sys.executable,
+            "-B",
+            "-c",
+            READ_IN_ANOTHER_PROCESS,
+            str(lictor_dir / "checkpoints.sqlite"),
+            SRC,
+        ],
         capture_output=True,
         text=True,
         check=True,
