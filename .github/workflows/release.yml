@@ -114,7 +114,10 @@ jobs:
                   time.sleep(15)
           else:
               raise SystemExit(f"::error::TestPyPI no sirve lictor {version}")
-          for path in sorted(pathlib.Path("dist").iterdir()):
+          built = sorted([*pathlib.Path("dist").glob("*.whl"), *pathlib.Path("dist").glob("*.tar.gz")])
+          if len(built) != 2:
+              raise SystemExit(f"::error::dist/ debería tener un wheel y un sdist: {built}")
+          for path in built:
               local = hashlib.sha256(path.read_bytes()).hexdigest()
               if served.get(path.name) != local:
                   raise SystemExit(f"::error::{path.name}: TestPyPI sirve {served.get(path.name)}, se construyó {local}")
@@ -130,7 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
+          gh release create "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz
           --title "Lictor $GITHUB_REF_NAME"
           --notes-file RELEASE_NOTES.md
           --verify-tag
