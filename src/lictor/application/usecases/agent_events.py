@@ -64,6 +64,7 @@ class AgentCall:
     prompt_sha: str
     raw_path: Path
     project_root: Path
+    prompt: Mapping[str, str] | None = None  # the file the prompt was saved to, and its hash
 
 
 def agent_finished_event(
@@ -99,6 +100,7 @@ def agent_finished_event(
             "num_turns": result.num_turns,
             "duration_ms": result.duration_ms,
             "prompt_sha": call.prompt_sha,
+            "prompt": dict(call.prompt) if call.prompt else None,
             "raw": relative_to_project(call.raw_path, call.project_root),
             "stderr": (
                 relative_to_project(stderr_path, call.project_root) if stderr_path else None

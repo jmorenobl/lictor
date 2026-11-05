@@ -11,6 +11,8 @@ Reglas:
   sin lógica: cada función lanza un error de "no implementado".
 - No implementes la funcionalidad. No toques {protected_sin_driver}.
 - Trabajas en una copia sin historial: no hay git ni commits.
+- Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las
+  comprobaciones: cualquier otra orden se deniega y te cuesta turnos.
 - Cada test debe llevar el ID de su escenario en el nombre.
 - Los escenarios {green_ids} ya funcionan y sus tests deben pasar.
 {reabiertos}

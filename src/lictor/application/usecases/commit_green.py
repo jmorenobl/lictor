@@ -52,15 +52,19 @@ class CommitGreen:
         if self.vcs.get_head_sha() != candidate.sha:
             self.vcs.advance_head(candidate.sha, expected=candidate.parent)
 
+        # With collaterals the candidate is the empty commit chained on top of the scenario's own,
+        # and each green names the commit whose `Scenario:` trailer names it, as git history does.
+        own = self.vcs.parent_of(candidate.sha) if request.collateral else candidate.sha
         attempts: dict[str, object] = {"attempt": request.attempt, "attempts": request.attempt}
-        self._green(request, candidate, sid_str, attempts)
+        self._green(request, own, candidate.tree, sid_str, attempts)
         for collateral in request.collateral:
-            self._green(request, candidate, collateral, {"attempt": 0, "collateral": True})
+            data: dict[str, object] = {"attempt": 0, "collateral": True}
+            self._green(request, candidate.sha, candidate.tree, collateral, data)
 
         return CommitGreenResult(commit_sha=candidate.sha)
 
     def _green(
-        self, request: CommitGreenRequest, candidate: Candidate, sid: str, data: dict[str, object]
+        self, request: CommitGreenRequest, commit: str, tree: str, sid: str, data: dict[str, object]
     ) -> None:
         self.event_log.append(
             new_event(
@@ -68,6 +72,6 @@ class CommitGreen:
                 "lictor.scenario.green.v1",
                 request.run_id,
                 scenario_id=sid,
-                data={"commit": candidate.sha, "tree": candidate.tree, **data},
+                data={"commit": commit, "tree": tree, **data},
             )
         )

@@ -9,6 +9,8 @@ Reglas:
 - No toques {protected}. Cualquier cambio ahí se revierte y cuenta como intento fallido.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}.
+- Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las
+  comprobaciones: cualquier otra orden se deniega y te cuesta turnos.
 - Estos escenarios ya funcionan y deben seguir funcionando: {green_ids}.
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
 

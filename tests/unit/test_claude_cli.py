@@ -2,6 +2,8 @@
 
 Result shapes come from the spike with the real CLI 2.1.316; `auth status` fields too.
 `fixtures/claude_stream.jsonl` is a stream of that spike, cut down to a few events.
+`fixtures/claude_stream_2_1_317.jsonl` is a call of the first real pass, with CLI 2.1.317, cut
+down the same way: it adds `permission_denied`, `task_started` and `task_notification`.
 """
 
 import json
@@ -22,6 +24,7 @@ from lictor.application.ports import Executor
 from lictor.domain.model import AgentResult, AgentTask, CommandOutput, PermissionDenial, Tokens
 
 CAPTURE = Path(__file__).resolve().parents[1] / "fixtures" / "claude_stream.jsonl"
+CAPTURE_2_1_317 = CAPTURE.with_name("claude_stream_2_1_317.jsonl")
 
 
 def _sample_task(cwd: Path, raw_path: Path, prompt: str = "Responde OK") -> AgentTask:
@@ -164,8 +167,7 @@ class TestClaudeCLIRun:
         assert "-p" in cmd
         assert cmd[cmd.index("--output-format") + 1] == "stream-json"
         assert "--verbose" in cmd
-        assert "--permission-mode" in cmd
-        assert "acceptEdits" in cmd
+        assert cmd[cmd.index("--permission-mode") + 1] == "dontAsk"
         assert "--allowedTools" in cmd
         assert "Bash(uv run pytest:*)" in cmd
         assert (call["cwd"], call["timeout_s"]) == (tmp_path, 1800)
@@ -207,6 +209,37 @@ class TestClaudeCLIRun:
         assert "--strict-mcp-config" in cmd
         assert "--no-session-persistence" in cmd
         assert "--bare" not in cmd
+        assert json.loads(cmd[cmd.index("--settings") + 1]) == {"autoMemoryEnabled": False}
+
+    def test_command_makes_only_the_allowed_tools_available(self, tmp_path: Path) -> None:
+        cmd = _cli()[0]._build_command(_sample_task(tmp_path, tmp_path / "raw.json"))
+
+        assert cmd[cmd.index("--tools") + 1] == "Read,Edit,Write,Glob,Grep,Bash"
+
+    def test_agent_gets_no_variable_of_the_callers_session_or_virtualenv(
+        self, tmp_path: Path
+    ) -> None:
+        """Launched from Claude Code or `uv run`, the caller's session and venv stay behind."""
+        caller = {
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_SESSION_ID": "s",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0",
+            "CLAUDE_EFFORT": "high",
+            "CLAUDE_CONFIG_DIR": "/home/u/.claude-work",
+            "VIRTUAL_ENV": "/lictor/.venv",
+            "VIRTUAL_ENV_PROMPT": "lictor",
+            "PATH": "/usr/bin",
+        }
+        cli, runner = _cli(_output(json.dumps(_result())))
+        with patch.dict(os.environ, caller, clear=True):
+            cli.run(_sample_task(tmp_path, tmp_path / "raw.json"))
+
+        assert runner.calls[0]["env"] == {
+            "CLAUDE_CONFIG_DIR": "/home/u/.claude-work",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "DISABLE_AUTOUPDATER": "1",
+            "PATH": "/usr/bin",
+        }
 
     def test_spec_conflict_extraction(self, tmp_path: Path) -> None:
         conflict_msg = (
@@ -418,6 +451,15 @@ class TestClaudeCLIRun:
         assert res.status == "ok"
         assert res.cli_version == "2.1.316"
         assert res.num_turns > 0
+        assert res.tokens.output > 0
+
+    def test_a_stream_of_the_real_pass_is_read_whole(self, tmp_path: Path) -> None:
+        """Events Lictor doesn't read, such as the denial the CLI announces, change nothing."""
+        res = _run(tmp_path, CAPTURE_2_1_317.read_text(encoding="utf-8"))
+
+        assert (res.status, res.cli_version, res.num_turns) == ("ok", "2.1.317", 7)
+        assert [d.tool for d in res.permission_denials] == ["Bash"]
+        assert res.permission_denials[0].target.startswith("sed -i ")
         assert res.tokens.output > 0
 
     def test_stderr_is_kept_beside_the_raw_output_without_a_result_event(

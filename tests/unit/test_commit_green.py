@@ -41,6 +41,7 @@ def test_commit_green_advances_to_the_candidate_and_emits_event() -> None:
     assert event.data["tree"] == "t1"
     assert event.data["attempt"] == 2
     assert event.data["attempts"] == 2
+    vcs.parent_of.assert_not_called()
 
 
 def test_commit_green_is_idempotent_after_a_crash() -> None:
@@ -80,8 +81,10 @@ def test_commit_green_expects_the_parent_it_verified_not_the_current_head() -> N
     vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")
 
 
-def test_commit_green_records_each_collateral_green_on_the_same_commit() -> None:
+def test_commit_green_names_for_each_green_the_commit_whose_trailer_names_it() -> None:
+    """The scenario's own commit sits under the collateral one the branch moves to."""
     use_case, vcs, event_log = _use_case()
+    vcs.parent_of.return_value = "5ce4a10"
 
     use_case.execute(
         CommitGreenRequest(
@@ -95,9 +98,10 @@ def test_commit_green_records_each_collateral_green_on_the_same_commit() -> None
 
     vcs.advance_head.assert_called_once_with("c0ffee", expected="p0")
     events = [call.args[0] for call in event_log.append.call_args_list]
-    assert [(e.scenarioid, e.data["commit"]) for e in events] == [
-        ("IVA-001", "c0ffee"),
-        ("IVA-002", "c0ffee"),
+    vcs.parent_of.assert_called_once_with("c0ffee")
+    assert [(e.scenarioid, e.data["commit"], e.data["tree"]) for e in events] == [
+        ("IVA-001", "5ce4a10", "t1"),
+        ("IVA-002", "c0ffee", "t1"),
     ]
     assert events[1].data["collateral"] is True
     assert events[1].data["attempt"] == 0

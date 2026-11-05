@@ -1,7 +1,8 @@
 """Where a run keeps its evidence, so that no attempt can overwrite another's.
 
 Under `.lictor/runs/<run_id>/<owner>/`, where the owner is a scenario or `driver`, each attempt
-leaves `NNN-implement.json` or `NNN-driver.json` and one directory per verification. Names are
+leaves `NNN-implement.json` or `NNN-driver.json`, the prompt it was given beside it
+(`NNN-implement.prompt.md`), and one directory per verification. Names are
 never reused: a retry, a resume or a repeated verification gets an `-rN` suffix.
 """
 
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from lictor.application.ports import Vcs
-from lictor.application.seal import hash_tree
+from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput, ControlResult
 from lictor.domain.rules import runs_to_prune
@@ -263,6 +264,16 @@ def describe_crash(crash: str, control: ControlResult, output: str) -> str:
     """Put what the report itself says on the first line: it survives any condensing."""
     first_line = crash if control.test_cases or not control.error else f"{crash}: {control.error}"
     return f"{first_line}\n{output}".strip()
+
+
+def save_prompt(raw_path: Path, prompt: str, project_root: Path) -> dict[str, str]:
+    """Keep what the agent was asked beside what it did, before the call: the CLI gets it by argv.
+
+    Its hash goes to the journal, like a step's, so a later change shows in the report.
+    """
+    path = raw_path.with_suffix(".prompt.md")
+    write_text(path, prompt)
+    return {"path": relative_to_project(path, project_root), "hash": hash_file(path)}
 
 
 def step_evidence(step_dir: Path, project_root: Path) -> dict[str, str]:

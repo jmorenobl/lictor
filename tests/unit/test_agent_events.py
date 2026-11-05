@@ -1,5 +1,6 @@
 """Unit tests for the events of a call to the agent: their whole shape is what the report reads."""
 
+from dataclasses import replace
 from pathlib import Path
 
 from lictor.application.usecases.agent_events import (
@@ -27,6 +28,7 @@ CALL = AgentCall(
     prompt_sha="sha256:p",
     raw_path=Path("/p/.lictor/runs/R1/IVA-001/002-implement.json"),
     project_root=Path("/p"),
+    prompt={"path": ".lictor/runs/R1/IVA-001/002-implement.prompt.md", "hash": "sha256:q"},
 )
 RESULT = AgentResult(
     status="ok",
@@ -65,6 +67,7 @@ def test_agent_finished_event_records_the_whole_call() -> None:
         "num_turns": 6,
         "duration_ms": 700,
         "prompt_sha": "sha256:p",
+        "prompt": {"path": ".lictor/runs/R1/IVA-001/002-implement.prompt.md", "hash": "sha256:q"},
         "raw": ".lictor/runs/R1/IVA-001/002-implement.json",
         "stderr": ".lictor/runs/R1/IVA-001/002-implement.stderr.log",
         "reverted_files": ["x"],
@@ -72,9 +75,9 @@ def test_agent_finished_event_records_the_whole_call() -> None:
 
 
 def test_agent_finished_event_without_cost_or_stderr() -> None:
-    event = agent_finished_event(_Clock(), CALL, AgentResult(status="error"))
+    event = agent_finished_event(_Clock(), replace(CALL, prompt=None), AgentResult(status="error"))
 
-    assert (event.data["cost_usd"], event.data["stderr"]) == (0.0, None)
+    assert (event.data["cost_usd"], event.data["stderr"], event.data["prompt"]) == (0.0, None, None)
     assert "reverted_files" not in event.data
 
 

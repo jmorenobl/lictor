@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lictor.application.ports import EventLog
-from lictor.application.seal import hash_tree
+from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage, MutationScore
 from lictor.domain.rules import describe_score
 
@@ -100,17 +100,33 @@ def _altered_evidence(
     """
     altered: list[str] = []
     for event in events:
-        evidence = event.data.get("evidence")
-        if not isinstance(evidence, dict) or "path" not in evidence:
-            continue
-        path = str(evidence["path"])
-        step_dir = project_root / path
-        if not step_dir.is_dir():
-            if _run_of(path) not in retired:
+        # A step is a directory; the prompt an agent call was given, a file beside its raw output.
+        for key, exists, digest in (
+            ("evidence", Path.is_dir, hash_tree),
+            ("prompt", Path.is_file, hash_file),
+        ):
+            recorded = event.data.get(key)
+            if not isinstance(recorded, dict) or "path" not in recorded:
+                continue
+            path = str(recorded["path"])
+            if not exists(project_root / path):
+                if _run_of(path) not in retired:
+                    altered.append(path)
+            elif digest(project_root / path) != recorded.get("hash"):
                 altered.append(path)
-        elif hash_tree(step_dir) != evidence.get("hash"):
-            altered.append(path)
     return sorted(set(altered))
+
+
+_DENIED_TARGET_CHARS = 120
+
+
+def _denied_target(denial: Mapping[str, Any]) -> str:
+    """The first line of what was refused, short enough for a list and with no code fence."""
+    lines = str(denial.get("target", "")).strip().splitlines()
+    first = lines[0] if lines else ""
+    if len(first) > _DENIED_TARGET_CHARS or len(lines) > 1:
+        first = f"{first[:_DENIED_TARGET_CHARS]}…"
+    return f"`{first.replace('`', "'")}`" if first else ""
 
 
 def _green_sections(info: Mapping[str, Any]) -> list[str]:
@@ -214,6 +230,7 @@ class BuildReport:
             "reregistered": [],
             "by_hand": [],
             "collateral": [],
+            "denials": [],
         }
 
         for ev in events:
@@ -226,6 +243,7 @@ class BuildReport:
             "lictor.run.started.v1": self._on_run_started,
             "lictor.spec.loaded.v1": self._on_spec_loaded,
             "lictor.agent.finished.v1": self._process_agent_finished,
+            "lictor.agent.denied.v1": self._on_agent_denied,
             "lictor.verify.finished.v1": self._process_verify_finished,
             "lictor.scenario.green.v1": self._on_scenario_green,
             "lictor.scenario.quarantined.v1": self._on_scenario_quarantined,
@@ -337,6 +355,18 @@ class BuildReport:
         totals = ev.data.get("totals", {})
         if isinstance(totals, dict):
             info["totals"] = totals
+
+    def _on_agent_denied(self, ev: Event, info: dict[str, Any]) -> None:
+        denials = ev.data.get("denials")
+        if not isinstance(denials, list):
+            return
+        owner = ev.scenarioid or "driver"
+        where = f"{owner}, {ev.data.get('role', '')}, intento {ev.data.get('attempt', '?')}"
+        for denial in denials:
+            if isinstance(denial, dict):
+                tool = str(denial.get("tool", "")) or "?"
+                line = f"- **{where}**: {tool} {_denied_target(denial)}"
+                info["denials"].append(line.rstrip())
 
     def _process_agent_finished(self, ev: Event, info: dict[str, Any]) -> None:
         role = str(ev.data.get("role", "") or "")
@@ -454,6 +484,9 @@ class BuildReport:
                     lines.append("  ```")
 
         lines.extend(_green_sections(info))
+
+        lines.extend(["", "## Denegaciones"])
+        lines.extend(info["denials"] or ["- *El backend no denegó nada al agente.*"])
 
         lines.extend(["", "## Intentos fallidos por nivel"])
         if not info["failed_by_level"]:

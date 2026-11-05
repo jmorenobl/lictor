@@ -464,3 +464,18 @@ def test_driver_cli_version_comes_from_the_call_not_from_a_health_check(tmp_path
     ]
     assert [e.data["cli_version"] for e in finished] == ["2.1.316"]
     executor.health.assert_not_called()
+
+
+def test_driver_prompt_is_saved_beside_the_raw_output(tmp_path: Path) -> None:
+    _, executor, event_log = _execute_driver(tmp_path, AgentResult(status="ok"))
+
+    task = executor.run.call_args.args[0]
+    prompt_file = task.raw_path.with_suffix(".prompt.md")
+    assert prompt_file.read_text(encoding="utf-8") == task.prompt
+    (finished,) = [
+        call_.args[0]
+        for call_ in event_log.append.call_args_list
+        if call_.args[0].type == "lictor.agent.finished.v1"
+    ]
+    assert finished.data["prompt"]["path"] == prompt_file.relative_to(tmp_path).as_posix()
+    assert prompt_file.name == task.raw_path.name.replace(".json", ".prompt.md")

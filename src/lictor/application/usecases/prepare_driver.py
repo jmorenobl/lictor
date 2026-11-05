@@ -11,6 +11,7 @@ from lictor.application.run_files import (
     DRIVER_OWNER,
     agent_workspace,
     attempt_prefix,
+    save_prompt,
     unused_path,
 )
 from lictor.application.usecases.agent_events import (
@@ -176,6 +177,7 @@ class PrepareDriver:
             timeout_s=request.timeout_s,
             raw_path=raw_path,
         )
+        prompt_file = save_prompt(raw_path, prompt, request.project_root)
         outcome = self._run_in_copy(task, request)
         agent_result = outcome.agent_result
         reverted = list(outcome.reverted)
@@ -202,6 +204,7 @@ class PrepareDriver:
             prompt_sha=prompt_sha,
             raw_path=raw_path,
             project_root=request.project_root,
+            prompt=prompt_file,
         )
         event = agent_finished_event(
             self.clock, call, agent_result, extra={"reverted_files": reverted}
