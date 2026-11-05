@@ -11,6 +11,7 @@ import typer
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from lictor import __version__
 from lictor.adapters.config.models import ControlConfig
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
@@ -44,6 +45,29 @@ app = typer.Typer(
 )
 
 DEFAULT_CWD = Path(".")
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"lictor {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    _version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_print_version,
+            is_eager=True,
+            help="Muestra la versión de Lictor y sale.",
+        ),
+    ] = False,
+) -> None:
+    """Implementa escenarios Gherkin con un agente y los verifica de forma determinista."""
+
+
 _UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con `lictor run --new`."
 
 
