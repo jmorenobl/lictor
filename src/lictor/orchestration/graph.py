@@ -13,6 +13,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
+from lictor import __version__
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
@@ -230,7 +231,7 @@ class _GraphNodes:
             "lictor.run.started.v1",
             state["run_id"],
             data={
-                "lictor_version": "0.1.0",
+                "lictor_version": __version__,
                 "cli_version": report.cli_version,
                 "profile": self.ctx.profile_name,
                 "config_hash": state.get("config_hash", ""),

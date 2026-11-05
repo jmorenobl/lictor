@@ -132,27 +132,39 @@ flowchart TD
 
 ### Instalación
 
+Lictor está en [PyPI](https://pypi.org/p/lictor). Instálalo como herramienta, fuera del proyecto en el que lo uses:
+
 ```bash
-# 1. Clonar el repositorio
-git clone <url-del-repositorio>
-cd lictor
-
-# 2. Instalar dependencias de producción y desarrollo
-uv sync --all-groups
-
-# 3. Comprobar la CLI
-uv run lictor --help
+uv tool install lictor      # o: pipx install lictor
+lictor --version
 ```
 
-> [!TIP]
-> También puedes instalar `lictor` como herramienta global en tu entorno de usuario con:
-> ```bash
-> uv tool install --editable .
-> ```
+También puedes probarlo sin instalarlo con `uvx lictor --version`.
+
+Para trabajar en el propio Lictor:
+
+```bash
+git clone https://github.com/jmorenobl/lictor.git
+cd lictor
+uv sync --all-groups
+uv run lictor --help
+```
 
 ---
 
 ## 🚀 Guía de Inicio Rápido
+
+### 0️⃣ Crea el proyecto
+
+Lictor trabaja sobre un proyecto `uv` con su `uv.lock` y un repositorio git. Para empezar de cero:
+
+```bash
+uv init --lib calculadora && cd calculadora
+uv add --dev pytest pytest-bdd ruff mypy   # las herramientas que usan los controles del perfil
+git init -b main
+```
+
+`uv init --lib` deja un paquete en `src/`. El driver crea ahí la interfaz que necesiten sus pasos, sin lógica, y el agente la implementa escenario a escenario.
 
 ### 1️⃣ Escribe tus escenarios Gherkin en `features/`
 
@@ -188,10 +200,11 @@ Característica: IVA de una factura
 
 ```bash
 # Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
-uv run lictor init
+lictor init
+git add -A && git commit -m "chore: proyecto inicial"   # Lictor parte de un árbol limpio
 
 # Comprueba lo mismo que `lictor run` antes de llamar al agente, entorno de verificación incluido
-uv run lictor doctor
+lictor doctor
 ```
 
 ```text
@@ -211,13 +224,13 @@ Doctor: todas las comprobaciones pasaron.
 
 ```bash
 # Implementa y verifica todos los escenarios de forma determinista
-uv run lictor run
+lictor run
 
 # Consulta el estado actual de la ejecución
-uv run lictor status
+lictor status
 
 # Regenera y muestra la ruta del informe en Markdown (.lictor/report.md)
-uv run lictor report
+lictor report
 ```
 
 <details>
@@ -566,3 +579,9 @@ uv run python scripts/mutation_score.py mutants/score.json
 ```
 
 </details>
+
+---
+
+## Licencia
+
+Copyright © 2026 Jorge MB. Licensed under the EUPL: Lictor se distribuye bajo la [Licencia Pública de la Unión Europea v1.2](LICENSE) (EUPL-1.2). El texto oficial en español y en las demás lenguas de la UE está en [interoperable-europe.ec.europa.eu](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12).

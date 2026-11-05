@@ -7,8 +7,11 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
-Primera versión, la 0.1.0, todavía sin etiquetar. Incluye la implementación inicial y el plan de
-corrección que siguió a una auditoría de la base (#1 a #6).
+## [0.1.0] - 2026-11-05
+
+Primera versión publicada, en PyPI como `lictor`. Incluye la implementación inicial, el plan de
+corrección que siguió a una auditoría de la base (#1 a #6) y las correcciones de la primera pasada
+con el CLI real de Claude Code (#8).
 
 ### Añadido
 
@@ -35,6 +38,7 @@ corrección que siguió a una auditoría de la base (#1 a #6).
   la alterada (#6).
 - El ejemplo `examples/prestamos-biblioteca`, con código previo, `Antecedentes` y `Regla` (#6).
 - Este registro de cambios y los ADR-0004 a ADR-0006.
+- `lictor --version`, la licencia EUPL-1.2 y la publicación en PyPI y TestPyPI desde una etiqueta.
 - El prompt de cada llamada al agente se guarda en `runs/` (`NNN-*.prompt.md`) con su hash en la
   bitácora, y el informe tiene una sección «Denegaciones».
 
@@ -116,3 +120,10 @@ corrección que siguió a una auditoría de la base (#1 a #6).
   `banned_patterns` son heurísticas: encarecen la trampa, no la impiden.
 - La marca «registrado a mano» es informativa: cualquiera puede escribir trailers con git.
 - Windows no está soportado.
+- Solo hay un perfil, `python-uv`, y un backend real, el CLI de Claude Code con suscripción.
+- `Scenario Outline` no está soportado.
+- Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
+  solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
+
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jmorenobl/lictor/releases/tag/v0.1.0

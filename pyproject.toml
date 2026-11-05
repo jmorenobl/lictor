@@ -7,6 +7,24 @@ authors = [
     { name = "Jorge MB", email = "jmorenobl@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "EUPL-1.2"
+license-files = ["LICENSE"]
+keywords = ["gherkin", "bdd", "agents", "llm", "claude", "acceptance-testing", "quality-gates"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Natural Language :: Spanish",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing :: BDD",
+    "Typing :: Typed",
+]
 dependencies = [
     "defusedxml>=0.7.1",
     "gherkin-official>=42.0.1",
@@ -17,6 +35,12 @@ dependencies = [
     "pydantic>=2",
     "typer>=0.27.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jmorenobl/lictor"
+Repository = "https://github.com/jmorenobl/lictor"
+Issues = "https://github.com/jmorenobl/lictor/issues"
+Changelog = "https://github.com/jmorenobl/lictor/blob/master/CHANGELOG.md"
 
 [project.scripts]
 lictor = "lictor.cli:app"

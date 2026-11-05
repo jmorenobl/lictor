@@ -1,10 +1,12 @@
 import json
 import subprocess
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+import lictor
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.application.run_files import exclusive_run
 from lictor.cli import app
@@ -110,3 +112,11 @@ def test_cli_refuses_while_another_run_holds_the_project(
     assert "otra ejecución" in result.output
     assert (tmp_path / "lictor.json").read_text(encoding="utf-8") == "{}"
     assert sorted(p.name for p in (tmp_path / ".lictor").iterdir()) == ["run.lock"]
+
+
+def test_cli_version_is_the_installed_package_version() -> None:
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.output == f"lictor {version('lictor')}\n"
+    assert lictor.__version__ == version("lictor")

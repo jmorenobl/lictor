@@ -1,0 +1,137 @@
+name: Release
+
+# Publicar es empujar una etiqueta `vX.Y.Z` sobre un commit de master: se construyen el wheel y el
+# sdist, se suben a TestPyPI, se comprueba que TestPyPI sirve los mismos bytes, se suben a PyPI y se
+# crea la release de GitHub con la sección del CHANGELOG. Lanzado a mano (workflow_dispatch) es un
+# ensayo: solo llega a TestPyPI.
+#
+# Sin tokens: PyPI y TestPyPI confían en este workflow por OIDC (trusted publishing). Configuración
+# de una vez, en pypi.org y en test.pypi.org → Publishing → «Add a new pending publisher» (GitHub):
+#   Project: lictor   Owner: jmorenobl   Repository: lictor
+#   Workflow: release.yml   Environment: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publicar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: release
+      url: https://pypi.org/p/lictor
+    permissions:
+      id-token: write # trusted publishing en TestPyPI y PyPI
+      contents: write # crear la release de GitHub
+    env:
+      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+
+      - name: Versión del paquete
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Versión del paquete: $version"
+
+      - name: La etiqueta coincide con la versión y está en master
+        if: env.IS_TAG == 'true'
+        run: |
+          if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+            echo "::error::La etiqueta $GITHUB_REF_NAME no coincide con la versión $VERSION de pyproject.toml"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::La etiqueta $GITHUB_REF_NAME no apunta a un commit de master"
+            exit 1
+          fi
+
+      - name: Notas de la release desde el CHANGELOG
+        if: env.IS_TAG == 'true'
+        run: |
+          awk -v ver="$VERSION" '
+            /^## \[/ { if (inblk) exit; if (index($0, "[" ver "]")) { inblk=1; next } }
+            /^\[[^]]+\]: / { if (inblk) exit }
+            inblk { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::El CHANGELOG no tiene sección [$VERSION]"
+            exit 1
+          fi
+
+      - name: Construir el wheel y el sdist
+        run: uv build --no-sources
+
+      - name: El wheel lleva el perfil, los prompts y la licencia
+        run: |
+          wheel="dist/lictor-$VERSION-py3-none-any.whl"
+          listing="$(python3 -m zipfile -l "$wheel")"
+          for entry in lictor/adapters/config/profiles/python-uv.json \
+                       lictor/adapters/config/profiles/python_uv/lictor_project_path.py \
+                       lictor/prompts/driver.md lictor/prompts/implement.md lictor/py.typed \
+                       "lictor-$VERSION.dist-info/licenses/LICENSE"; do
+            grep -qF "$entry" <<< "$listing" || { echo "::error::Falta $entry en el wheel"; exit 1; }
+          done
+
+      - name: El wheel instalado arranca
+        run: |
+          got="$(uvx --isolated --from "dist/lictor-$VERSION-py3-none-any.whl" lictor --version)"
+          [ "$got" = "lictor $VERSION" ] || { echo "::error::lictor --version dio '$got'"; exit 1; }
+
+      - name: Publicar en TestPyPI
+        run: >-
+          uv publish --trusted-publishing always
+          --publish-url https://test.pypi.org/legacy/
+          --check-url https://test.pypi.org/simple/
+
+      - name: TestPyPI sirve los mismos bytes
+        run: |
+          python3 - <<'EOF'
+          import hashlib, json, os, pathlib, time, urllib.request
+          version = os.environ["VERSION"]
+          url = f"https://test.pypi.org/pypi/lictor/{version}/json"
+          for _ in range(10):
+              try:
+                  served = {f["filename"]: f["digests"]["sha256"] for f in json.load(urllib.request.urlopen(url))["urls"]}
+                  break
+              except Exception:
+                  time.sleep(15)
+          else:
+              raise SystemExit(f"::error::TestPyPI no sirve lictor {version}")
+          for path in sorted(pathlib.Path("dist").iterdir()):
+              local = hashlib.sha256(path.read_bytes()).hexdigest()
+              if served.get(path.name) != local:
+                  raise SystemExit(f"::error::{path.name}: TestPyPI sirve {served.get(path.name)}, se construyó {local}")
+              print(f"{path.name}: {local}")
+          EOF
+
+      - name: Publicar en PyPI
+        if: env.IS_TAG == 'true'
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/
+
+      - name: Crear la release de GitHub
+        if: env.IS_TAG == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --title "Lictor $GITHUB_REF_NAME"
+          --notes-file RELEASE_NOTES.md
+          --verify-tag
+          --latest
