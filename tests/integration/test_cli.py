@@ -1,6 +1,6 @@
 import json
 import subprocess
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import pytest
@@ -114,9 +114,20 @@ def test_cli_refuses_while_another_run_holds_the_project(
     assert sorted(p.name for p in (tmp_path / ".lictor").iterdir()) == ["run.lock"]
 
 
+def _installed_version() -> str:
+    """The version of the installed package, or the marker of a tree that was never installed.
+
+    Lictor verifies itself in an environment where the project isn't installed, so both happen.
+    """
+    try:
+        return version("lictor")
+    except PackageNotFoundError:
+        return "0+desconocida"
+
+
 def test_cli_version_is_the_installed_package_version() -> None:
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.output == f"lictor {version('lictor')}\n"
-    assert lictor.__version__ == version("lictor")
+    assert result.output == f"lictor {_installed_version()}\n"
+    assert lictor.__version__ == _installed_version()
