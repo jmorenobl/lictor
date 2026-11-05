@@ -30,6 +30,13 @@ _DEFAULT_DISALLOWED_TOOLS = (
     "Edit(.lictor/**)",
     "Write(.lictor/**)",
 )
+# Automatic memory is on even with no setting sources: it would let one call configure the next.
+_SETTINGS = json.dumps({"autoMemoryEnabled": False})
+_NO_AUTO_MEMORY = "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
+# Where the CLI keeps its configuration and OAuth session: dropping it would log the agent out.
+_KEPT_CLAUDE_VARIABLES = frozenset({"CLAUDE_CONFIG_DIR"})
+# What the caller's virtual environment says, which is Lictor's and not the project's.
+_CALLER_VENV_VARIABLES = ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT")
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,8 @@ class ClaudeCLI:
         for tool in task.allowed_tools:
             if tool not in tools:
                 tools.append(tool)
+        # `--tools` takes names, not rules: `Bash(cmd:*)` makes Bash available, the rule limits it.
+        available = list(dict.fromkeys(tool.split("(", 1)[0] for tool in tools))
 
         return [
             self.cli_binary,
@@ -140,8 +149,13 @@ class ClaudeCLI:
             task.model,
             "--max-turns",
             str(task.max_turns),
+            # Only the listed tools exist for the agent: no web, subagents, schedules or messages.
+            "--tools",
+            ",".join(available),
+            # `acceptEdits` also lets through shell commands it takes for edits, such as `touch`;
+            # `dontAsk` refuses whatever no rule allows.
             "--permission-mode",
-            "acceptEdits",
+            "dontAsk",
             "--allowedTools",
             *tools,
             "--disallowedTools",
@@ -150,12 +164,26 @@ class ClaudeCLI:
             # make the run depend on the machine, and the agent can write the project's ones.
             "--setting-sources",
             "",
+            "--settings",
+            _SETTINGS,
             "--strict-mcp-config",
             "--no-session-persistence",
         ]
 
     def _prepare_env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        """The caller's environment, without what belongs to the caller's own session.
+
+        Launched from a Claude Code session, the agent would inherit its variables
+        (`CLAUDECODE`, the session id, the effort...), and from Lictor's own virtual environment
+        the variables that name it.
+        """
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if not (name.startswith("CLAUDE") and name not in _KEPT_CLAUDE_VARIABLES)
+            and name not in _CALLER_VENV_VARIABLES
+        }
+        env[_NO_AUTO_MEMORY] = "1"
         if self.auth == "subscription":
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("ANTHROPIC_AUTH_TOKEN", None)

@@ -17,6 +17,7 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
+from lictor.application.seal import hash_tree
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.check_red import (
     DRIVER_COMMIT_MESSAGE,
@@ -635,6 +636,33 @@ def test_check_red_baseline_verifies_head_and_commits_nothing(tmp_path: Path) ->
     vcs.commit_tree.assert_not_called()
     vcs.advance_head.assert_not_called()
     spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_baseline_that_passes_records_its_evidence(tmp_path: Path) -> None:
+    """Every step in `runs/` has its hash in the journal, the red that registers nothing too."""
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path, _REPORT_RED, 1, driver_fresh=False, driver_attempts=0
+    )
+
+    result = use_case.execute(request)
+
+    (checked,) = _events(event_log, "lictor.driver.checked.v1")
+    assert checked.data["attempt"] == 0
+    assert checked.data["scenario_status"] == result.scenario_status
+    evidence = checked.data["evidence"]
+    step_dir = tmp_path / evidence["path"]
+    assert step_dir.name == "000-red"
+    assert evidence["hash"] == hash_tree(step_dir)
+    assert _events(event_log, "lictor.driver.sealed.v1") == []
+
+
+def test_check_red_fresh_driver_records_no_check_beside_its_seal(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _ = _real_check(tmp_path, _REPORT_RED, 1)
+
+    assert use_case.execute(request).ok is True
+
+    assert _events(event_log, "lictor.driver.checked.v1") == []
+    assert len(_events(event_log, "lictor.driver.sealed.v1")) == 1
 
 
 def test_check_red_rerun_after_a_crash_verifies_the_driver_already_committed(

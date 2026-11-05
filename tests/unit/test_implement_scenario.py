@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.seal import hash_file
 from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
@@ -565,3 +566,24 @@ def test_the_prompt_carries_the_scenario_text_from_the_spec_source(tmp_path: Pat
 
     task = executor.run.call_args.args[0]
     assert SCENARIO_TEXT in task.prompt
+
+
+def test_the_prompt_is_saved_beside_the_raw_output_before_the_call(tmp_path: Path) -> None:
+    """The CLI gets the prompt by argv: without this file nothing tells what it was asked."""
+    seen: list[str] = []
+
+    def run(task: AgentTask) -> AgentResult:
+        seen.append(task.raw_path.with_suffix(".prompt.md").read_text(encoding="utf-8"))
+        return AgentResult(status="ok")
+
+    _, executor, event_log = _execute(tmp_path, MagicMock(side_effect=run))
+
+    task = executor.run.call_args.args[0]
+    assert seen == [task.prompt]
+    (finished,) = [e for e in _events(event_log) if e.type == "lictor.agent.finished.v1"]
+    prompt_file = task.raw_path.with_suffix(".prompt.md")
+    assert finished.data["prompt"] == {
+        "path": prompt_file.relative_to(tmp_path).as_posix(),
+        "hash": hash_file(prompt_file),
+    }
+    assert prompt_file.name == "002-implement.prompt.md"

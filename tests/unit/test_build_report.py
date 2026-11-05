@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from lictor.application.ports import EventLog
-from lictor.application.seal import hash_tree
+from lictor.application.seal import hash_file, hash_tree
 from lictor.application.usecases.build_report import (
     BuildReport,
     BuildReportRequest,
@@ -388,6 +388,37 @@ def test_report_names_evidence_changed_after_it_was_recorded(tmp_path: Path) -> 
     assert "**Alterada tras registrarse**: `.lictor/runs/paso`" in report
 
 
+def _agent_call(path: str, digest: str) -> Event:
+    return Event(
+        id="p1",
+        type="lictor.agent.finished.v1",
+        source="lictor",
+        time="2026-10-30T10:00:00Z",
+        runid="run-1",
+        scenarioid="IVA-001",
+        data={"role": "implement", "attempt": 1, "prompt": {"path": path, "hash": digest}},
+    )
+
+
+def test_report_names_a_prompt_changed_after_the_call(tmp_path: Path) -> None:
+    prompt = tmp_path / ".lictor" / "runs" / "run-1" / "IVA-001" / "001-implement.prompt.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Objetivo: que pase el escenario IVA-001.", encoding="utf-8")
+    path = prompt.relative_to(tmp_path).as_posix()
+    digest = hash_file(prompt)
+
+    assert "Alterada" not in _report(tmp_path, [_agent_call(path, digest)])
+
+    prompt.write_text("Objetivo: cualquier cosa.", encoding="utf-8")
+    assert f"- **Alterada tras registrarse**: `{path}`" in _report(
+        tmp_path, [_agent_call(path, digest)]
+    )
+    prompt.unlink()
+    assert f"- **Alterada tras registrarse**: `{path}`" in _report(
+        tmp_path, [_agent_call(path, digest)]
+    )
+
+
 def test_report_names_evidence_that_is_gone(tmp_path: Path) -> None:
     report = _report(tmp_path, [_verified(".lictor/runs/borrado", "sha256:x")])
 
@@ -547,3 +578,47 @@ def test_evidence_outside_runs_is_never_taken_for_retired(tmp_path: Path) -> Non
     report = _report(tmp_path, [_verified("otra/run-1/paso", "x"), _pruned(["run-1"])])
 
     assert "- **Alterada tras registrarse**: `otra/run-1/paso`" in report
+
+
+def _denied(scenario: str | None, denials: list[dict[str, str]]) -> Event:
+    return Event(
+        id="d1",
+        type="lictor.agent.denied.v1",
+        source="lictor",
+        time="2026-10-30T10:00:00Z",
+        runid="run-1",
+        scenarioid=scenario,
+        data={
+            "role": "implement" if scenario else "driver",
+            "attempt": 1,
+            "denials": denials,
+        },
+    )
+
+
+def test_report_lists_what_the_backend_denied_the_agent(tmp_path: Path) -> None:
+    heredoc = "python3 - <<'E'\n" + "x = 1\n" * 3 + "E"
+    events = [
+        _denied("IVA-001", [{"tool": "Bash", "target": "sed -i s/a/b/ src/`x`.py"}]),
+        _denied(None, [{"tool": "Bash", "target": heredoc}, {"tool": "Write", "target": ""}]),
+    ]
+
+    lines = _report(tmp_path, events).splitlines()
+
+    start = lines.index("## Denegaciones")
+    assert lines[start + 1 : start + 4] == [
+        "- **IVA-001, implement, intento 1**: Bash `sed -i s/a/b/ src/'x'.py`",
+        "- **driver, driver, intento 1**: Bash `python3 - <<'E'…`",
+        "- **driver, driver, intento 1**: Write",
+    ]
+
+
+def test_report_says_when_nothing_was_denied(tmp_path: Path) -> None:
+    assert "- *El backend no denegó nada al agente.*" in _report(tmp_path, [])
+
+
+def test_report_cuts_a_long_denied_command(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_denied("IVA-001", [{"tool": "Bash", "target": "a" * 200}])])
+
+    assert f"Bash `{'a' * 120}…`" in report
+    assert "a" * 121 not in report

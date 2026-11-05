@@ -178,7 +178,24 @@ class CheckRed:
             if request.driver_fresh:
                 commit_sha = self._seal(request, tree, candidate, step_dir)
             self._advance(request, candidate, registration)
+            if not request.driver_fresh:
+                self._checked(request, step_dir, result)
         return replace(result, commit_sha=commit_sha)
+
+    def _checked(self, request: CheckRedRequest, step_dir: Path, result: CheckRedResult) -> None:
+        """Record a sealed driver that passed, so its evidence is in the journal like any other."""
+        self.event_log.append(
+            new_event(
+                self.clock,
+                "lictor.driver.checked.v1",
+                request.run_id,
+                data={
+                    "attempt": request.driver_attempts,
+                    "scenario_status": dict(result.scenario_status),
+                    "evidence": step_evidence(step_dir, request.project_root),
+                },
+            )
+        )
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
         """Take the fresh driver from what the agent left, unless HEAD already holds it.

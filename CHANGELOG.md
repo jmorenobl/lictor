@@ -35,6 +35,8 @@ corrección que siguió a una auditoría de la base (#1 a #6).
   la alterada (#6).
 - El ejemplo `examples/prestamos-biblioteca`, con código previo, `Antecedentes` y `Regla` (#6).
 - Este registro de cambios y los ADR-0004 a ADR-0006.
+- El prompt de cada llamada al agente se guarda en `runs/` (`NNN-*.prompt.md`) con su hash en la
+  bitácora, y el informe tiene una sección «Denegaciones».
 
 ### Cambiado
 
@@ -44,6 +46,9 @@ corrección que siguió a una auditoría de la base (#1 a #6).
   avanza a ese commit (#1, #2).
 - El agente se ejecuta sin la configuración, los hooks ni el `CLAUDE.md` del usuario o del
   repositorio (#1).
+- El agente solo dispone de las herramientas de sus reglas (`--tools`), con `dontAsk` en vez de
+  `acceptEdits`, sin memoria automática y sin las variables de la sesión de Claude Code ni del
+  entorno virtual de quien lo lanza.
 - Los estados del backend (límite de uso, sesión, error) se deciden por campos estructurados, nunca
   por el texto. Un backend que no responde pausa con exit 40 sin gastar intentos (#1, #4).
 - Las defensas de la verificación (entorno, plugins, rutas y patrones prohibidos) pertenecen al
@@ -71,6 +76,10 @@ corrección que siguió a una auditoría de la base (#1 a #6).
 
 ### Corregido
 
+- `scenario.green` y la columna Commit del informe daban al escenario implementado el commit
+  colateral que va encima; ahora dan el suyo.
+- El rojo de un driver sellado que pasa no dejaba su evidencia en la bitácora
+  (`driver.checked`).
 - Sin identidad git, `lictor run` fallaba después de gastar el driver, con «Error interno» y sin el
   mensaje de git. Ahora para antes, con exit 40 y el motivo (#6).
 - `condense_error` conservaba el ruido y perdía el motivo del fallo (#1).
