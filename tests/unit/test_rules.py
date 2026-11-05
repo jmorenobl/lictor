@@ -16,6 +16,7 @@ from lictor.domain.model import (
 )
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
+    STATE_CHANGED_OUTSIDE_COPY,
     SUSPICIOUS_DRIVER,
     SYNTHETIC_MODEL,
     RedOracle,
@@ -32,6 +33,7 @@ from lictor.domain.rules import (
     count_agent_failures,
     describe_score,
     enforce_min_score,
+    error_for_agent,
     forbidden_paths,
     impostor_problem,
     impostor_source,
@@ -1480,3 +1482,15 @@ def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -
 
 def test_a_score_at_the_minimum_passes() -> None:
     assert enforce_min_score(ControlResult(ok=True, score=SCORE_94), 94).ok is True
+
+
+def test_error_for_agent_hides_the_state_files_the_agent_never_sees() -> None:
+    error = "Falló L0-estado\n\nEl estado fue modificado: .lictor/checkpoints.sqlite"
+
+    assert error_for_agent("L0-estado", error) == STATE_CHANGED_OUTSIDE_COPY
+    assert ".lictor" not in STATE_CHANGED_OUTSIDE_COPY
+
+
+@pytest.mark.parametrize("failed_at", [None, "L0-rutas", "red_check", "L2 (unit)"])
+def test_error_for_agent_keeps_any_other_failure(failed_at: str | None) -> None:
+    assert error_for_agent(failed_at, "Falló algo") == "Falló algo"

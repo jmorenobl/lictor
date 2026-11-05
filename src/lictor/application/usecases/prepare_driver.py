@@ -26,6 +26,7 @@ from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.rules import (
     classify_agent,
     count_agent_failures,
+    error_for_agent,
     forbidden_paths,
     keeps_attempt,
     path_within,
@@ -51,6 +52,7 @@ class PrepareDriverRequest:
     driver_attempts: int
     reopened_ids: Sequence[str] = ()
     last_error: str | None = None
+    failed_at: str | None = None
     prompt_template: str | None = None
     agent_failures: int = 0
     forbidden_paths: Sequence[str] = ()
@@ -68,6 +70,7 @@ class PrepareDriverResult:
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
+    failed_at: str | None = None
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -138,7 +141,8 @@ class PrepareDriver:
 
         # error block if attempt > 0 and last_error exists
         if request.driver_attempts > 0 and request.last_error:
-            error_block = f"El intento anterior falló:\n{request.last_error}"
+            error = error_for_agent(request.failed_at, request.last_error)
+            error_block = f"El intento anterior falló:\n{error}"
         else:
             error_block = ""
 
@@ -224,6 +228,7 @@ class PrepareDriver:
             agent_failures=agent_failures,
             tree=outcome.tree,
             error=outcome.error if agent_signal == "rejected" else None,
+            failed_at=outcome.failed_at if agent_signal == "rejected" else None,
         )
 
     def _run_in_copy(self, task: AgentTask, request: PrepareDriverRequest) -> AgentCopyOutcome:

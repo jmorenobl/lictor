@@ -333,6 +333,7 @@ class _GraphNodes:
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
+                failed_at=state.get("last_failed_at"),
                 agent_failures=state.get("agent_failures", 0),
                 forbidden_paths=self.ctx.forbidden_paths,
             )
@@ -341,6 +342,7 @@ class _GraphNodes:
         rejected: dict[str, Any] = {}
         if res.agent_signal == "rejected":
             rejected["last_error"] = res.error
+            rejected["last_failed_at"] = res.failed_at
             if res.driver_attempts >= self.ctx.max_driver_attempts:
                 reason = f"Driver rechazado tras {res.driver_attempts} intentos: {res.error}"
                 rejected.update(self._finish(state, int(ExitCode.PRECONDITION), reason))
@@ -406,6 +408,7 @@ class _GraphNodes:
                 "last_verify": {"ok": True},
                 "status": res.scenario_status,
                 "last_error": None,
+                "last_failed_at": None,
                 "seal_ok": True,
                 "agent_signal": None,
                 "anchor": self._anchor(),
@@ -413,6 +416,7 @@ class _GraphNodes:
         return {
             "last_verify": {"ok": False},
             "last_error": res.last_error,
+            "last_failed_at": res.failed_at,
         }
 
     def pick_next(self, state: GraphState) -> dict[str, Any]:
@@ -716,6 +720,25 @@ def get_sqlite_saver(db_path: Path) -> SqliteSaver:
     conn.execute("PRAGMA synchronous = FULL")
     saver = SqliteSaver(conn)
     saver.setup()
+    return saver
+
+
+def read_only_sqlite_saver(db_path: Path) -> SqliteSaver | None:
+    """Open the checkpoint for reading only, or None if there is none: nothing here may write.
+
+    A run in progress guards these files, so whoever only looks at them must leave them as they
+    were. A connection that may write runs `setup()` and, when it closes, can move the WAL into the
+    main file and delete it; read-only, SQLite can do neither. It may still create `-shm`, the
+    index readers share, which `IntegritySnapshot` doesn't count.
+    """
+    if not db_path.is_file():
+        return None
+    conn = sqlite3.connect(
+        f"{db_path.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False
+    )
+    conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+    saver = SqliteSaver(conn)
+    saver.is_setup = True  # its tables exist: the run that wrote them created them
     return saver
 
 
