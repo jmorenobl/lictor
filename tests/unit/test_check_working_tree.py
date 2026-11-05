@@ -19,7 +19,7 @@ from lictor.application.usecases.check_working_tree import (
     CheckWorkingTreeRequest,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
-from lictor.domain.errors import EnvironmentUnavailableError
+from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
 
 GIT = shutil.which("git") or "git"
@@ -98,6 +98,19 @@ def test_a_clean_tree_verifies_head_in_a_clone(project: Path) -> None:
     assert runner.seen[0]["src/a.py"] == "a = 1\n"
     assert not stale.exists()
     assert (project / ".lictor" / "check" / "lint.log").is_file()
+
+
+def test_a_repository_without_commits_has_nothing_to_verify(tmp_path: Path) -> None:
+    empty = tmp_path / "vacio"
+    empty.mkdir()
+    _git(empty, "init", "-q")
+    (empty / "a.py").write_text("a = 1\n", encoding="utf-8")
+    runner = FakeRunner()
+
+    with pytest.raises(PreconditionError, match="no tiene commits: haz el primero"):
+        _use_case(empty, runner).execute(_request())
+
+    assert runner.calls == []
 
 
 def test_a_clean_tree_needs_no_identity(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

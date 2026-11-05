@@ -476,6 +476,9 @@ STATE_CHANGED_OUTSIDE_COPY = (
 )
 
 
+NO_COMMITS = "El repositorio no tiene commits: haz el primero."
+
+
 def error_for_agent(failed_at: str | None, error: str) -> str:
     """What the next prompt says of a failed attempt.
 
