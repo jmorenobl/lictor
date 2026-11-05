@@ -32,8 +32,10 @@
   "forbidden_paths": [
     "*.dist-info", "*.egg-info", "*.pth", ".gitignore", ".gitattributes", "conftest.py",
     "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml",
-    "ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", "sitecustomize.py", "usercustomize.py", "uv.lock"
+    "ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", "sitecustomize.py", "usercustomize.py", "uv.lock",
+    ".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".vscode", ".github"
   ],
+  "driver_exempt_paths": ["conftest.py"],
   "verification": {
     "prepare": "uv sync --frozen --no-install-project --no-cache",
     "prepare_inherit": [

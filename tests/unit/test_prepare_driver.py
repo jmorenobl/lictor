@@ -349,6 +349,8 @@ def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) 
     vcs.changes.return_value = [
         _changed("src/evil.pth"),
         _changed("tests/acceptance/conftest.py"),
+        _changed("tests/acceptance/CLAUDE.md"),
+        _changed("tests/acceptance/.claude/conftest.py"),
         _changed("src/iva.py"),
     ]
     executor = MagicMock(spec=Executor)
@@ -372,11 +374,17 @@ def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) 
             hints="",
             green_ids=[],
             driver_attempts=0,
-            forbidden_paths=["*.pth", "conftest.py"],
+            forbidden_paths=["*.pth", "conftest.py", "CLAUDE.md", ".claude"],
+            driver_exempt_paths=["conftest.py"],
         )
     )
 
-    assert result.reverted_files == ("src/evil.pth",)
+    # In its own paths it keeps only what the profile exempts, and only where nothing else matches.
+    assert result.reverted_files == (
+        "src/evil.pth",
+        "tests/acceptance/CLAUDE.md",
+        "tests/acceptance/.claude/conftest.py",
+    )
 
 
 def test_prepare_driver_discards_links_even_in_its_own_paths(tmp_path: Path) -> None:

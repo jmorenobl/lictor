@@ -674,7 +674,8 @@ def test_init_copies_no_defence(tmp_path: Path) -> None:
 
     written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
     assert written["verification"] == {"env": {}, "inherit": [], "prepare_inherit": []}
-    assert not {"suppressions", "banned_patterns", "forbidden_paths"} & set(written)
+    defences = {"suppressions", "banned_patterns", "forbidden_paths", "driver_exempt_paths"}
+    assert not defences & set(written)
 
 
 def test_demo_declares_nothing_of_its_own() -> None:
@@ -806,7 +807,9 @@ def test_fingerprint_covers_every_field_of_the_verification(tmp_path: Path, fiel
     assert config_fingerprint(config, other) != config_fingerprint(config, defences)
 
 
-@pytest.mark.parametrize("field", ["suppressions", "banned_patterns", "forbidden_paths"])
+@pytest.mark.parametrize(
+    "field", ["suppressions", "banned_patterns", "forbidden_paths", "driver_exempt_paths"]
+)
 def test_fingerprint_covers_the_heuristics(tmp_path: Path, field: str) -> None:
     config = load_config(_project(tmp_path))
     defences = resolve_defences(config)

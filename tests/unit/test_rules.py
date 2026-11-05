@@ -1494,3 +1494,33 @@ def test_error_for_agent_hides_the_state_files_the_agent_never_sees() -> None:
 @pytest.mark.parametrize("failed_at", [None, "L0-rutas", "red_check", "L2 (unit)"])
 def test_error_for_agent_keeps_any_other_failure(failed_at: str | None) -> None:
     assert error_for_agent(failed_at, "Falló algo") == "Falló algo"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["CLAUDE.md", "src/claude.md", "src/.Claude/settings.json", "tests/unit/CONFTEST.py", "a.PTH"],
+)
+def test_forbidden_paths_ignore_case(path: str) -> None:
+    patterns = ["CLAUDE.md", ".claude", "conftest.py", "*.pth"]
+
+    assert forbidden_paths([path], patterns) == [path]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/mcp.json",
+        "src/x.mcp.json",
+        "src/.mcp.json.bak",
+        "src/CLAUDE.mdx",
+        "src/NOTCLAUDE.md",
+        "src/.claude.json",
+        "src/.githubx/ci.yml",
+        "src/github/ci.yml",
+        "src/vscode.py",
+    ],
+)
+def test_forbidden_paths_match_whole_components_only(path: str) -> None:
+    patterns = [".mcp.json", "CLAUDE.md", ".claude", ".github", ".vscode"]
+
+    assert forbidden_paths([path], patterns) == []

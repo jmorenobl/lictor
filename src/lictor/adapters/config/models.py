@@ -293,6 +293,7 @@ class Profile(BaseModel):
     suppressions: list[str] = Field(default_factory=list)
     banned_patterns: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
+    driver_exempt_paths: list[str] = Field(default_factory=list)
     verification: ProfileVerification = Field(default_factory=ProfileVerification)
     oracle: ProfileOracle = Field(default_factory=ProfileOracle)
     agent_tools: list[str] = Field(default_factory=list)

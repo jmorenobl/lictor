@@ -167,6 +167,7 @@ class GraphContext:
     build_report: BuildReport | None = None
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
+    driver_exempt_paths: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
     oracle: RedOracle = field(default_factory=RedOracle)
     map_link: MapLink = "name"
@@ -336,6 +337,7 @@ class _GraphNodes:
                 failed_at=state.get("last_failed_at"),
                 agent_failures=state.get("agent_failures", 0),
                 forbidden_paths=self.ctx.forbidden_paths,
+                driver_exempt_paths=self.ctx.driver_exempt_paths,
             )
         )
 

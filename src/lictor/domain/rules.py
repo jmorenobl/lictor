@@ -582,12 +582,19 @@ def control_path_status(path: str, *, in_tree: bool, deleted: Sequence[str]) -> 
 
 
 def forbidden_paths(paths: Sequence[str], patterns: Sequence[str]) -> list[str]:
-    """Return the paths with any component matching a pattern, as `*.pth` or `conftest.py`."""
+    """Return the paths with any component matching a pattern, as `*.pth` or `conftest.py`.
+
+    Case doesn't count: on a filesystem that ignores it, as macOS's does by default, whatever
+    opens `CLAUDE.md` or `.claude/` reads `claude.md` or `.Claude/` just the same.
+    """
+    folded = [pattern.casefold() for pattern in patterns]
     return [
         path
         for path in paths
         if any(
-            fnmatch.fnmatchcase(part, pattern) for part in path.split("/") for pattern in patterns
+            fnmatch.fnmatchcase(part.casefold(), pattern)
+            for part in path.split("/")
+            for pattern in folded
         )
     ]
 
