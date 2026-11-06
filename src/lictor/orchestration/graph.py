@@ -58,6 +58,8 @@ from lictor.domain.rules import (
     Impostors,
     MapLink,
     RedOracle,
+    paths_only_a_person_can_change,
+    person_only_reason,
     precondition_exit_code,
     run_outcome,
     suspicious_driver,
@@ -125,6 +127,7 @@ class GraphState(TypedDict, total=False):
     resume_to: str | None
     reopened: list[str]
     failures: list[list[str] | None]
+    rejected_paths: list[list[str] | None]
 
 
 @dataclass(frozen=True)
@@ -427,6 +430,7 @@ class _GraphNodes:
                     "current": sid,
                     "attempt": 0,
                     "failures": [],
+                    "rejected_paths": [],
                     "last_error": None,
                     "last_failed_at": None,
                     "last_agent_status": None,
@@ -483,6 +487,7 @@ class _GraphNodes:
                     failed_at=state.get("last_failed_at"),
                     agent_failures=state.get("agent_failures", 0),
                     last_agent_status=state.get("last_agent_status"),
+                    forbidden_paths=self.ctx.forbidden_paths,
                 )
             )
         except SealTamperedError as exc:
@@ -545,6 +550,7 @@ class _GraphNodes:
             "last_error": error,
             "last_failed_at": failed_at,
             "failures": [*state.get("failures", []), None],
+            "rejected_paths": [*state.get("rejected_paths", []), None],
         }
 
     def verify(self, state: GraphState) -> dict[str, Any]:
@@ -606,7 +612,19 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
+        discarded = list(res.reverted_files) if res.failed_at == "L0-rutas" else None
+        rejected_paths = [*state.get("rejected_paths", []), discarded]
+        needed = (
+            [] if res.ok else paths_only_a_person_can_change(rejected_paths, self.ctx.paths_driver)
+        )
+        stop = (
+            self._finish(state, int(ExitCode.PRECONDITION), person_only_reason(current_id, needed))
+            if needed
+            else {}
+        )
         return {
+            **stop,
+            "rejected_paths": rejected_paths,
             "last_verify": {
                 "ok": res.ok,
                 "failed_at": res.failed_at,
@@ -891,7 +909,7 @@ def create_graph(
     builder.add_conditional_edges(
         "verify",
         route_verify_edge,
-        {"commit": "commit", "implement": "implement", "quarantine": "quarantine"},
+        {"commit": "commit", "implement": "implement", "quarantine": "quarantine", END: END},
     )
     builder.add_conditional_edges(
         "commit",

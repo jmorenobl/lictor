@@ -74,7 +74,9 @@ def route_implement(state: Mapping[str, Any], max_attempts: int | None = None) -
 
 
 def route_verify(state: Mapping[str, Any], max_attempts: int | None = None) -> str:
-    """Route after verify node."""
+    """Route after verify node; verify itself may end the run (a path only a person may change)."""
+    if state.get("exit_code") is not None:
+        return END
     last_verify = state.get("last_verify")
     if _is_verify_ok(last_verify):
         return "commit"

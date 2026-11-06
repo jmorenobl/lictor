@@ -7,6 +7,12 @@ Objetivo: que pase el escenario {id}.
 Reglas:
 - Solo puedes crear o modificar archivos en: {writable}.
 - No toques {protected}. Cualquier cambio ahí se revierte y cuenta como intento fallido.
+- Tampoco crees ni modifiques, en ninguna carpeta: {forbidden}.
+  Lo que hay ahí lo cambia solo una persona.
+- Si el escenario no se puede cumplir sin cambiar algo de lo anterior (una dependencia nueva en la
+  configuración del proyecto, una pipeline), no busques rodeos como copiar o reimplementar una
+  dependencia: haz el cambio que haría falta. Se descartará y Lictor se lo pedirá a una persona.
+  Los tests de aceptación y los features no entran aquí: no se tocan nunca.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}.
 - Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las

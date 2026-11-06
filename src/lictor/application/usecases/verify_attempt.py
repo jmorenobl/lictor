@@ -49,6 +49,7 @@ from lictor.domain.rules import (
     map_test_cases_to_scenarios,
     path_within,
     render_full_error,
+    routes_rejected,
     suite_crash_reason,
 )
 
@@ -467,7 +468,7 @@ class VerifyAttempt:
         ]
 
         if forbidden:
-            err = f"Archivos modificados fuera de las rutas permitidas: {', '.join(forbidden)}"
+            err = routes_rejected(forbidden, req.paths_driver)
             return self._fail(req, _Failure("L0-rutas", err, reverted_files=tuple(forbidden)))
         return VerifyResult(ok=True)
 

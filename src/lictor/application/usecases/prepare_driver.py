@@ -161,6 +161,8 @@ class PrepareDriver:
             "{driver_paths}": ", ".join(request.paths_driver),
             "{writable}": ", ".join(request.paths_writable),
             "{protected_sin_driver}": ", ".join(protected_without_driver),
+            "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
+            "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,

@@ -62,6 +62,7 @@ class ImplementScenarioRequest:
     prompt_template: str | None = None
     agent_failures: int = 0
     last_agent_status: AgentStatus | None = None
+    forbidden_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class ImplementScenario:
             "{gherkin_del_escenario}": gherkin_text,
             "{writable}": ", ".join(request.paths_writable),
             "{protected}": ", ".join(request.paths_protected),
+            "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{check_commands}": ", ".join(request.check_commands) or "los tests del proyecto",
