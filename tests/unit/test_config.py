@@ -23,6 +23,7 @@ from lictor.adapters.config.loader import (
     list_profiles,
     load_config,
     load_profile,
+    profile_skill_sections,
     resolve_defences,
 )
 from lictor.adapters.config.models import (
@@ -108,6 +109,19 @@ def test_list_profiles_includes_python_uv() -> None:
     profiles = list_profiles()
     names = [p.name for p in profiles]
     assert "python-uv" in names
+
+
+def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
+    [(name, text)] = profile_skill_sections()
+    assert name == "python-uv"
+    assert "uv add --dev" in text
+
+    profile = (DEFAULT_PROFILES_DIR / "python-uv.json").read_text(encoding="utf-8")
+    (tmp_path / "a.json").write_text(profile.replace('"python-uv"', '"a"', 1), encoding="utf-8")
+    (tmp_path / "b.json").write_text(profile.replace('"python-uv"', '"b"', 1), encoding="utf-8")
+    (tmp_path / "b.skill.md").write_text("Lo de b.\n", encoding="utf-8")
+    # A profile without a section adds nothing.
+    assert profile_skill_sections(tmp_path) == [("b", "Lo de b.\n")]
 
 
 def test_controls_must_have_unique_ids() -> None:

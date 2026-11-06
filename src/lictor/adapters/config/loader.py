@@ -75,6 +75,21 @@ def list_profiles(profiles_dir: Path | None = None) -> list[Profile]:
     return profiles
 
 
+def profile_skill_sections(profiles_dir: Path | None = None) -> list[tuple[str, str]]:
+    """What each profile adds to Lictor's skill, from `<name>.skill.md` beside its definition.
+
+    It stays out of `config_fingerprint`: it tells a person how to prepare a project, and
+    verification never reads it.
+    """
+    directory = _resolve_profiles_dir(profiles_dir)
+    sections: list[tuple[str, str]] = []
+    for profile in list_profiles(directory):
+        path = directory / f"{profile.name}.skill.md"
+        if path.is_file():
+            sections.append((profile.name, path.read_text(encoding="utf-8")))
+    return sections
+
+
 def load_profile(name: str, profiles_dir: Path | None = None) -> Profile:
     """Carga un perfil por su nombre o por '<nombre>@<versión>'."""
     base_name, _, requested_version = name.partition("@")

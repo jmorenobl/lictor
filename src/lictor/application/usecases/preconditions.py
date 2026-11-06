@@ -14,6 +14,7 @@ from typing import Literal
 
 from lictor.application.ports import Executor, SpecSource, Vcs
 from lictor.application.run_files import prepare_scratch
+from lictor.application.skill import skill_stub_warning
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
@@ -49,6 +50,7 @@ class PreconditionsRequest:
     log_dir: Path | None = None
     skip_reason: str = ""
     features: bool = False
+    skill: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,8 @@ class CheckPreconditions:
             checks.append(self._clean_tree())
         if req.features:
             checks.append(self._features())
+        if req.skill and (warning := skill_stub_warning(self.project_root)):
+            checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
         checks.append(self._identity())
         executor, cli_version = self._executor()
         checks.append(executor)

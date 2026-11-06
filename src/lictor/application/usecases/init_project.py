@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lictor.application.ports import ConfigInitializer
+from lictor.application.skill import install_skill_stub
 from lictor.domain.errors import ConfigError
 
 CONFIG_FILE = "lictor.json"
@@ -18,6 +19,7 @@ class InitProjectRequest:
     profile_name: str | None = None
     model: str | None = None
     force: bool = False
+    skill: bool = True
 
 
 @dataclass(frozen=True)
@@ -27,10 +29,11 @@ class InitProjectResult:
     config_path: Path
     profile_name: str
     gitignore_updated: bool
+    skill_path: Path | None = None
 
 
 class InitProject:
-    """Use case to initialize lictor.json, .lictor/ directory, and .gitignore entries."""
+    """Use case to initialize lictor.json, .lictor/, .gitignore entries and the skill's stub."""
 
     def __init__(self, initializer: ConfigInitializer) -> None:
         self.initializer = initializer
@@ -63,6 +66,7 @@ class InitProject:
             config_path=config_path,
             profile_name=init_data.profile_name,
             gitignore_updated=gitignore_updated,
+            skill_path=install_skill_stub(req.project_root) if req.skill else None,
         )
 
     def _update_gitignore(self, project_root: Path, entries: list[str]) -> bool:

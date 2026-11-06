@@ -5,12 +5,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor import __version__
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
     config_fingerprint,
     load_config,
+    profile_skill_sections,
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig
@@ -34,6 +36,7 @@ from lictor.application.ports import (
     Vcs,
 )
 from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir
+from lictor.application.skill import render_skill
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
@@ -86,6 +89,11 @@ def bootstrap_init(project_root: Path) -> InitProject:
     """Build InitProject use case with default profile initializer."""
     initializer = ProfileConfigInitializer()
     return InitProject(initializer=initializer)
+
+
+def skill_content() -> str:
+    """Lictor's skill as the installed version tells it, with what each profile adds."""
+    return render_skill(__version__, profile_skill_sections())
 
 
 def project_journal(project_root: Path) -> EventLog:

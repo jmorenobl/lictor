@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 import lictor
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.application.run_files import exclusive_run
+from lictor.application.skill import SKILL_FILE, skill_stub
 from lictor.cli import app
 from lictor.domain.model import Health
 
@@ -92,6 +93,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     (tmp_path / "features" / "x.feature").write_text(
         "Feature: X\n  @X-001\n  Scenario: Uno\n    Given algo\n", encoding="utf-8"
     )
+    (tmp_path / SKILL_FILE).write_text("---\nname: lictor\n---\nde otra versión\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
     broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
@@ -101,6 +103,9 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
 
     assert result.exit_code == 40
     assert "✗ Ejecutor: el ejecutor no está disponible: sin sesión" in result.output
+    # The stub isn't this version's: worth telling, but not what stops the run.
+    assert "⚠ Skill de Lictor:" in result.output
+    assert "ejecuta `lictor skill`" in result.output
 
 
 @pytest.mark.parametrize("command", [["run"], ["init", "--force"]])
@@ -135,3 +140,49 @@ def test_cli_version_is_the_installed_package_version() -> None:
     assert result.exit_code == 0
     assert result.output == f"lictor {_installed_version()}\n"
     assert lictor.__version__ == _installed_version()
+
+
+def _python_project(path: Path) -> None:
+    _init_git_repo(path)
+    (path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+
+
+def test_cli_init_installs_the_skill_stub_and_says_so(tmp_path: Path) -> None:
+    _python_project(tmp_path)
+
+    result = runner.invoke(app, ["init", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / SKILL_FILE).read_text(encoding="utf-8") == skill_stub()
+    assert ".claude/skills/lictor/SKILL.md" in result.output
+
+
+def test_cli_init_without_the_skill_leaves_no_stub(tmp_path: Path) -> None:
+    _python_project(tmp_path)
+
+    result = runner.invoke(app, ["init", "--no-skill", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_cli_skill_restores_the_stub_without_touching_the_configuration(tmp_path: Path) -> None:
+    (tmp_path / "lictor.json").write_text("{}", encoding="utf-8")
+    (tmp_path / SKILL_FILE).parent.mkdir(parents=True)
+    (tmp_path / SKILL_FILE).write_text("editado\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["skill", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / SKILL_FILE).read_text(encoding="utf-8") == skill_stub()
+    assert (tmp_path / "lictor.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_cli_skill_show_prints_the_content_anywhere_and_writes_nothing(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["skill", "--show", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert f"Lictor {lictor.__version__}" in result.output.splitlines()[0]
+    assert "## Perfil python-uv" in result.output
+    assert "No lances `lictor run`" in result.output
+    assert list(tmp_path.iterdir()) == []

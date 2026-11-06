@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
+from lictor.application.skill import SKILL_FILE, skill_stub
 from lictor.application.usecases.init_project import (
     InitProject,
     InitProjectRequest,
@@ -89,3 +90,15 @@ def test_init_project_existing_gitignore_preserves_content_and_appends_missing(
     assert "__pycache__/" in content
     # .venv/ should not be duplicated
     assert content.count(".venv/") == 1
+
+
+def test_init_project_installs_the_skill_stub_unless_told_not_to(tmp_path: Path) -> None:
+    with_skill = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(tmp_path))
+    assert with_skill.skill_path == tmp_path / SKILL_FILE
+    assert with_skill.skill_path.read_text(encoding="utf-8") == skill_stub()
+
+    other = tmp_path / "otro"
+    other.mkdir()
+    without = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(other, skill=False))
+    assert without.skill_path is None
+    assert not (other / ".claude").exists()

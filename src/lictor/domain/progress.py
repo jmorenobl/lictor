@@ -181,10 +181,18 @@ class RunProgress:
         spend.calls += 1
         spend.cost_usd += _number(event.data.get("cost_usd"))
         spend.agent_ms += int(_number(event.data.get("duration_ms")))
-        if event.data.get("signal") != "error":
-            return []
         owner = event.scenarioid or DRIVER_OWNER
-        return [f"{owner}: la llamada al agente falló; se repite sin gastar el intento."]
+        lines: list[str] = []
+        skills = event.data.get("project_skills")
+        if isinstance(skills, list) and skills:
+            names = ", ".join(str(name) for name in skills)
+            lines.append(
+                f"⚠ {owner}: el agente cargó skills del proyecto ({names}), y no debería: "
+                "comprueba la versión de Claude Code."
+            )
+        if event.data.get("signal") == "error":
+            lines.append(f"{owner}: la llamada al agente falló; se repite sin gastar el intento.")
+        return lines
 
     def _verify_finished(self, event: Event) -> list[str]:
         durations = event.data.get("control_durations")

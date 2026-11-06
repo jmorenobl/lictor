@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lictor.application.ports import Executor, Vcs
+from lictor.application.skill import install_skill_stub
 from lictor.application.usecases import preconditions
 from lictor.application.usecases.preconditions import CheckPreconditions, PreconditionsRequest
 from lictor.application.verification_env import VerificationEnvironment
@@ -259,3 +260,26 @@ def test_no_commit_is_the_projects_problem_and_nothing_reads_head(
     parts.vcs.is_executable.assert_not_called()
     parts.environment.ensure.assert_not_called()
     parts.environment.throwaway.assert_not_called()
+
+
+def test_a_skill_stub_of_another_version_is_a_warning_only_doctor_asks_for(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _parts(tmp_path, bin_dir)
+    install_skill_stub(tmp_path).write_text("---\nname: lictor\n---\nviejo\n", encoding="utf-8")
+
+    assert "Skill de Lictor" not in [check.name for check in parts.use_case.execute(RUN).checks]
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", skill=True))
+
+    skill = next(check for check in report.checks if check.name == "Skill de Lictor")
+    assert skill.problems == ()
+    assert "ejecuta `lictor skill`" in skill.warnings[0]
+    assert report.problems == []
+
+
+def test_doctor_says_nothing_of_a_project_without_the_skill(tmp_path: Path, bin_dir: Path) -> None:
+    report = _parts(tmp_path, bin_dir).use_case.execute(
+        PreconditionsRequest(run_id="r1", skill=True)
+    )
+
+    assert "Skill de Lictor" not in [check.name for check in report.checks]

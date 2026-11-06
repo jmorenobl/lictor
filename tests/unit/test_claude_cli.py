@@ -528,3 +528,27 @@ def test_a_real_process_with_bad_bytes_and_an_orphan_does_not_hang_the_call(
     assert res.status == "ok"
     assert res.text.startswith("\ufffd")
     assert res.cli_version == "2.1.316"
+
+
+class TestProjectSkills:
+    """The copy may hold the project's own skills; the agent must never load them."""
+
+    @staticmethod
+    def _with_skill(tmp_path: Path, name: str) -> None:
+        skill = tmp_path / ".claude" / "skills" / name / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("---\nname: x\n---\n", encoding="utf-8")
+
+    def test_a_skill_of_the_copy_the_backend_loaded_is_reported(self, tmp_path: Path) -> None:
+        self._with_skill(tmp_path, "lictor")
+        stdout = _stream(
+            {"type": "system", "subtype": "init", "skills": ["simplify", "lictor"]}, _result()
+        )
+
+        assert _run(tmp_path, stdout).project_skills == ("lictor",)
+
+    def test_built_in_skills_are_not_the_projects(self, tmp_path: Path) -> None:
+        self._with_skill(tmp_path, "lictor")
+        stdout = _stream({"type": "system", "subtype": "init", "skills": ["simplify"]}, _result())
+
+        assert _run(tmp_path, stdout).project_skills == ()

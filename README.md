@@ -220,6 +220,12 @@ Doctor: todas las comprobaciones pasaron.
 
 `doctor` construye de verdad el entorno de verificación, en un directorio desechable, sin tocar el de una ejecución. Si hay una ejecución en curso, comprueba todo lo demás y deja el entorno como «no comprobado».
 
+### 🤝 La skill de Lictor para Claude Code
+
+`lictor init` instala en `.claude/skills/lictor/SKILL.md` una skill que ayuda a preparar el proyecto, a redactar los escenarios contigo y a leer los resultados. Nunca escribe tests ni código, ni lanza `lictor run`, ni hace commits: los escenarios los decides tú, y te pregunta por los casos que el contrato deja abiertos.
+
+El fichero es solo un esbozo: al cargarse, Claude Code ejecuta `lictor skill --show`, que imprime la skill de la versión instalada, así que al actualizar Lictor la skill se actualiza sola. Commitéalo para que lo tenga todo el equipo: el agente de Lictor no lo carga. Si el esbozo no es el de tu versión, `lictor doctor` lo avisa y `lictor skill` lo restaura. Si no la quieres, usa `lictor init --no-skill`.
+
 ### 3️⃣ Ejecuta el ciclo autónomo y consulta el informe
 
 ```bash
@@ -311,7 +317,8 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 
 | Comando | Opciones | Descripción |
 | :--- | :--- | :--- |
-| `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado) y actualiza `.gitignore`. |
+| `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f`<br/>`--no-skill` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado), actualiza `.gitignore` e instala el esbozo de la skill de Lictor para Claude Code (salvo con `--no-skill`). |
+| `lictor skill` | `--show` | Instala o restaura el esbozo de la skill en `.claude/skills/lictor/SKILL.md`, sin tocar `lictor.json`. Con `--show` imprime la skill completa de la versión instalada, sin escribir nada. |
 | `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, árbol `git` limpio, identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
 | `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
 | `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |

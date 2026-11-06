@@ -400,3 +400,23 @@ def test_status_tells_greens_registered_again() -> None:
 
     assert "Verdes: 1 de 1 (1 registrado de nuevo). En cuarentena: 0. Pendientes: 0." in lines
     assert "  - A-001: verde (registrado de nuevo)" in lines
+
+
+def test_a_call_that_loaded_a_skill_of_the_project_says_so() -> None:
+    progress = RunProgress()
+    event = _event(
+        "agent.finished",
+        "A-001",
+        role="implement",
+        attempt=1,
+        signal="ok",
+        cost_usd=0.0,
+        duration_ms=10,
+        project_skills=["lictor"],
+    )
+
+    [line] = progress.observe(event)
+
+    assert line.startswith("⚠ A-001:")
+    assert "lictor" in line
+    assert progress.observe(_finished("A-001", 0.0, 10)) == []
