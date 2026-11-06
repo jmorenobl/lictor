@@ -340,6 +340,11 @@ class GitCli(Vcs):
         found = self._run_git(["rev-parse", "--verify", "--quiet", f"{rev}^"], check=False)
         return found.stdout.strip() if found.returncode == 0 else ""
 
+    def has_commits(self) -> bool:
+        """Ask for HEAD's commit quietly: without one, git fails and says nothing."""
+        res = self._run_git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], check=False)
+        return res.returncode == 0
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         res = self._run_git(["rev-parse", "HEAD"])

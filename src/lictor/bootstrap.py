@@ -252,6 +252,7 @@ def bootstrap_runtime(
         build_report=report_uc,
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
         forbidden_paths=defences.forbidden_paths,
+        driver_exempt_paths=defences.driver_exempt_paths,
         banned_patterns=defences.banned_patterns,
         oracle=RedOracle(
             red_kinds=defences.red_kinds,

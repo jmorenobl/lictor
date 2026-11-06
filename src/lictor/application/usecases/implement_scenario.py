@@ -25,7 +25,12 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
-from lictor.domain.rules import classify_agent, count_agent_failures, keeps_attempt
+from lictor.domain.rules import (
+    classify_agent,
+    count_agent_failures,
+    error_for_agent,
+    keeps_attempt,
+)
 
 _STOPPED_EARLY_NOTES: dict[str, str] = {
     "max_turns": "El intento anterior se quedó sin turnos antes de terminar.",
@@ -114,7 +119,7 @@ class ImplementScenario:
         if request.last_error:
             failure = (
                 f"El intento anterior falló en {request.failed_at or 'verificación'}:\n"
-                f"{request.last_error}"
+                f"{error_for_agent(request.failed_at, request.last_error)}"
             )
             error_block = f"{error_block}\n{failure}".strip()
 

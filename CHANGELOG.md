@@ -7,6 +7,41 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.1.1] - 2026-11-06
+
+Correcciones de la pasada greenfield `romanos` con la 0.1.0 de PyPI.
+
+### Corregido
+
+- `lictor status` durante una ejecución ya no gasta el intento en curso. Abría el checkpoint con
+  una conexión de escritura y, al cerrarla, SQLite volcaba el WAL al fichero principal: el intento
+  fallaba en `L0-estado` y, con `max_attempts: 3`, dos `status` podían poner un escenario en
+  cuarentena. Ahora lo lee en solo lectura, y sin ejecución no crea el fichero.
+- El prompt del reintento tras un fallo en `L0-estado` ya no le lista al agente ficheros de
+  `.lictor/` que no ve: dice que el intento se descartó porque el estado de la ejecución cambió
+  fuera de su copia. `state.tampered` y la evidencia siguen nombrándolos.
+- `lictor doctor` y `lictor check` en un repositorio sin commits salían con «Error interno», la
+  traza de git y código 1. `doctor` lo muestra como una comprobación fallida más («El repositorio no
+  tiene commits: haz el primero»), y las dos órdenes salen con 10. `lictor run` también lo dice.
+- Los eventos de la bitácora decían `source: lictor/0.1.0` en cualquier versión: estaba escrito a
+  mano. Ahora es la versión instalada.
+- El README de PyPI tenía el banner y los enlaces a los ejemplos, el esquema y los ADR rotos: eran
+  rutas relativas al repositorio. Ahora apuntan a GitHub.
+
+### Cambiado
+
+- El perfil `python-uv` rechaza en `L0-rutas` lo que hace que otra herramienta ejecute código o siga
+  instrucciones al abrir el proyecto: `.claude`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+  `.mcp.json`, `.vscode` y `.github`, en cualquier directorio.
+- `forbidden_paths` se compara sin distinguir mayúsculas: en macOS, `claude.md` se abre como
+  `CLAUDE.md`.
+- El driver ya no está exento de todo `forbidden_paths` en sus rutas, solo de lo que el perfil
+  nombra en `driver_exempt_paths` (en `python-uv`, `conftest.py`). Lo demás se descarta de su árbol.
+- **Una ejecución a medias de la 0.1.0 no se puede reanudar con la 0.1.1**: el perfil cambia y con
+  él la huella de la configuración, así que `lictor run` sale con 10. Termínala con la 0.1.0 antes
+  de actualizar, o empieza otra con `lictor run --new`. El perfil sigue siendo `python-uv@0.1`:
+  subir la versión obligaría a editar el `lictor.json` de cada proyecto.
+
 ## [0.1.0] - 2026-11-05
 
 Primera versión publicada, en PyPI como `lictor`. Incluye la implementación inicial, el plan de
@@ -125,5 +160,6 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.1.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jmorenobl/lictor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jmorenobl/lictor/releases/tag/v0.1.0

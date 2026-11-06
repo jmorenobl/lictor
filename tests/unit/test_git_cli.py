@@ -675,3 +675,12 @@ def test_a_repository_without_commits_has_no_trailer_commits(tmp_path: Path) -> 
     subprocess.run([GIT_BIN, "init", "-q"], cwd=tmp_path, check=True)
 
     assert GitCli(repo_dir=tmp_path).trailer_commits("Scenario") == []
+
+
+def test_has_commits_tells_a_repository_just_created(tmp_path: Path, git_repo: Path) -> None:
+    empty = tmp_path / "vacio"
+    empty.mkdir()
+    subprocess.run([GIT_BIN, "init", "-q"], cwd=empty, check=True)
+
+    assert GitCli(repo_dir=empty).has_commits() is False
+    assert GitCli(repo_dir=git_repo).has_commits() is True

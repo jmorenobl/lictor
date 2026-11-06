@@ -43,6 +43,7 @@ class Defences:
     suppressions: Sequence[str]
     banned_patterns: Sequence[str]
     forbidden_paths: Sequence[str]
+    driver_exempt_paths: Sequence[str] = ()
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -302,6 +303,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         suppressions=profile.suppressions,
         banned_patterns=profile.banned_patterns,
         forbidden_paths=profile.forbidden_paths,
+        driver_exempt_paths=profile.driver_exempt_paths,
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

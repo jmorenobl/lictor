@@ -674,7 +674,7 @@ def test_verify_files_its_evidence_under_the_attempt_of_the_call(
 
 
 def test_build_driver_hands_the_forbidden_paths_to_the_use_case() -> None:
-    context = MagicMock(forbidden_paths=("*.pth",))
+    context = MagicMock(forbidden_paths=("*.pth",), driver_exempt_paths=("conftest.py",))
     context.prepare_driver.execute.return_value = MagicMock(
         agent_result=MagicMock(
             text="", duration_ms=0, cost_usd=0.0, tokens=MagicMock(input=0, output=0)
@@ -686,7 +686,9 @@ def test_build_driver_hands_the_forbidden_paths_to_the_use_case() -> None:
 
     _GraphNodes(context).build_driver(cast(GraphState, {"run_id": "R"}))
 
-    assert context.prepare_driver.execute.call_args.args[0].forbidden_paths == ("*.pth",)
+    request = context.prepare_driver.execute.call_args.args[0]
+    assert request.forbidden_paths == ("*.pth",)
+    assert request.driver_exempt_paths == ("conftest.py",)
 
 
 NODE_JOIN_S = 5.0

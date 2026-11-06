@@ -122,6 +122,7 @@ class CheckRedResult:
     scenario_status: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None
     commit_sha: str | None = None
+    failed_at: str | None = None
 
 
 class CheckRed:
@@ -437,7 +438,7 @@ class CheckRed:
                 },
             )
         )
-        return CheckRedResult(ok=False, last_error=condensed)
+        return CheckRedResult(ok=False, last_error=condensed, failed_at=rejection.kind)
 
     def _advance(
         self, request: CheckRedRequest, candidate: Candidate | None, registration: _Registration

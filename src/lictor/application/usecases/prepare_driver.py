@@ -26,6 +26,7 @@ from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.rules import (
     classify_agent,
     count_agent_failures,
+    error_for_agent,
     forbidden_paths,
     keeps_attempt,
     path_within,
@@ -51,9 +52,11 @@ class PrepareDriverRequest:
     driver_attempts: int
     reopened_ids: Sequence[str] = ()
     last_error: str | None = None
+    failed_at: str | None = None
     prompt_template: str | None = None
     agent_failures: int = 0
     forbidden_paths: Sequence[str] = ()
+    driver_exempt_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class PrepareDriverResult:
     agent_failures: int = 0
     tree: str | None = None
     error: str | None = None
+    failed_at: str | None = None
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -89,17 +93,25 @@ def _collect_features_text(features_dir: Path) -> str:
 
 
 def _discarded_paths(changes: Sequence[TreeChange], request: PrepareDriverRequest) -> list[str]:
-    """Return what the driver may not write: L0-rutas, allowing paths.driver and paths.writable."""
+    """Return what the driver may not write: L0-rutas, allowing paths.driver and paths.writable.
+
+    In its own paths the driver may keep what the profile exempts, as the test configuration it
+    needs (`driver_exempt_paths`); nothing else that `forbidden_paths` names, since it is sealed
+    and committed with the rest: instructions or settings for the next tool that opens the project
+    would be as much a plant there as anywhere.
+    """
     allowed_paths = tuple(request.paths_driver) + tuple(request.paths_writable)
     changed = [change.path for change in changes]
     forbidden = set(forbidden_paths(changed, request.forbidden_paths))
+    exempt = set(request.driver_exempt_paths)
+    not_exempt = set(
+        forbidden_paths(changed, [p for p in request.forbidden_paths if p not in exempt])
+    )
     discarded: list[str] = []
     for change in changes:
-        # The driver may need its own config; what it writes in project code may not.
-        in_project_code = change.path in forbidden and not path_within(
-            change.path, request.paths_driver
-        )
-        if change.is_link or in_project_code or not path_within(change.path, allowed_paths):
+        in_driver = path_within(change.path, request.paths_driver)
+        rejected = change.path in not_exempt or (change.path in forbidden and not in_driver)
+        if change.is_link or rejected or not path_within(change.path, allowed_paths):
             discarded.append(change.path)
     return discarded
 
@@ -138,7 +150,8 @@ class PrepareDriver:
 
         # error block if attempt > 0 and last_error exists
         if request.driver_attempts > 0 and request.last_error:
-            error_block = f"El intento anterior falló:\n{request.last_error}"
+            error = error_for_agent(request.failed_at, request.last_error)
+            error_block = f"El intento anterior falló:\n{error}"
         else:
             error_block = ""
 
@@ -224,6 +237,7 @@ class PrepareDriver:
             agent_failures=agent_failures,
             tree=outcome.tree,
             error=outcome.error if agent_signal == "rejected" else None,
+            failed_at=outcome.failed_at if agent_signal == "rejected" else None,
         )
 
     def _run_in_copy(self, task: AgentTask, request: PrepareDriverRequest) -> AgentCopyOutcome:

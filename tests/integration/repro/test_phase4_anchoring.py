@@ -14,6 +14,7 @@ from lictor import cli
 from lictor.application.usecases.commit_green import CommitGreen
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.model import AgentStatus, AgentTask
+from lictor.domain.rules import STATE_CHANGED_OUTSIDE_COPY
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     DRIVER,
@@ -393,7 +394,10 @@ def test_c7_state_tampering_fails_the_attempt(make_project: ProjectFactory) -> N
     assert "IVA-001" not in green_ids(root)
     assert quarantined(root) == ["IVA-001"]
     assert agent.calls.count("IVA-001") == 3, "cada manipulación gasta el intento"
-    assert "journal.jsonl" in error_block(agent.prompts["IVA-001"][1])
+    # The agent never sees `.lictor/`: the retry says what happened without the list (F13).
+    retry = error_block(agent.prompts["IVA-001"][1])
+    assert STATE_CHANGED_OUTSIDE_COPY in retry
+    assert "journal.jsonl" not in retry
     assert not [
         e
         for e in events_of(root, "verify.finished")
@@ -422,6 +426,9 @@ def test_c7_tampering_during_the_driver_fails_its_attempt(make_project: ProjectF
 
     assert agent.calls.count("driver") == 2
     assert len(events_of(root, "state.tampered")) == 1
+    retry = error_block(agent.prompts["driver"][1])
+    assert STATE_CHANGED_OUTSIDE_COPY in retry
+    assert "journal.jsonl" not in retry
 
 
 def test_c8_the_copy_has_no_checkpoint(make_project: ProjectFactory) -> None:

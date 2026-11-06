@@ -470,6 +470,25 @@ def _condense_cases(cases: Sequence[TestCaseResult], limit: int) -> str:
     return "\n\n".join(items)
 
 
+STATE_CHANGED_OUTSIDE_COPY = (
+    "El intento se descartó sin verificarlo: el estado de la ejecución cambió fuera de tu copia "
+    "de trabajo, que no lo contiene. Implementa el escenario de nuevo."
+)
+
+
+NO_COMMITS = "El repositorio no tiene commits: haz el primero."
+
+
+def error_for_agent(failed_at: str | None, error: str) -> str:
+    """What the next prompt says of a failed attempt.
+
+    A failure at `L0-estado` names files the agent never sees, in `.lictor/` and `.git`: the list
+    would accuse it of something it can't do, and anything that reads the checkpoint while it works
+    can cause one. The journal (`state.tampered`) and the evidence keep the names.
+    """
+    return STATE_CHANGED_OUTSIDE_COPY if failed_at == "L0-estado" else error
+
+
 def condense_error(
     failed_at: str,
     raw_error: str,
@@ -563,12 +582,19 @@ def control_path_status(path: str, *, in_tree: bool, deleted: Sequence[str]) -> 
 
 
 def forbidden_paths(paths: Sequence[str], patterns: Sequence[str]) -> list[str]:
-    """Return the paths with any component matching a pattern, as `*.pth` or `conftest.py`."""
+    """Return the paths with any component matching a pattern, as `*.pth` or `conftest.py`.
+
+    Case doesn't count: on a filesystem that ignores it, as macOS's does by default, whatever
+    opens `CLAUDE.md` or `.claude/` reads `claude.md` or `.Claude/` just the same.
+    """
+    folded = [pattern.casefold() for pattern in patterns]
     return [
         path
         for path in paths
         if any(
-            fnmatch.fnmatchcase(part, pattern) for part in path.split("/") for pattern in patterns
+            fnmatch.fnmatchcase(part.casefold(), pattern)
+            for part in path.split("/")
+            for pattern in folded
         )
     ]
 

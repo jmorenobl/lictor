@@ -4,6 +4,7 @@ import json
 import shutil
 import sys
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -36,7 +37,12 @@ from lictor.domain.rules import (
     describe_score,
     precondition_exit_code,
 )
-from lictor.orchestration.graph import DURABILITY, create_graph, get_sqlite_saver
+from lictor.orchestration.graph import (
+    DURABILITY,
+    create_graph,
+    get_sqlite_saver,
+    read_only_sqlite_saver,
+)
 
 app = typer.Typer(
     name="lictor",
@@ -700,11 +706,14 @@ def status(
 
         run_id = current_run_file.read_text(encoding="utf-8").strip()
         runtime = bootstrap_runtime(resolved_cwd)
-        saver = get_sqlite_saver(lictor_dir / "checkpoints.sqlite")
-        graph = create_graph(runtime.graph_context, checkpointer=saver)
-
-        chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
-        state_snapshot = graph.get_state(config=chk_config)
+        # A run in progress guards the checkpoint: looking at it must not write it (F13).
+        saver = read_only_sqlite_saver(lictor_dir / "checkpoints.sqlite")
+        state_snapshot = None
+        if saver is not None:
+            with closing(saver.conn):
+                graph = create_graph(runtime.graph_context, checkpointer=saver)
+                chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+                state_snapshot = graph.get_state(config=chk_config)
         state_vals = state_snapshot.values if state_snapshot else {}
         next_nodes = list(state_snapshot.next) if state_snapshot else []
 

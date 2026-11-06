@@ -162,6 +162,10 @@ class Vcs(Protocol):
         """
         ...
 
+    def has_commits(self) -> bool:
+        """Tell whether HEAD names a commit: a repository just created has none."""
+        ...
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         ...

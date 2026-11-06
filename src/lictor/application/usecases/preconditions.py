@@ -17,7 +17,7 @@ from lictor.application.run_files import prepare_scratch
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
-from lictor.domain.rules import missing_executables
+from lictor.domain.rules import NO_COMMITS, missing_executables
 
 EnvironmentCheck = Literal["run", "throwaway", "none"]
 
@@ -75,7 +75,8 @@ class CheckPreconditions:
     aside: VerificationEnvironment | None = None
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
-        checks: list[PreconditionCheck] = []
+        has_commits = self.vcs.has_commits()
+        checks: list[PreconditionCheck] = [self._commits(has_commits)]
         if req.clean_tree:
             checks.append(self._clean_tree())
         checks.append(self._identity())
@@ -85,11 +86,27 @@ class CheckPreconditions:
         checks.append(scratch)
         checks.append(
             PreconditionCheck(
-                "Comandos de verificación", tuple(missing_executables(self.commands, self._found))
+                "Comandos de verificación",
+                tuple(
+                    missing_executables(
+                        self.commands, lambda program: self._found(program, has_commits)
+                    )
+                ),
             )
         )
-        checks.append(self._environment(req, checks, scratch_ok=not scratch.problems))
+        checks.append(
+            self._environment(req, checks, scratch_ok=not scratch.problems, has_commits=has_commits)
+        )
         return PreconditionsReport(tuple(checks), cli_version)
+
+    @staticmethod
+    def _commits(has_commits: bool) -> PreconditionCheck:
+        """Everything Lictor verifies is a commit, and its first one builds on HEAD."""
+        if has_commits:
+            return PreconditionCheck("Repositorio con commits")
+        return PreconditionCheck(
+            "Repositorio con commits", (PreconditionProblem("repository", NO_COMMITS),)
+        )
 
     def _clean_tree(self) -> PreconditionCheck:
         changed = self.vcs.status()
@@ -126,20 +143,31 @@ class CheckPreconditions:
             )
         return PreconditionCheck("Directorio temporal")
 
-    def _found(self, program: str) -> bool:
-        """Resolve a program as the clone will: on the commands' PATH, or committed in HEAD."""
+    def _found(self, program: str, has_commits: bool) -> bool:
+        """Resolve a program as the clone will: on the commands' PATH, or committed in HEAD.
+
+        Without a HEAD a relative program can't be judged, and isn't: the missing commit already
+        stops the command, and calling it missing would send the person to fix the machine.
+        """
         if "/" not in program:
             return shutil.which(program, path=self.environment.search_path()) is not None
         if os.path.isabs(program):
             return os.path.isfile(program) and os.access(program, os.X_OK)
-        return self.vcs.is_executable("HEAD", posixpath.normpath(program))
+        return not has_commits or self.vcs.is_executable("HEAD", posixpath.normpath(program))
 
     def _environment(
-        self, req: PreconditionsRequest, earlier: list[PreconditionCheck], *, scratch_ok: bool
+        self,
+        req: PreconditionsRequest,
+        earlier: list[PreconditionCheck],
+        *,
+        scratch_ok: bool,
+        has_commits: bool,
     ) -> PreconditionCheck:
         name = "Entorno de verificación"
         if req.environment == "none":
             return PreconditionCheck(name, skipped=req.skip_reason)
+        if not has_commits:
+            return PreconditionCheck(name, skipped="no se construye: no hay ningún commit")
         if not scratch_ok:
             return PreconditionCheck(name, skipped="no se puede construir sin directorio temporal")
         # A run that is going to stop anyway doesn't download anything.

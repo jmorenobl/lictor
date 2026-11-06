@@ -20,6 +20,8 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
+from lictor.domain.errors import PreconditionError
+from lictor.domain.rules import NO_COMMITS
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
 
@@ -72,7 +74,10 @@ class CheckWorkingTree:
         self.evidence_dir = evidence_dir
 
     def execute(self, req: CheckWorkingTreeRequest) -> CheckWorkingTreeResult:
-        """Check; raise `EnvironmentUnavailableError` if git can't commit or nothing builds."""
+        """Check; raise `EnvironmentUnavailableError` if git can't commit or nothing builds.
+
+        Raise `PreconditionError` if the repository has no commit: there is nothing to verify on.
+        """
         subject = self._subject(req.rev)
         # Each check replaces what the previous one left.
         shutil.rmtree(self.evidence_dir, ignore_errors=True)
@@ -101,6 +106,8 @@ class CheckWorkingTree:
     def _subject(self, rev: str | None) -> _Subject:
         if rev is not None:
             return _Subject(rev, f"commit {rev[:12]}")
+        if not self.vcs.has_commits():
+            raise PreconditionError(NO_COMMITS)
         head = self.vcs.get_head_sha()
         tree = self.vcs.capture(self.project_root, skip=[".lictor"])
         if tree == self.vcs.get_tree(head):

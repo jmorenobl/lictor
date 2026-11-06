@@ -3,6 +3,7 @@
 import contextlib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,9 +14,11 @@ from lictor.application.usecases.preconditions import CheckPreconditions, Precon
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import Health, PreconditionProblem
+from lictor.domain.rules import NO_COMMITS
 
 HEALTHY = Health(ok=True, cli_version="2.1.0", auth_status="subscription")
 NAMES = [
+    "Repositorio con commits",
     "Árbol git limpio",
     "Identidad git",
     "Ejecutor",
@@ -41,6 +44,7 @@ class _Parts:
 
     def __init__(self, tmp_path: Path, bin_dir: Path, commands: dict[str, str]) -> None:
         self.vcs = MagicMock(spec=Vcs)
+        self.vcs.has_commits.return_value = True
         self.vcs.status.return_value = []
         self.vcs.committer_identity.return_value = "Ana <ana@example.com>"
         self.vcs.is_executable.return_value = False
@@ -96,7 +100,7 @@ def test_a_resume_doesnt_look_at_the_tree(tmp_path: Path, bin_dir: Path) -> None
     )
 
     assert report.problems == []
-    assert [check.name for check in report.checks] == NAMES[1:]
+    assert [check.name for check in report.checks] == [NAMES[0], *NAMES[2:]]
     parts.vcs.status.assert_not_called()
 
 
@@ -236,3 +240,22 @@ def test_a_prepare_that_fails_is_the_machines_problem(tmp_path: Path, bin_dir: P
     report = parts.use_case.execute(RUN)
 
     assert report.checks[-1].problems == (PreconditionProblem("environment", "sin red"),)
+
+
+@pytest.mark.parametrize("environment", ["run", "throwaway"])
+def test_no_commit_is_the_projects_problem_and_nothing_reads_head(
+    tmp_path: Path, bin_dir: Path, environment: Literal["run", "throwaway"]
+) -> None:
+    parts = _parts(tmp_path, bin_dir, {"del control 'a'": "scripts/check.sh --x"})
+    parts.vcs.has_commits.return_value = False
+    request = PreconditionsRequest(run_id="r1", environment=environment, log_dir=tmp_path / "log")
+
+    report = parts.use_case.execute(request)
+
+    assert report.checks[0].problems == (PreconditionProblem("repository", NO_COMMITS),)
+    # A relative program can't be judged without a HEAD; the missing commit already says why.
+    assert report.problems == [PreconditionProblem("repository", NO_COMMITS)]
+    assert report.checks[-1].skipped == "no se construye: no hay ningún commit"
+    parts.vcs.is_executable.assert_not_called()
+    parts.environment.ensure.assert_not_called()
+    parts.environment.throwaway.assert_not_called()
