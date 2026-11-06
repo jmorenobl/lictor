@@ -13,6 +13,7 @@ Reglas:
 - No crees ni modifiques, en ninguna carpeta: {forbidden}, salvo {exentos} dentro de
   {driver_paths}. Se descartan: lo que hay ahí lo cambia solo una persona.
 - Trabajas en una copia sin historial: no hay git ni commits.
+- No añadas supresiones: {suppressions}. El driver queda sellado: si las lleva, se rechaza.
 - Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las
   comprobaciones: cualquier otra orden se deniega y te cuesta turnos.
 - Cada test debe llevar el ID de su escenario en el nombre.

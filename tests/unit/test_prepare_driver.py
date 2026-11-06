@@ -104,7 +104,7 @@ def test_prepare_driver_executes_task_and_emits_event(tmp_path: Path) -> None:
     assert result.driver_attempts == 1
     assert result.agent_result.status == "ok"
 
-    event_log.append.assert_called_once()
+    assert event_log.append.call_count == 2
     event = event_log.append.call_args[0][0]
     assert isinstance(event, Event)
     assert event.type == "lictor.agent.finished.v1"
@@ -160,7 +160,7 @@ def test_prepare_driver_reverts_unauthorized_paths(tmp_path: Path) -> None:
     workspace = executor.run.call_args.args[0].cwd
     assert vcs.capture.call_args_list == [call(workspace), call(workspace, skip=["pyproject.toml"])]
     assert result.reverted_files == ("pyproject.toml",)
-    assert event_log.append.call_args_list[0].args[0].data["reverted_files"] == ["pyproject.toml"]
+    assert event_log.append.call_args_list[1].args[0].data["reverted_files"] == ["pyproject.toml"]
 
 
 def test_prepare_driver_does_not_increment_attempts_on_rate_limit(tmp_path: Path) -> None:
@@ -335,7 +335,7 @@ def test_prepare_driver_records_denials(tmp_path: Path) -> None:
 
     _, _, event_log = _execute_driver(tmp_path, agent)
 
-    finished, denied = [call.args[0] for call in event_log.append.call_args_list]
+    _, finished, denied = [call.args[0] for call in event_log.append.call_args_list]
     assert finished.data["exit_code"] == 0
     assert finished.data["signal"] == "ok"
     assert denied.type == "lictor.agent.denied.v1"
@@ -487,3 +487,25 @@ def test_driver_prompt_is_saved_beside_the_raw_output(tmp_path: Path) -> None:
     ]
     assert finished.data["prompt"]["path"] == prompt_file.relative_to(tmp_path).as_posix()
     assert prompt_file.name == task.raw_path.name.replace(".json", ".prompt.md")
+
+
+def test_driver_prompt_forbids_the_suppressions_of_the_profile(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), suppressions=["# noqa", "# type: ignore"]
+    )
+
+    assert "- No añadas supresiones: # noqa, # type: ignore." in _prompt(executor)
+
+
+def test_driver_start_is_in_the_journal_before_the_call(tmp_path: Path) -> None:
+    _, _, event_log = _execute_driver(
+        tmp_path, AgentResult(status="ok"), driver_attempts=1, max_driver_attempts=2
+    )
+
+    events = [call_.args[0] for call_ in event_log.append.call_args_list]
+    assert [e.type for e in events][:2] == ["lictor.agent.started.v1", "lictor.agent.finished.v1"]
+    assert (events[0].scenarioid, events[0].data["attempt"], events[0].data["max_attempts"]) == (
+        None,
+        2,
+        2,
+    )

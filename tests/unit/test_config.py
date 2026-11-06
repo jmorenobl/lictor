@@ -43,6 +43,7 @@ from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
 )
 from lictor.domain.errors import ConfigError, ExitCode
+from lictor.domain.rules import banned_matches
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,6 +57,36 @@ def test_load_python_uv_profile() -> None:
     assert "tests/acceptance/" in profile.paths.driver
     assert "tests/acceptance/" in profile.paths.protected
     assert len(profile.controls) == 3
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))',
+        "sys.path.append('src')",
+        "sys.path[:0] = ['src']",
+        "sys.path = ['src', *sys.path]",
+        "sys.path += ['src']",
+        "sys.path.extend(['src'])",
+    ],
+)
+def test_the_profile_refuses_reordering_the_import_path(line: str) -> None:
+    """`src` goes behind the dependencies on purpose: in front, it can replace one (F12)."""
+    assert banned_matches([line], load_profile("python-uv").banned_patterns)
+
+
+@pytest.mark.parametrize(
+    "line", ["import sys", "print(sys.path)", "assert 'src' in sys.path", "sys.path == []"]
+)
+def test_the_profile_lets_code_read_the_import_path(line: str) -> None:
+    assert banned_matches([line], load_profile("python-uv").banned_patterns) == []
+
+
+def test_the_driver_is_told_not_to_touch_the_import_path() -> None:
+    hints = load_profile("python-uv").acceptance.driver_hints
+
+    assert "sys.path" in hints
+    assert "ya está en el path" in hints
 
 
 def test_load_profile_with_version_suffix() -> None:

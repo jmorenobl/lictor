@@ -195,6 +195,56 @@ def test_e2e_demo_iva_good_mode(tmp_path: Path) -> None:
     assert "Escenarios en verde**: 3" in report_text
 
 
+def test_run_tells_each_step_on_stderr_and_leaves_stdout_alone(tmp_path: Path) -> None:
+    repo = _setup_demo_iva_repo(tmp_path, {"mode": "good", "files_to_write": GOOD_FILES})
+
+    res = runner.invoke(app, ["run", "--cwd", str(repo)])
+
+    assert res.exit_code == 0, res.output
+    lines = res.stderr.splitlines()
+    assert lines[:4] == [
+        "Entorno de verificación listo.",
+        "Escenarios: 3 (0 en verde, 3 pendientes).",
+        "driver: escribiendo el driver, intento 1 de 2…",
+        "driver: sellado (1 llamada, 0,01 $).",
+    ]
+    assert "IVA-001: implementando, intento 1 de 3…" in lines
+    assert any(line.startswith("IVA-001: verde, intento 1, ") for line in lines)
+    assert lines[-1].startswith("Total: 4 llamadas, ")
+    assert lines[-1].endswith("; 3 en verde, 0 en cuarentena, 0 pendientes.")
+    assert "Escenarios:" not in res.stdout
+
+
+def test_status_after_a_run_reads_as_spanish_with_its_counts(tmp_path: Path) -> None:
+    repo = _setup_demo_iva_repo(tmp_path, {"mode": "good", "files_to_write": GOOD_FILES})
+    assert runner.invoke(app, ["run", "--quiet", "--cwd", str(repo)]).exit_code == 0
+
+    res = runner.invoke(app, ["status", "--cwd", str(repo)])
+
+    assert res.exit_code == 0, res.output
+    lines = res.stdout.splitlines()
+    assert lines[1] == "Estado: terminada con código 0."
+    assert "Verdes: 3 de 3 (3 implementados). En cuarentena: 0. Pendientes: 0." in lines
+    assert any(
+        line.startswith("Agente: 4 llamadas, ") and "(driver: 1 llamada" in line for line in lines
+    )
+    assert "  - IVA-001: verde (implementado)" in lines
+    assert "None" not in res.stdout
+    payload = json.loads(runner.invoke(app, ["status", "--json", "--cwd", str(repo)]).stdout)
+    assert (payload["calls"], payload["driver"]["calls"]) == (4, 1)
+    assert payload["greens"]["implemented"] == ["IVA-001", "IVA-002", "IVA-003"]
+
+
+def test_run_quiet_tells_nothing_but_the_outcome(tmp_path: Path) -> None:
+    repo = _setup_demo_iva_repo(tmp_path, {"mode": "good", "files_to_write": GOOD_FILES})
+
+    res = runner.invoke(app, ["run", "--quiet", "--cwd", str(repo)])
+
+    assert res.exit_code == 0, res.output
+    assert "driver:" not in res.output
+    assert "Total:" not in res.output
+
+
 def test_e2e_demo_iva_fail_mode_quarantines(tmp_path: Path) -> None:
     # Driver is valid, but implementation always fails
     fake_config = {

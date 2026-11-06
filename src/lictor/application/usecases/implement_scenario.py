@@ -16,6 +16,7 @@ from lictor.application.run_files import (
 from lictor.application.usecases.agent_events import (
     AgentCall,
     agent_finished_event,
+    agent_started_event,
     denial_event,
     tamper_event,
 )
@@ -63,6 +64,7 @@ class ImplementScenarioRequest:
     agent_failures: int = 0
     last_agent_status: AgentStatus | None = None
     forbidden_paths: Sequence[str] = ()
+    max_attempts: int = 0  # only to tell whoever watches; the graph decides when they run out
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,20 @@ class ImplementScenario:
             raw_path=raw_path,
         )
         prompt_file = save_prompt(raw_path, prompt, request.project_root)
+        started = AgentCall(
+            run_id=request.run_id,
+            scenario_id=request.scenario.id.value,
+            role="implement",
+            attempt=request.attempt + 1,
+            signal="",
+            model=request.model,
+            cli_version="",
+            prompt_sha=prompt_sha,
+            raw_path=raw_path,
+            project_root=request.project_root,
+            prompt=prompt_file,
+        )
+        self.event_log.append(agent_started_event(self.clock, started, request.max_attempts))
         outcome = self._run_in_copy(task, request.project_root)
         agent_result = outcome.agent_result
 
@@ -176,18 +192,11 @@ class ImplementScenario:
         keeps = keeps_attempt(agent_signal, agent_failures)
         new_attempt = request.attempt if keeps else request.attempt + 1
 
-        call = AgentCall(
-            run_id=request.run_id,
-            scenario_id=request.scenario.id.value,
-            role="implement",
+        call = replace(
+            started,
             attempt=new_attempt,
             signal=agent_signal,
-            model=request.model,
             cli_version=agent_result.cli_version,
-            prompt_sha=prompt_sha,
-            raw_path=raw_path,
-            project_root=request.project_root,
-            prompt=prompt_file,
         )
         event = agent_finished_event(self.clock, call, agent_result)
         self.event_log.append(event)

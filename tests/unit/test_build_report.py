@@ -471,7 +471,7 @@ def test_report_lists_reopened_and_reregistered_scenarios(tmp_path: Path) -> Non
         "- **IVA-001**: sigue pasando con la especificación nueva; "
         f"registrado sin agente en `{'b' * 12}`" in section
     )
-    assert "| IVA-001 | General | green | 0 |" in report
+    assert "| IVA-001 | General | verde | - |" in report
 
 
 def test_report_says_when_nothing_was_reopened_or_reregistered(tmp_path: Path) -> None:
@@ -492,7 +492,7 @@ def test_report_lists_collateral_greens(tmp_path: Path) -> None:
 
     section = report.split("## Verdes colaterales")[1].split("##")[0]
     assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
-    assert "| IVA-002 | R | green | 0 |" in report
+    assert f"| IVA-002 | R | verde (colateral) | - | - | - | - | - | - | {'c' * 12} |" in report
     assert "*Ningún verde colateral.*" in _report(tmp_path, [])
 
 
@@ -607,9 +607,9 @@ def test_report_lists_what_the_backend_denied_the_agent(tmp_path: Path) -> None:
 
     start = lines.index("## Denegaciones")
     assert lines[start + 1 : start + 4] == [
-        "- **IVA-001, implement, intento 1**: Bash `sed -i s/a/b/ src/'x'.py`",
-        "- **driver, driver, intento 1**: Bash `python3 - <<'E'…`",
-        "- **driver, driver, intento 1**: Write",
+        "- **IVA-001, intento 1**: Bash `sed -i s/a/b/ src/'x'.py`",
+        "- **driver, intento 1**: Bash `python3 - <<'E'…`",
+        "- **driver, intento 1**: Write",
     ]
 
 
@@ -622,3 +622,117 @@ def test_report_cuts_a_long_denied_command(tmp_path: Path) -> None:
 
     assert f"Bash `{'a' * 120}…`" in report
     assert "a" * 121 not in report
+
+
+def _call(scenario: str | None, attempt: int, cost: float, tokens: dict[str, int]) -> Event:
+    return Event(
+        id=f"call-{scenario}-{attempt}",
+        type="lictor.agent.finished.v1",
+        source="lictor/0.2.0",
+        time="2026-11-06T10:00:00Z",
+        runid="run-1",
+        scenarioid=scenario,
+        data={
+            "role": "implement" if scenario else "driver",
+            "attempt": attempt,
+            "tokens": tokens,
+            "cost_usd": cost,
+            "duration_ms": 61_000,
+        },
+    )
+
+
+def _timed(event: Event, time: str) -> Event:
+    return Event(
+        id=event.id,
+        type=event.type,
+        source=event.source,
+        time=time,
+        runid=event.runid,
+        scenarioid=event.scenarioid,
+        data=event.data,
+    )
+
+
+def _summary_run() -> list[Event]:
+    loaded = _event(
+        "lictor.spec.loaded.v1",
+        {"scenarios": [{"id": "IVA-001", "name": "General"}, {"id": "IVA-002", "name": "R"}]},
+    )
+    tokens = {"input": 8, "output": 1783, "cache_read": 40_000, "cache_write": 2000}
+    return [
+        _timed(
+            _event("lictor.run.started.v1", {"lictor_version": "0.2.0"}), "2026-11-06T10:00:00Z"
+        ),
+        loaded,
+        _call(None, 1, 0.072, tokens),
+        _event("lictor.driver.sealed.v1", {"commit": "d" * 40}),
+        _call("IVA-001", 1, 0.05, tokens),
+        _event(
+            "lictor.verify.finished.v1",
+            {"attempt": 1, "ok": True, "control_durations": {"unit": 4000}},
+            "IVA-001",
+        ),
+        _event("lictor.scenario.green.v1", {"commit": "a" * 40, "attempt": 1}, "IVA-001"),
+        _event("lictor.scenario.green.v1", {"commit": "b" * 40, "collateral": True}, "IVA-002"),
+        _timed(
+            _event("lictor.run.finished.v1", {"exit_code": 0, "totals": {}}),
+            "2026-11-06T10:02:07Z",
+        ),
+    ]
+
+
+def test_report_gives_the_calls_and_cost_of_the_whole_run(tmp_path: Path) -> None:
+    report = _report(tmp_path, _summary_run())
+
+    assert "- **Llamadas al agente**: 2 (driver: 1)" in report
+    assert "- **Coste total**: 0,1220 $" in report
+    assert "- **Duración total**: 2 min 7 s (agente 2 min 2 s, verificación 4 s)" in report
+
+
+def test_report_has_a_row_for_the_driver_and_one_for_the_total(tmp_path: Path) -> None:
+    report = _report(tmp_path, _summary_run())
+
+    assert (
+        f"| driver | Driver de aceptación | sellado | 1 | 1 | 42008 / 1783 | 0,0720 $ | 1 min 1 s "
+        f"| - | {'d' * 12} |"
+    ) in report
+    assert (
+        f"| IVA-001 | General | verde | 1 | 1 | 42008 / 1783 | 0,0500 $ | 1 min 1 s | 4 s "
+        f"| {'a' * 12} |"
+    ) in report
+    assert "| **Total** | | | | 2 | 84016 / 3566 | 0,1220 $ | 2 min 2 s | 4 s | |" in report
+    assert "La entrada incluye la caché" in report
+    assert "a" * 13 not in report
+
+
+def test_report_names_statuses_in_spanish(tmp_path: Path) -> None:
+    loaded = _event(
+        "lictor.spec.loaded.v1",
+        {"scenarios": [{"id": "IVA-001", "name": "General"}, {"id": "IVA-002", "name": "R"}]},
+    )
+    quarantined = _event("lictor.scenario.quarantined.v1", {"reason": "x"}, "IVA-002")
+
+    report = _report(tmp_path, [loaded, quarantined])
+
+    assert "| IVA-001 | General | pendiente |" in report
+    assert "| IVA-002 | R | en cuarentena |" in report
+    assert "| green |" not in report
+    assert "| driver |" not in report  # a run that never called the driver has no row for it
+
+
+def test_a_sealed_driver_that_was_only_checked_says_so(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_event("lictor.driver.checked.v1", {"attempt": 1})])
+
+    assert "| driver | Driver de aceptación | comprobado | - | - | - | - | - | - | - |" in report
+
+
+def test_a_driver_rejected_for_good_says_so(tmp_path: Path) -> None:
+    rejected = _event(
+        "lictor.driver.rejected.v1",
+        {"attempt": 2, "reason": "sin_prueba", "final": True, "error_path": "e"},
+    )
+
+    report = _report(tmp_path, [_call(None, 2, 0.01, {}), rejected])
+
+    assert "| driver | Driver de aceptación | rechazado | 2 | 1 |" in report

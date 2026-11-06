@@ -71,8 +71,8 @@ def test_a_registered_scenario_is_green_by_hand_and_the_rest_by_lictor(
     assert "por Test User <test@example.com>; Lictor no lo ha probado" in report
     assert "La marca es informativa" in report
     status = CliRunner().invoke(app, ["status", "--cwd", str(root)])
-    assert "IVA-001: green (registrado a mano)" in status.output
-    assert "IVA-002: green\n" in status.output
+    assert "IVA-001: verde (registrado a mano)" in status.output
+    assert "IVA-002: verde (implementado)\n" in status.output
 
 
 def test_without_registering_the_same_project_stops_for_a_person(

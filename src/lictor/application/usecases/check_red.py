@@ -31,6 +31,7 @@ from lictor.domain.rules import (
     RedOracle,
     RedVerdict,
     condense_error,
+    describe_suppressions,
     impostor_problem,
     impostor_source,
     impostor_survivors,
@@ -38,6 +39,7 @@ from lictor.domain.rules import (
     map_test_cases_to_scenarios,
     render_full_error,
     suite_crash_reason,
+    suppression_matches,
     unmapped_cases,
 )
 
@@ -49,8 +51,11 @@ _REGISTER_HINT = (
     "en un proyecto con código, hazlo antes de la primera ejecución."
 )
 
+_OWN_GATES = ("L0-estado", "L0-supresiones")  # rejections the agent reads by their gate
+
 RejectionKind = Literal[
     "L0-estado",
+    "L0-supresiones",
     "L0-entorno",
     "suite_caida",
     "mapeo",
@@ -84,6 +89,8 @@ class CheckRedRequest:
     oracle: RedOracle = field(default_factory=RedOracle)
     link: MapLink = "name"
     impostors: Impostors | None = None
+    suppressions: Sequence[str] = ()
+    banned_patterns: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -155,6 +162,10 @@ class CheckRed:
         if env_problem:
             return self._reject_or_raise(request, step_dir, _Rejection("L0-entorno", env_problem))
 
+        suppressed = self._suppressed(request)
+        if suppressed is not None:
+            return self._reject_or_raise(request, step_dir, suppressed)
+
         candidate = self._create_candidate(request)
         rev = candidate.sha if candidate else "HEAD"
         with verification_tree(self.vcs, rev, request.project_root) as tree:
@@ -197,6 +208,22 @@ class CheckRed:
                 },
             )
         )
+
+    def _suppressed(self, request: CheckRedRequest) -> _Rejection | None:
+        """Refuse what a fresh driver adds that L0-supresiones refuses to the implementer (F12).
+
+        The driver is sealed with the oracle, so whatever it leaves stays for every attempt: a
+        `sys.path` put in front of the dependencies undoes the profile's defence for all of them.
+        A sealed driver isn't judged again: it passed when it was sealed.
+        """
+        if not request.driver_fresh or request.tree is None:
+            return None
+        if not request.suppressions and not request.banned_patterns:
+            return None
+        found = suppression_matches(
+            self.vcs.added_lines(request.tree), request.suppressions, request.banned_patterns
+        )
+        return _Rejection("L0-supresiones", describe_suppressions(found)) if found else None
 
     def _create_candidate(self, request: CheckRedRequest) -> Candidate | None:
         """Take the fresh driver from what the agent left, unless HEAD already holds it.
@@ -418,7 +445,7 @@ class CheckRed:
             render_full_error("red_check", rejection.reason, all_cases, rejection.output),
         )
         condensed = condense_error(
-            failed_at=rejection.kind if rejection.kind == "L0-estado" else "red_check",
+            failed_at=rejection.kind if rejection.kind in _OWN_GATES else "red_check",
             raw_error=rejection.reason,
             test_cases=rejection.cases,
             max_chars=request.error_max_chars,

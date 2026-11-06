@@ -12,7 +12,7 @@
     "run": "uv run pytest tests/acceptance -q --junitxml {out}",
     "report": "junit",
     "failure_exit_codes": [1],
-    "driver_hints": "Usa pytest-bdd. Escribe los tests y todas las definiciones de pasos (@given, @when, @then) juntos en tests/acceptance/test_<nombre>.py (o en tests/acceptance/conftest.py) para que pytest los encuentre. Un test por escenario, enlazado con @scenario('../../features/<archivo>.feature', '<nombre>') y llamado test_<id> (por ejemplo test_iva_001). Los pasos @given que devuelvan una entidad deben usar target_fixture='<nombre_fixture>'. Los pasos deben llamar a la interfaz pública en src/ para que fallen por NotImplementedError al ejecutarse con pytest. Crea en src/ la interfaz pública mínima requerida por los pasos, con funciones que lancen NotImplementedError y código limpio que pase lint (por ejemplo, en clases con docstring no agregues 'pass' innecesario). Escribe cada `raise NotImplementedError` en una sola línea. Los pasos leen los valores del Gherkin con parsers y los pasos Entonces comprueban el resultado con assert: cada test tiene que fallar porque la interfaz lanza NotImplementedError o por una aserción, nunca por un error del propio test. No escribas tests que no sean de ningún escenario."
+    "driver_hints": "Usa pytest-bdd. Escribe los tests y todas las definiciones de pasos (@given, @when, @then) juntos en tests/acceptance/test_<nombre>.py (o en tests/acceptance/conftest.py) para que pytest los encuentre. Un test por escenario, enlazado con @scenario('../../features/<archivo>.feature', '<nombre>') y llamado test_<id> (por ejemplo test_iva_001). Los pasos @given que devuelvan una entidad deben usar target_fixture='<nombre_fixture>'. Los pasos deben llamar a la interfaz pública en src/ para que fallen por NotImplementedError al ejecutarse con pytest. Crea en src/ la interfaz pública mínima requerida por los pasos, con funciones que lancen NotImplementedError y código limpio que pase lint (por ejemplo, en clases con docstring no agregues 'pass' innecesario). Escribe cada `raise NotImplementedError` en una sola línea. Los pasos leen los valores del Gherkin con parsers y los pasos Entonces comprueban el resultado con assert: cada test tiene que fallar porque la interfaz lanza NotImplementedError o por una aserción, nunca por un error del propio test. No escribas tests que no sean de ningún escenario. No toques sys.path: en la verificación src/ ya está en el path de importación, detrás de las dependencias, y ponerlo delante deja que un módulo de src/ sustituya a una dependencia; un driver que lo cambie, o que añada supresiones, se rechaza."
   },
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
@@ -27,7 +27,8 @@
     "#\\s*(ruff|flake8):\\s*noqa",
     "#\\s*mypy:\\s*ignore-errors",
     "pytest\\.(skip|xfail)\\(",
-    "pytest\\.mark\\.(skip|skipif|xfail)\\b"
+    "pytest\\.mark\\.(skip|skipif|xfail)\\b",
+    "\\bsys\\.path\\s*(\\.\\s*(insert|append|extend|remove|pop|clear)\\b|\\[|\\+?=(?!=))"
   ],
   "forbidden_paths": [
     "*.dist-info", "*.egg-info", "*.pth", ".gitignore", ".gitattributes", "conftest.py",

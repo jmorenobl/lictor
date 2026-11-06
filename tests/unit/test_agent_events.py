@@ -7,6 +7,7 @@ from lictor.application.events import SOURCE
 from lictor.application.usecases.agent_events import (
     AgentCall,
     agent_finished_event,
+    agent_started_event,
     denial_event,
     tamper_event,
 )
@@ -108,3 +109,26 @@ def test_tamper_and_denial_events_share_the_envelope_of_the_call() -> None:
         "attempt": 2,
         "denials": [{"tool": "Bash", "target": "git push"}],
     }
+
+
+def test_agent_started_event_says_which_attempt_of_how_many_and_where_the_prompt_is() -> None:
+    event = agent_started_event(_Clock(), CALL, max_attempts=3)
+
+    assert (event.type, event.runid, event.scenarioid, event.time) == (
+        "lictor.agent.started.v1",
+        "R1",
+        "IVA-001",
+        "2026-11-03T12:00:00Z",
+    )
+    assert event.data == {
+        "role": "implement",
+        "attempt": 2,
+        "max_attempts": 3,
+        "prompt": {"path": ".lictor/runs/R1/IVA-001/002-implement.prompt.md", "hash": "sha256:q"},
+    }
+
+
+def test_agent_started_event_without_a_saved_prompt() -> None:
+    event = agent_started_event(_Clock(), replace(CALL, prompt=None), max_attempts=1)
+
+    assert event.data["prompt"] is None

@@ -3,29 +3,92 @@
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage, MutationScore
+from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
 from lictor.domain.rules import describe_score
 
 _MS_PER_SECOND: Final[int] = 1000
+_SHORT_SHA: Final[int] = 12
+_COST_DECIMALS: Final[int] = 4
+_CACHE_NOTE = (
+    "*La entrada incluye la caché: los tokens leídos y escritos en ella, que son casi toda la "
+    "entrada de un agente.*"
+)
 
 
-def _calculate_total_duration(info: dict[str, Any]) -> str:
-    total_ms = 0
-    if info.get("totals") and isinstance(info["totals"], dict):
-        t_agent = int(info["totals"].get("agent_duration_ms", 0) or 0)
-        t_verify = int(info["totals"].get("verify_duration_ms", 0) or 0)
-        total_ms = t_agent + t_verify
-    if total_ms == 0:
-        total_ms = sum(
-            int(s.get("agent_ms", 0) or 0) + int(s.get("verify_ms", 0) or 0)
-            for s in info["scenarios"].values()
-        )
-    return f"{total_ms}ms" if total_ms < _MS_PER_SECOND else f"{total_ms / _MS_PER_SECOND:.2f}s"
+def _owner_totals(owners: list[dict[str, Any]]) -> dict[str, int | float]:
+    return {
+        key: sum(owner[key] for owner in owners)
+        for key in ("calls", "tokens_in", "tokens_out", "cost_usd", "agent_ms", "verify_ms")
+    }
+
+
+def _seconds_between(start: str, end: str) -> int | None:
+    """Milliseconds from one event to another, if both times can be read."""
+    try:
+        elapsed = datetime.fromisoformat(end) - datetime.fromisoformat(start)
+    except ValueError:
+        return None
+    return int(elapsed.total_seconds() * _MS_PER_SECOND)
+
+
+def _total_duration(info: dict[str, Any]) -> str:
+    """The run's wall clock, from its start to its end, and how much of it went where.
+
+    The agent's and the controls' times leave out what is neither, such as building the
+    verification environment, so the wall clock is the one that matches what the person waited.
+    """
+    owners = _owner_totals([*info["scenarios"].values(), info["driver"]])
+    split = (
+        f"agente {duration_text(int(owners['agent_ms']))}, "
+        f"verificación {duration_text(int(owners['verify_ms']))}"
+    )
+    start, end = info["started_at"], info["finished_at"]
+    wall = _seconds_between(start, end) if start and end else None
+    if wall is None:
+        return split
+    return f"{duration_text(wall)} ({split})"
+
+
+def _short(commit: str) -> str:
+    return commit[:_SHORT_SHA] if commit and commit != "-" else "-"
+
+
+def _row(ident: str, name: str, status: str, owner: Mapping[str, Any]) -> str:
+    """One row of the table: what the agent's calls of one owner cost, or `-` without calls."""
+    called = owner["calls"] > 0
+    attempts = str(owner["attempts"]) if owner["attempts"] else "-"
+    cells = [
+        attempts,
+        str(owner["calls"]) if called else "-",
+        f"{owner['tokens_in']} / {owner['tokens_out']}" if called else "-",
+        cost_text(owner["cost_usd"], _COST_DECIMALS) if called else "-",
+        duration_text(owner["agent_ms"]) if called else "-",
+        duration_text(owner["verify_ms"]) if owner["verify_ms"] else "-",
+        _short(owner["commit"]),
+    ]
+    return f"| {ident} | {name} | {status} | {' | '.join(cells)} |"
+
+
+def _new_owner() -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "attempts": 0,
+        "calls": 0,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost_usd": 0.0,
+        "agent_ms": 0,
+        "verify_ms": 0,
+        "commit": "-",
+        "collateral": False,
+    }
 
 
 def _score_text(raw: object) -> str:
@@ -164,6 +227,41 @@ def _retirement_notes(events: list[Event], retired: Mapping[str, Event]) -> list
     ]
 
 
+def _scenario_table(
+    info: Mapping[str, Any], owners: list[dict[str, Any]], totals: Mapping[str, int | float]
+) -> list[str]:
+    """A row per scenario, one for the driver if it was called, and the total."""
+    lines = [
+        (
+            "| ID | Nombre | Estado | Intentos | Llamadas | Tokens (entrada / salida) | "
+            "Coste | Tiempo agente | Tiempo verificación | Commit |"
+        ),
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    if info["driver_seen"]:
+        driver = info["driver"]
+        lines.append(_row(DRIVER_OWNER, "Driver de aceptación", driver["status"], driver))
+    for sid, s in sorted(info["scenarios"].items()):
+        status = status_text(s["status"])
+        if s["status"] == "green" and s["collateral"]:
+            status = f"{status} (colateral)"
+        lines.append(_row(sid, s["name"], status, s))
+    if not owners:
+        return lines
+    tokens = f"{totals['tokens_in']} / {totals['tokens_out']}"
+    return [
+        *lines,
+        (
+            f"| **Total** | | | | {totals['calls']} | {tokens} | "
+            f"{cost_text(float(totals['cost_usd']), _COST_DECIMALS)} | "
+            f"{duration_text(int(totals['agent_ms']))} | "
+            f"{duration_text(int(totals['verify_ms']))} | |"
+        ),
+        "",
+        _CACHE_NOTE,
+    ]
+
+
 class BuildReport:
     """Use case to aggregate journal events and write report.md."""
 
@@ -231,6 +329,10 @@ class BuildReport:
             "by_hand": [],
             "collateral": [],
             "denials": [],
+            "driver": {**_new_owner(), "status": "-"},
+            "driver_seen": False,
+            "started_at": "",
+            "finished_at": "",
         }
 
         for ev in events:
@@ -250,6 +352,8 @@ class BuildReport:
             "lictor.run.finished.v1": self._on_run_finished,
             "lictor.run.stopped.v1": self._on_run_stopped,
             "lictor.driver.rejected.v1": self._on_driver_rejected,
+            "lictor.driver.sealed.v1": self._on_driver_sealed,
+            "lictor.driver.checked.v1": self._on_driver_checked,
             "lictor.scenario.reopened.v1": self._on_scenario_reopened,
             "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
         }
@@ -258,6 +362,7 @@ class BuildReport:
             handler(ev, info)
 
     def _on_run_started(self, ev: Event, info: dict[str, Any]) -> None:
+        info["started_at"] = ev.time
         info["lictor_version"] = ev.data.get("lictor_version", "0.1.0")
         info["cli_version"] = ev.data.get("cli_version", info["cli_version"])
         info["profile"] = ev.data.get("profile", info["profile"])
@@ -269,17 +374,7 @@ class BuildReport:
                 if isinstance(s, dict):
                     sid = str(s.get("id", ""))
                     if sid:
-                        info["scenarios"][sid] = {
-                            "name": str(s.get("name", "")),
-                            "status": "pending",
-                            "attempts": 0,
-                            "tokens_in": 0,
-                            "tokens_out": 0,
-                            "cost_usd": 0.0,
-                            "agent_ms": 0,
-                            "verify_ms": 0,
-                            "commit": "-",
-                        }
+                        info["scenarios"][sid] = {**_new_owner(), "name": str(s.get("name", ""))}
                         self._previous_green(sid, s.get("green"), info)
 
     def _previous_green(self, sid: str, green: object, info: dict[str, Any]) -> None:
@@ -305,6 +400,7 @@ class BuildReport:
         if sid and sid in info["scenarios"]:
             info["scenarios"][sid]["status"] = "green"
             info["scenarios"][sid]["commit"] = str(ev.data.get("commit", "-"))
+            info["scenarios"][sid]["collateral"] = bool(ev.data.get("collateral"))
             raw_attempts = ev.data.get("attempt", ev.data.get("attempts", 1))
             if isinstance(raw_attempts, (int, str)):
                 info["scenarios"][sid]["attempts"] = max(
@@ -322,12 +418,25 @@ class BuildReport:
             }
 
     def _on_run_stopped(self, ev: Event, info: dict[str, Any]) -> None:
+        info["finished_at"] = ev.time
         raw_exit = ev.data.get("exit_code", 0)
         if isinstance(raw_exit, (int, str)):
             info["exit_code"] = int(raw_exit)
         info["exit_reason"] = str(ev.data.get("reason", "") or "")
 
+    def _on_driver_sealed(self, ev: Event, info: dict[str, Any]) -> None:
+        info["driver_seen"] = True
+        info["driver"]["status"] = "sellado"
+        info["driver"]["commit"] = str(ev.data.get("commit", "-"))
+
+    def _on_driver_checked(self, _: Event, info: dict[str, Any]) -> None:
+        info["driver_seen"] = True
+        info["driver"]["status"] = "comprobado"
+
     def _on_driver_rejected(self, ev: Event, info: dict[str, Any]) -> None:
+        info["driver_seen"] = True
+        if ev.data.get("final"):
+            info["driver"]["status"] = "rechazado"
         info["rejected_drivers"].append(
             f"- Intento {ev.data.get('attempt')}: {ev.data.get('reason')} "
             f"(`{ev.data.get('error_path')}`)"
@@ -360,8 +469,8 @@ class BuildReport:
         denials = ev.data.get("denials")
         if not isinstance(denials, list):
             return
-        owner = ev.scenarioid or "driver"
-        where = f"{owner}, {ev.data.get('role', '')}, intento {ev.data.get('attempt', '?')}"
+        # The owner says the role: a scenario's calls implement it, the driver's write it (F15).
+        where = f"{ev.scenarioid or DRIVER_OWNER}, intento {ev.data.get('attempt', '?')}"
         for denial in denials:
             if isinstance(denial, dict):
                 tool = str(denial.get("tool", "")) or "?"
@@ -379,11 +488,17 @@ class BuildReport:
             info["cli_version"] = str(ev.data.get("cli_version"))
 
         sid = ev.scenarioid
-        if sid and sid in info["scenarios"]:
-            scen = info["scenarios"][sid]
+        if sid is None:
+            info["driver_seen"] = True
+        scen = info["driver"] if sid is None else info["scenarios"].get(sid)
+        if scen is not None:
+            scen["calls"] += 1
             tok = ev.data.get("tokens")
             if isinstance(tok, dict):
-                scen["tokens_in"] += int(tok.get("input", 0) or 0)
+                # What the model read: its cache is most of an agent's input (F14).
+                scen["tokens_in"] += sum(
+                    int(tok.get(key, 0) or 0) for key in ("input", "cache_read", "cache_write")
+                )
                 scen["tokens_out"] += int(tok.get("output", 0) or 0)
             raw_cost = ev.data.get("cost_usd")
             if isinstance(raw_cost, (int, float, str)):
@@ -441,7 +556,9 @@ class BuildReport:
         greens = sum(1 for s in info["scenarios"].values() if s["status"] == "green")
         quarantined = len(info["quarantines"])
         pending = len(info["scenarios"]) - greens - quarantined
-        duration_str = _calculate_total_duration(info)
+        owners = [*info["scenarios"].values(), *([info["driver"]] if info["driver_seen"] else [])]
+        totals = _owner_totals(owners)
+        driver_calls = info["driver"]["calls"]
 
         lines = [
             "# Informe de ejecución de Lictor",
@@ -452,25 +569,13 @@ class BuildReport:
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
             *([f"- **Motivo**: {info['exit_reason']}"] if info["exit_reason"] else []),
-            f"- **Duración total**: {duration_str}",
+            f"- **Llamadas al agente**: {totals['calls']} (driver: {driver_calls})",
+            f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
+            f"- **Duración total**: {_total_duration(info)}",
             "",
             "## Escenarios",
-            (
-                "| ID | Nombre | Estado | Intentos | Tokens (In/Out) | "
-                "Coste | Tiempo Agente | Tiempo Verif | Commit |"
-            ),
-            "|---|---|---|---|---|---|---|---|---|",
+            *_scenario_table(info, owners, totals),
         ]
-
-        for sid, s in sorted(info["scenarios"].items()):
-            tokens_str = f"{s['tokens_in']} / {s['tokens_out']}"
-            cost_str = f"${s['cost_usd']:.4f}"
-            agent_str = f"{s['agent_ms']}ms"
-            verify_str = f"{s['verify_ms']}ms"
-            lines.append(
-                f"| {sid} | {s['name']} | {s['status']} | {s['attempts']} | "
-                f"{tokens_str} | {cost_str} | {agent_str} | {verify_str} | {s['commit']} |"
-            )
 
         lines.extend(["", "## Cuarentenas"])
         if not info["quarantines"]:
