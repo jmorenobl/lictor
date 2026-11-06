@@ -3,7 +3,6 @@
 import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,15 @@ from lictor.application.ports import SpecSource
 from lictor.application.seal import collect_monitored_files, hash_file
 from lictor.domain.errors import SpecError
 from lictor.domain.model import Scenario, ScenarioId
+from lictor.domain.spec_rules import (
+    FeatureFile,
+    ScenarioSeen,
+    SpecProblem,
+    TagSeen,
+    blocking,
+    describe_spec_problems,
+    spec_problems,
+)
 
 ALL_OUTLINE_KEYWORDS: frozenset[str] = frozenset(
     kw.strip().lower() for dialect in DIALECTS.values() for kw in dialect.get("scenarioOutline", [])
@@ -127,19 +135,39 @@ class GherkinSource(SpecSource):
     """Adapter for discovering and parsing Gherkin specification scenarios."""
 
     def load(self, features_dir: Path) -> list[Scenario]:
-        """Load and validate all scenarios from the given directory deterministically."""
+        """Load every scenario, or raise with every blocking problem `spec_problems` finds."""
+        read = self._read(features_dir)
+        problems = blocking(spec_problems([found for found, _ in read]))
+        if problems:
+            raise SpecError(
+                f"Los features no se pueden cargar:\n{describe_spec_problems(problems)}"
+            )
+        scenarios: list[Scenario] = []
+        for found, feature in read:
+            for backgrounds, _rule, entry in _scenarios(feature):
+                node = entry.get("scenario") or {}
+                scenarios.append(
+                    Scenario(
+                        id=ScenarioId.from_tag(str(node["tags"][0]["name"])),
+                        name=str(node.get("name", "")),
+                        file=found.file,
+                        line=int(node.get("location", {}).get("line", 0)),
+                        spec_hash=spec_hash(backgrounds, node),
+                    )
+                )
+        return scenarios
+
+    def problems(self, features_dir: Path) -> list[SpecProblem]:
+        """Every problem of these features, warnings included, without raising."""
+        return spec_problems([found for found, _ in self._read(features_dir)])
+
+    def _read(self, features_dir: Path) -> list[tuple[FeatureFile, Mapping[str, Any]]]:
+        """Each `.feature` under the directory, in order, as `spec_problems` needs to see it."""
         if not features_dir.is_dir():
             return []
-
-        parser = Parser()
-        scenarios: list[Scenario] = []
-        seen_ids: dict[str, tuple[str, int]] = {}
         root = features_dir.resolve().parent
-
-        for feature_path in sorted(features_dir.rglob("*.feature")):
-            self._load_file(feature_path, parser, seen_ids, scenarios, root)
-
-        return scenarios
+        parser = Parser()
+        return [_read_file(path, parser, root) for path in sorted(features_dir.rglob("*.feature"))]
 
     def spec_hashes(self, text: str) -> dict[str, str]:
         """Hash the scenarios of an old tree's feature, skipping what `load` would reject."""
@@ -206,120 +234,74 @@ class GherkinSource(SpecSource):
         write_seal(project_root, data)
         return data
 
-    def _load_file(
-        self,
-        feature_path: Path,
-        parser: Parser,
-        seen_ids: dict[str, tuple[str, int]],
-        scenarios: list[Scenario],
-        root: Path,
-    ) -> None:
-        try:
-            rel_file = feature_path.resolve().relative_to(root).as_posix()
-        except ValueError:
-            rel_file = feature_path.as_posix()
 
-        content = feature_path.read_text(encoding="utf-8")
-        try:
-            ast = parser.parse(content)
-        except ParserError as exc:
-            raise SpecError(f"Error al analizar {rel_file}: {exc}") from exc
+def _parse_error(exc: ParserError) -> tuple[str, int | None]:
+    """The parser's first complaint without its header, and the line it points at."""
+    errors = getattr(exc, "errors", None) or [exc]
+    first = errors[0]
+    location = getattr(first, "location", None) or {}
+    message = str(first).splitlines()[-1]
+    if message.startswith("("):
+        message = message.partition(": ")[2] or message
+    line = location.get("line") if isinstance(location, Mapping) else None
+    return message, int(line) if line else None
 
-        feature = ast.get("feature")
-        if not feature:
-            return
 
-        self._forbid_scenario_id_tags(feature.get("tags", []), "Feature", rel_file)
+def _tags(node: Mapping[str, Any]) -> tuple[TagSeen, ...]:
+    return tuple(
+        TagSeen(str(tag.get("name", "")), int(tag.get("location", {}).get("line", 1)))
+        for tag in node.get("tags", [])
+    )
 
-        for child in feature.get("children", []):
-            rule = child.get("rule")
-            if isinstance(rule, Mapping):
-                self._forbid_scenario_id_tags(rule.get("tags", []), "Rule", rel_file)
-        for backgrounds, _rule, entry in _scenarios(feature):
-            scenario = self._parse_child(entry, rel_file, seen_ids)
-            if scenario is not None:
-                hashed = spec_hash(backgrounds, entry.get("scenario") or {})
-                scenarios.append(replace(scenario, spec_hash=hashed))
 
-    def _forbid_scenario_id_tags(
-        self,
-        tags: Sequence[Mapping[str, Any]],
-        level_name: str,
-        rel_file: str,
-    ) -> None:
-        for tag in tags:
-            tag_name = str(tag.get("name", ""))
-            try:
-                ScenarioId.from_tag(tag_name)
-                is_scenario_id = True
-            except SpecError:
-                is_scenario_id = False
+def _is_outline(node: Mapping[str, Any]) -> bool:
+    keyword = str(node.get("keyword", "")).strip().lower()
+    return bool(
+        node.get("examples")
+        or keyword in ALL_OUTLINE_KEYWORDS
+        or "outline" in keyword
+        or "esquema" in keyword
+    )
 
-            if is_scenario_id:
-                tag_line = int(tag.get("location", {}).get("line", 1))
-                raise SpecError(
-                    f"Tag ID '{tag_name}' no permitido en nivel {level_name} "
-                    f"en {rel_file}:{tag_line}"
-                )
 
-    def _parse_child(
-        self,
-        child: Mapping[str, Any],
-        rel_file: str,
-        seen_ids: dict[str, tuple[str, int]],
-    ) -> Scenario | None:
-        if "background" in child:
-            return None
-
-        scenario_dict = child.get("scenario")
-        if not scenario_dict:
-            return None
-
-        line = int(scenario_dict.get("location", {}).get("line", 0))
-        name = str(scenario_dict.get("name", ""))
-
-        examples = scenario_dict.get("examples", [])
-        keyword = str(scenario_dict.get("keyword", "")).strip().lower()
-        if (
-            examples
-            or keyword in ALL_OUTLINE_KEYWORDS
-            or "outline" in keyword
-            or "esquema" in keyword
-        ):
-            raise SpecError(f"Scenario Outline no admitido en v0.1: {rel_file}:{line}")
-
-        tags = scenario_dict.get("tags", [])
-        if not tags:
-            raise SpecError(
-                f"El escenario '{name}' en {rel_file}:{line} "
-                "debe tener exactamente un tag con formato @[A-Z][A-Z0-9]*-[0-9]+"
-            )
-
-        if len(tags) > 1:
-            tag_names = [t.get("name", "") for t in tags]
-            raise SpecError(
-                f"El escenario '{name}' en {rel_file}:{line} "
-                f"tiene múltiples tags: {tag_names}. Debe tener exactamente uno."
-            )
-
-        tag_name = tags[0].get("name", "")
-        try:
-            scenario_id = ScenarioId.from_tag(tag_name)
-        except SpecError as exc:
-            raise SpecError(
-                f"Tag inválido '{tag_name}' en '{name}' en {rel_file}:{line}: {exc}"
-            ) from exc
-
-        id_val = scenario_id.value
-        if id_val in seen_ids:
-            prev_file, prev_line = seen_ids[id_val]
-            raise SpecError(
-                f"ID de escenario duplicado '{id_val}' en {rel_file}:{line} "
-                f"(ya definido en {prev_file}:{prev_line})"
-            )
-
-        seen_ids[id_val] = (rel_file, line)
-        return Scenario(id=scenario_id, name=name, file=rel_file, line=line)
+def _read_file(path: Path, parser: Parser, root: Path) -> tuple[FeatureFile, Mapping[str, Any]]:
+    try:
+        rel_file = path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        rel_file = path.as_posix()
+    text = path.read_text(encoding="utf-8")
+    if not any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines()):
+        # Only comments: with `# language:` the parser calls it a syntax error, but it is empty.
+        return FeatureFile(file=rel_file), {}
+    try:
+        feature: Mapping[str, Any] = parser.parse(text).get("feature") or {}
+    except ParserError as exc:
+        message, line = _parse_error(exc)
+        return FeatureFile(file=rel_file, error=message, error_line=line), {}
+    if not feature:
+        return FeatureFile(file=rel_file), {}
+    levels = [("Feature", tag) for tag in _tags(feature)]
+    for child in feature.get("children", []):
+        rule = child.get("rule")
+        if isinstance(rule, Mapping):
+            levels.extend(("Rule", tag) for tag in _tags(rule))
+    scenarios = tuple(
+        ScenarioSeen(
+            name=str(node.get("name", "")),
+            line=int(node.get("location", {}).get("line", 0)),
+            tags=_tags(node),
+            outline=_is_outline(node),
+        )
+        for node in (entry.get("scenario") or {} for _b, _r, entry in _scenarios(feature))
+    )
+    found = FeatureFile(
+        file=rel_file,
+        feature_name=str(feature.get("name", "")),
+        feature_line=int(feature.get("location", {}).get("line", 1)),
+        level_tags=tuple(levels),
+        scenarios=scenarios,
+    )
+    return found, feature
 
 
 _hash_file = hash_file

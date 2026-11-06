@@ -254,10 +254,6 @@ class _GraphNodes:
                 "seal_ok": False,
             }
 
-        if not scenarios:
-            reason = f"No hay escenarios en {features_dir}"
-            return {**self._finish(state, int(ExitCode.PRECONDITION), reason), "seal_ok": False}
-
         seal_ok = self.ctx.spec_source.verify_seal(self.ctx.project_root, self.ctx.paths_driver)
         records = self.ctx.spec_history.records()
         classes = self.ctx.spec_history.classify({s.id.value: s.spec_hash for s in scenarios})

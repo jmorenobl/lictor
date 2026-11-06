@@ -97,7 +97,7 @@ Feature: No tags
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "exactamente un tag" in str(exc_info.value)
+    assert "features/test.feature:3: el escenario «Untagged» no tiene ID" in str(exc_info.value)
 
 
 def test_reject_scenario_with_multiple_tags(tmp_path: Path) -> None:
@@ -117,7 +117,7 @@ Feature: Multiple tags
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "múltiples tags" in str(exc_info.value) or "exactamente un tag" in str(exc_info.value)
+    assert "tiene varias etiquetas: @IVA-001, @SLOW" in str(exc_info.value)
 
 
 def test_reject_scenario_with_invalid_tag_format(tmp_path: Path) -> None:
@@ -165,7 +165,7 @@ Feature: Dup 2
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "duplicado" in str(exc_info.value).lower()
+    assert "usa el ID @IVA-001, que ya tiene features/a.feature:4" in str(exc_info.value)
 
 
 def test_reject_scenario_outline_english(tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ Feature: Outline
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "Scenario Outline no admitido" in str(exc_info.value)
+    assert "es un Esquema del escenario (Scenario Outline)" in str(exc_info.value)
     assert "outline.feature" in str(exc_info.value)
 
 
@@ -212,7 +212,7 @@ Característica: Esquema
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "Scenario Outline no admitido" in str(exc_info.value)
+    assert "es un Esquema del escenario (Scenario Outline)" in str(exc_info.value)
 
 
 def test_reject_scenario_template_without_examples(tmp_path: Path) -> None:
@@ -232,7 +232,7 @@ Feature: Template without examples
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "Scenario Outline no admitido" in str(exc_info.value)
+    assert "es un Esquema del escenario (Scenario Outline)" in str(exc_info.value)
 
 
 def test_reject_scenario_outline_french(tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ Fonctionnalité: Plan
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "Scenario Outline no admitido" in str(exc_info.value)
+    assert "es un Esquema del escenario (Scenario Outline)" in str(exc_info.value)
 
 
 def test_reject_tag_id_on_feature_level(tmp_path: Path) -> None:
@@ -275,7 +275,7 @@ Feature: Feature with scenario id tag
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
     assert exc_info.value.exit_code == 10
-    assert "Feature" in str(exc_info.value) or "nivel Feature" in str(exc_info.value)
+    assert "la etiqueta @IVA-001 está en la característica" in str(exc_info.value)
 
 
 def test_seal_computation_write_and_verification(tmp_path: Path) -> None:
@@ -415,7 +415,7 @@ def test_reject_rule_level_scenario_id_tag(tmp_path: Path) -> None:
     source = GherkinSource()
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
-    assert "Tag ID '@RUL-001' no permitido en nivel Rule" in str(exc_info.value)
+    assert "la etiqueta @RUL-001 está en una regla" in str(exc_info.value)
 
 
 def test_reject_scenario_outline_inside_rule(tmp_path: Path) -> None:
@@ -436,7 +436,7 @@ def test_reject_scenario_outline_inside_rule(tmp_path: Path) -> None:
     source = GherkinSource()
     with pytest.raises(SpecError) as exc_info:
         source.load(features_dir)
-    assert "Scenario Outline no admitido" in str(exc_info.value)
+    assert "es un Esquema del escenario (Scenario Outline)" in str(exc_info.value)
 
 
 def test_reject_symlink_pointing_outside_repo(tmp_path: Path) -> None:
@@ -590,7 +590,7 @@ def test_a_rule_without_scenarios_still_cannot_carry_a_scenario_id(tmp_path: Pat
     (tmp_path / "features" / "r.feature").write_text(
         "Feature: X\n  @A-1\n  Rule: R\n", encoding="utf-8"
     )
-    with pytest.raises(SpecError, match="nivel Rule"):
+    with pytest.raises(SpecError, match="está en una regla"):
         GherkinSource().load(tmp_path / "features")
 
 
@@ -732,3 +732,54 @@ def test_scenario_text_reads_an_absolute_path(tmp_path: Path) -> None:
     scenario = Scenario(ScenarioId("IVA-1"), "uno", str(feature), 1)
 
     assert GherkinSource().scenario_text(Path("/no/existe"), scenario).endswith("Given a")
+
+
+def test_problems_lists_everything_load_would_refuse_without_raising(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "a.feature").write_text(
+        "Feature: A\n  Scenario: Uno\n    Given algo\n  oops\n", encoding="utf-8"
+    )
+    (features_dir / "b.feature").write_text("# language: es\n# pendiente\n", encoding="utf-8")
+
+    problems = GherkinSource().problems(features_dir)
+
+    assert [(p.file, p.line) for p in problems] == [
+        ("features/a.feature", 4),
+        ("features/b.feature", None),
+    ]
+    assert problems[0].message.startswith("no se puede leer: expected:")
+    assert "got 'oops'" in problems[0].message
+    assert "vacío" in problems[1].message
+    assert [p.blocking for p in problems] == [True, False]
+
+
+def test_load_skips_an_empty_feature_file(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "a.feature").write_text(
+        "Feature: A\n  @A-001\n  Scenario: Uno\n    Given algo\n", encoding="utf-8"
+    )
+    (features_dir / "b.feature").write_text("Feature: Pendiente\n", encoding="utf-8")
+
+    assert [s.id.value for s in GherkinSource().load(features_dir)] == ["A-001"]
+
+
+def test_load_without_a_features_directory_says_there_is_no_scenario(tmp_path: Path) -> None:
+    with pytest.raises(SpecError, match="features/: no hay ningún escenario"):
+        GherkinSource().load(tmp_path / "features")
+
+
+def test_load_lists_every_problem_not_only_the_first(tmp_path: Path) -> None:
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "a.feature").write_text(
+        "Feature: A\n  Scenario: Uno\n    Given algo\n\n  Scenario: Dos\n    Given algo\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError) as exc_info:
+        GherkinSource().load(features_dir)
+
+    assert "features/a.feature:2: el escenario «Uno» no tiene ID" in str(exc_info.value)
+    assert "features/a.feature:5: el escenario «Dos» no tiene ID" in str(exc_info.value)

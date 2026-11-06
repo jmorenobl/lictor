@@ -88,6 +88,10 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
     config["backend"]["kind"] = "fake"
     (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "x.feature").write_text(
+        "Feature: X\n  @X-001\n  Scenario: Uno\n    Given algo\n", encoding="utf-8"
+    )
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
     broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")

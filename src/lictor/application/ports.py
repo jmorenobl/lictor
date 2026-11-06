@@ -19,6 +19,7 @@ from lictor.domain.model import (
     Scenario,
     TreeChange,
 )
+from lictor.domain.spec_rules import SpecProblem
 
 
 @runtime_checkable
@@ -214,6 +215,10 @@ class SpecSource(Protocol):
 
     def load(self, features_dir: Path) -> list[Scenario]:
         """Load and validate all scenarios from the given directory."""
+        ...
+
+    def problems(self, features_dir: Path) -> list[SpecProblem]:
+        """Every problem of the features, warnings included; `load` refuses the blocking ones."""
         ...
 
     def spec_hashes(self, text: str) -> dict[str, str]:

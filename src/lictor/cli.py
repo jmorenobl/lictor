@@ -174,6 +174,7 @@ def doctor(
                 environment="throwaway" if held else "none",
                 log_dir=log_dir,
                 skip_reason="no comprobado: hay una ejecución en curso",
+                features=True,
             )
             report = runtime.preconditions.execute(request)
 
@@ -183,14 +184,18 @@ def doctor(
             elif check.problems:
                 for problem in check.problems:
                     typer.echo(f"✗ {check.name}: {problem.message}", err=True)
-            else:
+            elif not check.warnings:
                 typer.echo(f"✓ {check.name}")
+            for warning in check.warnings:
+                typer.echo(f"⚠ {check.name}: {warning}")
 
         code = precondition_exit_code(report.problems)
         if code:
             typer.echo("Doctor: hay que resolver lo marcado con ✗.", err=True)
         else:
-            typer.echo("Doctor: todas las comprobaciones pasaron.")
+            warned = any(check.warnings for check in report.checks)
+            suffix = ", con avisos (⚠) que no impiden ejecutar" if warned else ""
+            typer.echo(f"Doctor: todas las comprobaciones pasaron{suffix}.")
         return code
 
     _safe_run(_execute)
