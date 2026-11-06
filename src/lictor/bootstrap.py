@@ -213,6 +213,7 @@ def bootstrap_runtime(
         aside=VerificationEnvironment(
             vcs, runner, doctor_audit, resolved_root, defences.verification
         ),
+        spec_source=spec_source,
     )
 
     graph_context = GraphContext(

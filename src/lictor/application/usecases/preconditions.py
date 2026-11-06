@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from lictor.application.ports import Executor, Vcs
+from lictor.application.ports import Executor, SpecSource, Vcs
 from lictor.application.run_files import prepare_scratch
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
@@ -24,11 +24,15 @@ EnvironmentCheck = Literal["run", "throwaway", "none"]
 
 @dataclass(frozen=True)
 class PreconditionCheck:
-    """One check, with what it found; `skipped` says why it wasn't made."""
+    """One check, with what it found; `skipped` says why it wasn't made.
+
+    `warnings` are worth telling but stop nothing: they don't count for the exit code.
+    """
 
     name: str
     problems: tuple[PreconditionProblem, ...] = ()
     skipped: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class PreconditionsRequest:
     environment: EnvironmentCheck = "run"
     log_dir: Path | None = None
     skip_reason: str = ""
+    features: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,7 @@ class CheckPreconditions:
 
     `commands` maps a label that completes "el comando …" to each command verification runs.
     `aside` is the environment a throwaway is made from, so that its events stay out of the runs'
-    journal; without it, the run's own is used.
+    journal; without it, the run's own is used. `spec_source` checks the features when asked.
     """
 
     vcs: Vcs
@@ -73,12 +78,15 @@ class CheckPreconditions:
     project_root: Path
     commands: Mapping[str, str] = field(default_factory=dict)
     aside: VerificationEnvironment | None = None
+    spec_source: SpecSource | None = None
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
         checks: list[PreconditionCheck] = [self._commits(has_commits)]
         if req.clean_tree:
             checks.append(self._clean_tree())
+        if req.features:
+            checks.append(self._features())
         checks.append(self._identity())
         executor, cli_version = self._executor()
         checks.append(executor)
@@ -117,6 +125,17 @@ class CheckPreconditions:
             "Confírmalos o descártalos antes de ejecutar."
         )
         return PreconditionCheck("Árbol git limpio", (PreconditionProblem("repository", message),))
+
+    def _features(self) -> PreconditionCheck:
+        """What `load_spec` would refuse, all of it, and what it would skip: the same rule."""
+        if self.spec_source is None:
+            raise InternalLictorError("Comprobar los escenarios necesita un SpecSource")
+        problems = self.spec_source.problems(self.project_root / "features")
+        return PreconditionCheck(
+            "Escenarios",
+            tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking),
+            warnings=tuple(str(p) for p in problems if not p.blocking),
+        )
 
     def _identity(self) -> PreconditionCheck:
         try:
