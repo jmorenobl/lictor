@@ -1,4 +1,5 @@
 import dataclasses
+import sqlite3
 import subprocess
 import threading
 from collections.abc import Sequence
@@ -8,6 +9,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from lictor.adapters.agents.fake import FakeExecutor
@@ -714,3 +716,38 @@ def test_a_checkpoint_write_from_another_thread_waits_for_the_node(tmp_path: Pat
 
     assert waited == [True], "otro hilo no debe escribir mientras el nodo corre"
     assert finished == [True], "y debe seguir en cuanto el nodo termina"
+
+
+def test_after_a_node_the_run_reads_the_checkpoint_through_a_new_connection(
+    tmp_path: Path,
+) -> None:
+    """F19: the old one may hold descriptors to what a tampering unlinked; it's never read again.
+
+    It stays open while the node runs, so a reader that may write can't fold the WAL on closing.
+    """
+    saver = get_sqlite_saver(tmp_path / "checkpoints.sqlite")
+    before = saver.conn
+    open_during_node: list[bool] = []
+
+    def node(_state: GraphState) -> dict[str, Any]:
+        open_during_node.append(before.execute("select 1").fetchone() == (1,))
+        return {}
+
+    _holding_checkpoint_writes(saver)(node)(cast(GraphState, {}))
+
+    assert open_during_node == [True]
+    assert saver.conn is not before
+    with pytest.raises(sqlite3.ProgrammingError):
+        before.execute("select 1")
+    assert saver.get_tuple({"configurable": {"thread_id": "t"}}) is None
+
+
+def test_a_checkpoint_in_memory_keeps_its_connection(tmp_path: Path) -> None:
+    saver = SqliteSaver(sqlite3.connect(":memory:", check_same_thread=False))
+    saver.setup()
+    before = saver.conn
+
+    _holding_checkpoint_writes(saver)(lambda _state: {})(cast(GraphState, {}))
+
+    assert saver.conn is before
+    assert saver.get_tuple({"configurable": {"thread_id": "t"}}) is None

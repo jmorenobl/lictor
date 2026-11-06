@@ -1,8 +1,8 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, TypedDict
@@ -715,14 +715,48 @@ def _scenario_files(state: GraphState) -> dict[str, str]:
     return {s["id"]: s["file"] for s in state.get("scenarios", [])}
 
 
+def _connect(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute("PRAGMA synchronous = FULL")
+    return conn
+
+
 def get_sqlite_saver(db_path: Path) -> SqliteSaver:
     """Instantiate and configure SqliteSaver with synchronous durability."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.execute("PRAGMA synchronous = FULL")
-    saver = SqliteSaver(conn)
+    saver = SqliteSaver(_connect(db_path))
     saver.setup()
     return saver
+
+
+def _database_file(conn: sqlite3.Connection) -> Path | None:
+    """The file behind the connection's main database, or None if it lives in memory."""
+    row = conn.execute("PRAGMA database_list").fetchone()
+    return Path(row[2]) if row is not None and row[2] else None
+
+
+@contextmanager
+def _reconnected(saver: SqliteSaver) -> Iterator[None]:
+    """Read the checkpoint through a new connection once code that isn't trusted has run (F19).
+
+    `IntegritySnapshot` restores a tampered checkpoint by writing its old bytes back. The run's
+    connection kept descriptors to whatever the tampering left, unlinked `-wal` and `-shm`
+    included, and reading the restored main file through them gave `no such table`: the run died
+    instead of failing the attempt. So that connection is never read again: it is closed after the
+    node and a new one opened. It stays open during the node on purpose: while it lives, a reader
+    that may write can't be the last connection, so closing can't fold the WAL into the main file.
+
+    Closing it must leave the files as they are, or the WAL would go into the main file and `-wal`
+    would be deleted. The caller holds the saver's lock, so nothing is writing meanwhile.
+    """
+    try:
+        yield
+    finally:
+        db_path = _database_file(saver.conn)
+        if db_path is not None:
+            saver.conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+            saver.conn.close()
+            saver.conn = _connect(db_path)
 
 
 def read_only_sqlite_saver(db_path: Path) -> SqliteSaver | None:
@@ -760,12 +794,20 @@ def _holding_checkpoint_writes(
     the WAL halfway through it would restore a torn file. The saver takes this lock for every
     write, so one in progress ends before the node starts and one not started waits for it to end.
     Nothing is lost if the run dies meanwhile: the checkpoint after those writes is already stored.
+    Still under the lock, the saver reads through a new connection once the node ends.
     """
-    lock = checkpointer.lock if isinstance(checkpointer, SqliteSaver) else nullcontext()
+
+    def guarded() -> AbstractContextManager[object]:
+        if not isinstance(checkpointer, SqliteSaver):
+            return nullcontext()
+        stack = ExitStack()
+        stack.enter_context(checkpointer.lock)
+        stack.enter_context(_reconnected(checkpointer))
+        return stack
 
     def holding(node: _Node) -> _Node:
         def run(state: GraphState) -> dict[str, Any]:
-            with lock:
+            with guarded():
                 return node(state)
 
         return run
