@@ -10,6 +10,8 @@ Reglas:
 - Puedes crear en {writable} la interfaz pública mínima que necesiten los pasos,
   sin lógica: cada función lanza un error de "no implementado".
 - No implementes la funcionalidad. No toques {protected_sin_driver}.
+- No crees ni modifiques, en ninguna carpeta: {forbidden}, salvo {exentos} dentro de
+  {driver_paths}. Se descartan: lo que hay ahí lo cambia solo una persona.
 - Trabajas en una copia sin historial: no hay git ni commits.
 - Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las
   comprobaciones: cualquier otra orden se deniega y te cuesta turnos.

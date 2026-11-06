@@ -16,6 +16,7 @@ from lictor.domain.model import (
 )
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
+    PERSON_ONLY_STREAK,
     STATE_CHANGED_OUTSIDE_COPY,
     SUSPICIOUS_DRIVER,
     SYNTHETIC_MODEL,
@@ -46,10 +47,13 @@ from lictor.domain.rules import (
     model_responded,
     mutation_score,
     path_within,
+    paths_only_a_person_can_change,
+    person_only_reason,
     precondition_exit_code,
     red_failure_problem,
     registration_problems,
     render_full_error,
+    routes_rejected,
     run_outcome,
     runs_to_prune,
     score_meets,
@@ -1524,3 +1528,73 @@ def test_forbidden_paths_match_whole_components_only(path: str) -> None:
     patterns = [".mcp.json", "CLAUDE.md", ".claude", ".github", ".vscode"]
 
     assert forbidden_paths([path], patterns) == []
+
+
+@pytest.mark.parametrize(
+    ("rejected", "expected"),
+    [
+        ([], []),
+        ([["pyproject.toml"]], []),
+        ([None, ["pyproject.toml"]], []),
+        ([["pyproject.toml"], None], []),
+        ([["pyproject.toml"], []], []),
+        ([["src/conftest.py"], ["README.md"]], []),
+        ([["pyproject.toml"], ["pyproject.toml"]], ["pyproject.toml"]),
+        ([["b", "a", "c"], ["c", "a"]], ["a", "c"]),
+        ([["x"], ["README.md"], ["x", "README.md"]], ["README.md"]),
+        ([None, ["uv.lock"], ["uv.lock"]], ["uv.lock"]),
+    ],
+)
+def test_paths_only_a_person_can_change(
+    rejected: list[list[str] | None], expected: list[str]
+) -> None:
+    assert paths_only_a_person_can_change(rejected) == expected
+
+
+def test_the_streak_is_two_attempts() -> None:
+    assert PERSON_ONLY_STREAK == 2
+
+
+def test_person_only_reason_names_the_scenario_and_the_paths() -> None:
+    assert person_only_reason("ROM-007", [".github/workflows/x.yml", "uv.lock"]) == (
+        "ROM-007 necesita cambiar .github/workflows/x.yml, uv.lock, que solo puede tocar una "
+        "persona. Haz tú el cambio, confírmalo y vuelve a lanzar `lictor run`; si el escenario no "
+        "debería necesitarlo, revisa el escenario."
+    )
+
+
+def test_routes_rejected_lists_the_paths_and_says_what_to_do() -> None:
+    assert routes_rejected(["pyproject.toml", "uv.lock"]) == (
+        "Archivos modificados fuera de las rutas permitidas: pyproject.toml, uv.lock. Esos "
+        "cambios se han descartado: solo una persona puede hacerlos. Si el escenario no se puede "
+        "cumplir sin ellos, repite exactamente el mismo cambio y Lictor parará para pedírselo a "
+        "una persona; si no hacen falta, no los toques."
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["features/iva.feature", "tests/acceptance/test_iva.py", "tests/acceptance/conftest.py"],
+)
+def test_insisting_on_the_oracle_is_never_a_persons_change(path: str) -> None:
+    rejected: list[list[str] | None] = [[path, "uv.lock"], [path, "uv.lock"]]
+
+    assert paths_only_a_person_can_change(rejected, ["tests/acceptance"]) == ["uv.lock"]
+    assert paths_only_a_person_can_change([[path], [path]], ["tests/acceptance"]) == []
+
+
+def test_routes_rejected_on_the_oracle_says_to_declare_the_conflict() -> None:
+    message = routes_rejected(["tests/acceptance/test_iva.py"], ["tests/acceptance"])
+
+    assert message == (
+        "Archivos modificados fuera de las rutas permitidas: tests/acceptance/test_iva.py. Los "
+        "tests de aceptación y los features no se tocan nunca: si contradicen el escenario, "
+        "declara el conflicto como se indica al final."
+    )
+
+
+def test_routes_rejected_on_both_says_both() -> None:
+    message = routes_rejected(["features/a.feature", "uv.lock"], ["tests/acceptance"])
+
+    assert "repite exactamente el mismo cambio" in message
+    assert message.endswith("declara el conflicto como se indica al final.")

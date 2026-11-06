@@ -190,3 +190,9 @@ def test_route_build_driver_retries_a_call_that_kept_its_attempt(
     state: dict[str, object], expected: str
 ) -> None:
     assert route_build_driver(state) == expected
+
+
+def test_route_verify_ends_when_the_verification_stopped_the_run() -> None:
+    state = {"exit_code": 10, "last_verify": {"ok": False}, "attempt": 2}
+
+    assert route_verify(state, max_attempts=3) == END

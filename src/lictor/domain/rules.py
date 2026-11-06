@@ -651,6 +651,72 @@ def keeps_attempt(signal: AgentSignal, failures: int) -> bool:
     return signal == "error" and failures > 0
 
 
+PERSON_ONLY_STREAK = 2
+ROUTES_REJECTED = "Archivos modificados fuera de las rutas permitidas"
+ROUTES_GUIDANCE = (
+    "Esos cambios se han descartado: solo una persona puede hacerlos. Si el escenario no se puede "
+    "cumplir sin ellos, repite exactamente el mismo cambio y Lictor parará para pedírselo a una "
+    "persona; si no hacen falta, no los toques."
+)
+ORACLE_GUIDANCE = (
+    "Los tests de aceptación y los features no se tocan nunca: si contradicen el escenario, "
+    "declara el conflicto como se indica al final."
+)
+FEATURES_ROOT = "features"
+
+
+def _oracle(paths_driver: Sequence[str]) -> list[str]:
+    """What tells whether a scenario is met: its features and the sealed driver."""
+    return [FEATURES_ROOT, *paths_driver]
+
+
+def routes_rejected(paths: Sequence[str], paths_driver: Sequence[str] = ()) -> str:
+    """What `L0-rutas` says of an attempt: what it discarded, and what the agent may do next.
+
+    Only a change outside the oracle may be asked of a person; one to the oracle is never needed
+    to meet a scenario, and a test that contradicts it is a conflict to declare.
+    """
+    oracle = _oracle(paths_driver)
+    guidance = []
+    if any(not path_within(path, oracle) for path in paths):
+        guidance.append(ROUTES_GUIDANCE)
+    if any(path_within(path, oracle) for path in paths):
+        guidance.append(ORACLE_GUIDANCE)
+    return f"{ROUTES_REJECTED}: {', '.join(paths)}. {' '.join(guidance)}"
+
+
+def paths_only_a_person_can_change(
+    rejected: Sequence[Sequence[str] | None], paths_driver: Sequence[str] = ()
+) -> list[str]:
+    """The paths the last attempts of a scenario insisted on, though only a person may change them.
+
+    `rejected` holds, attempt by attempt, what `L0-rutas` discarded, or None if it didn't stop
+    there. A slip, as a `conftest.py` out of habit, happens once, or changes from one attempt to
+    the next. The same path again, after the retry said it was discarded and to make it again only
+    if the scenario needs it, is the agent saying that it does: nothing it can write will do.
+    The oracle never counts: insisting on rewriting a sealed test is cheating, not a need, and
+    stays an attempt spent like any other.
+    """
+    last = rejected[-PERSON_ONLY_STREAK:]
+    if len(last) < PERSON_ONLY_STREAK or any(not paths for paths in last):
+        return []
+    common = set(last[0] or ())
+    for paths in last[1:]:
+        common &= set(paths or ())
+    oracle = _oracle(paths_driver)
+    return sorted(path for path in common if not path_within(path, oracle))
+
+
+def person_only_reason(scenario_id: str, paths: Sequence[str]) -> str:
+    """Why the run stops: the scenario needs a change that is a person's to make."""
+    joined = ", ".join(paths)
+    return (
+        f"{scenario_id} necesita cambiar {joined}, que solo puede tocar una persona. Haz tú el "
+        "cambio, confírmalo y vuelve a lanzar `lictor run`; si el escenario no debería "
+        "necesitarlo, revisa el escenario."
+    )
+
+
 def model_responded(events: Iterable[Mapping[str, Any]]) -> bool:
     """Tell whether the model itself wrote anything in a stream of agent events.
 
