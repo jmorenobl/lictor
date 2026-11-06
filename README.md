@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.svg" alt="Lictor — Factoría Agéntica de Software" width="100%" />
+<img src="https://raw.githubusercontent.com/jmorenobl/lictor/master/docs/assets/banner.svg" alt="Lictor — Factoría Agéntica de Software" width="100%" />
 
 <br/>
 
@@ -10,7 +10,7 @@
 [![LangGraph](https://img.shields.io/badge/Orquestaci%C3%B3n-LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
 [![Ruff](https://img.shields.io/badge/Linter-Ruff-D7FF64?style=for-the-badge&logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
 [![Mypy Strict](https://img.shields.io/badge/Typing-mypy%20--strict-2A6DB2?style=for-the-badge&logo=python&logoColor=white)](https://mypy-lang.org/)
-[![Hexagonal](https://img.shields.io/badge/Arquitectura-Hexagonal-10B981?style=for-the-badge)](docs/adr/ADR-0002-arquitectura-hexagonal.md)
+[![Hexagonal](https://img.shields.io/badge/Arquitectura-Hexagonal-10B981?style=for-the-badge)](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0002-arquitectura-hexagonal.md)
 
 <p align="center">
   <strong>Implementa escenarios Gherkin con un agente autónomo y los verifica de forma 100 % determinista.</strong><br/>
@@ -194,7 +194,7 @@ Característica: IVA de una factura
     Entonces se rechaza por importe no válido
 ```
 
-> 💡 *Puedes explorar este proyecto de ejemplo directamente en el directorio [`examples/demo-iva/`](examples/demo-iva/).*
+> 💡 *Puedes explorar este proyecto de ejemplo directamente en el directorio [`examples/demo-iva/`](https://github.com/jmorenobl/lictor/tree/master/examples/demo-iva).*
 
 ### 2️⃣ Inicializa y diagnostica el proyecto
 
@@ -323,7 +323,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas o en `forbidden_paths`, un borrado incluido, y cualquier enlace simbólico o repositorio anidado, falla el intento; lo que hizo el agente se descarta con su copia. | `block` |
 | **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
 | **L0** | `L0-supresiones` | Analiza las líneas que añade el resultado del agente, también en binarios, bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
-| **L0** | `L0-estado` | Guarda en memoria el estado de `.lictor/` (con el WAL del checkpoint), `lictor.json`, HEAD y los ficheros de control de `.git` antes de cada ventana del agente y cada comando. Si algo cambió, lo restaura y falla el intento sin verificarlo, con el evento `lictor.state.tampered.v1` ([ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
+| **L0** | `L0-estado` | Guarda en memoria el estado de `.lictor/` (con el WAL del checkpoint), `lictor.json`, HEAD y los ficheros de control de `.git` antes de cada ventana del agente y cada comando. Si algo cambió, lo restaura y falla el intento sin verificarlo, con el evento `lictor.state.tampered.v1` ([ADR-0001](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
 | **L0** | `L0-entorno` | Compara el hash del entorno de verificación, con todos sus ficheros, antes y después de ejecutar los comandos. Si no coincide, falla el intento, reconstruye el entorno y deja el evento `lictor.env.tampered.v1`. | `block` |
 | **L1** | Análisis estático | Linter (`ruff check`), formato (`ruff format --check`) y chequeo estricto de tipos (`mypy --strict`). | `block` |
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
@@ -335,7 +335,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 
 ## ⚙️ Configuración (`lictor.json`)
 
-El archivo `lictor.json` define el perfil del proyecto, el backend del agente, los límites de intentos, las fronteras de rutas y los controles. Puedes consultar su esquema formal en [`schema/lictor.schema.json`](schema/lictor.schema.json).
+El archivo `lictor.json` define el perfil del proyecto, el backend del agente, los límites de intentos, las fronteras de rutas y los controles. Puedes consultar su esquema formal en [`schema/lictor.schema.json`](https://github.com/jmorenobl/lictor/blob/master/schema/lictor.schema.json).
 
 > [!IMPORTANT]
 > - **ID de modelo explícito:** `backend.model` exige el identificador completo con versión (p. ej. `claude-sonnet-5-5`) y rechaza alias mutables como `sonnet` o `latest`.
@@ -422,7 +422,7 @@ lictor register PRE-001 PRE-002 PRE-003
 lictor run
 ```
 
-`lictor register` comprueba que los escenarios existen y no están en verde, te explica lo que afirmas y te pide confirmación (`--yes` para no preguntar). Hace un solo commit vacío con un trailer `Scenario:` por escenario y `Lictor-Asserted-By` con tu identidad git. El driver que Lictor escriba después solo tendrá que pasar esos escenarios, como cualquier verde. `report.md` y `lictor status` los muestran como **registrados a mano**: todo verde cuyo commit no lleva `Lictor-Run`, que Lictor pone en todos los suyos. La marca es informativa: los trailers los puede escribir cualquiera con git. [`examples/prestamos-biblioteca/`](examples/prestamos-biblioteca/) es un ejemplo con código previo, `Antecedentes` y `Regla`.
+`lictor register` comprueba que los escenarios existen y no están en verde, te explica lo que afirmas y te pide confirmación (`--yes` para no preguntar). Hace un solo commit vacío con un trailer `Scenario:` por escenario y `Lictor-Asserted-By` con tu identidad git. El driver que Lictor escriba después solo tendrá que pasar esos escenarios, como cualquier verde. `report.md` y `lictor status` los muestran como **registrados a mano**: todo verde cuyo commit no lleva `Lictor-Run`, que Lictor pone en todos los suyos. La marca es informativa: los trailers los puede escribir cualquiera con git. [`examples/prestamos-biblioteca/`](https://github.com/jmorenobl/lictor/tree/master/examples/prestamos-biblioteca) es un ejemplo con código previo, `Antecedentes` y `Regla`.
 
 `Scenario Outline` no se admite: `lictor run` lo rechaza al cargar la especificación (exit 10). Cada escenario necesita exactamente un test, y un esquema genera uno por fila de sus ejemplos.
 
@@ -458,7 +458,7 @@ Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación b�
 
 ## 🏗️ Arquitectura del Proyecto
 
-Lictor sigue una **Arquitectura Hexagonal (Puertos y Adaptadores)** estricta. Todas las dependencias apuntan hacia el interior y se verifican mediante [`.importlinter`](.importlinter):
+Lictor sigue una **Arquitectura Hexagonal (Puertos y Adaptadores)** estricta. Todas las dependencias apuntan hacia el interior y se verifican mediante [`.importlinter`](https://github.com/jmorenobl/lictor/blob/master/.importlinter):
 
 ```mermaid
 flowchart TB
@@ -521,20 +521,20 @@ flowchart TB
 
 ### Registros de Decisiones de Arquitectura (ADRs)
 
-- 📌 **[ADR-0001](docs/adr/ADR-0001-estado-en-dot-lictor.md):** El estado vive en `.lictor/`, dentro del repositorio e ignorado por git.
-- 📌 **[ADR-0002](docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
-- 📌 **[ADR-0003](docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
-- 📌 **[ADR-0004](docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
-- 📝 **[ADR-0005](docs/adr/ADR-0005-clon-y-rama-propios.md):** Cada ejecución trabaja en su propio clon y en su propia rama (propuesta).
-- 📌 **[ADR-0006](docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
+- 📌 **[ADR-0001](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0001-estado-en-dot-lictor.md):** El estado vive en `.lictor/`, dentro del repositorio e ignorado por git.
+- 📌 **[ADR-0002](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
+- 📌 **[ADR-0003](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
+- 📌 **[ADR-0004](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
+- 📝 **[ADR-0005](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0005-clon-y-rama-propios.md):** Cada ejecución trabaja en su propio clon y en su propia rama (propuesta).
+- 📌 **[ADR-0006](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
 
-Los cambios de cada versión están en [`CHANGELOG.md`](CHANGELOG.md).
+Los cambios de cada versión están en [`CHANGELOG.md`](https://github.com/jmorenobl/lictor/blob/master/CHANGELOG.md).
 
 ---
 
 ## 🧪 Desarrollo y Verificación
 
-Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` definido en [`lictor.json`](lictor.json):
+Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` definido en [`lictor.json`](https://github.com/jmorenobl/lictor/blob/master/lictor.json):
 
 ```bash
 # Todos los controles de calidad y la aceptación, en un clon limpio y en el entorno de verificación,
@@ -584,4 +584,4 @@ uv run python scripts/mutation_score.py mutants/score.json
 
 ## Licencia
 
-Copyright © 2026 Jorge MB. Licensed under the EUPL: Lictor se distribuye bajo la [Licencia Pública de la Unión Europea v1.2](LICENSE) (EUPL-1.2). El texto oficial en español y en las demás lenguas de la UE está en [interoperable-europe.ec.europa.eu](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
+Copyright © 2026 Jorge MB. Licensed under the EUPL: Lictor se distribuye bajo la [Licencia Pública de la Unión Europea v1.2](https://github.com/jmorenobl/lictor/blob/master/LICENSE) (EUPL-1.2). El texto oficial en español y en las demás lenguas de la UE está en [interoperable-europe.ec.europa.eu](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12).

@@ -25,6 +25,8 @@ Correcciones de la pasada greenfield `romanos` con la 0.1.0 de PyPI.
   tiene commits: haz el primero»), y las dos órdenes salen con 10. `lictor run` también lo dice.
 - Los eventos de la bitácora decían `source: lictor/0.1.0` en cualquier versión: estaba escrito a
   mano. Ahora es la versión instalada.
+- El README de PyPI tenía el banner y los enlaces a los ejemplos, el esquema y los ADR rotos: eran
+  rutas relativas al repositorio. Ahora apuntan a GitHub.
 
 ### Cambiado
 
