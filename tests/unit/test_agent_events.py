@@ -132,3 +132,10 @@ def test_agent_started_event_without_a_saved_prompt() -> None:
     event = agent_started_event(_Clock(), replace(CALL, prompt=None), max_attempts=1)
 
     assert event.data["prompt"] is None
+
+
+def test_agent_finished_event_names_the_projects_skills_the_backend_loaded() -> None:
+    loaded = agent_finished_event(_Clock(), CALL, replace(RESULT, project_skills=("lictor",)))
+
+    assert loaded.data["project_skills"] == ["lictor"]
+    assert "project_skills" not in agent_finished_event(_Clock(), CALL, RESULT).data

@@ -47,6 +47,16 @@ class _Stream:
     result: dict[str, Any] | None
     rate_limit_status: str | None
     cli_version: str
+    skills: tuple[str, ...] = ()
+
+
+def _project_skills(loaded: tuple[str, ...], cwd: Path) -> tuple[str, ...]:
+    """The skills of the copy that the backend says it loaded, which `--setting-sources ""` stops.
+
+    `system/init` lists every skill loaded, its own built-in ones included; only a name the copy
+    holds under `.claude/skills/` can be the project's.
+    """
+    return tuple(name for name in loaded if (cwd / ".claude" / "skills" / name).is_dir())
 
 
 class ClaudeCLI:
@@ -235,6 +245,7 @@ class ClaudeCLI:
         result: dict[str, Any] | None = None
         rate_limit_status: str | None = None
         cli_version = ""
+        skills: tuple[str, ...] = ()
         for line in stdout.splitlines():
             try:
                 event = json.loads(line)
@@ -252,7 +263,10 @@ class ClaudeCLI:
                     rate_limit_status = info["status"]
             elif kind == "system" and event.get("subtype") == "init":
                 cli_version = str(event.get("claude_code_version") or "")
-        return _Stream(tuple(events), result, rate_limit_status, cli_version)
+                listed = event.get("skills")
+                if isinstance(listed, list):
+                    skills = tuple(str(name) for name in listed)
+        return _Stream(tuple(events), result, rate_limit_status, cli_version, skills)
 
     def _read_denials(self, data: dict[str, Any]) -> tuple[PermissionDenial, ...]:
         denials = data.get("permission_denials")
@@ -345,6 +359,7 @@ class ClaudeCLI:
             "raw_path": task.raw_path,
             "stderr_path": stderr_path,
             "cli_version": stream.cli_version,
+            "project_skills": _project_skills(stream.skills, task.cwd),
         }
         if out.timed_out:
             return self._timed_out(task, stream, common)
@@ -371,6 +386,7 @@ class ClaudeCLI:
             ),
             stderr_path=stderr_path,
             cli_version=stream.cli_version,
+            project_skills=common["project_skills"],
         )
 
     @staticmethod

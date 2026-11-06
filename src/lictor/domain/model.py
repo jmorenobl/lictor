@@ -194,6 +194,7 @@ class AgentResult:
     exit_code: int | None = None
     stderr_path: Path | None = None
     cli_version: str = ""  # as the backend reported it when the call started
+    project_skills: tuple[str, ...] = ()  # the project's skills the backend loaded; never any
 
 
 @dataclass(frozen=True)

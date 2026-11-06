@@ -24,6 +24,7 @@ from lictor.application.run_files import (
     prune_runs,
     sweep_scratch,
 )
+from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
@@ -34,6 +35,7 @@ from lictor.bootstrap import (
     bootstrap_init,
     bootstrap_runtime,
     observed_journal,
+    skill_content,
 )
 from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
@@ -124,6 +126,13 @@ def init(
             help="Sobrescribir archivo de configuración existente",
         ),
     ] = False,
+    skill: Annotated[
+        bool,
+        typer.Option(
+            "--skill/--no-skill",
+            help="Instalar el esbozo de la skill de Lictor para Claude Code",
+        ),
+    ] = True,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -145,9 +154,47 @@ def init(
                     profile_name=profile,
                     model=model,
                     force=force,
+                    skill=skill,
                 )
             )
         typer.echo(f"Configuración inicializada en '{res.config_path}'.")
+        if res.skill_path:
+            typer.echo(f"Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
+        return 0
+
+    _safe_run(_execute)
+
+
+@app.command("skill")
+def skill_command(
+    show: Annotated[
+        bool,
+        typer.Option(
+            "--show",
+            help="Imprimir la skill completa de la versión instalada, sin escribir nada",
+        ),
+    ] = False,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Instala o restaura el esbozo de la skill de Lictor para Claude Code, sin tocar lictor.json.
+
+    El esbozo carga la skill de la versión instalada, así que al actualizar Lictor no hay que
+    volver a instalarla.
+    """
+
+    def _execute() -> int:
+        if show:
+            typer.echo(skill_content(), nl=False)
+            return 0
+        install_skill_stub(cwd)
+        typer.echo(f"Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
         return 0
 
     _safe_run(_execute)
@@ -182,6 +229,7 @@ def doctor(
                 log_dir=log_dir,
                 skip_reason="no comprobado: hay una ejecución en curso",
                 features=True,
+                skill=True,
             )
             report = runtime.preconditions.execute(request)
 

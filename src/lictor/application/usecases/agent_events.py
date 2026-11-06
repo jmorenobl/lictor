@@ -125,6 +125,7 @@ def agent_finished_event(
             "stderr": (
                 relative_to_project(stderr_path, call.project_root) if stderr_path else None
             ),
+            **({"project_skills": list(result.project_skills)} if result.project_skills else {}),
             **(extra or {}),
         },
     )
