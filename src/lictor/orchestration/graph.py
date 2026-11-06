@@ -337,6 +337,8 @@ class _GraphNodes:
                 agent_failures=state.get("agent_failures", 0),
                 forbidden_paths=self.ctx.forbidden_paths,
                 driver_exempt_paths=self.ctx.driver_exempt_paths,
+                max_driver_attempts=self.ctx.max_driver_attempts,
+                suppressions=self.ctx.suppressions,
             )
         )
 
@@ -394,6 +396,8 @@ class _GraphNodes:
                     oracle=self.ctx.oracle,
                     link=self.ctx.map_link,
                     impostors=self.ctx.impostors,
+                    suppressions=self.ctx.suppressions,
+                    banned_patterns=self.ctx.banned_patterns,
                 )
             )
         except DriverError as exc:
@@ -488,6 +492,7 @@ class _GraphNodes:
                     agent_failures=state.get("agent_failures", 0),
                     last_agent_status=state.get("last_agent_status"),
                     forbidden_paths=self.ctx.forbidden_paths,
+                    max_attempts=self.ctx.max_attempts,
                 )
             )
         except SealTamperedError as exc:

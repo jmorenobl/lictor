@@ -33,6 +33,7 @@ from lictor.domain.rules import (
     control_path_status,
     count_agent_failures,
     describe_score,
+    describe_suppressions,
     enforce_min_score,
     error_for_agent,
     forbidden_paths,
@@ -58,6 +59,7 @@ from lictor.domain.rules import (
     runs_to_prune,
     score_meets,
     suite_crash_reason,
+    suppression_matches,
     suspicious_driver,
     unmapped_cases,
 )
@@ -559,6 +561,21 @@ def test_banned_matches_lists_each_pattern_once_and_sorted() -> None:
 
 def test_banned_matches_clean_lines() -> None:
     assert banned_matches(["x = 1"], [r"#\s*noqa"]) == []
+
+
+def test_suppression_matches_joins_literals_and_patterns_once_and_sorted() -> None:
+    lines = ["x = 1  # noqa", "sys.path.insert(0, 'src')", "y = 2  # noqa"]
+
+    found = suppression_matches(lines, ["# noqa", "# type: ignore"], [r"\bsys\.path\b"])
+
+    assert found == ["# noqa", r"\bsys\.path\b"]
+    assert suppression_matches(["x = 1"], ["# noqa"], [r"\bsys\.path\b"]) == []
+
+
+def test_describe_suppressions_names_each_finding_once() -> None:
+    assert describe_suppressions(["b", "a", "b"]) == (
+        "Se detectaron supresiones no permitidas: a, b"
+    )
 
 
 def test_run_outcome_exact_reasons() -> None:

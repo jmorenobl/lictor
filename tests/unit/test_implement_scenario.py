@@ -42,7 +42,7 @@ def _execute(
     spec_source = MagicMock(spec=SpecSource)
     spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = True
-    event_log = MagicMock(spec=EventLog)
+    event_log = overrides.pop("event_log", MagicMock(spec=EventLog))
     clock = MagicMock(spec=Clock)
     clock.now_iso.return_value = "2026-10-30T14:35:00Z"
     use_case = ImplementScenario(
@@ -172,14 +172,14 @@ def test_stderr_of_the_call_reaches_the_journal(tmp_path: Path) -> None:
 
     _, _, event_log = _execute(tmp_path, agent)
 
-    event = event_log.append.call_args_list[0].args[0]
+    event = event_log.append.call_args_list[1].args[0]
     assert event.data["stderr"] == ".lictor/runs/x.stderr.log"
 
 
 def test_journal_has_no_stderr_when_the_call_left_none(tmp_path: Path) -> None:
     _, _, event_log = _execute(tmp_path, AgentResult(status="ok"))
 
-    assert event_log.append.call_args_list[0].args[0].data["stderr"] is None
+    assert event_log.append.call_args_list[1].args[0].data["stderr"] is None
 
 
 def test_denials_and_exit_code_reach_the_journal(tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ def test_denials_and_exit_code_reach_the_journal(tmp_path: Path) -> None:
 
     _, _, event_log = _execute(tmp_path, agent)
 
-    finished, denied = _events(event_log)
+    _, finished, denied = _events(event_log)
     expected = [{"tool": "Bash", "target": "curl -V"}]
     assert finished.data["permission_denials"] == expected
     assert finished.data["exit_code"] == 0
@@ -201,7 +201,10 @@ def test_denials_and_exit_code_reach_the_journal(tmp_path: Path) -> None:
 def test_no_denial_event_without_denials(tmp_path: Path) -> None:
     _, _, event_log = _execute(tmp_path, AgentResult(status="ok"))
 
-    assert [e.type for e in _events(event_log)] == ["lictor.agent.finished.v1"]
+    assert [e.type for e in _events(event_log)] == [
+        "lictor.agent.started.v1",
+        "lictor.agent.finished.v1",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -357,7 +360,7 @@ def test_implement_scenario_success(tmp_path: Path) -> None:
     assert result.agent_signal == "ok"
     assert result.agent_result.status == "ok"
 
-    event_log.append.assert_called_once()
+    assert event_log.append.call_count == 2
     event = event_log.append.call_args[0][0]
     assert isinstance(event, Event)
     assert event.type == "lictor.agent.finished.v1"
@@ -587,3 +590,24 @@ def test_the_prompt_is_saved_beside_the_raw_output_before_the_call(tmp_path: Pat
         "hash": hash_file(prompt_file),
     }
     assert prompt_file.name == "002-implement.prompt.md"
+
+
+def test_the_start_of_the_call_is_in_the_journal_before_the_agent_runs(tmp_path: Path) -> None:
+    """Whoever watches the run learns what it waits for, and the snapshot covers that line."""
+    event_log = MagicMock(spec=EventLog)
+    journal: list[list[str]] = []
+
+    def run(task: AgentTask) -> AgentResult:
+        journal.append([e.type for e in _events(event_log)])
+        return AgentResult(status="ok")
+
+    _execute(tmp_path, MagicMock(side_effect=run), max_attempts=3, event_log=event_log)
+
+    assert journal == [["lictor.agent.started.v1"]]
+    started, finished = _events(event_log)[:2]
+    assert (started.scenarioid, started.data["attempt"], started.data["max_attempts"]) == (
+        "IVA-001",
+        2,
+        3,
+    )
+    assert started.data["prompt"] == finished.data["prompt"]

@@ -29,8 +29,15 @@ from lictor.application.usecases.check_project import CheckAcceptanceSpec, Check
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest
 from lictor.application.usecases.preconditions import PreconditionsRequest
-from lictor.bootstrap import BootstrapResult, bootstrap_init, bootstrap_runtime
+from lictor.bootstrap import (
+    BootstrapResult,
+    bootstrap_init,
+    bootstrap_runtime,
+    observed_journal,
+)
 from lictor.domain.errors import ExitCode, LictorError
+from lictor.domain.model import Event
+from lictor.domain.progress import RunProgress, StatusView, describe_status
 from lictor.domain.rules import (
     anchor_problems,
     baseline_head_accepted,
@@ -308,6 +315,14 @@ def run(
             help="Forzar una ejecución nueva descartando la anterior",
         ),
     ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet",
+            "-q",
+            help="No mostrar el progreso en stderr; solo el resultado final",
+        ),
+    ] = False,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -317,12 +332,29 @@ def run(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Implementa y verifica los escenarios de forma determinista."""
+    """Implementa y verifica los escenarios de forma determinista.
+
+    Cuenta en stderr cada paso según ocurre (con --quiet, no); stdout queda para el resultado.
+    """
 
     def _execute() -> int:
-        return _execute_run(cwd, force_new=new)
+        return _execute_run(cwd, force_new=new, progress=None if quiet else _progress_printer())
 
     _safe_run(_execute)
+
+
+def _progress_printer() -> Callable[[Event], None]:
+    """Tell each step of the run on stderr, as the journal records it (F10)."""
+    progress = RunProgress()
+
+    def show(event: Event) -> None:
+        for line in progress.observe(event):
+            try:
+                typer.echo(line, err=True)
+            except OSError:
+                return  # nobody is reading stderr any more: the run goes on without telling
+
+    return show
 
 
 def _record_stop(runtime: BootstrapResult, run_id: str, code: int, reason: str) -> None:
@@ -565,7 +597,9 @@ def _start_new_run(
     return _finished_exit_code(final_state.values)
 
 
-def _execute_run(cwd: Path, force_new: bool) -> int:
+def _execute_run(
+    cwd: Path, force_new: bool, progress: Callable[[Event], None] | None = None
+) -> int:
     """Run or resume, holding the project: another run would sweep this one's copy and clone.
 
     A refusal writes nothing: the journal and `current_run` belong to the run in progress, which
@@ -573,15 +607,18 @@ def _execute_run(cwd: Path, force_new: bool) -> int:
     """
     resolved_cwd = cwd.resolve()
     with exclusive_run(resolved_cwd, "lictor run"):
-        return _run_holding_project(resolved_cwd, force_new)
+        return _run_holding_project(resolved_cwd, force_new, progress)
 
 
-def _run_holding_project(resolved_cwd: Path, force_new: bool) -> int:
+def _run_holding_project(
+    resolved_cwd: Path, force_new: bool, progress: Callable[[Event], None] | None
+) -> int:
     lictor_dir = resolved_cwd / ".lictor"
     current_run_file = lictor_dir / "current_run"
     db_path = lictor_dir / "checkpoints.sqlite"
 
-    runtime = bootstrap_runtime(resolved_cwd)
+    journal = observed_journal(resolved_cwd, progress) if progress is not None else None
+    runtime = bootstrap_runtime(resolved_cwd, event_log=journal)
     saver = get_sqlite_saver(db_path)
     graph = create_graph(runtime.graph_context, checkpointer=saver)
     sweep_scratch(resolved_cwd)
@@ -722,38 +759,61 @@ def status(
         state_vals = state_snapshot.values if state_snapshot else {}
         next_nodes = list(state_snapshot.next) if state_snapshot else []
 
-        payload: dict[str, Any] = {
-            "run_id": run_id,
-            "next_nodes": next_nodes,
-            "exit_code": state_vals.get("exit_code"),
-            "exit_reason": state_vals.get("exit_reason"),
-            "status": state_vals.get("status", {}),
-            "reasons": state_vals.get("reasons", {}),
-            "totals": state_vals.get("totals", {}),
-            # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
-            "registered_by_hand": sorted(
-                sid
-                for sid, record in runtime.spec_history.records().items()
-                if not record.by_lictor
-            ),
-        }
+        progress = RunProgress()
+        for event in runtime.event_log.events(run_id=run_id):
+            progress.observe(event)
+        # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
+        by_hand = sorted(
+            sid for sid, record in runtime.spec_history.records().items() if not record.by_lictor
+        )
+        view = StatusView(
+            run_id=run_id,
+            next_nodes=next_nodes,
+            values=state_vals,
+            progress=progress,
+            by_hand=frozenset(by_hand),
+            max_attempts=runtime.config.limits.max_attempts,
+            max_driver_attempts=runtime.config.limits.max_driver_attempts,
+        )
 
         if as_json:
-            typer.echo(json.dumps(payload, indent=2))
+            typer.echo(json.dumps(_status_payload(view, by_hand), indent=2))
         else:
-            typer.echo(f"Ejecución: {run_id}")
-            typer.echo(f"Nodos pendientes: {next_nodes or 'ninguno'}")
-            typer.echo(f"Código de salida: {payload['exit_code']}")
-            if payload["exit_reason"]:
-                typer.echo(f"Motivo: {payload['exit_reason']}")
-            typer.echo("Escenarios:")
-            by_hand = set(payload["registered_by_hand"])
-            for sid, st in payload["status"].items():
-                mark = " (registrado a mano)" if sid in by_hand and st == "green" else ""
-                typer.echo(f"  - {sid}: {st}{mark}")
+            for line in describe_status(view):
+                typer.echo(line)
         return 0
 
     _safe_run(_execute)
+
+
+def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
+    """The same as the text, for a program: the checkpoint's fields and the journal's counts."""
+    values, progress = view.values, view.progress
+    driver = progress.spend("driver")
+    return {
+        "run_id": view.run_id,
+        "next_nodes": list(view.next_nodes),
+        "exit_code": values.get("exit_code"),
+        "exit_reason": values.get("exit_reason"),
+        "current": values.get("current") if view.next_nodes else None,
+        "attempt": values.get("attempt", 0),
+        "max_attempts": view.max_attempts,
+        "driver_attempts": values.get("driver_attempts", 0),
+        "max_driver_attempts": view.max_driver_attempts,
+        "status": values.get("status", {}),
+        "reasons": values.get("reasons", {}),
+        "totals": values.get("totals", {}),
+        "calls": progress.calls,
+        "cost_usd": round(progress.cost_usd, 6),
+        "driver": {"calls": driver.calls, "cost_usd": round(driver.cost_usd, 6)},
+        "greens": {
+            "implemented": progress.implemented,
+            "collateral": progress.collateral,
+            "reregistered": progress.reregistered,
+            "previous": progress.previous,
+        },
+        "registered_by_hand": by_hand,
+    }
 
 
 @app.command()

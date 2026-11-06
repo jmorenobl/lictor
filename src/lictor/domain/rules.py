@@ -608,6 +608,23 @@ def banned_matches(lines: Sequence[str], patterns: Sequence[str]) -> list[str]:
     )
 
 
+def suppression_matches(
+    lines: Sequence[str], suppressions: Sequence[str], patterns: Sequence[str]
+) -> list[str]:
+    """What added lines carry that L0-supresiones refuses: literal suppressions and patterns.
+
+    The same rule judges what the implementer adds and what a fresh driver adds, which is sealed
+    with the oracle and never judged again (F12).
+    """
+    literal = [s for s in suppressions if any(s in line for line in lines)]
+    return sorted({*banned_matches(lines, patterns), *literal})
+
+
+def describe_suppressions(found: Sequence[str]) -> str:
+    """The message of L0-supresiones, naming what was found."""
+    return f"Se detectaron supresiones no permitidas: {', '.join(sorted(set(found)))}"
+
+
 def count_agent_failures(status: AgentStatus, failures: int) -> int:
     """Count consecutive calls the agent itself failed, as opposed to failing a verification."""
     return failures + 1 if status == "error" else 0

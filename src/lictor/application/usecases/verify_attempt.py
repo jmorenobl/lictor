@@ -40,10 +40,10 @@ from lictor.domain.model import (
 from lictor.domain.rules import (
     MapLink,
     acceptance_failure,
-    banned_matches,
     collateral_greens,
     condense_error,
     control_path_status,
+    describe_suppressions,
     enforce_min_score,
     forbidden_paths,
     map_test_cases_to_scenarios,
@@ -51,6 +51,7 @@ from lictor.domain.rules import (
     render_full_error,
     routes_rejected,
     suite_crash_reason,
+    suppression_matches,
 )
 
 RoleKind = Literal["implement", "driver"]
@@ -526,15 +527,9 @@ class VerifyAttempt:
             return VerifyResult(ok=True)
 
         added_lines = self.vcs.added_lines(self._tree(req))
-        detected = banned_matches(added_lines, req.banned_patterns)
-        for line in added_lines:
-            for pattern in req.suppressions:
-                if pattern in line:
-                    detected.append(pattern)
-
+        detected = suppression_matches(added_lines, req.suppressions, req.banned_patterns)
         if detected:
-            err = f"Se detectaron supresiones no permitidas: {', '.join(sorted(set(detected)))}"
-            return self._fail(req, _Failure("L0-supresiones", err))
+            return self._fail(req, _Failure("L0-supresiones", describe_suppressions(detected)))
 
         return VerifyResult(ok=True)
 

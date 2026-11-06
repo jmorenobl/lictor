@@ -17,6 +17,7 @@ from lictor.application.run_files import (
 from lictor.application.usecases.agent_events import (
     AgentCall,
     agent_finished_event,
+    agent_started_event,
     denial_event,
     tamper_event,
 )
@@ -57,6 +58,8 @@ class PrepareDriverRequest:
     agent_failures: int = 0
     forbidden_paths: Sequence[str] = ()
     driver_exempt_paths: Sequence[str] = ()
+    max_driver_attempts: int = 0  # only to tell whoever watches; the graph decides
+    suppressions: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,7 @@ class PrepareDriver:
             "{protected_sin_driver}": ", ".join(protected_without_driver),
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
+            "{suppressions}": ", ".join(request.suppressions) or "ninguna",
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,
@@ -193,6 +197,20 @@ class PrepareDriver:
             raw_path=raw_path,
         )
         prompt_file = save_prompt(raw_path, prompt, request.project_root)
+        started = AgentCall(
+            run_id=request.run_id,
+            scenario_id=None,
+            role="driver",
+            attempt=request.driver_attempts + 1,
+            signal="",
+            model=request.model,
+            cli_version="",
+            prompt_sha=prompt_sha,
+            raw_path=raw_path,
+            project_root=request.project_root,
+            prompt=prompt_file,
+        )
+        self.event_log.append(agent_started_event(self.clock, started, request.max_driver_attempts))
         outcome = self._run_in_copy(task, request)
         agent_result = outcome.agent_result
         reverted = list(outcome.reverted)
@@ -208,18 +226,11 @@ class PrepareDriver:
         keeps = keeps_attempt(agent_signal, agent_failures)
         new_attempts = request.driver_attempts if keeps else request.driver_attempts + 1
 
-        call = AgentCall(
-            run_id=request.run_id,
-            scenario_id=None,
-            role="driver",
+        call = replace(
+            started,
             attempt=new_attempts,
             signal=agent_signal,
-            model=request.model,
             cli_version=agent_result.cli_version,
-            prompt_sha=prompt_sha,
-            raw_path=raw_path,
-            project_root=request.project_root,
-            prompt=prompt_file,
         )
         event = agent_finished_event(
             self.clock, call, agent_result, extra={"reverted_files": reverted}

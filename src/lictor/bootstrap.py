@@ -1,6 +1,7 @@
 """Composition root for Lictor runtime and dependency injection."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.application.events import ObservedEventLog
 from lictor.application.ports import (
     AuditSink,
     Clock,
@@ -46,6 +48,7 @@ from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import ConfigError
+from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle
 from lictor.orchestration.graph import GraphContext
 
@@ -85,6 +88,16 @@ def bootstrap_init(project_root: Path) -> InitProject:
     return InitProject(initializer=initializer)
 
 
+def project_journal(project_root: Path) -> EventLog:
+    """The project's journal, where every run writes its events."""
+    return JsonlEventLog(project_root.resolve() / ".lictor" / "journal.jsonl")
+
+
+def observed_journal(project_root: Path, observe: Callable[[Event], None]) -> EventLog:
+    """The project's journal, telling `observe` each event once it is written."""
+    return ObservedEventLog(project_journal(project_root), observe)
+
+
 def bootstrap_runtime(
     project_root: Path,
     *,
@@ -101,9 +114,7 @@ def bootstrap_runtime(
     active_clock = clock if clock is not None else SystemClock()
     lictor_dir = resolved_root / ".lictor"
     lictor_dir.mkdir(parents=True, exist_ok=True)
-    active_event_log = (
-        event_log if event_log is not None else JsonlEventLog(lictor_dir / "journal.jsonl")
-    )
+    active_event_log = event_log if event_log is not None else project_journal(resolved_root)
 
     vcs = GitCli(resolved_root)
     runner = SubprocessRunner()

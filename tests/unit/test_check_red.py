@@ -1180,3 +1180,73 @@ def test_check_red_with_a_fresh_driver_never_commits_a_registration(
         assert call.args == ("driver",)
     assert _events(event_log, "lictor.scenario.reregistered.v1") == []
     assert _events(event_log, "lictor.scenario.green.v1") == []
+
+
+_PATH_HACK = 'sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))'
+
+
+def test_check_red_rejects_a_fresh_driver_with_a_banned_line_before_running_it(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, spec_source, runner = _real_check(
+        tmp_path, _REPORT_RED, 1, tree="driver-tree", banned_patterns=(r"\bsys\.path\b",)
+    )
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.added_lines.return_value = [_PATH_HACK, "from romanos.cli import main  # noqa: E402"]
+
+    result = use_case.execute(request)
+
+    assert (result.ok, result.failed_at) == (False, "L0-supresiones")
+    event = _rejection(event_log)
+    assert event.data["reason"] == "L0-supresiones"
+    assert r"\bsys\.path\b" in str(event.data["error"])
+    vcs.added_lines.assert_called_once_with("driver-tree")
+    assert runner.paths == []
+    spec_source.write_seal.assert_not_called()
+    vcs.commit_tree.assert_not_called()
+
+
+def test_check_red_rejects_a_suppression_the_fresh_driver_adds(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _ = _real_check(
+        tmp_path, _REPORT_RED, 1, tree="driver-tree", suppressions=("# noqa",)
+    )
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.added_lines.return_value = ["from romanos.cli import main  # noqa: E402"]
+
+    use_case.execute(request)
+
+    assert "# noqa" in str(_rejection(event_log).data["error"])
+
+
+def test_check_red_on_the_last_attempt_a_banned_line_stops_the_run(tmp_path: Path) -> None:
+    use_case, request, _, _, _ = _real_check(
+        tmp_path,
+        _REPORT_RED,
+        1,
+        tree="driver-tree",
+        banned_patterns=(r"\bsys\.path\b",),
+        driver_attempts=3,
+    )
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.added_lines.return_value = [_PATH_HACK]
+
+    with pytest.raises(DriverError, match="L0-supresiones"):
+        use_case.execute(request)
+
+
+def test_check_red_never_judges_the_lines_of_a_sealed_driver(tmp_path: Path) -> None:
+    use_case, request, _, _, _ = _real_check(
+        tmp_path,
+        _REPORT_RED,
+        1,
+        driver_fresh=False,
+        driver_attempts=0,
+        banned_patterns=(r"\bsys\.path\b",),
+    )
+    assert isinstance(use_case.vcs, MagicMock)
+    use_case.vcs.added_lines.return_value = [_PATH_HACK]
+
+    use_case.execute(request)
+
+    use_case.vcs.added_lines.assert_not_called()

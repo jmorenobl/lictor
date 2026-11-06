@@ -226,12 +226,30 @@ Doctor: todas las comprobaciones pasaron.
 # Implementa y verifica todos los escenarios de forma determinista
 lictor run
 
-# Consulta el estado actual de la ejecución
+# Consulta el estado actual de la ejecución, también desde otra terminal mientras trabaja
 lictor status
 
 # Regenera y muestra la ruta del informe en Markdown (.lictor/report.md)
 lictor report
 ```
+
+Mientras trabaja, `lictor run` cuenta cada paso en stderr, y stdout queda para el resultado. Con `--quiet` no cuenta nada:
+
+```text
+Entorno de verificación listo.
+Escenarios: 3 (0 en verde, 3 pendientes).
+driver: escribiendo el driver, intento 1 de 2…
+driver: sellado (1 llamada, 0,07 $).
+IVA-001: implementando, intento 1 de 3…
+IVA-001: verde, intento 1, 28 s, 0,03 $.
+IVA-002: implementando, intento 1 de 3…
+IVA-002: verde, intento 1, 27 s, 0,02 $.
+IVA-003: implementando, intento 1 de 3…
+IVA-003: verde, intento 1, 31 s, 0,02 $.
+Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
+```
+
+`lictor status` dice en qué escenario e intento está, cuántos verdes lleva y cómo llegaron (implementados, colaterales, de antes), y las llamadas y el coste acumulados.
 
 <details>
 <summary>📄 <strong>Ver ejemplo de informe generado en <code>.lictor/report.md</code></strong></summary>
@@ -245,14 +263,20 @@ lictor report
 - **Escenarios pendientes**: 0
 - **Código de salida**: 0
 - **Motivo**: Ejecución completada: 3 escenarios en verde
-- **Duración total**: 18.42s
+- **Llamadas al agente**: 4 (driver: 1)
+- **Coste total**: 0,1406 $
+- **Duración total**: 2 min 31 s (agente 1 min 58 s, verificación 9 s)
 
 ## Escenarios
-| ID | Nombre | Estado | Intentos | Tokens (In/Out) | Coste | Tiempo Agente | Tiempo Verif | Commit |
-|---|---|---|---|---|---|---|---|---|
-| IVA-001 | IVA general | green | 1 | 4120 / 890 | $0.0257 | 5400ms | 620ms | a1b2c3d |
-| IVA-002 | IVA reducido | green | 1 | 3850 / 640 | $0.0212 | 4800ms | 590ms | e4f5g6h |
-| IVA-003 | Importe negativo | green | 1 | 4010 / 710 | $0.0227 | 6100ms | 910ms | i7j8k9l |
+| ID | Nombre | Estado | Intentos | Llamadas | Tokens (entrada / salida) | Coste | Tiempo agente | Tiempo verificación | Commit |
+|---|---|---|---|---|---|---|---|---|---|
+| driver | Driver de aceptación | sellado | 1 | 1 | 61204 / 2310 | 0,0710 $ | 41 s | - | 3f9c2a7b1d04 |
+| IVA-001 | IVA general | verde | 1 | 1 | 41120 / 890 | 0,0257 $ | 25 s | 3 s | a1b2c3d4e5f6 |
+| IVA-002 | IVA reducido | verde | 1 | 1 | 38850 / 640 | 0,0212 $ | 24 s | 3 s | 0e4f5a6b7c8d |
+| IVA-003 | Importe negativo | verde | 1 | 1 | 40010 / 710 | 0,0227 $ | 28 s | 3 s | 9a7b8c6d5e4f |
+| **Total** | | | | 4 | 181184 / 4550 | 0,1406 $ | 1 min 58 s | 9 s | |
+
+*La entrada incluye la caché: los tokens leídos y escritos en ella, que son casi toda la entrada de un agente.*
 
 ## Cuarentenas
 - *Ningún escenario en cuarentena.*
@@ -291,8 +315,8 @@ lictor report
 | `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, árbol `git` limpio, identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
 | `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
 | `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |
-| `lictor run` | `--new` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. |
-| `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos. |
+| `lictor run` | `--new`<br/>`--quiet, -q` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. Cuenta cada paso en stderr salvo con `--quiet`. |
+| `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos: escenario e intento en curso, verdes implementados y colaterales, llamadas y coste. Se puede lanzar durante una ejecución. |
 | `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl` y muestra su ruta. |
 
 ### Códigos de Salida Estables

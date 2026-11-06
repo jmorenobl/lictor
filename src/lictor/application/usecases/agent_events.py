@@ -67,6 +67,26 @@ class AgentCall:
     prompt: Mapping[str, str] | None = None  # the file the prompt was saved to, and its hash
 
 
+def agent_started_event(clock: Clock, call: AgentCall, max_attempts: int) -> Event:
+    """Record that a call is about to start, so that whoever watches knows what it waits for.
+
+    It is written before the integrity snapshot is taken, so it is part of what the call must leave
+    as it was.
+    """
+    return new_event(
+        clock,
+        "lictor.agent.started.v1",
+        call.run_id,
+        scenario_id=call.scenario_id,
+        data={
+            "role": call.role,
+            "attempt": call.attempt,
+            "max_attempts": max_attempts,
+            "prompt": dict(call.prompt) if call.prompt else None,
+        },
+    )
+
+
 def agent_finished_event(
     clock: Clock,
     call: AgentCall,
