@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+from lictor.application.events import SOURCE
 from lictor.application.usecases.agent_events import (
     AgentCall,
     agent_finished_event,
@@ -90,7 +91,7 @@ def test_tamper_and_denial_events_share_the_envelope_of_the_call() -> None:
     for event, kind in ((tampered, "lictor.state.tampered.v1"), (denied, "lictor.agent.denied.v1")):
         assert (event.type, event.source, event.time, event.runid, event.scenarioid) == (
             kind,
-            "lictor/0.1.0",
+            SOURCE,
             "2026-11-03T12:00:00Z",
             "R1",
             "IVA-001",

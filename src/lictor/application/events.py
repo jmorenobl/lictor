@@ -2,10 +2,12 @@
 
 import uuid
 
+from lictor import __version__
 from lictor.application.ports import Clock
 from lictor.domain.model import Event
 
-SOURCE = "lictor/0.1.0"
+# The installed version, never a literal: one written by hand went on saying 0.1.0 in 0.1.1 (F20).
+SOURCE = f"lictor/{__version__}"
 
 
 def new_event(

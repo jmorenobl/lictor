@@ -23,6 +23,8 @@ Correcciones de la pasada greenfield `romanos` con la 0.1.0 de PyPI.
 - `lictor doctor` y `lictor check` en un repositorio sin commits salían con «Error interno», la
   traza de git y código 1. `doctor` lo muestra como una comprobación fallida más («El repositorio no
   tiene commits: haz el primero»), y las dos órdenes salen con 10. `lictor run` también lo dice.
+- Los eventos de la bitácora decían `source: lictor/0.1.0` en cualquier versión: estaba escrito a
+  mano. Ahora es la versión instalada.
 
 ### Cambiado
 

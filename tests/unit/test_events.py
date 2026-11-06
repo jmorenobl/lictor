@@ -1,5 +1,6 @@
 """Unit tests for the envelope every journal event shares."""
 
+import lictor
 from lictor.application.events import SOURCE, new_event
 
 
@@ -13,13 +14,16 @@ def test_new_event_stamps_the_envelope() -> None:
 
     assert (event.type, event.source, event.time, event.runid, event.scenarioid, event.data) == (
         "lictor.x.v1",
-        "lictor/0.1.0",
+        SOURCE,
         "2026-11-03T12:00:00Z",
         "R1",
         "IVA-001",
         {"a": 1},
     )
-    assert SOURCE == "lictor/0.1.0"
+
+
+def test_the_source_is_the_installed_version() -> None:
+    assert f"lictor/{lictor.__version__}" == SOURCE
 
 
 def test_new_event_has_a_fresh_id_and_no_scenario_by_default() -> None:
