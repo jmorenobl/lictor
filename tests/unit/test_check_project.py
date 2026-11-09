@@ -196,6 +196,31 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
     assert res.control_results["lint"].skipped is None
 
 
+@pytest.mark.parametrize(
+    ("installed", "runs"),
+    [(("xdist.plugin",), False), (("pytest_cov.plugin",), True), (None, True)],
+)
+def test_check_project_skips_a_control_whose_plugin_the_environment_lacks(
+    tmp_path: Path, installed: tuple[str, ...] | None, runs: bool
+) -> None:
+    runner = FakeRunner()
+    runner.set_response("cov", CommandOutput(returncode=0, stdout="", stderr=""))
+    use_case = CheckProject(runner=runner, readers={"exit-code": ExitCodeReader()})
+    cov = CheckControlSpec(
+        id="coverage", level="L2", run="cov", mode="measure", when_plugin="pytest_cov.plugin"
+    )
+
+    res = use_case.execute(
+        CheckProjectRequest(project_root=tmp_path, controls=[cov], installed_plugins=installed)
+    )
+
+    assert res.ok is True
+    assert len(runner.calls) == int(runs)
+    skipped = res.control_results["coverage"].skipped
+    assert (skipped is None) == runs
+    assert runs or "pytest_cov.plugin" in (skipped or "")
+
+
 OK = CommandOutput(returncode=0, stdout="", stderr="")
 BAD = CommandOutput(returncode=1, stdout="mal", stderr="")
 JUNIT_OK = '<testsuite><testcase name="test_1"/></testsuite>'

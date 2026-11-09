@@ -153,6 +153,19 @@
           "default": null,
           "title": "When Exists"
         },
+        "when_plugin": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "When Plugin"
+        },
         "min_score": {
           "anyOf": [
             {

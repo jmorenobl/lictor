@@ -57,7 +57,7 @@ def test_load_python_uv_profile() -> None:
     assert profile.detect == ["pyproject.toml"]
     assert "tests/acceptance/" in profile.paths.driver
     assert "tests/acceptance/" in profile.paths.protected
-    assert len(profile.controls) == 3
+    assert [c.id for c in profile.controls] == ["lint", "types", "unit", "coverage"]
 
 
 @pytest.mark.parametrize(
@@ -1108,3 +1108,13 @@ def test_hints_left_to_the_profile_also_name_the_project_s_python(tmp_path: Path
     (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
 
     assert load_config(tmp_path).hints.startswith("Python >=3.13,")
+
+
+def test_the_profile_measures_coverage_only_where_the_plugin_is_installed() -> None:
+    """It needs a dependency the agent can't add: without it, the control is skipped (F18)."""
+    [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
+
+    assert coverage.mode == "measure"
+    assert coverage.when_plugin == "pytest_cov.plugin"
+    assert coverage.when_exists == "tests/unit"
+    assert "--cov" in coverage.run

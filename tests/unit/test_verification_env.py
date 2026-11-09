@@ -538,6 +538,25 @@ def test_installed_plugins_are_fixed_when_building(tmp_path: Path) -> None:
     assert event_log.append.call_args.args[0].data["plugins"] == ["plugin_a", "plugin_b"]
 
 
+def test_the_plugins_the_commands_load_are_known_once_built(tmp_path: Path) -> None:
+    """A control that needs a plugin is skipped without it, so the list must be the real one."""
+    runner = _Builder()
+    runner.plugins = "plugin_b\nplugin_a\n"
+    environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)
+
+    environment.ensure("R")
+
+    assert environment.installed_plugins == ("propio", "plugin_a", "plugin_b")
+
+
+def test_without_a_plugin_command_nobody_can_say_what_is_installed(tmp_path: Path) -> None:
+    environment, _ = _environment(tmp_path, _Builder(), replace(WITH_PLUGINS, plugins_command=""))
+
+    environment.ensure("R")
+
+    assert environment.installed_plugins is None
+
+
 def test_plugins_are_asked_after_prepare_and_inside_the_environment(tmp_path: Path) -> None:
     runner = _Builder()
     environment, _ = _environment(tmp_path, runner, WITH_PLUGINS)

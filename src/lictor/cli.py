@@ -368,6 +368,7 @@ def _check_spec(control: ControlConfig) -> CheckControlSpec:
         timeout_s=control.timeout_s,
         when_exists=control.when_exists,
         min_score=control.min_score,
+        when_plugin=control.when_plugin,
     )
 
 

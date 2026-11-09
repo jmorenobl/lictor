@@ -45,6 +45,7 @@ from lictor.domain.rules import (
     keeps_attempt,
     map_test_cases_to_scenarios,
     missing_executables,
+    missing_plugin,
     model_responded,
     mutation_score,
     path_within,
@@ -690,6 +691,23 @@ def test_control_path_status_tells_absent_from_removed(
 ) -> None:
     """Only a path the base never had lets a control be skipped; removing one fails it."""
     assert control_path_status(path, in_tree=in_tree, deleted=deleted) == expected
+
+
+@pytest.mark.parametrize(
+    ("required", "installed", "expected"),
+    [
+        (None, (), None),
+        ("pytest_cov.plugin", ("pytest_cov.plugin", "xdist.plugin"), None),
+        ("pytest_cov.plugin", ("xdist.plugin",), "pytest_cov.plugin"),
+        ("pytest_cov.plugin", (), "pytest_cov.plugin"),
+        # Without a list of plugins nothing can be said: the control runs and tells its own story.
+        ("pytest_cov.plugin", None, None),
+    ],
+)
+def test_missing_plugin_is_only_what_the_environment_is_known_to_lack(
+    required: str | None, installed: tuple[str, ...] | None, expected: str | None
+) -> None:
+    assert missing_plugin(required, installed) == expected
 
 
 # --- Phase 5: the oracle and the cycle of scenarios ---

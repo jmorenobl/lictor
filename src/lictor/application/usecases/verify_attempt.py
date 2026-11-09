@@ -47,7 +47,9 @@ from lictor.domain.rules import (
     enforce_min_score,
     forbidden_paths,
     map_test_cases_to_scenarios,
+    missing_plugin,
     path_within,
+    plugin_skip_reason,
     render_full_error,
     routes_rejected,
     suite_crash_reason,
@@ -87,6 +89,9 @@ class VerificationControlProtocol(Protocol):
     def when_exists(self) -> str | None: ...
 
     @property
+    def when_plugin(self) -> str | None: ...
+
+    @property
     def min_score(self) -> float | None: ...
 
 
@@ -103,6 +108,7 @@ class VerificationControl:
     timeout_s: int = 600
     when_exists: str | None = None
     min_score: float | None = None
+    when_plugin: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -536,7 +542,15 @@ class VerifyAttempt:
     def _run_present_control(
         self, ctrl: VerificationControlProtocol, req: VerifyAttemptRequest
     ) -> _ControlRun:
-        """Skip a control whose path neither HEAD nor the candidate has; fail one removed."""
+        """Skip a control whose path neither HEAD nor the candidate has; fail one removed.
+
+        Skip one whose plugin the environment lacks, too: the dependency is the project's.
+        """
+        installed = self.environment.installed_plugins if self.environment else None
+        if plugin := missing_plugin(ctrl.when_plugin, installed):
+            return _ControlRun(
+                ControlResult(ok=True, mode=ctrl.mode, skipped=plugin_skip_reason(plugin))
+            )
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)

@@ -16,7 +16,13 @@ from lictor.application.run_files import (
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import ControlResult
-from lictor.domain.rules import condense_error, control_path_status, enforce_min_score
+from lictor.domain.rules import (
+    condense_error,
+    control_path_status,
+    enforce_min_score,
+    missing_plugin,
+    plugin_skip_reason,
+)
 
 ACCEPTANCE_ID = "acceptance"
 
@@ -34,6 +40,7 @@ class CheckControlSpec:
     timeout_s: int = 600
     when_exists: str | None = None
     min_score: float | None = None
+    when_plugin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,7 +58,9 @@ class CheckProjectRequest:
 
     The commands run in `tree`, the project unless said otherwise, and leave their reports and
     logs in `evidence_dir`. `deleted` are the paths the checked tree removed from HEAD: a control
-    whose `when_exists` path is among them fails instead of being skipped.
+    whose `when_exists` path is among them fails instead of being skipped. `installed_plugins`
+    are what the environment has, or None if nobody can say: a control whose `when_plugin`
+    isn't among them is skipped.
     """
 
     project_root: Path
@@ -64,6 +73,7 @@ class CheckProjectRequest:
     keep_going: bool = False
     control_ids: Sequence[str] | None = None
     deleted: Sequence[str] = ()
+    installed_plugins: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +177,8 @@ class CheckProject:
     def _control(self, req: CheckProjectRequest, ctrl: CheckControlSpec) -> ControlResult:
         """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
         tree = req.tree or req.project_root
+        if plugin := missing_plugin(ctrl.when_plugin, req.installed_plugins):
+            return ControlResult(ok=True, mode=ctrl.mode, skipped=plugin_skip_reason(plugin))
         if ctrl.when_exists:
             in_tree = os.path.lexists(tree / ctrl.when_exists)
             status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=req.deleted)

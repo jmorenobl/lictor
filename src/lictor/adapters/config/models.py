@@ -233,6 +233,8 @@ class ControlConfig(BaseModel):
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
+    # A plugin the control needs, as the profile lists them: without it the control is skipped.
+    when_plugin: str | None = Field(default=None, min_length=1)
     # The lowest mutation score that passes, in percent; only a mutation report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
 

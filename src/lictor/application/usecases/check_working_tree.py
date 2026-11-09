@@ -98,6 +98,7 @@ class CheckWorkingTree:
                         keep_going=req.keep_going,
                         control_ids=req.control_ids,
                         deleted=subject.deleted,
+                        installed_plugins=environment.installed_plugins,
                     )
                 )
             tampered = environment.ensure(req.run_id)
