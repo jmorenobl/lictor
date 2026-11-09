@@ -273,12 +273,17 @@ class BuildReport:
         raw_events = self.event_log.events(run_id=req.run_id)
         deduped = self._deduplicate_events(raw_events)
 
-        report_md = self._render_report(deduped, req.project_root)
+        report_md = self._render_report(deduped, req.project_root, req.run_id)
 
         lictor_dir = req.project_root / ".lictor"
         lictor_dir.mkdir(parents=True, exist_ok=True)
         report_path = lictor_dir / "report.md"
         report_path.write_text(report_md, encoding="utf-8")
+        if req.run_id is not None:
+            # The one above is the next run's too; this one stays with the run's evidence.
+            own = lictor_dir / "runs" / req.run_id / "report.md"
+            own.parent.mkdir(parents=True, exist_ok=True)
+            own.write_text(report_md, encoding="utf-8")
 
         return BuildReportResult(report_path=report_path, content=report_md)
 
@@ -298,8 +303,9 @@ class BuildReport:
             seen[key] = ev
         return list(seen.values())
 
-    def _render_report(self, events: list[Event], project_root: Path) -> str:
+    def _render_report(self, events: list[Event], project_root: Path, run_id: str | None) -> str:
         data = self._aggregate_metrics(events)
+        data["run_id"] = run_id
         retired = _retired_runs(self.event_log.events())
         data["altered_evidence"] = _altered_evidence(events, project_root, retired)
         data["retired_evidence"] = _retirement_notes(events, retired)
@@ -564,6 +570,7 @@ class BuildReport:
             "# Informe de ejecución de Lictor",
             "",
             "## Resumen",
+            *([f"- **Ejecución**: {info['run_id']}"] if info.get("run_id") else []),
             f"- **Escenarios en verde**: {greens}",
             f"- **Escenarios en cuarentena**: {quarantined}",
             f"- **Escenarios pendientes**: {pending}",
