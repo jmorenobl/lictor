@@ -34,8 +34,7 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
   },
   "acceptance": {
     "run": "echo test {out}",
-    "report": "junit",
-    "driver_hints": "hints"
+    "report": "junit"
   },
   "controls": [
     {"id": "c1", "level": "L1", "run": "echo c1", "report": "exit-code"}

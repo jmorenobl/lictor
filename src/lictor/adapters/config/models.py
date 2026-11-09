@@ -90,16 +90,36 @@ class PathsConfig(BaseModel):
         return self
 
 
+def driver_hints_message() -> str:
+    """Why `lictor.json` can't declare the driver's instructions, and where the project's go."""
+    return (
+        "lictor.json no puede declarar acceptance.driver_hints: esas instrucciones son del "
+        "perfil, que las mejora en cada versión, y una copia las tapa. Bórralo; lo propio del "
+        "proyecto va en hints."
+    )
+
+
 class AcceptanceConfig(BaseModel):
-    """Configuración de la suite de aceptación (L3)."""
+    """Configuración de la suite de aceptación (L3) que decide el proyecto."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: str = Field(min_length=1)
     report: ReportFormat = "junit"
-    driver_hints: str = ""
     timeout_s: int = Field(default=600, gt=0)
     failure_exit_codes: list[int] = Field(default=[1], min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_driver_hints(cls, data: object) -> object:
+        """Only the profile's acceptance has them: in `lictor.json` they'd hide its fixes."""
+        if (
+            isinstance(data, dict)
+            and "driver_hints" in data
+            and "driver_hints" not in cls.model_fields
+        ):
+            raise ValueError(driver_hints_message())
+        return data
 
     @model_validator(mode="after")
     def _validate_failure_exit_codes(self) -> Self:
@@ -113,6 +133,12 @@ class AcceptanceConfig(BaseModel):
             msg = "La sección acceptance con report='junit' debe incluir '{out}' en run"
             raise ValueError(msg)
         return self
+
+
+class ProfileAcceptance(AcceptanceConfig):
+    """The acceptance of a profile, with the instructions every driver of the profile gets."""
+
+    driver_hints: str = ""
 
 
 class ProfileVerification(BaseModel):
@@ -288,7 +314,7 @@ class Profile(BaseModel):
     status: ProfileStatus = "stable"
     detect: list[str] = Field(min_length=1)
     paths: PathsConfig
-    acceptance: AcceptanceConfig
+    acceptance: ProfileAcceptance
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
     banned_patterns: list[str] = Field(default_factory=list)

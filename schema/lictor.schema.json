@@ -2,7 +2,7 @@
   "$defs": {
     "AcceptanceConfig": {
       "additionalProperties": false,
-      "description": "Configuración de la suite de aceptación (L3).",
+      "description": "Configuración de la suite de aceptación (L3) que decide el proyecto.",
       "properties": {
         "run": {
           "minLength": 1,
@@ -17,11 +17,6 @@
             "mutation"
           ],
           "title": "Report",
-          "type": "string"
-        },
-        "driver_hints": {
-          "default": "",
-          "title": "Driver Hints",
           "type": "string"
         },
         "timeout_s": {

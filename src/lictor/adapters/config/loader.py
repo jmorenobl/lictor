@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from lictor.adapters.config.models import (
+    AcceptanceConfig,
     BackendConfig,
     LictorConfig,
     LimitsConfig,
@@ -15,6 +16,7 @@ from lictor.adapters.config.models import (
     ProfileVerification,
     ProjectVerification,
     allow_empty_message,
+    driver_hints_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
@@ -44,6 +46,7 @@ class Defences:
     banned_patterns: Sequence[str]
     forbidden_paths: Sequence[str]
     driver_exempt_paths: Sequence[str] = ()
+    driver_hints: str = ""
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -129,7 +132,9 @@ def build_config_from_profile(
             backend=backend,
             limits=LimitsConfig(),
             paths=profile.paths,
-            acceptance=profile.acceptance,
+            acceptance=AcceptanceConfig.model_validate(
+                profile.acceptance.model_dump(exclude={"driver_hints"})
+            ),
             controls=list(profile.controls),
             agent_tools=list(profile.agent_tools),
             agent_commands=list(profile.agent_commands),
@@ -208,6 +213,8 @@ def _merge_profile_defaults(
 
     profile = load_profile(profile_ref, profiles_dir)
     profile_dump = profile.model_dump(mode="json")
+    # The driver's instructions are the profile's alone: `resolve_defences` reads them.
+    del profile_dump["acceptance"]["driver_hints"]
     merged = dict(raw_data)
     for key in _PROFILE_FALLBACK_KEYS:
         if key not in merged:
@@ -216,11 +223,7 @@ def _merge_profile_defaults(
     acc = merged.get("acceptance")
     if isinstance(acc, dict):
         inherited = profile_dump["acceptance"]
-        merged["acceptance"] = {
-            "driver_hints": inherited["driver_hints"],
-            "failure_exit_codes": inherited["failure_exit_codes"],
-            **acc,
-        }
+        merged["acceptance"] = {"failure_exit_codes": inherited["failure_exit_codes"], **acc}
     return merged
 
 
@@ -243,6 +246,9 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg)
 
     _reject_allow_empty(parsed, profiles_dir)
+    acceptance = parsed.get("acceptance")
+    if isinstance(acceptance, dict) and "driver_hints" in acceptance:
+        raise ConfigError(driver_hints_message())
     merged = _merge_profile_defaults(parsed, profiles_dir)
     try:
         return LictorConfig.model_validate(merged)
@@ -319,6 +325,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         banned_patterns=profile.banned_patterns,
         forbidden_paths=profile.forbidden_paths,
         driver_exempt_paths=profile.driver_exempt_paths,
+        driver_hints=profile.acceptance.driver_hints,
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

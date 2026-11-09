@@ -1019,3 +1019,54 @@ def test_min_score_belongs_to_a_mutation_control() -> None:
 def test_min_score_is_a_percentage(minimum: float) -> None:
     with pytest.raises(ValidationError):
         ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)
+
+
+def test_init_does_not_copy_the_driver_hints(tmp_path: Path) -> None:
+    """They are the profile's: a copy kept every project away from the profile's later fixes."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    assert "driver_hints" not in written["acceptance"]
+
+
+def test_the_driver_hints_come_from_the_profile_on_every_load(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    init_config_file(tmp_path)
+    profiles = _profiles_copy(tmp_path / "perfiles")
+    path = profiles / "python-uv.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["acceptance"]["driver_hints"] = "Una instrucción nueva del perfil."
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    defences = resolve_defences(load_config(tmp_path, profiles), profiles)
+
+    assert defences.driver_hints == "Una instrucción nueva del perfil."
+
+
+def test_the_fingerprint_covers_the_driver_hints(tmp_path: Path) -> None:
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    other = replace(defences, driver_hints=f"{defences.driver_hints} Más.")
+
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_a_lictor_json_with_driver_hints_is_refused_naming_hints(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    init_config_file(tmp_path)
+    path = tmp_path / "lictor.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["acceptance"]["driver_hints"] = "Usa pytest-bdd."
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(tmp_path)
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "acceptance.driver_hints" in message
+    assert "perfil" in message
+    assert "hints" in message.replace("driver_hints", "")
