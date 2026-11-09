@@ -5,8 +5,10 @@ import shutil
 import sys
 from collections.abc import Callable
 from contextlib import closing
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import unquote, urlparse
 
 import typer
 from langchain_core.runnables import RunnableConfig
@@ -62,9 +64,37 @@ app = typer.Typer(
 DEFAULT_CWD = Path(".")
 
 
+def version_line(installed: str, direct_url: str | None) -> str:
+    """Say the version, and whether it runs from a source tree: both say the same number (F01).
+
+    `direct_url` is the installation's `direct_url.json` (PEP 610), absent from an index.
+    """
+    line = f"lictor {installed}"
+    try:
+        data = json.loads(direct_url) if direct_url else None
+    except json.JSONDecodeError:
+        return line
+    if not isinstance(data, dict):
+        return line
+    info = data.get("dir_info")
+    if not isinstance(info, dict) or info.get("editable") is not True:
+        return line
+    url = data.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        return f"{line} (editable, desde {unquote(urlparse(url).path)})"
+    return f"{line} (editable)"
+
+
+def _direct_url() -> str | None:
+    try:
+        return distribution("lictor").read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+
+
 def _print_version(value: bool) -> None:
     if value:
-        typer.echo(f"lictor {__version__}")
+        typer.echo(version_line(__version__, _direct_url()))
         raise typer.Exit()
 
 

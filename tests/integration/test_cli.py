@@ -10,7 +10,7 @@ import lictor
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.application.run_files import exclusive_run
 from lictor.application.skill import SKILL_FILE, skill_stub
-from lictor.cli import app
+from lictor.cli import app, version_line
 from lictor.domain.model import Health
 
 runner = CliRunner()
@@ -138,8 +138,31 @@ def test_cli_version_is_the_installed_package_version() -> None:
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.output == f"lictor {_installed_version()}\n"
+    assert result.output.startswith(f"lictor {_installed_version()}")
     assert lictor.__version__ == _installed_version()
+
+
+@pytest.mark.parametrize(
+    ("direct_url", "expected"),
+    [
+        (None, "lictor 0.2.0"),
+        ('{"url": "https://example.org/lictor.whl", "archive_info": {}}', "lictor 0.2.0"),
+        ('{"url": "file:///tmp/x.whl", "archive_info": {}}', "lictor 0.2.0"),
+        ('{"url": "file:///home/ana/lictor", "dir_info": {}}', "lictor 0.2.0"),
+        (
+            '{"url": "file:///home/ana/lictor", "dir_info": {"editable": true}}',
+            "lictor 0.2.0 (editable, desde /home/ana/lictor)",
+        ),
+        ('{"dir_info": {"editable": true}}', "lictor 0.2.0 (editable)"),
+        ("no es JSON", "lictor 0.2.0"),
+        ("[1]", "lictor 0.2.0"),
+    ],
+)
+def test_cli_version_says_when_the_installation_is_editable(
+    direct_url: str | None, expected: str
+) -> None:
+    """A venv with an editable Lictor first on the PATH looks like the released one (F01)."""
+    assert version_line("0.2.0", direct_url) == expected
 
 
 def _python_project(path: Path) -> None:
