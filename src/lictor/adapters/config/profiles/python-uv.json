@@ -80,6 +80,9 @@
   },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],
-  "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/.",
+  "hints": "Python {requires-python}, gestor uv, tests con pytest. El código va en src/<paquete>/.",
+  "hint_values": {
+    "requires-python": {"file": "pyproject.toml", "key": "project.requires-python", "default": ">=3.12"}
+  },
   "gitignore": ["__pycache__/", "*.pyc", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/"]
 }

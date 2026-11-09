@@ -259,6 +259,8 @@ class ProfileInitConfig:
     profile_name: str
     gitignore_entries: Sequence[str]
     config_json: str
+    model: str = ""
+    hints: str = ""
 
 
 @runtime_checkable

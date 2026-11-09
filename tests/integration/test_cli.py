@@ -157,6 +157,24 @@ def test_cli_init_installs_the_skill_stub_and_says_so(tmp_path: Path) -> None:
     assert ".claude/skills/lictor/SKILL.md" in result.output
 
 
+def test_cli_init_summarizes_what_it_wrote_and_says_the_next_step(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.14"\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["init", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Perfil: python-uv@0.1" in out
+    assert "Modelo: claude-sonnet-5-5" in out
+    assert "Python >=3.14" in out
+    assert ".gitignore: añadidas .lictor/" in out
+    assert "Siguiente paso:" in out
+    assert out.index("commit") < out.index("lictor doctor")
+
+
 def test_cli_init_without_the_skill_leaves_no_stub(tmp_path: Path) -> None:
     _python_project(tmp_path)
 

@@ -1070,3 +1070,41 @@ def test_a_lictor_json_with_driver_hints_is_refused_naming_hints(tmp_path: Path)
     assert "acceptance.driver_hints" in message
     assert "perfil" in message
     assert "hints" in message.replace("driver_hints", "")
+
+
+def test_init_takes_the_python_version_of_hints_from_requires_python(tmp_path: Path) -> None:
+    """`uv init` writes the user's Python; the profile's own version misled the agent (F05)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.14"\n', encoding="utf-8"
+    )
+
+    init_config_file(tmp_path)
+
+    hints = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))["hints"]
+    assert "Python >=3.14" in hints
+    assert "3.12" not in hints
+    assert "{" not in hints
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    ['[project]\nname = "x"\n', "esto no es TOML ][", "[project]\nrequires-python = 3\n"],
+)
+def test_without_a_readable_requires_python_hints_keep_the_profile_default(
+    tmp_path: Path, pyproject: str
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    hints = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))["hints"]
+    assert hints.startswith("Python >=3.12,")
+
+
+def test_hints_left_to_the_profile_also_name_the_project_s_python(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.13"\n', encoding="utf-8"
+    )
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+
+    assert load_config(tmp_path).hints.startswith("Python >=3.13,")

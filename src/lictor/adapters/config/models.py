@@ -304,6 +304,19 @@ class LimitsConfig(BaseModel):
     error_max_chars: int = Field(default=4000, ge=500)
 
 
+class HintValue(BaseModel):
+    """A value `hints` takes from a project file, as `{name}`, or its default if it can't be read.
+
+    `key` is dotted through the tables of a TOML file: `project.requires-python`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    default: str
+
+
 class Profile(BaseModel):
     """Perfil de lenguaje y herramientas distribuido con Lictor."""
 
@@ -325,6 +338,8 @@ class Profile(BaseModel):
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
+    # What `{name}` in `hints` stands for, read from the project when the hints are written.
+    hint_values: dict[str, HintValue] = Field(default_factory=dict)
     gitignore: list[str] = Field(default_factory=list)
 
     @field_validator("controls")

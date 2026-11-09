@@ -28,7 +28,7 @@ from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
-from lictor.application.usecases.init_project import InitProjectRequest
+from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import PreconditionsRequest
 from lictor.bootstrap import (
     BootstrapResult,
@@ -84,6 +84,25 @@ def _main(
 
 
 _UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con `lictor run --new`."
+
+
+def describe_init(res: InitProjectResult) -> str:
+    """Say what `init` decided for the person, what to review, and what comes next (F08)."""
+    added = ", ".join(res.gitignore_added)
+    lines = [
+        f"Configuración inicializada en '{res.config_path.name}':",
+        f"  Perfil: {res.profile_name}",
+        f"  Modelo: {res.model} (backend.model; otro con --model)",
+        f"  hints: «{res.hints}»",
+        "    Lo lee el agente en cada llamada: ajústalo a tu proyecto.",
+        f"  .gitignore: añadidas {added}" if added else "  .gitignore: ya tenía todo",
+    ]
+    if res.skill_path:
+        lines.append(f"  Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
+    lines += [
+        "Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.",
+    ]
+    return "\n".join(lines)
 
 
 def _safe_run(cmd_func: Callable[[], int | None]) -> None:
@@ -157,9 +176,7 @@ def init(
                     skill=skill,
                 )
             )
-        typer.echo(f"Configuración inicializada en '{res.config_path}'.")
-        if res.skill_path:
-            typer.echo(f"Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
+        typer.echo(describe_init(res))
         return 0
 
     _safe_run(_execute)
