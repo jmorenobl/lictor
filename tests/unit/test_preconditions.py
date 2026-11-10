@@ -92,6 +92,25 @@ def test_a_dirty_tree_is_the_repositorys_problem_and_nothing_is_built(
     parts.environment.ensure.assert_not_called()
 
 
+def test_in_the_persons_checkout_a_dirty_tree_is_only_a_warning(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """`run` from there starts from the last commit, in a worktree of its own (ADR-0005)."""
+    parts = _parts(tmp_path, bin_dir)
+    parts.vcs.status.return_value = ["src/a.py"]
+
+    report = parts.use_case.execute(
+        PreconditionsRequest(run_id="r1", uncommitted_warns=True, environment="none")
+    )
+
+    assert report.problems == []
+    tree = report.checks[1]
+    assert tree.name == NAMES[1]
+    assert len(tree.warnings) == 1
+    assert "src/a.py" in tree.warnings[0]
+    assert "no entra" in tree.warnings[0]
+
+
 def test_a_resume_doesnt_look_at_the_tree(tmp_path: Path, bin_dir: Path) -> None:
     parts = _parts(tmp_path, bin_dir)
     parts.vcs.status.return_value = ["src/a.py"]

@@ -7,6 +7,26 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Añadido
+
+- **Cada ejecución trabaja en un worktree y una rama propios** (ADR-0005). `lictor run` desde tu
+  checkout crea un worktree desde el último commit en `~/.lictor/worktrees/<repo>-<hash>/<nombre>`,
+  con la rama `lictor/<nombre>`, y ejecuta allí el run entero. Tu checkout y tu rama no se tocan:
+  puedes seguir trabajando y haciendo commits mientras corre. Al terminar, el motivo dice en qué rama
+  está el resultado; integrarlo, con un merge o una pull request, lo haces tú.
+  - `--branch <nombre>` elige el nombre; sin él, es el id de la ejecución. Una rama que ya existe se
+    rechaza con 10, salvo que sea la de la ejecución que se reanuda.
+  - Lo que no has confirmado no entra en la ejecución, y `run` lo avisa. Ya no hace falta un árbol
+    limpio en tu checkout; `doctor` lo muestra como aviso (⚠). Dentro del worktree se sigue exigiendo.
+  - `lictor run` desde tu checkout reanuda la ejecución que quedó a medias. Con varias, pide
+    `--branch`; `--new` empieza otra a su lado, y así pueden correr varias a la vez.
+  - `lictor status` desde tu checkout muestra cada ejecución con su rama y su worktree. Con
+    `--json`, la salida es `{"runs": [...]}`.
+  - La ubicación se cambia por máquina con la variable `LICTOR_HOME` (por defecto `~/.lictor`), y
+    nunca puede estar en el directorio temporal: un reinicio borraría las ejecuciones a medias.
+  - Dentro de un worktree enlazado, creado a mano o por otra herramienta, `run` trabaja en él tal
+    cual.
+
 ### Cambiado
 
 - **Lictor se puede ejecutar dentro de un worktree enlazado** (`git worktree add`). En uno, `config`,

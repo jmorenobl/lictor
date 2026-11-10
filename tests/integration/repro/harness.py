@@ -25,6 +25,7 @@ import pytest
 
 from lictor import cli
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.application.run_index import read_run_index
 from lictor.bootstrap import BootstrapResult, bootstrap_runtime
 from lictor.domain.model import AgentStatus, AgentTask
 
@@ -189,6 +190,23 @@ class Outcome:
 
 
 def run_lictor(root: Path, agent: Agent, *, new: bool = False) -> Outcome:
+    """Run in `root` itself, as Lictor does inside a linked worktree.
+
+    In production a normal checkout gets a worktree of its own (`run_from_checkout`); running
+    in place is the same code with the git directory in one place instead of two, which the
+    linked-worktree cases of `test_v0_3_0_worktree.py` cover.
+    """
+    return _invoke(agent, lambda: cli._run_here(root, new))
+
+
+def run_from_checkout(
+    root: Path, agent: Agent, *, branch: str | None = None, new: bool = False
+) -> Outcome:
+    """Run as `lictor run` does from a person's checkout: in a worktree and a branch of its own."""
+    return _invoke(agent, lambda: cli._execute_run(root, force_new=new, branch=branch))
+
+
+def _invoke(agent: Agent, run: Callable[[], int]) -> Outcome:
     def bootstrap(project_root: Path, **_kwargs: Any) -> BootstrapResult:
         return bootstrap_runtime(project_root, executor=agent.executor)
 
@@ -196,13 +214,20 @@ def run_lictor(root: Path, agent: Agent, *, new: bool = False) -> Outcome:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(cli, "bootstrap_runtime", bootstrap)
         try:
-            outcome = Outcome(cli._execute_run(root, force_new=new))
+            outcome = Outcome(run())
         except KeyboardInterrupt as exc:
             outcome = Outcome(None, exc)
         except Exception as exc:
             outcome = Outcome(None, exc)
     require(not agent.errors, f"el guion del agente falló: {agent.errors}")
     return outcome
+
+
+def run_worktree(root: Path, branch: str) -> Path:
+    """The worktree the main checkout's index records for a run's branch."""
+    found = [run.worktree for run in read_run_index(root) if run.branch == branch]
+    require(len(found) == 1, f"el índice debía tener la rama {branch}: {read_run_index(root)}")
+    return Path(found[0])
 
 
 def green_commits(root: Path) -> list[tuple[str, str]]:

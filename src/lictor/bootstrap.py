@@ -106,6 +106,16 @@ def observed_journal(project_root: Path, observe: Callable[[Event], None]) -> Ev
     return ObservedEventLog(project_journal(project_root), observe)
 
 
+def checkout_repository(project_root: Path) -> GitCli:
+    """The repository of a checkout, before any configuration is read: `run` starts here."""
+    return GitCli(project_root.resolve())
+
+
+def new_run_id() -> str:
+    """Name a run before its worktree exists: the branch may be named after it."""
+    return SystemClock().generate_run_id()
+
+
 def bootstrap_runtime(
     project_root: Path,
     *,
@@ -269,6 +279,7 @@ def bootstrap_runtime(
         event_log=active_event_log,
         clock=active_clock,
         profile_name=active_config.profile,
+        result_branch=vcs.current_branch() if vcs.is_linked_worktree() else "",
         build_report=report_uc,
         acceptance_failure_exit_codes=active_config.acceptance.failure_exit_codes,
         forbidden_paths=defences.forbidden_paths,

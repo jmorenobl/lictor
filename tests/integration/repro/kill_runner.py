@@ -2,6 +2,10 @@
 
 Usage: python kill_runner.py <project> <profiles> <mode> <flags dir> [<point> <marker> [<release>]]
 
+It runs as `lictor run` from the person's checkout: in a worktree of its own, created or found
+through the index, with `LICTOR_KILL_BRANCH` as `--branch`. With `LICTOR_KILL_IN_PLACE` set it
+runs in `<project>` itself, as inside a linked worktree.
+
 A point is `<node>:antes`, `<node>:durante` or `<node>:despues`, or `red_check:registro`: the
 branch has advanced inside the red check and the checkpoint doesn't know it yet. On reaching it
 the process creates the marker and sleeps, so the test can send a real SIGKILL at exactly that
@@ -9,6 +13,7 @@ moment. With a release file it goes on as soon as that file exists. Without a po
 the end: that is the resume.
 """
 
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -110,6 +115,8 @@ def _install(stall: _Stall) -> None:
         hit = partial(stall.at, f"{node}:durante")
         _around(owner, name, hit if first else _nothing, _nothing if first else hit)
     _around(cli, "_paused_exit_code", partial(stall.at, "pause:durante"), _nothing)
+    # The worktree and its branch exist, and nothing of the run has started in it.
+    _around(GitCli, "add_worktree", _nothing, partial(stall.at, "worktree:durante"))
     _around(GitCli, "advance_head", _nothing, stall.advanced)
 
 
@@ -148,7 +155,10 @@ def main(args: list[str]) -> int:
 
     vars(cli)["bootstrap_runtime"] = bootstrap
     try:
-        return cli._execute_run(root, force_new=False)
+        if os.environ.get("LICTOR_KILL_IN_PLACE"):
+            return cli._run_here(root, False)
+        branch = os.environ.get("LICTOR_KILL_BRANCH") or None
+        return cli._execute_run(root, force_new=False, branch=branch)
     except LictorError as err:
         print(f"Error ({err.exit_code}): {err}", file=sys.stderr)
         return err.exit_code

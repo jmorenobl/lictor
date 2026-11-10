@@ -19,6 +19,7 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
 from lictor.domain.rules import NO_COMMITS, missing_executables
+from lictor.domain.run_branches import uncommitted_left_out
 
 EnvironmentCheck = Literal["run", "throwaway", "none"]
 
@@ -46,6 +47,8 @@ class PreconditionsRequest:
 
     run_id: str
     clean_tree: bool = True
+    # In the person's checkout what isn't committed only stays out of the run (ADR-0005).
+    uncommitted_warns: bool = False
     environment: EnvironmentCheck = "run"
     log_dir: Path | None = None
     skip_reason: str = ""
@@ -86,7 +89,7 @@ class CheckPreconditions:
         has_commits = self.vcs.has_commits()
         checks: list[PreconditionCheck] = [self._commits(has_commits)]
         if req.clean_tree:
-            checks.append(self._clean_tree())
+            checks.append(self._clean_tree(warn=req.uncommitted_warns))
         if req.features:
             checks.append(self._features())
         if req.skill and (warning := skill_stub_warning(self.project_root)):
@@ -120,10 +123,12 @@ class CheckPreconditions:
             "Repositorio con commits", (PreconditionProblem("repository", NO_COMMITS),)
         )
 
-    def _clean_tree(self) -> PreconditionCheck:
+    def _clean_tree(self, *, warn: bool) -> PreconditionCheck:
         changed = self.vcs.status()
         if not changed:
             return PreconditionCheck("Árbol git limpio")
+        if warn:
+            return PreconditionCheck("Árbol git limpio", warnings=(uncommitted_left_out(changed),))
         message = (
             f"El árbol de trabajo tiene cambios sin confirmar: {', '.join(changed)}. "
             "Confírmalos o descártalos antes de ejecutar."

@@ -26,6 +26,12 @@ from lictor.application.run_files import (
     prune_runs,
     sweep_scratch,
 )
+from lictor.application.run_index import (
+    RunEntry,
+    add_to_run_index,
+    read_run_index,
+    run_worktree,
+)
 from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
@@ -36,10 +42,12 @@ from lictor.bootstrap import (
     BootstrapResult,
     bootstrap_init,
     bootstrap_runtime,
+    checkout_repository,
+    new_run_id,
     observed_journal,
     skill_content,
 )
-from lictor.domain.errors import ExitCode, LictorError
+from lictor.domain.errors import ExitCode, LictorError, RunInProgressError
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
 from lictor.domain.rules import (
@@ -48,6 +56,12 @@ from lictor.domain.rules import (
     baseline_head_accepted,
     describe_score,
     precondition_exit_code,
+)
+from lictor.domain.run_branches import (
+    branch_name_problem,
+    resume_choice,
+    run_branch,
+    uncommitted_left_out,
 )
 from lictor.orchestration.graph import (
     DURABILITY,
@@ -278,6 +292,7 @@ def doctor(
                 skip_reason="no comprobado: hay una ejecución en curso",
                 features=True,
                 skill=True,
+                uncommitted_warns=not checkout_repository(resolved_cwd).is_linked_worktree(),
             )
             report = runtime.preconditions.execute(request)
 
@@ -420,6 +435,13 @@ def run(
             help="No mostrar el progreso en stderr; solo el resultado final",
         ),
     ] = False,
+    branch: Annotated[
+        str | None,
+        typer.Option(
+            "--branch",
+            help="Nombre de la ejecución: trabaja en la rama lictor/<nombre>, o la reanuda",
+        ),
+    ] = None,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -431,11 +453,18 @@ def run(
 ) -> None:
     """Implementa y verifica los escenarios de forma determinista.
 
-    Cuenta en stderr cada paso según ocurre (con --quiet, no); stdout queda para el resultado.
+    Trabaja en un worktree y una rama propios (lictor/<nombre>), creados desde el último commit;
+    tu checkout no se toca. Cuenta en stderr cada paso según ocurre (con --quiet, no); stdout
+    queda para el resultado.
     """
 
     def _execute() -> int:
-        return _execute_run(cwd, force_new=new, progress=None if quiet else _progress_printer())
+        return _execute_run(
+            cwd,
+            force_new=new,
+            progress=None if quiet else _progress_printer(),
+            branch=branch,
+        )
 
     _safe_run(_execute)
 
@@ -682,8 +711,9 @@ def _start_new_run(
     graph: Any,
     current_run_file: Path,
     resolved_cwd: Path,
+    run_id: str | None = None,
 ) -> int:
-    run_id = runtime.clock.generate_run_id()
+    run_id = run_id or runtime.clock.generate_run_id()
     _retire_old_runs(runtime, resolved_cwd, run_id, current_run_file)
     current_run_file.write_text(run_id, encoding="utf-8")
     init_state = {
@@ -708,20 +738,143 @@ def _start_new_run(
 
 
 def _execute_run(
-    cwd: Path, force_new: bool, progress: Callable[[Event], None] | None = None
+    cwd: Path,
+    force_new: bool,
+    progress: Callable[[Event], None] | None = None,
+    branch: str | None = None,
 ) -> int:
-    """Run or resume, holding the project: another run would sweep this one's copy and clone.
+    """Run or resume in a worktree of its own, never in the person's checkout (ADR-0005).
+
+    From a normal checkout Lictor creates the worktree, or finds the run to resume in the index;
+    inside a linked worktree, made by hand or by another tool, it works right there.
+    """
+    resolved_cwd = cwd.resolve()
+    repository = checkout_repository(resolved_cwd)
+    if repository.is_linked_worktree():
+        if branch is not None:
+            typer.echo(
+                "Error: ya estás en un worktree enlazado, en la rama "
+                f"{repository.current_branch() or '(HEAD separado)'}, y la ejecución trabaja en "
+                "él. `--branch` es para lanzarla desde el checkout principal.",
+                err=True,
+            )
+            return int(ExitCode.PRECONDITION)
+        return _run_here(resolved_cwd, force_new, progress)
+
+    target = _run_target(resolved_cwd, force_new=force_new, branch=branch)
+    if isinstance(target, int):
+        return target
+    typer.echo(f"Ejecución en la rama {target.branch}, en {target.worktree}", err=True)
+    try:
+        return _run_here(Path(target.worktree), False, progress, run_id=target.run_id)
+    except RunInProgressError as err:
+        raise RunInProgressError(
+            f"{err} Para lanzar otra en paralelo, dale un nombre: `lictor run --branch <nombre>`."
+        ) from err
+
+
+def _run_target(main_root: Path, *, force_new: bool, branch: str | None) -> RunEntry | int:
+    """Pick the run to resume, or create the worktree of a new one, holding the main checkout.
+
+    The lock is held only for this: the run itself holds its worktree's own.
+    """
+    wanted = None
+    if branch is not None:
+        problem = branch_name_problem(branch)
+        if problem is not None:
+            typer.echo(f"Error: {problem}", err=True)
+            return int(ExitCode.PRECONDITION)
+        wanted = run_branch(branch, "")
+    with exclusive_run(main_root, "lictor run"):
+        if not force_new:
+            pending = {run.branch: run for run in read_run_index(main_root) if _can_go_on(run)}
+            chosen, problem = resume_choice(list(pending), wanted)
+            if problem is not None:
+                typer.echo(f"Error: {problem}", err=True)
+                return int(ExitCode.PRECONDITION)
+            if chosen is not None:
+                return pending[chosen]
+        return _new_run_target(main_root, wanted)
+
+
+def _new_run_target(main_root: Path, wanted: str | None) -> RunEntry | int:
+    """Create the worktree and its branch from HEAD; what isn't committed stays out."""
+    repository = checkout_repository(main_root)
+    if not repository.has_commits():
+        typer.echo(
+            "Error: el repositorio todavía no tiene ningún commit, y la ejecución parte del "
+            "último. Confirma el proyecto (`git add` y `git commit`) y vuelve a lanzar.",
+            err=True,
+        )
+        return int(ExitCode.PRECONDITION)
+    run_id = new_run_id()
+    branch = wanted or run_branch(None, run_id)
+    worktree = run_worktree(main_root, branch)
+    if repository.branch_exists(branch) or worktree.exists():
+        typer.echo(
+            f"Error: ya existe la rama {branch} o el directorio de su worktree ({worktree}), y "
+            "no es de una ejecución que se pueda reanudar. No se ha tocado nada: elige otro "
+            "nombre con `--branch`, o retira la que ya no quieras.",
+            err=True,
+        )
+        return int(ExitCode.PRECONDITION)
+    uncommitted = repository.status()
+    if uncommitted:
+        typer.echo(f"Aviso: {uncommitted_left_out(uncommitted)}", err=True)
+    entry = RunEntry(branch=branch, worktree=str(worktree), run_id=run_id)
+    add_to_run_index(main_root, entry)
+    repository.add_worktree(worktree, branch)
+    return entry
+
+
+def _can_go_on(entry: RunEntry) -> bool:
+    """A run of the index goes on if its worktree is there and its checkpoint hasn't finished.
+
+    One that never got to start counts too: its worktree exists and nothing ran in it yet.
+    """
+    worktree = Path(entry.worktree)
+    if not worktree.is_dir():
+        return False
+    try:
+        snapshot = _read_only_state(worktree, entry.run_id)
+    except LictorError:
+        return True  # the resume says what is wrong, with the run's own checks
+    if snapshot is None or not snapshot.values:
+        return True
+    return not (snapshot.values.get("exit_code") is not None and not snapshot.next)
+
+
+def _read_only_state(project_root: Path, run_id: str) -> Any:
+    """Read a run's checkpoint without writing it: a run in progress guards it (F13)."""
+    saver = read_only_sqlite_saver(project_root / ".lictor" / "checkpoints.sqlite")
+    if saver is None:
+        return None
+    with closing(saver.conn):
+        graph = create_graph(bootstrap_runtime(project_root).graph_context, checkpointer=saver)
+        chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+        return graph.get_state(config=chk_config)
+
+
+def _run_here(
+    resolved_cwd: Path,
+    force_new: bool,
+    progress: Callable[[Event], None] | None = None,
+    run_id: str | None = None,
+) -> int:
+    """Run or resume in this checkout, holding it: another run would sweep its copy and clone.
 
     A refusal writes nothing: the journal and `current_run` belong to the run in progress, which
     would read any change to them as tampering.
     """
-    resolved_cwd = cwd.resolve()
     with exclusive_run(resolved_cwd, "lictor run"):
-        return _run_holding_project(resolved_cwd, force_new, progress)
+        return _run_holding_project(resolved_cwd, force_new, progress, run_id)
 
 
 def _run_holding_project(
-    resolved_cwd: Path, force_new: bool, progress: Callable[[Event], None] | None
+    resolved_cwd: Path,
+    force_new: bool,
+    progress: Callable[[Event], None] | None,
+    run_id: str | None = None,
 ) -> int:
     lictor_dir = resolved_cwd / ".lictor"
     current_run_file = lictor_dir / "current_run"
@@ -738,7 +891,7 @@ def _run_holding_project(
         run_id, state_snapshot = resumable
         return _resume_run(runtime, graph, run_id, resolved_cwd, state_snapshot)
 
-    return _start_new_run(runtime, graph, current_run_file, resolved_cwd)
+    return _start_new_run(runtime, graph, current_run_file, resolved_cwd, run_id)
 
 
 def _resumable_run(graph: Any, current_run_file: Path) -> tuple[str, Any] | None:
@@ -850,42 +1003,17 @@ def status(
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
-        lictor_dir = resolved_cwd / ".lictor"
-        current_run_file = lictor_dir / "current_run"
+        runs = _indexed_runs(resolved_cwd)
+        if runs:
+            _show_indexed_runs(runs, as_json=as_json)
+            return 0
+        current_run_file = resolved_cwd / ".lictor" / "current_run"
         if not current_run_file.is_file():
             typer.echo("No hay ninguna ejecución registrada en el proyecto.")
             return 0
 
         run_id = current_run_file.read_text(encoding="utf-8").strip()
-        runtime = bootstrap_runtime(resolved_cwd)
-        # A run in progress guards the checkpoint: looking at it must not write it (F13).
-        saver = read_only_sqlite_saver(lictor_dir / "checkpoints.sqlite")
-        state_snapshot = None
-        if saver is not None:
-            with closing(saver.conn):
-                graph = create_graph(runtime.graph_context, checkpointer=saver)
-                chk_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
-                state_snapshot = graph.get_state(config=chk_config)
-        state_vals = state_snapshot.values if state_snapshot else {}
-        next_nodes = list(state_snapshot.next) if state_snapshot else []
-
-        progress = RunProgress()
-        for event in runtime.event_log.events(run_id=run_id):
-            progress.observe(event)
-        # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
-        by_hand = sorted(
-            sid for sid, record in runtime.spec_history.records().items() if not record.by_lictor
-        )
-        view = StatusView(
-            run_id=run_id,
-            next_nodes=next_nodes,
-            values=state_vals,
-            progress=progress,
-            by_hand=frozenset(by_hand),
-            max_attempts=runtime.config.limits.max_attempts,
-            max_driver_attempts=runtime.config.limits.max_driver_attempts,
-        )
-
+        view, by_hand = _status_view(resolved_cwd, run_id)
         if as_json:
             typer.echo(json.dumps(_status_payload(view, by_hand), indent=2))
         else:
@@ -894,6 +1022,58 @@ def status(
         return 0
 
     _safe_run(_execute)
+
+
+def _indexed_runs(project_root: Path) -> list[RunEntry]:
+    """The runs a main checkout started whose worktree is still there; none inside a worktree."""
+    if checkout_repository(project_root).is_linked_worktree():
+        return []
+    return [run for run in read_run_index(project_root) if Path(run.worktree).is_dir()]
+
+
+def _show_indexed_runs(runs: list[RunEntry], *, as_json: bool) -> None:
+    """Tell each run by its branch, the way `lictor run --branch` names it."""
+    payloads: list[dict[str, Any]] = []
+    for number, run in enumerate(runs):
+        view, by_hand = _status_view(Path(run.worktree), run.run_id)
+        if as_json:
+            payloads.append(
+                {"branch": run.branch, "worktree": run.worktree, **_status_payload(view, by_hand)}
+            )
+            continue
+        if number:
+            typer.echo("")
+        typer.echo(f"Rama {run.branch} · {run.worktree}")
+        for line in describe_status(view):
+            typer.echo(line)
+    if as_json:
+        typer.echo(json.dumps({"runs": payloads}, indent=2))
+
+
+def _status_view(project_root: Path, run_id: str) -> tuple[StatusView, list[str]]:
+    """Fold a run's checkpoint and journal, reading both without writing either."""
+    runtime = bootstrap_runtime(project_root)
+    state_snapshot = _read_only_state(project_root, run_id)
+    state_vals = state_snapshot.values if state_snapshot else {}
+    next_nodes = list(state_snapshot.next) if state_snapshot else []
+
+    progress = RunProgress()
+    for event in runtime.event_log.events(run_id=run_id):
+        progress.observe(event)
+    # Informative: any green whose commit lacks Lictor-Run; anyone can write a trailer.
+    by_hand = sorted(
+        sid for sid, record in runtime.spec_history.records().items() if not record.by_lictor
+    )
+    view = StatusView(
+        run_id=run_id,
+        next_nodes=next_nodes,
+        values=state_vals,
+        progress=progress,
+        by_hand=frozenset(by_hand),
+        max_attempts=runtime.config.limits.max_attempts,
+        max_driver_attempts=runtime.config.limits.max_driver_attempts,
+    )
+    return view, by_hand
 
 
 def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:

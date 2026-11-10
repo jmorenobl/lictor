@@ -147,12 +147,6 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
     (project_dir / "lictor.json").write_text(json.dumps(lictor_json, indent=2), encoding="utf-8")
     (project_dir / ".gitignore").write_text(".lictor/\n__pycache__/\n.venv/\n", encoding="utf-8")
 
-    # Write .lictor/fake_executor.json
-    lictor_dir = project_dir / ".lictor"
-    lictor_dir.mkdir(parents=True, exist_ok=True)
-    if fake_config is not None:
-        (lictor_dir / "fake_executor.json").write_text(json.dumps(fake_config), encoding="utf-8")
-
     subprocess.run(["git", "add", "."], cwd=project_dir, check=True, capture_output=True)
     subprocess.run(
         ["git", "commit", "-m", "chore: initial commit"],
@@ -161,7 +155,20 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
         capture_output=True,
     )
 
-    return project_dir
+    # A run works in a linked worktree of its own: these cycles start inside one, as `lictor run`
+    # does after creating it, so that the fake executor's options are in the run's `.lictor/`.
+    worktree = tmp_path / "demo-iva-run"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "lictor/demo", str(worktree)],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+    )
+    lictor_dir = worktree / ".lictor"
+    lictor_dir.mkdir(parents=True, exist_ok=True)
+    if fake_config is not None:
+        (lictor_dir / "fake_executor.json").write_text(json.dumps(fake_config), encoding="utf-8")
+    return worktree
 
 
 def test_e2e_demo_iva_good_mode(tmp_path: Path) -> None:
