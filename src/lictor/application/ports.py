@@ -89,6 +89,14 @@ class Worktrees(Protocol):
         """Create a worktree at `path` on a new branch from HEAD, running none of the hooks."""
         ...
 
+    def remove_worktree(self, path: Path) -> None:
+        """Remove a clean worktree; git refuses one with untracked or modified files."""
+        ...
+
+    def delete_branch(self, branch: str) -> None:
+        """Delete a branch only if it is integrated into HEAD, as `git branch -d` does."""
+        ...
+
 
 @runtime_checkable
 class Vcs(Protocol):

@@ -860,3 +860,35 @@ def test_add_worktree_refuses_an_existing_branch(git_repo: Path, tmp_path: Path)
 
     with pytest.raises(CandidateError, match="lictor/iva"):
         cli.add_worktree(tmp_path.with_name(f"{tmp_path.name}-run") / "iva", "lictor/iva")
+
+
+def test_remove_worktree_refuses_what_git_would_lose(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    dest = tmp_path.with_name(f"{tmp_path.name}-run") / "iva"
+    cli.add_worktree(dest, "lictor/iva")
+    (dest / "notas.txt").write_text("a mano\n", encoding="utf-8")
+
+    with pytest.raises(CandidateError, match="No se pudo retirar el worktree"):
+        cli.remove_worktree(dest)
+    assert dest.is_dir()
+
+    (dest / "notas.txt").unlink()
+    (dest / "x.ignored").write_text("ignorado\n", encoding="utf-8")
+    cli.remove_worktree(dest)
+    assert not dest.exists()
+
+
+def test_delete_branch_keeps_one_that_isnt_integrated(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    dest = tmp_path.with_name(f"{tmp_path.name}-run") / "iva"
+    cli.add_worktree(dest, "lictor/iva")
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "x"], cwd=dest, check=True)
+    cli.remove_worktree(dest)
+
+    with pytest.raises(CandidateError, match="lictor/iva"):
+        cli.delete_branch("lictor/iva")
+    assert cli.branch_exists("lictor/iva")
+
+    subprocess.run([GIT_BIN, "merge", "-q", "--ff-only", "lictor/iva"], cwd=git_repo, check=True)
+    cli.delete_branch("lictor/iva")
+    assert not cli.branch_exists("lictor/iva")
