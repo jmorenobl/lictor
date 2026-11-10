@@ -605,7 +605,7 @@ flowchart TB
 - 📌 **[ADR-0002](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0002-arquitectura-hexagonal.md):** Arquitectura Hexagonal (Puertos y Adaptadores).
 - 📌 **[ADR-0003](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0003-langgraph-adaptador-orquestacion.md):** LangGraph como adaptador de orquestación, no núcleo del sistema.
 - 📌 **[ADR-0004](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
-- 📝 **[ADR-0005](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0005-clon-y-rama-propios.md):** Cada ejecución trabaja en su propio clon y en su propia rama (propuesta).
+- 📝 **[ADR-0005](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0005-worktree-y-rama-propios.md):** Cada ejecución trabaja en su propio worktree y en su propia rama.
 - 📌 **[ADR-0006](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
 
 Los cambios de cada versión están en [`CHANGELOG.md`](https://github.com/jmorenobl/lictor/blob/master/CHANGELOG.md).
