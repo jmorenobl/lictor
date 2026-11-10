@@ -70,6 +70,27 @@ class Clock(Protocol):
 
 
 @runtime_checkable
+class Worktrees(Protocol):
+    """Where a run works: a linked worktree with a branch of its own (ADR-0005)."""
+
+    def is_linked_worktree(self) -> bool:
+        """Tell, by reading files and not by asking git, whether this checkout is linked."""
+        ...
+
+    def current_branch(self) -> str:
+        """Name the branch HEAD points to, or "" when it is detached."""
+        ...
+
+    def branch_exists(self, branch: str) -> bool:
+        """Tell whether a local branch with that name exists."""
+        ...
+
+    def add_worktree(self, path: Path, branch: str) -> None:
+        """Create a worktree at `path` on a new branch from HEAD, running none of the hooks."""
+        ...
+
+
+@runtime_checkable
 class Vcs(Protocol):
     """Abstraction for Version Control System operations."""
 

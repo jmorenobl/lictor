@@ -811,3 +811,52 @@ def test_each_worktree_exports_through_its_own_ref(git_repo: Path, tmp_path: Pat
         linked.get_head_sha()
     )
     assert main.get_head_sha() != linked.get_head_sha()
+
+
+def test_add_worktree_creates_the_branch_from_head_and_runs_no_hook(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """`git worktree add` runs `post-checkout`: the repository's hooks must not run here."""
+    marker = tmp_path / "hook-ejecutado"
+    hook = git_repo / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    cli = GitCli(repo_dir=git_repo)
+    dest = tmp_path.with_name(f"{tmp_path.name}-run") / "iva"
+
+    cli.add_worktree(dest, "lictor/iva")
+
+    assert not marker.exists()
+    linked = GitCli(repo_dir=dest)
+    assert linked.is_linked_worktree()
+    assert linked.current_branch() == "lictor/iva"
+    assert linked.get_head_sha() == cli.get_head_sha()
+    assert cli.current_branch() == "main"
+    assert (dest / "README.md").is_file()
+
+
+def test_a_normal_checkout_is_not_a_linked_worktree(git_repo: Path) -> None:
+    assert not GitCli(repo_dir=git_repo).is_linked_worktree()
+
+
+def test_branch_exists_looks_only_at_local_branches(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    subprocess.run([GIT_BIN, "tag", "lictor/etiqueta"], cwd=git_repo, check=True)
+
+    assert cli.branch_exists("main")
+    assert not cli.branch_exists("lictor/etiqueta")
+    assert not cli.branch_exists("lictor/nada")
+
+
+def test_a_detached_head_has_no_branch(git_repo: Path) -> None:
+    subprocess.run([GIT_BIN, "checkout", "-q", "--detach"], cwd=git_repo, check=True)
+
+    assert GitCli(repo_dir=git_repo).current_branch() == ""
+
+
+def test_add_worktree_refuses_an_existing_branch(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    subprocess.run([GIT_BIN, "branch", "lictor/iva"], cwd=git_repo, check=True)
+
+    with pytest.raises(CandidateError, match="lictor/iva"):
+        cli.add_worktree(tmp_path.with_name(f"{tmp_path.name}-run") / "iva", "lictor/iva")

@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from lictor.application.ports import Vcs
+from lictor.application.ports import Vcs, Worktrees
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import Candidate, RepoPin, TreeChange
 
@@ -40,7 +40,7 @@ _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _EXECUTABLE_MODE = "100755"
 
 
-class GitCli(Vcs):
+class GitCli(Vcs, Worktrees):
     """VCS implementation using the local git command line binary."""
 
     def __init__(self, repo_dir: Path | None = None) -> None:
@@ -142,6 +142,32 @@ class GitCli(Vcs):
             else:
                 target.unlink()
         return changed
+
+    def is_linked_worktree(self) -> bool:
+        """A linked worktree's `.git` is a file, and its directory has a `commondir`."""
+        return (self.repo_dir / ".git").is_file() and (self._git_dir() / "commondir").is_file()
+
+    def current_branch(self) -> str:
+        """Read HEAD as a file: `ref: refs/heads/<branch>`, or a sha when it is detached."""
+        head = (self._git_dir() / "HEAD").read_text(encoding="utf-8").strip()
+        return head.removeprefix("ref: refs/heads/") if head.startswith("ref: refs/heads/") else ""
+
+    def branch_exists(self, branch: str) -> bool:
+        """Look the name up under `refs/heads/` only: a tag with the same name isn't a branch."""
+        found = self._run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], False)
+        return found.returncode == 0
+
+    def add_worktree(self, path: Path, branch: str) -> None:
+        """Create the worktree with the same hardening as every call: `post-checkout` won't run."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        added = self._run_git(
+            ["worktree", "add", "--quiet", "-b", branch, str(path), "HEAD"], check=False
+        )
+        if added.returncode != 0:
+            raise CandidateError(
+                f"No se pudo crear el worktree de la rama {branch} en {path}: "
+                f"{added.stderr.strip()}"
+            )
 
     def fingerprint(self) -> str:
         """Hash the control files, read as bytes: no git command runs here."""
