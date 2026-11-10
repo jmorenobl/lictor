@@ -6,6 +6,7 @@ from pathlib import Path
 from lictor.application.ports import ConfigInitializer
 from lictor.application.skill import install_skill_stub
 from lictor.domain.errors import ConfigError
+from lictor.domain.gitignore import missing_entries
 
 CONFIG_FILE = "lictor.json"
 STATE_DIR = ".lictor"
@@ -82,8 +83,7 @@ class InitProject:
         if gitignore_path.is_file():
             existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
 
-        normalized_existing = {line.strip() for line in existing_lines if line.strip()}
-        to_add = [entry.strip() for entry in entries if entry.strip() not in normalized_existing]
+        to_add = missing_entries(existing_lines, entries)
 
         if not to_add:
             return ()

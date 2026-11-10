@@ -127,3 +127,15 @@ def test_init_project_with_a_complete_gitignore_adds_nothing(tmp_path: Path) -> 
 
     assert res.gitignore_added == ()
     assert not res.gitignore_updated
+
+
+def test_init_project_doesnt_repeat_what_uv_init_left_in_gitignore(tmp_path: Path) -> None:
+    """F33: `uv init` writes `.venv` and `*.py[oc]`; `.venv/` and `*.pyc` say the same."""
+    uv_init = "# Python-generated files\n__pycache__/\n*.py[oc]\n.venv\n"
+    (tmp_path / ".gitignore").write_text(uv_init, encoding="utf-8")
+    initializer = FakeConfigInitializer(gitignore_entries=["__pycache__/", "*.pyc", ".venv/"])
+
+    res = InitProject(initializer).execute(InitProjectRequest(project_root=tmp_path))
+
+    assert res.gitignore_added == (".lictor/",)
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == f"{uv_init}.lictor/\n"

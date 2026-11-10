@@ -139,7 +139,7 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
             "run": "python3 -m pytest tests/acceptance -q --junitxml {out}",
             "report": "junit",
         },
-        "controls": [],
+        "controls": [{"id": c, "enabled": False} for c in ("lint", "types", "unit", "coverage")],
         "agent_tools": [],
         "hints": "demo-iva hints",
         "gitignore": [".venv/", "__pycache__/"],

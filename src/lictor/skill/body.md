@@ -85,8 +85,10 @@ ejecutar, y el run lo salta.
      persona quiera decirle al agente va aquí.
    - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
      `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
-   - Los `controls` son los del perfil cuando se hizo `init`. No des por hecho cómo se actualizan
-     si el perfil cambia en otra versión de Lictor.
+   - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
+     con el de un control del perfil cambian solo los campos escritos (`{"id": "unit",
+     "timeout_s": 900}`), `"enabled": false` lo quita y otro `id` añade un control, con `level`,
+     `run` y `report`.
 2. Pide a la persona que haga el commit: el run parte del último commit, y lo que no esté
    confirmado no entra. Conviene commitear también `.claude/skills/lictor/`: el esbozo lo comparte
    el equipo y el agente de Lictor no lo carga.

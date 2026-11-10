@@ -267,6 +267,35 @@ class ControlConfig(BaseModel):
         return path.as_posix()
 
 
+class ControlChange(BaseModel):
+    """Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.
+
+    Con el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo
+    quita. Con otro `id`, añade un control, y entonces `level`, `run` y `report` hacen falta.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1)
+    enabled: bool = True
+    level: ControlLevel | None = None
+    run: str | None = Field(default=None, min_length=1)
+    report: ReportFormat | None = None
+    mode: ControlMode | None = None
+    empty_exit_codes: list[int] | None = None
+    timeout_s: int | None = Field(default=None, gt=0)
+    when_exists: str | None = None
+    when_plugin: str | None = Field(default=None, min_length=1)
+    min_score: float | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_allow_empty(cls, data: object) -> object:
+        if isinstance(data, dict) and "allow_empty" in data:
+            raise ValueError(allow_empty_message(str(data.get("id", "")), None))
+        return data
+
+
 class BackendConfig(BaseModel):
     """Configuración del backend de agente."""
 
@@ -387,3 +416,38 @@ class LictorConfig(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
+
+
+class LictorFile(BaseModel):
+    """lictor.json tal como lo escribe la persona: lo que no escribe sale del perfil al cargar.
+
+    Una clave escrita sustituye entera la del perfil, salvo `controls`, que son cambios por `id`
+    sobre los del perfil (`ControlChange`).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: str = "0.1"
+    profile: str = Field(min_length=1)
+    backend: BackendConfig = Field(default_factory=BackendConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    paths: PathsConfig | None = None
+    acceptance: AcceptanceConfig | None = None
+    controls: list[ControlChange] = Field(default_factory=list)
+    verification: ProjectVerification = Field(default_factory=ProjectVerification)
+    agent_tools: list[str] | None = None
+    agent_commands: list[str] | None = None
+    hints: str | None = None
+    gitignore: list[str] | None = None
+
+    @field_validator("controls")
+    @classmethod
+    def _check_unique_changes(cls, controls: list[ControlChange]) -> list[ControlChange]:
+        seen: set[str] = set()
+        for change in controls:
+            if change.id in seen:
+                msg = f"El control '{change.id}' está escrito dos veces en controls"
+                raise ValueError(msg)
+            seen.add(change.id)
+        return controls

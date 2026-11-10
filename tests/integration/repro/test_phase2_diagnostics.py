@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from lictor.adapters.config.loader import load_config
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
@@ -344,7 +345,7 @@ def test_m4_refused_resume_is_recorded(
     run_lictor(root, Agent(impl=lambda _t, _s, _a: "rate_limited"))
     capsys.readouterr()
     config = json.loads((root / "lictor.json").read_text(encoding="utf-8"))
-    config["limits"]["max_attempts"] += 1
+    config["limits"] = {"max_attempts": load_config(root).limits.max_attempts + 1}
     write(root, "lictor.json", json.dumps(config))
 
     outcome = run_lictor(root, Agent())

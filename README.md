@@ -434,48 +434,35 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 > - **Marcador JUnit:** Todo control o suite de aceptación con `"report": "junit"` debe incluir `{out}` en su comando `run`.
 
 <details>
-<summary>⚙️ <strong>Ver ejemplo completo de <code>lictor.json</code> y estructura de <code>.lictor/</code></strong></summary>
+<summary>⚙️ <strong>Ver ejemplos de <code>lictor.json</code> y estructura de <code>.lictor/</code></strong></summary>
 
 ### Ejemplo de `lictor.json`
+
+`lictor init` escribe solo lo que decide la persona. Lo demás (`paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `gitignore`, `limits`, `retention`) sale del perfil en cada carga, así que una mejora del perfil llega al proyecto sin editar su `lictor.json`:
 
 ```json
 {
   "version": "0.1",
   "profile": "python-uv@0.1",
-  "backend": {
-    "kind": "claude-cli",
-    "model": "claude-sonnet-5-5",
-    "auth": "subscription",
-    "max_turns": 40,
-    "timeout_s": 1800
-  },
-  "limits": {
-    "max_attempts": 3,
-    "max_driver_attempts": 2,
-    "error_max_chars": 4000
-  },
-  "paths": {
-    "writable": ["src/", "tests/unit/"],
-    "driver": ["tests/acceptance/"],
-    "protected": ["features/", "tests/acceptance/", "lictor.json", "pyproject.toml", "uv.lock"]
-  },
-  "acceptance": {
-    "run": "uv run pytest tests/acceptance -q --junitxml {out}",
-    "failure_exit_codes": [1],
-    "report": "junit",
-    "timeout_s": 600
-  },
-  "controls": [
-    {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
-    {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"},
-    {"id": "coverage", "level": "L2", "run": "uv run pytest tests/unit -q --cov=src --cov-branch --cov-report=term", "report": "exit-code", "mode": "measure", "empty_exit_codes": [5], "when_exists": "tests/unit", "when_plugin": "pytest_cov.plugin"}
-  ],
-  "verification": {"env": {}, "inherit": [], "prepare_inherit": []},
-  "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
-  "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"]
+  "backend": {"model": "claude-sonnet-5-5"},
+  "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/."
 }
 ```
+
+**Los controles se cambian por `id`.** En `controls` solo van los cambios sobre los del perfil. Con el `id` de un control del perfil se cambian solo los campos escritos, y `"enabled": false` lo quita. Con otro `id` se añade un control, y entonces hacen falta `level`, `run` y `report`; va detrás del que tenga delante en la lista, o al final si es el primero:
+
+```json
+{
+  "profile": "python-uv@0.1",
+  "controls": [
+    {"id": "unit", "timeout_s": 900},
+    {"id": "types", "enabled": false},
+    {"id": "audit", "level": "L4", "run": "uv run pip-audit", "report": "exit-code"}
+  ]
+}
+```
+
+Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, sigue valiendo: si resuelve a lo mismo, una ejecución a medias se reanuda. Una lista vacía ya no quita los controles: cada uno se quita con `"enabled": false`.
 
 **Qué manda cada lado.** Lo que garantiza la verificación lo declara solo el perfil y se lee de él en cada carga: un `lictor.json` no lo contiene, así que no puede quedar obsoleto. Declarar en `lictor.json` cualquiera de estos campos es un error de configuración.
 
@@ -483,7 +470,8 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 | :--- | :--- | :--- |
 | Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
-| Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
+| Proyecto | `paths`, `acceptance`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
+| Proyecto | `controls` | Cambios por `id` sobre los del perfil: cambian campos, quitan (`enabled: false`) o añaden |
 
 El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Cada comando tiene además un `HOME` vacío y nuevo, fuera del proyecto, así que tu configuración de usuario (`~/.config/ruff`, `~/.config/mypy`, `~/.config/uv`) no decide ningún control. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
 

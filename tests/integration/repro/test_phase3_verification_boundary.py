@@ -623,6 +623,7 @@ def test_project_cannot_open_the_lock_to_the_agent(make_project: ProjectFactory)
     root = make_project()
     config_path = root / "lictor.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["paths"] = load_config(root).paths.model_dump(mode="json")
     config["paths"]["protected"].remove("uv.lock")
     config["paths"]["writable"].append("uv.lock")
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")

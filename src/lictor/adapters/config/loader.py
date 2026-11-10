@@ -11,7 +11,9 @@ from pydantic import ValidationError
 from lictor.adapters.config.models import (
     AcceptanceConfig,
     BackendConfig,
+    ControlChange,
     LictorConfig,
+    LictorFile,
     LimitsConfig,
     Profile,
     ProfileVerification,
@@ -30,7 +32,6 @@ DEFAULT_PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 _PROFILE_FALLBACK_KEYS = (
     "paths",
     "acceptance",
-    "controls",
     "agent_tools",
     "agent_commands",
     "hints",
@@ -170,6 +171,18 @@ def build_config_from_profile(
         raise ConfigError(msg) from exc
 
 
+def _init_payload(config: LictorConfig) -> str:
+    """What `init` writes: what the person decides. The rest comes from the profile on each load,
+    so a fix to the profile reaches the project without editing its `lictor.json`."""
+    written = {
+        "version": config.version,
+        "profile": config.profile,
+        "backend": {"model": config.backend.model},
+        "hints": config.hints,
+    }
+    return json.dumps(written, indent=2, ensure_ascii=False) + "\n"
+
+
 def init_config_file(
     project_dir: Path,
     *,
@@ -190,7 +203,7 @@ def init_config_file(
         else detect_profile(project_dir, profiles_dir)
     )
     config = build_config_from_profile(profile, model=model, project_root=project_dir)
-    payload = json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+    payload = _init_payload(config)
     try:
         target.write_text(payload, encoding="utf-8")
     except OSError as exc:
@@ -217,7 +230,7 @@ class ProfileConfigInitializer(ConfigInitializer):
             else detect_profile(project_root, self.profiles_dir)
         )
         config = build_config_from_profile(profile, model=model, project_root=project_root)
-        payload = json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+        payload = _init_payload(config)
         return ProfileInitConfig(
             profile_name=config.profile,
             gitignore_entries=list(config.gitignore),
@@ -229,16 +242,11 @@ class ProfileConfigInitializer(ConfigInitializer):
 
 def _merge_profile_defaults(
     raw_data: dict[str, object],
+    written: LictorFile,
     profiles_dir: Path | None,
     project_root: Path,
 ) -> dict[str, object]:
-    profile_ref = raw_data.get("profile")
-    if not isinstance(profile_ref, str) or not profile_ref.strip():
-        return raw_data
-    if all(key in raw_data for key in _PROFILE_FALLBACK_KEYS):
-        return raw_data
-
-    profile = load_profile(profile_ref, profiles_dir)
+    profile = load_profile(written.profile, profiles_dir)
     profile_dump = profile.model_dump(mode="json")
     # The driver's instructions are the profile's alone: `resolve_defences` reads them.
     del profile_dump["acceptance"]["driver_hints"]
@@ -247,12 +255,59 @@ def _merge_profile_defaults(
     for key in _PROFILE_FALLBACK_KEYS:
         if key not in merged:
             merged[key] = profile_dump[key]
+    merged["controls"] = _resolve_controls(profile_dump["controls"], written.controls)
 
     acc = merged.get("acceptance")
     if isinstance(acc, dict):
         inherited = profile_dump["acceptance"]
         merged["acceptance"] = {"failure_exit_codes": inherited["failure_exit_codes"], **acc}
     return merged
+
+
+_NEEDED_TO_ADD = ("level", "run", "report")
+
+
+def _resolve_controls(
+    profile_controls: list[dict[str, object]], changes: Sequence[ControlChange]
+) -> list[dict[str, object]]:
+    """Apply the project's changes by `id` over the profile's controls.
+
+    A control of the profile keeps its place. One the project adds goes after the control it
+    writes before it, or at the end if it is the first: so a full copy of the profile, with or
+    without controls of its own in between, resolves in the order it was written.
+    """
+    resolved = [dict(control) for control in profile_controls]
+    known = ", ".join(str(control["id"]) for control in profile_controls)
+    dropped: set[str] = set()
+    previous: int | None = None
+    for change in changes:
+        fields = change.model_dump(mode="json", exclude_unset=True, exclude={"enabled"})
+        place = next((i for i, c in enumerate(resolved) if c["id"] == change.id), None)
+        if place is None:
+            _check_can_add(change, fields, known)
+            place = len(resolved) if previous is None else previous + 1
+            resolved.insert(place, {})
+        resolved[place] = {**resolved[place], **fields}
+        if not change.enabled:
+            dropped.add(change.id)
+        previous = place
+    return [control for control in resolved if control["id"] not in dropped]
+
+
+def _check_can_add(change: ControlChange, fields: dict[str, object], known: str) -> None:
+    if not change.enabled:
+        msg = (
+            f"El control '{change.id}' que quitas con enabled: false no está en el perfil, "
+            f"que tiene {known}"
+        )
+        raise ConfigError(msg)
+    missing = [name for name in _NEEDED_TO_ADD if name not in fields]
+    if missing:
+        msg = (
+            f"El control '{change.id}' no está en el perfil ({known}), así que lo añade: "
+            f"escribe también {' y '.join(missing)}"
+        )
+        raise ConfigError(msg)
 
 
 def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorConfig:
@@ -277,7 +332,12 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     acceptance = parsed.get("acceptance")
     if isinstance(acceptance, dict) and "driver_hints" in acceptance:
         raise ConfigError(driver_hints_message())
-    merged = _merge_profile_defaults(parsed, profiles_dir, config_path.parent)
+    try:
+        written = LictorFile.model_validate(parsed)
+    except ValidationError as exc:
+        msg = f"Configuración inválida en '{config_path}': {exc}"
+        raise ConfigError(msg) from exc
+    merged = _merge_profile_defaults(parsed, written, profiles_dir, config_path.parent)
     try:
         return LictorConfig.model_validate(merged)
     except ValidationError as exc:
@@ -381,8 +441,8 @@ def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
 
 
 def export_config_schema(output_path: Path | None = None) -> dict[str, object]:
-    """Exporta el JSON Schema de LictorConfig y opcionalmente lo guarda en disco."""
-    schema: dict[str, object] = LictorConfig.model_json_schema()
+    """Exporta el JSON Schema de lictor.json (`LictorFile`) y opcionalmente lo guarda en disco."""
+    schema: dict[str, object] = LictorFile.model_json_schema()
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
