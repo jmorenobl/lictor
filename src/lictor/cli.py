@@ -5,8 +5,10 @@ import shutil
 import sys
 from collections.abc import Callable
 from contextlib import closing
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import unquote, urlparse
 
 import typer
 from langchain_core.runnables import RunnableConfig
@@ -28,7 +30,7 @@ from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
-from lictor.application.usecases.init_project import InitProjectRequest
+from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import PreconditionsRequest
 from lictor.bootstrap import (
     BootstrapResult,
@@ -62,9 +64,37 @@ app = typer.Typer(
 DEFAULT_CWD = Path(".")
 
 
+def version_line(installed: str, direct_url: str | None) -> str:
+    """Say the version, and whether it runs from a source tree: both say the same number (F01).
+
+    `direct_url` is the installation's `direct_url.json` (PEP 610), absent from an index.
+    """
+    line = f"lictor {installed}"
+    try:
+        data = json.loads(direct_url) if direct_url else None
+    except json.JSONDecodeError:
+        return line
+    if not isinstance(data, dict):
+        return line
+    info = data.get("dir_info")
+    if not isinstance(info, dict) or info.get("editable") is not True:
+        return line
+    url = data.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        return f"{line} (editable, desde {unquote(urlparse(url).path)})"
+    return f"{line} (editable)"
+
+
+def _direct_url() -> str | None:
+    try:
+        return distribution("lictor").read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+
+
 def _print_version(value: bool) -> None:
     if value:
-        typer.echo(f"lictor {__version__}")
+        typer.echo(version_line(__version__, _direct_url()))
         raise typer.Exit()
 
 
@@ -84,6 +114,25 @@ def _main(
 
 
 _UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con `lictor run --new`."
+
+
+def describe_init(res: InitProjectResult) -> str:
+    """Say what `init` decided for the person, what to review, and what comes next (F08)."""
+    added = ", ".join(res.gitignore_added)
+    lines = [
+        f"Configuración inicializada en '{res.config_path.name}':",
+        f"  Perfil: {res.profile_name}",
+        f"  Modelo: {res.model} (backend.model; otro con --model)",
+        f"  hints: «{res.hints}»",
+        "    Lo lee el agente en cada llamada: ajústalo a tu proyecto.",
+        f"  .gitignore: añadidas {added}" if added else "  .gitignore: ya tenía todo",
+    ]
+    if res.skill_path:
+        lines.append(f"  Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
+    lines += [
+        "Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.",
+    ]
+    return "\n".join(lines)
 
 
 def _safe_run(cmd_func: Callable[[], int | None]) -> None:
@@ -157,9 +206,7 @@ def init(
                     skill=skill,
                 )
             )
-        typer.echo(f"Configuración inicializada en '{res.config_path}'.")
-        if res.skill_path:
-            typer.echo(f"Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
+        typer.echo(describe_init(res))
         return 0
 
     _safe_run(_execute)
@@ -351,6 +398,7 @@ def _check_spec(control: ControlConfig) -> CheckControlSpec:
         timeout_s=control.timeout_s,
         when_exists=control.when_exists,
         min_score=control.min_score,
+        when_plugin=control.when_plugin,
     )
 
 

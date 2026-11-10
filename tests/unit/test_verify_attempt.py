@@ -1237,6 +1237,44 @@ def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -
     assert result.control_results["unit"].skipped is None
 
 
+_COVERAGE = VerificationControl(
+    id="coverage",
+    level="L2",
+    run="coverage",
+    report="exit-code",
+    mode="measure",
+    when_plugin="pytest_cov.plugin",
+)
+
+
+def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Path) -> None:
+    """A dependency only a person can add mustn't show as a failure in every run (F18)."""
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
+    verifier.environment = _spied_environment([None, None], runner)
+    verifier.environment.installed_plugins = ("xdist.plugin",)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["suite"]
+    skipped = result.control_results["coverage"]
+    assert (skipped.ok, skipped.mode) == (True, "measure")
+    assert "pytest_cov.plugin" in (skipped.skipped or "")
+
+
+def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) -> None:
+    runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "coverage": ("", 0)})
+    verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
+    verifier.environment = _spied_environment([None, None], runner)
+    verifier.environment.installed_plugins = ("pytest_cov.plugin",)
+
+    result = verifier.execute(req)
+
+    assert [call["cmd"][0] for call in runner.calls] == ["coverage", "suite"]
+    assert result.control_results["coverage"].skipped is None
+
+
 def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
     tmp_path: Path,
 ) -> None:

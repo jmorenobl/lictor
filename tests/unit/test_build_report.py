@@ -736,3 +736,33 @@ def test_a_driver_rejected_for_good_says_so(tmp_path: Path) -> None:
     report = _report(tmp_path, [_call(None, 2, 0.01, {}), rejected])
 
     assert "| driver | Driver de aceptación | rechazado | 2 | 1 |" in report
+
+
+def test_each_run_keeps_a_copy_of_its_report(tmp_path: Path) -> None:
+    """`report.md` is overwritten by every run; the copy lets two runs be compared (F03)."""
+    first = Event(
+        id="1",
+        source="lictor/test",
+        type="lictor.run.started.v1",
+        time="2026-11-10T10:00:00Z",
+        runid="run-1",
+        data={},
+    )
+    second = Event(
+        id="2",
+        source="lictor/test",
+        type="lictor.run.started.v1",
+        time="2026-11-10T11:00:00Z",
+        runid="run-2",
+        data={},
+    )
+    use_case = BuildReport(event_log=InMemoryEventLog([first, second]))
+
+    one = use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1"))
+    two = use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-2"))
+
+    runs = tmp_path / ".lictor" / "runs"
+    assert (runs / "run-1" / "report.md").read_text(encoding="utf-8") == one.content
+    assert (runs / "run-2" / "report.md").read_text(encoding="utf-8") == two.content
+    assert two.report_path.read_text(encoding="utf-8") == two.content
+    assert one.content != two.content

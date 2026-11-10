@@ -140,6 +140,13 @@ class VerificationEnvironment:
             other._move_to(EnvironmentPlace(tmp / "env", tmp / "env.json", rev, log_dir))
             yield other
 
+    @property
+    def installed_plugins(self) -> tuple[str, ...] | None:
+        """The plugins the commands load, once built; None if the profile can't list them."""
+        if not self.spec.plugins_command:
+            return None
+        return (*self.spec.plugins, *self._installed_plugins)
+
     def search_path(self) -> str:
         """Return where a verification command looks for its program, as `Popen` reads it."""
         env = self.command_env(Path(HOME_DIR_PLACEHOLDER))

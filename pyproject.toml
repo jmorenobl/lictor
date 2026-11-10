@@ -1,6 +1,6 @@
 [project]
 name = "lictor"
-version = "0.1.1"
+version = "0.2.0"
 description = "Implementa escenarios Gherkin con un agente y los verifica de forma determinista."
 readme = "README.md"
 authors = [

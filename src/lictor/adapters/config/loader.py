@@ -1,5 +1,6 @@
 import hashlib
 import json
+import tomllib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from fnmatch import fnmatchcase
@@ -8,6 +9,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from lictor.adapters.config.models import (
+    AcceptanceConfig,
     BackendConfig,
     LictorConfig,
     LimitsConfig,
@@ -15,6 +17,7 @@ from lictor.adapters.config.models import (
     ProfileVerification,
     ProjectVerification,
     allow_empty_message,
+    driver_hints_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
@@ -44,6 +47,7 @@ class Defences:
     banned_patterns: Sequence[str]
     forbidden_paths: Sequence[str]
     driver_exempt_paths: Sequence[str] = ()
+    driver_hints: str = ""
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -115,10 +119,33 @@ def detect_profile(project_dir: Path, profiles_dir: Path | None = None) -> Profi
     raise ConfigError(msg)
 
 
+def _project_value(project_root: Path, file: str, key: str) -> str | None:
+    """Read a dotted key of a project's TOML file, or None if it isn't a string there."""
+    try:
+        node: object = tomllib.loads((project_root / file).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    for part in key.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node.strip() if isinstance(node, str) and node.strip() else None
+
+
+def render_hints(profile: Profile, project_root: Path | None) -> str:
+    """The profile's `hints` with each `{name}` taken from the project, or its default."""
+    hints = profile.hints
+    for name, source in profile.hint_values.items():
+        found = _project_value(project_root, source.file, source.key) if project_root else None
+        hints = hints.replace(f"{{{name}}}", found or source.default)
+    return hints
+
+
 def build_config_from_profile(
     profile: Profile,
     *,
     model: str | None = None,
+    project_root: Path | None = None,
 ) -> LictorConfig:
     """Construye una instancia de LictorConfig a partir de un perfil."""
     try:
@@ -129,11 +156,13 @@ def build_config_from_profile(
             backend=backend,
             limits=LimitsConfig(),
             paths=profile.paths,
-            acceptance=profile.acceptance,
+            acceptance=AcceptanceConfig.model_validate(
+                profile.acceptance.model_dump(exclude={"driver_hints"})
+            ),
             controls=list(profile.controls),
             agent_tools=list(profile.agent_tools),
             agent_commands=list(profile.agent_commands),
-            hints=profile.hints,
+            hints=render_hints(profile, project_root),
             gitignore=list(profile.gitignore),
         )
     except ValidationError as exc:
@@ -160,7 +189,7 @@ def init_config_file(
         if profile_name is not None
         else detect_profile(project_dir, profiles_dir)
     )
-    config = build_config_from_profile(profile, model=model)
+    config = build_config_from_profile(profile, model=model, project_root=project_dir)
     payload = json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
     try:
         target.write_text(payload, encoding="utf-8")
@@ -187,18 +216,21 @@ class ProfileConfigInitializer(ConfigInitializer):
             if profile_name is not None
             else detect_profile(project_root, self.profiles_dir)
         )
-        config = build_config_from_profile(profile, model=model)
+        config = build_config_from_profile(profile, model=model, project_root=project_root)
         payload = json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
         return ProfileInitConfig(
             profile_name=config.profile,
             gitignore_entries=list(config.gitignore),
             config_json=payload,
+            model=config.backend.model,
+            hints=config.hints,
         )
 
 
 def _merge_profile_defaults(
     raw_data: dict[str, object],
     profiles_dir: Path | None,
+    project_root: Path,
 ) -> dict[str, object]:
     profile_ref = raw_data.get("profile")
     if not isinstance(profile_ref, str) or not profile_ref.strip():
@@ -208,6 +240,9 @@ def _merge_profile_defaults(
 
     profile = load_profile(profile_ref, profiles_dir)
     profile_dump = profile.model_dump(mode="json")
+    # The driver's instructions are the profile's alone: `resolve_defences` reads them.
+    del profile_dump["acceptance"]["driver_hints"]
+    profile_dump["hints"] = render_hints(profile, project_root)
     merged = dict(raw_data)
     for key in _PROFILE_FALLBACK_KEYS:
         if key not in merged:
@@ -216,11 +251,7 @@ def _merge_profile_defaults(
     acc = merged.get("acceptance")
     if isinstance(acc, dict):
         inherited = profile_dump["acceptance"]
-        merged["acceptance"] = {
-            "driver_hints": inherited["driver_hints"],
-            "failure_exit_codes": inherited["failure_exit_codes"],
-            **acc,
-        }
+        merged["acceptance"] = {"failure_exit_codes": inherited["failure_exit_codes"], **acc}
     return merged
 
 
@@ -243,7 +274,10 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg)
 
     _reject_allow_empty(parsed, profiles_dir)
-    merged = _merge_profile_defaults(parsed, profiles_dir)
+    acceptance = parsed.get("acceptance")
+    if isinstance(acceptance, dict) and "driver_hints" in acceptance:
+        raise ConfigError(driver_hints_message())
+    merged = _merge_profile_defaults(parsed, profiles_dir, config_path.parent)
     try:
         return LictorConfig.model_validate(merged)
     except ValidationError as exc:
@@ -319,6 +353,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         banned_patterns=profile.banned_patterns,
         forbidden_paths=profile.forbidden_paths,
         driver_exempt_paths=profile.driver_exempt_paths,
+        driver_hints=profile.acceptance.driver_hints,
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

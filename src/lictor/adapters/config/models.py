@@ -90,16 +90,36 @@ class PathsConfig(BaseModel):
         return self
 
 
+def driver_hints_message() -> str:
+    """Why `lictor.json` can't declare the driver's instructions, and where the project's go."""
+    return (
+        "lictor.json no puede declarar acceptance.driver_hints: esas instrucciones son del "
+        "perfil, que las mejora en cada versión, y una copia las tapa. Bórralo; lo propio del "
+        "proyecto va en hints."
+    )
+
+
 class AcceptanceConfig(BaseModel):
-    """Configuración de la suite de aceptación (L3)."""
+    """Configuración de la suite de aceptación (L3) que decide el proyecto."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: str = Field(min_length=1)
     report: ReportFormat = "junit"
-    driver_hints: str = ""
     timeout_s: int = Field(default=600, gt=0)
     failure_exit_codes: list[int] = Field(default=[1], min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_driver_hints(cls, data: object) -> object:
+        """Only the profile's acceptance has them: in `lictor.json` they'd hide its fixes."""
+        if (
+            isinstance(data, dict)
+            and "driver_hints" in data
+            and "driver_hints" not in cls.model_fields
+        ):
+            raise ValueError(driver_hints_message())
+        return data
 
     @model_validator(mode="after")
     def _validate_failure_exit_codes(self) -> Self:
@@ -113,6 +133,12 @@ class AcceptanceConfig(BaseModel):
             msg = "La sección acceptance con report='junit' debe incluir '{out}' en run"
             raise ValueError(msg)
         return self
+
+
+class ProfileAcceptance(AcceptanceConfig):
+    """The acceptance of a profile, with the instructions every driver of the profile gets."""
+
+    driver_hints: str = ""
 
 
 class ProfileVerification(BaseModel):
@@ -207,6 +233,8 @@ class ControlConfig(BaseModel):
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
+    # A plugin the control needs, as the profile lists them: without it the control is skipped.
+    when_plugin: str | None = Field(default=None, min_length=1)
     # The lowest mutation score that passes, in percent; only a mutation report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
 
@@ -278,6 +306,19 @@ class LimitsConfig(BaseModel):
     error_max_chars: int = Field(default=4000, ge=500)
 
 
+class HintValue(BaseModel):
+    """A value `hints` takes from a project file, as `{name}`, or its default if it can't be read.
+
+    `key` is dotted through the tables of a TOML file: `project.requires-python`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    default: str
+
+
 class Profile(BaseModel):
     """Perfil de lenguaje y herramientas distribuido con Lictor."""
 
@@ -288,7 +329,7 @@ class Profile(BaseModel):
     status: ProfileStatus = "stable"
     detect: list[str] = Field(min_length=1)
     paths: PathsConfig
-    acceptance: AcceptanceConfig
+    acceptance: ProfileAcceptance
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
     banned_patterns: list[str] = Field(default_factory=list)
@@ -299,6 +340,8 @@ class Profile(BaseModel):
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
+    # What `{name}` in `hints` stands for, read from the project when the hints are written.
+    hint_values: dict[str, HintValue] = Field(default_factory=dict)
     gitignore: list[str] = Field(default_factory=list)
 
     @field_validator("controls")

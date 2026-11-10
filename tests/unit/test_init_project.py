@@ -19,6 +19,8 @@ class FakeConfigInitializer(ConfigInitializer):
         gitignore_entries: Sequence[str] = ("__pycache__/", ".venv/"),
         config_json: str = '{"profile": "python-uv@0.1"}',
     ) -> None:
+        self.model = "claude-sonnet-5-5"
+        self.hints = "Python >=3.14, gestor uv."
         self.profile_name = profile_name
         self.gitignore_entries = gitignore_entries
         self.config_json = config_json
@@ -33,6 +35,8 @@ class FakeConfigInitializer(ConfigInitializer):
             profile_name=self.profile_name,
             gitignore_entries=self.gitignore_entries,
             config_json=self.config_json,
+            model=self.model,
+            hints=self.hints,
         )
 
 
@@ -102,3 +106,24 @@ def test_init_project_installs_the_skill_stub_unless_told_not_to(tmp_path: Path)
     without = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(other, skill=False))
     assert without.skill_path is None
     assert not (other / ".claude").exists()
+
+
+def test_init_project_says_what_it_decided(tmp_path: Path) -> None:
+    """The person has to know what `init` chose for them, and what is left (F08)."""
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+
+    res = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(tmp_path))
+
+    assert res.profile_name == "python-uv@0.1"
+    assert res.model == "claude-sonnet-5-5"
+    assert res.hints == "Python >=3.14, gestor uv."
+    assert res.gitignore_added == (".lictor/", "__pycache__/")
+
+
+def test_init_project_with_a_complete_gitignore_adds_nothing(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text(".lictor/\n__pycache__/\n.venv/\n", encoding="utf-8")
+
+    res = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(tmp_path))
+
+    assert res.gitignore_added == ()
+    assert not res.gitignore_updated

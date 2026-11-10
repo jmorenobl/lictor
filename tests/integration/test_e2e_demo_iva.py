@@ -138,7 +138,6 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
         "acceptance": {
             "run": "python3 -m pytest tests/acceptance -q --junitxml {out}",
             "report": "junit",
-            "driver_hints": "hints",
         },
         "controls": [],
         "agent_tools": [],

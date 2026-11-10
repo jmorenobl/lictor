@@ -10,8 +10,8 @@ Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproj
 3. Lo que exija `pyproject.toml` se fija ahora también: el `[project.scripts]` de una CLI, por
    ejemplo. El módulo y la función que fijes ahí van luego en `hints`.
 4. `uv init` deja un `hello()` de ejemplo en el paquete y un `requires-python` con la versión de la
-   persona. El `hints` que escribe `lictor init` puede decir otra versión: ajústalo a
-   `requires-python`.
+   persona. `lictor init` toma de ahí la versión de Python de `hints`; el resto de `hints` sí hay
+   que ajustarlo al proyecto.
 
 **Cómo se prueba:** el proyecto no se instala en el entorno de verificación, y `src/` está en el
 path de importación detrás de las dependencias. Por eso:
@@ -26,4 +26,8 @@ path de importación detrás de las dependencias. Por eso:
   proyecto no está instalado, así que no se lanza el ejecutable.»
 
 **Controles del perfil:** `lint` (ruff), `types` (mypy) y `unit` (pytest de `tests/unit`), y la
-aceptación (pytest de `tests/acceptance`). No miden cobertura.
+aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` con los tests
+unitarios, en modo `measure`: no bloquea nada, y su porcentaje queda en la salida del control en
+`.lictor/runs/`. Solo corre si el proyecto tiene `pytest-cov`. Sin él, cada run lo muestra como
+omitido, no como fallido. Si la persona quiere medir cobertura, que lo añada antes del run con
+`uv add --dev pytest-cov`.

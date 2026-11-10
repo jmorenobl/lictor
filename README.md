@@ -150,6 +150,8 @@ uv sync --all-groups
 uv run lictor --help
 ```
 
+Esa copia es editable, y con el venv del repositorio activado puede ir delante de la instalada en el `PATH`. `lictor --version` lo dice: `lictor 0.2.0 (editable, desde /ruta/al/repositorio)`. Una instalación desde PyPI dice solo la versión.
+
 ---
 
 ## 🚀 Guía de Inicio Rápido
@@ -159,12 +161,14 @@ uv run lictor --help
 Lictor trabaja sobre un proyecto `uv` con su `uv.lock` y un repositorio git. Para empezar de cero:
 
 ```bash
-uv init --lib calculadora && cd calculadora
-uv add --dev pytest pytest-bdd ruff mypy   # las herramientas que usan los controles del perfil
-git init -b main
+uv init --lib calculadora && cd calculadora   # ya crea el repositorio git
+git branch -m main                            # solo si quieres otro nombre para la rama
+uv add --dev pytest pytest-bdd ruff mypy      # las herramientas que usan los controles del perfil
 ```
 
-`uv init --lib` deja un paquete en `src/`. El driver crea ahí la interfaz que necesiten sus pasos, sin lógica, y el agente la implementa escenario a escenario.
+`uv init` ya inicializa el repositorio, con tu rama por defecto: un `git init -b main` después no hace nada y solo avisa. A Lictor le da igual cómo se llame la rama.
+
+`uv init --lib` deja un paquete en `src/`. El driver crea ahí la interfaz que necesiten sus pasos, sin lógica, y el agente la implementa escenario a escenario. Todas las dependencias, también las de desarrollo, van antes de la primera ejecución: el agente no puede tocar `pyproject.toml` ni `uv.lock`. Si quieres medir cobertura, añade también `pytest-cov`.
 
 ### 1️⃣ Escribe tus escenarios Gherkin en `features/`
 
@@ -201,6 +205,22 @@ Característica: IVA de una factura
 ```bash
 # Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
 lictor init
+```
+
+```text
+Configuración inicializada en 'lictor.json':
+  Perfil: python-uv@0.1
+  Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
+  hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
+    Lo lee el agente en cada llamada: ajústalo a tu proyecto.
+  .gitignore: añadidas .lictor/, __pycache__/, *.pyc, .venv/, .pytest_cache/, .mypy_cache/, .ruff_cache/
+  Skill de Lictor para Claude Code: .claude/skills/lictor/SKILL.md
+Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.
+```
+
+La versión de Python de `hints` sale del `requires-python` de `pyproject.toml`. Revisa `hints` antes del commit (ver «Qué va en `hints`», más abajo).
+
+```bash
 git add -A && git commit -m "chore: proyecto inicial"   # Lictor parte de un árbol limpio
 
 # Comprueba lo mismo que `lictor run` antes de llamar al agente, entorno de verificación incluido
@@ -219,6 +239,31 @@ Doctor: todas las comprobaciones pasaron.
 ```
 
 `doctor` construye de verdad el entorno de verificación, en un directorio desechable, sin tocar el de una ejecución. Si hay una ejecución en curso, comprueba todo lo demás y deja el entorno como «no comprobado».
+
+### 📝 Qué va en `hints`
+
+`hints` es texto libre de `lictor.json` que reciben el driver y el implementador en cada llamada. Sirve para la **interfaz**: lo que el agente necesita saber del proyecto y que no está en el Gherkin. Por ejemplo, dónde vive el código, el nombre y la firma de la función que prueban los tests, cómo se prueba una CLI o qué módulo fija `[project.scripts]`.
+
+No sirve para reglas de **comportamiento**. Nada comprueba `hints`: si una regla importa, escríbela como escenario. En la pasada de prueba, `hints` decía que `main` nunca termina el proceso, ningún escenario lo cubría, y `--help` lo terminaba igual.
+
+Las instrucciones de cómo escribir el driver (`acceptance.driver_hints`) son del perfil y se leen de él en cada carga, así que sus mejoras llegan a todos los proyectos. Un `lictor.json` no puede declararlas: Lictor lo rechaza al cargar. Lo propio del proyecto va en `hints`.
+
+### 💻 Probar una CLI
+
+El proyecto no se instala en el entorno de verificación, así que el ejecutable de una CLI no existe allí. Los tests la prueban dentro del proceso:
+
+- **Una función de entrada con `argv`.** Por ejemplo, `romanos.cli:main(argv: list[str]) -> int`. Los tests la llaman y leen la salida con `capsys`; nunca lanzan `romanos …`.
+- **Decide antes si `main` devuelve el código de salida o termina el proceso.** `argparse` termina con `SystemExit` en `--help` y en sus propios errores, con mensajes en inglés. Si eso importa, escríbelo como escenario.
+- **Lo que fija `pyproject.toml` va antes del run.** El agente no puede tocarlo, así que el `[project.scripts]` lo añades tú. El módulo y la función que nombres ahí van en `hints`, para que el driver los respete.
+
+Un `hints` para una CLI:
+
+```text
+Python >=3.14, gestor uv, tests con pytest. El código va en src/romanos/. La CLI es
+romanos.cli:main(argv: list[str]) -> int, declarada en [project.scripts]; los tests la llaman en
+el proceso y leen stdout y stderr con capsys; el proyecto no está instalado, así que no se lanza
+el ejecutable.
+```
 
 ### 🤝 La skill de Lictor para Claude Code
 
@@ -264,6 +309,7 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 # Informe de ejecución de Lictor
 
 ## Resumen
+- **Ejecución**: 20261110-101500-3f9c
 - **Escenarios en verde**: 3
 - **Escenarios en cuarentena**: 0
 - **Escenarios pendientes**: 0
@@ -324,7 +370,7 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 | `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |
 | `lictor run` | `--new`<br/>`--quiet, -q` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. Cuenta cada paso en stderr salvo con `--quiet`. |
 | `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos: escenario e intento en curso, verdes implementados y colaterales, llamadas y coste. Se puede lanzar durante una ejecución. |
-| `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl` y muestra su ruta. |
+| `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl`, deja una copia en `.lictor/runs/<run_id>/report.md` y muestra su ruta. |
 
 ### Códigos de Salida Estables
 
@@ -408,7 +454,8 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
   "controls": [
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
-    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"}
+    {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"},
+    {"id": "coverage", "level": "L2", "run": "uv run pytest tests/unit -q --cov=src --cov-branch --cov-report=term", "report": "exit-code", "mode": "measure", "empty_exit_codes": [5], "when_exists": "tests/unit", "when_plugin": "pytest_cov.plugin"}
   ],
   "verification": {"env": {}, "inherit": [], "prepare_inherit": []},
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
@@ -420,7 +467,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Sustituyen al valor del perfil, que `lictor init` escribe como punto de partida |
 
@@ -433,6 +480,8 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 **Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. La única excepción al HEAD registrado es el commit vacío con el que el rojo registra verdes sin agente, si la ejecución murió justo después: se acepta solo con el rojo pendiente, sobre la cabeza registrada y con su mismo árbol, y el rojo repetido vuelve a probar cada verde.
 
 **Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` aplica la misma regla a lo que verifica. Así un proyecto sin `tests/unit` no bloquea al agente.
+
+**Un control puede depender de un plugin.** Con `when_plugin`, el control se omite, con el motivo, si el entorno de verificación no carga ese plugin. La lista sale de lo que Lictor pregunta al entorno al construirlo (`plugins_command`). Si el perfil no puede preguntarlo, el control se ejecuta. Así funciona el control `coverage` de `python-uv`: mide la cobertura de `src` con los tests unitarios en modo `measure`, sin bloquear, y solo si el proyecto tiene `pytest-cov`, que tiene que añadir una persona (`uv add --dev pytest-cov`) porque el agente no puede tocar `uv.lock`. Sin él, cada ejecución lo muestra como omitido, no como fallido. El porcentaje queda en la salida del control, en `.lictor/runs/`.
 
 ### El oráculo y el ciclo de escenarios
 
@@ -476,7 +525,7 @@ Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación b�
 | `.lictor/checkpoints.sqlite` | Estado transaccional del grafo LangGraph. |
 | `.lictor/seal.json` | Hashes `SHA-256` de `features/*.feature` y de los archivos del *driver*. |
 | `.lictor/journal.jsonl` | Bitácora inmutable de eventos en formato CloudEvents 1.0. |
-| `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. |
+| `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. Cada ejecución lo sobrescribe y deja una copia en `.lictor/runs/<run_id>/report.md`. |
 | `.lictor/verify-env/` | Entorno de verificación, construido una vez por ejecución fuera del clon. |
 | `.lictor/verify_env.json` | Hash esperado de ese entorno y plugins que tiene instalados. |
 | `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente, su stderr y el prompt que recibió (`NNN-implement.json`, `NNN-implement.stderr.log`, `NNN-implement.prompt.md`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. Al empezar una ejecución nueva se conservan las `retention.keep_runs` más recientes (10 por defecto, contando la nueva) y nunca la de `current_run`; la bitácora registra lo retirado (`runs.pruned`) y el informe lo distingue de la evidencia alterada. |

@@ -57,7 +57,7 @@ def test_load_python_uv_profile() -> None:
     assert profile.detect == ["pyproject.toml"]
     assert "tests/acceptance/" in profile.paths.driver
     assert "tests/acceptance/" in profile.paths.protected
-    assert len(profile.controls) == 3
+    assert [c.id for c in profile.controls] == ["lint", "types", "unit", "coverage"]
 
 
 @pytest.mark.parametrize(
@@ -1019,3 +1019,102 @@ def test_min_score_belongs_to_a_mutation_control() -> None:
 def test_min_score_is_a_percentage(minimum: float) -> None:
     with pytest.raises(ValidationError):
         ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)
+
+
+def test_init_does_not_copy_the_driver_hints(tmp_path: Path) -> None:
+    """They are the profile's: a copy kept every project away from the profile's later fixes."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    assert "driver_hints" not in written["acceptance"]
+
+
+def test_the_driver_hints_come_from_the_profile_on_every_load(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    init_config_file(tmp_path)
+    profiles = _profiles_copy(tmp_path / "perfiles")
+    path = profiles / "python-uv.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["acceptance"]["driver_hints"] = "Una instrucción nueva del perfil."
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    defences = resolve_defences(load_config(tmp_path, profiles), profiles)
+
+    assert defences.driver_hints == "Una instrucción nueva del perfil."
+
+
+def test_the_fingerprint_covers_the_driver_hints(tmp_path: Path) -> None:
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    other = replace(defences, driver_hints=f"{defences.driver_hints} Más.")
+
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_a_lictor_json_with_driver_hints_is_refused_naming_hints(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    init_config_file(tmp_path)
+    path = tmp_path / "lictor.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["acceptance"]["driver_hints"] = "Usa pytest-bdd."
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(tmp_path)
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "acceptance.driver_hints" in message
+    assert "perfil" in message
+    assert "hints" in message.replace("driver_hints", "")
+
+
+def test_init_takes_the_python_version_of_hints_from_requires_python(tmp_path: Path) -> None:
+    """`uv init` writes the user's Python; the profile's own version misled the agent (F05)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.14"\n', encoding="utf-8"
+    )
+
+    init_config_file(tmp_path)
+
+    hints = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))["hints"]
+    assert "Python >=3.14" in hints
+    assert "3.12" not in hints
+    assert "{" not in hints
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    ['[project]\nname = "x"\n', "esto no es TOML ][", "[project]\nrequires-python = 3\n"],
+)
+def test_without_a_readable_requires_python_hints_keep_the_profile_default(
+    tmp_path: Path, pyproject: str
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    hints = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))["hints"]
+    assert hints.startswith("Python >=3.12,")
+
+
+def test_hints_left_to_the_profile_also_name_the_project_s_python(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.13"\n', encoding="utf-8"
+    )
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+
+    assert load_config(tmp_path).hints.startswith("Python >=3.13,")
+
+
+def test_the_profile_measures_coverage_only_where_the_plugin_is_installed() -> None:
+    """It needs a dependency the agent can't add: without it, the control is skipped (F18)."""
+    [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
+
+    assert coverage.mode == "measure"
+    assert coverage.when_plugin == "pytest_cov.plugin"
+    assert coverage.when_exists == "tests/unit"
+    assert "--cov" in coverage.run

@@ -7,6 +7,78 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.2.0] - 2026-11-10
+
+La skill de Lictor para Claude Code y lo que la pasada greenfield `romanos` mostró que hacía falta
+para que el primer contacto funcione: una terminal que cuenta lo que pasa, un informe con totales,
+`doctor` que valida los escenarios y `init` que dice lo que decidió.
+
+### Añadido
+
+- **La skill de Lictor para Claude Code.** `lictor init` instala un esbozo en
+  `.claude/skills/lictor/SKILL.md`, salvo con `--no-skill`. Al cargarse, Claude Code ejecuta
+  `lictor skill --show`, que imprime la skill de la versión instalada, así que al actualizar Lictor
+  la skill se actualiza sola. `lictor skill` instala o restaura el esbozo sin tocar `lictor.json`, y
+  `lictor doctor` avisa (⚠) si el del proyecto no es el de esta versión. La skill ayuda a preparar
+  el proyecto, a redactar los escenarios con la persona y a leer los resultados. Nunca escribe tests
+  ni código, ni lanza `run`, ni hace commits. El agente de Lictor no la carga, y si en su sesión
+  aparece alguna skill del proyecto, `agent.finished` la nombra y la terminal lo avisa (#16).
+- **`lictor run` cuenta cada paso en stderr**: el driver, cada intento, cada verde con su tiempo y
+  su coste, los colaterales, las cuarentenas y los totales. `--quiet` lo apaga, y stdout queda para
+  el resultado. El evento nuevo `agent.started` se escribe antes de cada llamada (#15).
+- **`lictor doctor` valida los features** con la misma regla que la carga de la especificación: que
+  parseen, que cada escenario tenga exactamente un ID válido y único, sin `Esquema del escenario` ni
+  IDs en una característica o una regla. Cada problema sale con fichero, línea y qué hacer, con exit
+  10. Un fichero vacío o una característica sin escenarios es un aviso (⚠): el run lo salta (#13).
+- **`lictor init` resume lo que decidió:** el perfil, el modelo, el `hints` que escribió, lo que
+  añadió al `.gitignore` y la skill, y dice el siguiente paso, el commit y luego `lictor doctor`. La
+  versión de Python de `hints` sale de `requires-python`.
+- **Un control de cobertura en `python-uv`.** `coverage` mide la cobertura de `src` con los tests
+  unitarios, en modo `measure`, sin bloquear. Necesita `pytest-cov`, una dependencia que solo puede
+  añadir una persona: en un proyecto sin ella se omite, con su motivo, en vez de fallar en cada run.
+  Lo hace un campo nuevo de los controles, `when_plugin`, que omite el control si el entorno de
+  verificación no carga ese plugin.
+- Una copia del informe por ejecución en `.lictor/runs/<run_id>/report.md`, que se retira con la
+  evidencia del run, y el resumen dice de qué ejecución es.
+- `lictor --version` dice si la instalación es editable y desde dónde: con un venv activado, la copia
+  del repositorio y la publicada decían el mismo número.
+- El README explica el orden de `uv init` y git, qué va en `hints` y cómo probar una CLI.
+
+### Cambiado
+
+- **Una ruta que solo puede tocar una persona para el run, no el escenario.** Un escenario que solo
+  se cumple cambiando una ruta de `forbidden_paths` o de `paths.protected` (una dependencia en
+  `pyproject.toml`, una pipeline en `.github`) gastaba todos sus intentos en `L0-rutas` y acababa en
+  cuarentena con exit 30, que se lee como «el agente no supo». Ahora los prompts dicen qué rutas no
+  se pueden tocar, y si dos intentos seguidos tocan la misma ruta rechazada, el run para con exit 10
+  y un motivo que nombra el escenario y la ruta, sin gastar los intentos que quedan. El oráculo
+  (`features/` y el driver sellado) no cuenta: insistir en reescribirlo sigue acabando en cuarentena
+  (#14).
+- **`acceptance.driver_hints` es solo del perfil.** `lictor init` lo copiaba a `lictor.json` y desde
+  entonces el run leía la copia, así que las mejoras del perfil no llegaban a los proyectos ya
+  iniciados. Ahora se lee del perfil en cada carga, y **un `lictor.json` que lo declare se rechaza
+  al cargar (exit 10)**: bórralo de `acceptance`; lo propio del proyecto va en `hints`.
+- `lictor status` dice el escenario y el intento en curso, los verdes implementados, colaterales y
+  registrados, y las llamadas y el coste, en español (#15).
+- `report.md` tiene una fila para el driver y otra para el total, los tokens de entrada con la caché,
+  el SHA corto, los estados en español, la duración de reloj y las denegaciones por dueño e intento
+  (#15).
+- El driver nuevo pasa por `L0-supresiones` antes de ejecutarse: una supresión o un cambio de
+  `sys.path` que deje se rechaza. Antes quedaba sellado para todos los intentos (#15).
+- **El perfil cambió y sigue siendo `python-uv@0.1`.** Prohíbe cambiar `sys.path` en lo que añade el
+  agente o el driver, `driver_hints` lo dice, `hints` es una plantilla con la versión de
+  `requires-python` y tiene el control `coverage`. Todavía no hay proyectos que dependan de él, así
+  que no sube de versión ni hay reglas de compatibilidad.
+- **Una ejecución a medias de la 0.1.1 no se puede reanudar con la 0.2.0**: el perfil cambia y con
+  él la huella de la configuración, así que `lictor run` sale con 10. Termínala con la 0.1.1 antes
+  de actualizar, o empieza otra con `lictor run --new`.
+
+### Corregido
+
+- Si algo manipulaba de verdad el checkpoint mientras corría el agente, el run moría con «no such
+  table: checkpoints» en vez de fallar el intento en `L0-estado`. Tras cada nodo que ejecuta código
+  ajeno, la conexión del checkpoint se cierra sin volcar el WAL y se abre otra (#12).
+
 ## [0.1.1] - 2026-11-06
 
 Correcciones de la pasada greenfield `romanos` con la 0.1.0 de PyPI.
@@ -160,6 +232,7 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.1.1...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jmorenobl/lictor/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jmorenobl/lictor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jmorenobl/lictor/releases/tag/v0.1.0

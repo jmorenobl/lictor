@@ -241,7 +241,7 @@ def bootstrap_runtime(
         paths_protected=active_config.paths.protected,
         paths_driver=active_config.paths.driver,
         suppressions=defences.suppressions,
-        driver_hints=active_config.acceptance.driver_hints,
+        driver_hints=defences.driver_hints,
         hints=active_config.hints,
         check_commands=active_config.agent_commands,
         model=active_config.backend.model,

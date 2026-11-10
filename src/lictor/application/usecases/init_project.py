@@ -30,6 +30,9 @@ class InitProjectResult:
     profile_name: str
     gitignore_updated: bool
     skill_path: Path | None = None
+    model: str = ""
+    hints: str = ""
+    gitignore_added: tuple[str, ...] = ()
 
 
 class InitProject:
@@ -57,7 +60,7 @@ class InitProject:
         lictor_dir = req.project_root / STATE_DIR
         lictor_dir.mkdir(parents=True, exist_ok=True)
 
-        gitignore_updated = self._update_gitignore(
+        added = self._update_gitignore(
             project_root=req.project_root,
             entries=[f"{STATE_DIR}/", *init_data.gitignore_entries],
         )
@@ -65,11 +68,15 @@ class InitProject:
         return InitProjectResult(
             config_path=config_path,
             profile_name=init_data.profile_name,
-            gitignore_updated=gitignore_updated,
+            gitignore_updated=bool(added),
             skill_path=install_skill_stub(req.project_root) if req.skill else None,
+            model=init_data.model,
+            hints=init_data.hints,
+            gitignore_added=added,
         )
 
-    def _update_gitignore(self, project_root: Path, entries: list[str]) -> bool:
+    def _update_gitignore(self, project_root: Path, entries: list[str]) -> tuple[str, ...]:
+        """Append the entries the file lacks, and return them."""
         gitignore_path = project_root / ".gitignore"
         existing_lines: list[str] = []
         if gitignore_path.is_file():
@@ -79,7 +86,7 @@ class InitProject:
         to_add = [entry.strip() for entry in entries if entry.strip() not in normalized_existing]
 
         if not to_add:
-            return False
+            return ()
 
         content = "\n".join(existing_lines).rstrip()
         if content:
@@ -87,4 +94,4 @@ class InitProject:
         content += "\n".join(to_add) + "\n"
 
         gitignore_path.write_text(content, encoding="utf-8")
-        return True
+        return tuple(to_add)

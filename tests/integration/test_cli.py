@@ -10,7 +10,7 @@ import lictor
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.application.run_files import exclusive_run
 from lictor.application.skill import SKILL_FILE, skill_stub
-from lictor.cli import app
+from lictor.cli import app, version_line
 from lictor.domain.model import Health
 
 runner = CliRunner()
@@ -138,8 +138,31 @@ def test_cli_version_is_the_installed_package_version() -> None:
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.output == f"lictor {_installed_version()}\n"
+    assert result.output.startswith(f"lictor {_installed_version()}")
     assert lictor.__version__ == _installed_version()
+
+
+@pytest.mark.parametrize(
+    ("direct_url", "expected"),
+    [
+        (None, "lictor 0.2.0"),
+        ('{"url": "https://example.org/lictor.whl", "archive_info": {}}', "lictor 0.2.0"),
+        ('{"url": "file:///tmp/x.whl", "archive_info": {}}', "lictor 0.2.0"),
+        ('{"url": "file:///home/ana/lictor", "dir_info": {}}', "lictor 0.2.0"),
+        (
+            '{"url": "file:///home/ana/lictor", "dir_info": {"editable": true}}',
+            "lictor 0.2.0 (editable, desde /home/ana/lictor)",
+        ),
+        ('{"dir_info": {"editable": true}}', "lictor 0.2.0 (editable)"),
+        ("no es JSON", "lictor 0.2.0"),
+        ("[1]", "lictor 0.2.0"),
+    ],
+)
+def test_cli_version_says_when_the_installation_is_editable(
+    direct_url: str | None, expected: str
+) -> None:
+    """A venv with an editable Lictor first on the PATH looks like the released one (F01)."""
+    assert version_line("0.2.0", direct_url) == expected
 
 
 def _python_project(path: Path) -> None:
@@ -155,6 +178,24 @@ def test_cli_init_installs_the_skill_stub_and_says_so(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert (tmp_path / SKILL_FILE).read_text(encoding="utf-8") == skill_stub()
     assert ".claude/skills/lictor/SKILL.md" in result.output
+
+
+def test_cli_init_summarizes_what_it_wrote_and_says_the_next_step(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nrequires-python = ">=3.14"\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["init", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Perfil: python-uv@0.1" in out
+    assert "Modelo: claude-sonnet-5-5" in out
+    assert "Python >=3.14" in out
+    assert ".gitignore: añadidas .lictor/" in out
+    assert "Siguiente paso:" in out
+    assert out.index("commit") < out.index("lictor doctor")
 
 
 def test_cli_init_without_the_skill_leaves_no_stub(tmp_path: Path) -> None:

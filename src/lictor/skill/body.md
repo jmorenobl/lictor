@@ -78,11 +78,13 @@ ejecutar, y el run lo salta.
 ## 3. Configurar
 
 1. `lictor init`, si no está hecho: escribe `lictor.json`, añade `.lictor/` al `.gitignore` e
-   instala el esbozo de esta skill en `.claude/skills/lictor/`. Revisa con la persona:
+   instala el esbozo de esta skill en `.claude/skills/lictor/`. Imprime lo que decidió: el perfil,
+   el modelo, el `hints` que escribió y lo que añadió al `.gitignore`. Revisa con la persona:
    - `backend.model`: el modelo que usará el agente.
-   - `hints`: ajústalo al proyecto. La versión del lenguaje, dónde vive el código, la interfaz y
-     cómo se prueba. Lo que la persona quiera decirle al agente va aquí.
-   - No propongas cambiar `driver_hints`: lo propio del proyecto va en `hints`.
+   - `hints`: ajústalo al proyecto. Dónde vive el código, la interfaz y cómo se prueba. Lo que la
+     persona quiera decirle al agente va aquí.
+   - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
+     `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
    - Los `controls` son los del perfil cuando se hizo `init`. No des por hecho cómo se actualizan
      si el perfil cambia en otra versión de Lictor.
 2. Pide a la persona que haga el commit: Lictor parte de un árbol limpio. Conviene commitear
@@ -100,7 +102,8 @@ ejecutar, y el run lo salta.
 ## 4. Diagnosticar
 
 - `lictor status`: el escenario y el intento en curso, los verdes, las llamadas y el coste.
-- `.lictor/report.md`: el informe del último run. Las secciones que más dicen son «Verificaciones»
+- `.lictor/report.md`: el informe del último run; el de cada run queda también en
+  `.lictor/runs/<run_id>/report.md`, para compararlos. Las secciones que más dicen son «Verificaciones»
   (qué puerta paró cada intento), «Intentos fallidos por nivel», «Cuarentenas», «Drivers
   rechazados», «Denegaciones» (órdenes que el agente intentó y no podía), «Verdes colaterales» y
   «Verdes registrados a mano».
