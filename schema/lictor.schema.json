@@ -86,60 +86,111 @@
       "title": "BackendConfig",
       "type": "object"
     },
-    "ControlConfig": {
+    "ControlChange": {
       "additionalProperties": false,
-      "description": "Control determinista de verificación.",
+      "description": "Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.\n\nCon el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo\nquita. Con otro `id`, añade un control, y entonces `level`, `run` y `report` hacen falta.",
       "properties": {
         "id": {
           "minLength": 1,
           "title": "Id",
           "type": "string"
         },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
         "level": {
-          "enum": [
-            "L1",
-            "L2",
-            "L4",
-            "L5"
+          "anyOf": [
+            {
+              "enum": [
+                "L1",
+                "L2",
+                "L4",
+                "L5"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Level",
-          "type": "string"
+          "default": null,
+          "title": "Level"
         },
         "run": {
-          "minLength": 1,
-          "title": "Run",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run"
         },
         "report": {
-          "enum": [
-            "exit-code",
-            "junit",
-            "mutation"
+          "anyOf": [
+            {
+              "enum": [
+                "exit-code",
+                "junit",
+                "mutation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Report",
-          "type": "string"
+          "default": null,
+          "title": "Report"
         },
         "mode": {
-          "default": "block",
-          "enum": [
-            "block",
-            "measure"
+          "anyOf": [
+            {
+              "enum": [
+                "block",
+                "measure"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Mode",
-          "type": "string"
+          "default": null,
+          "title": "Mode"
         },
         "empty_exit_codes": {
-          "items": {
-            "type": "integer"
-          },
-          "title": "Empty Exit Codes",
-          "type": "array"
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Empty Exit Codes"
         },
         "timeout_s": {
-          "default": 600,
-          "exclusiveMinimum": 0,
-          "title": "Timeout S",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout S"
         },
         "when_exists": {
           "anyOf": [
@@ -182,12 +233,9 @@
         }
       },
       "required": [
-        "id",
-        "level",
-        "run",
-        "report"
+        "id"
       ],
-      "title": "ControlConfig",
+      "title": "ControlChange",
       "type": "object"
     },
     "LimitsConfig": {
@@ -298,7 +346,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil.",
+  "description": "lictor.json tal como lo escribe la persona: lo que no escribe sale del perfil al cargar.\n\nUna clave escrita sustituye entera la del perfil, salvo `controls`, que son cambios por `id`\nsobre los del perfil (`ControlChange`).",
   "properties": {
     "version": {
       "default": "0.1",
@@ -320,14 +368,30 @@
       "$ref": "#/$defs/RetentionConfig"
     },
     "paths": {
-      "$ref": "#/$defs/PathsConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "acceptance": {
-      "$ref": "#/$defs/AcceptanceConfig"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcceptanceConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "controls": {
       "items": {
-        "$ref": "#/$defs/ControlConfig"
+        "$ref": "#/$defs/ControlChange"
       },
       "title": "Controls",
       "type": "array"
@@ -336,38 +400,66 @@
       "$ref": "#/$defs/ProjectVerification"
     },
     "agent_tools": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Agent Tools",
-      "type": "array"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Tools"
     },
     "agent_commands": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Agent Commands",
-      "type": "array"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Commands"
     },
     "hints": {
-      "default": "",
-      "title": "Hints",
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hints"
     },
     "gitignore": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Gitignore",
-      "type": "array"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gitignore"
     }
   },
   "required": [
-    "profile",
-    "paths",
-    "acceptance",
-    "controls"
+    "profile"
   ],
-  "title": "LictorConfig",
+  "title": "LictorFile",
   "type": "object"
 }

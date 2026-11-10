@@ -61,7 +61,7 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
     assert res.executor is fake_exec
     assert res.graph_context.project_root == tmp_path
     assert res.graph_context.model == "claude-3-5-sonnet"
-    assert len(res.graph_context.controls) == 1
+    assert [c.id for c in res.graph_context.controls] == ["lint", "types", "unit", "coverage", "c1"]
 
 
 def test_bootstrap_hands_the_acceptance_failure_codes_to_the_graph(tmp_path: Path) -> None:

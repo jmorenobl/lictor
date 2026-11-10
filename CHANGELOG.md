@@ -49,6 +49,19 @@ en su significado se anota en «Cambiado».
 - **La ref con la que se exporta el commit que se verifica es de cada worktree**
   (`refs/worktree/lictor/verified`), para que dos ejecuciones en dos worktrees no se la pisen. La
   antigua `refs/lictor/verified` ya no se usa y se puede borrar.
+- **`lictor init` escribe solo lo que decides tú**: `version`, `profile`, `backend.model` y
+  `hints`. Lo demás sale del perfil en cada carga, así que una mejora del perfil llega a tu proyecto
+  sin editar `lictor.json`.
+- **`controls` en `lictor.json` son cambios por `id` sobre los del perfil.** Con el `id` de uno del
+  perfil cambian solo los campos que escribes, `"enabled": false` lo quita y otro `id` añade un
+  control (con `level`, `run` y `report`). Un `lictor.json` con todo copiado, como los de la 0.2.0,
+  sigue cargando igual y conserva su huella, así que lo que resuelve a lo mismo se reanuda. Dos
+  diferencias: una lista vacía ya no quita los controles, y un control del perfil que borraste de
+  la lista vuelve; quítalos con `"enabled": false`. Quitar un `id` que el perfil no tiene sale con
+  10. `schema/lictor.schema.json` describe ahora el fichero que escribes. El perfil sigue siendo
+  `python-uv@0.1`: no ha cambiado.
+- `lictor init` no repite en `.gitignore` lo que ya dice otra línea: `.venv` cubre `.venv/`, y
+  `*.py[oc]`, `*.pyc`.
 - **Una ejecución empezada con la 0.2.0 no se reanuda**: sale con 10 y lo dice, en vez de leer el
   ancla antigua como una manipulación. Hay que empezar de nuevo con `lictor run --new`.
 

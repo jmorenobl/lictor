@@ -112,7 +112,7 @@ def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch
         if extra_controls or config_changes:
             config_path = root / "lictor.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            config["controls"].extend(extra_controls or [])
+            config.setdefault("controls", []).extend(extra_controls or [])
             config.update(config_changes or {})
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             git(root, "add", "-A")

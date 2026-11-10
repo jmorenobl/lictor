@@ -718,7 +718,7 @@ def test_init_copies_no_defence(tmp_path: Path) -> None:
     init_config_file(tmp_path)
 
     written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
-    assert written["verification"] == {"env": {}, "inherit": [], "prepare_inherit": []}
+    assert "verification" not in written
     defences = {"suppressions", "banned_patterns", "forbidden_paths", "driver_exempt_paths"}
     assert not defences & set(written)
 
@@ -971,9 +971,7 @@ def test_a_lictor_json_with_allow_empty_says_what_to_write_instead(tmp_path: Pat
     init_config_file(tmp_path)
     config_path = tmp_path / "lictor.json"
     raw = json.loads(config_path.read_text(encoding="utf-8"))
-    unit = next(c for c in raw["controls"] if c["id"] == "unit")
-    unit.pop("empty_exit_codes")
-    unit["allow_empty"] = True
+    raw["controls"] = [{"id": "unit", "allow_empty": True}]
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ConfigError) as exc_info:
@@ -1028,7 +1026,7 @@ def test_init_does_not_copy_the_driver_hints(tmp_path: Path) -> None:
     init_config_file(tmp_path)
 
     written = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
-    assert "driver_hints" not in written["acceptance"]
+    assert "acceptance" not in written
 
 
 def test_the_driver_hints_come_from_the_profile_on_every_load(tmp_path: Path) -> None:
@@ -1059,7 +1057,8 @@ def test_a_lictor_json_with_driver_hints_is_refused_naming_hints(tmp_path: Path)
     init_config_file(tmp_path)
     path = tmp_path / "lictor.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["acceptance"]["driver_hints"] = "Usa pytest-bdd."
+    acceptance = load_profile("python-uv").acceptance.model_dump(exclude={"driver_hints"})
+    data["acceptance"] = {**acceptance, "driver_hints": "Usa pytest-bdd."}
     path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ConfigError) as exc_info:
