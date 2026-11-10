@@ -43,6 +43,7 @@ from lictor.domain.errors import ExitCode, LictorError
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
 from lictor.domain.rules import (
+    anchor_from_older_version,
     anchor_problems,
     baseline_head_accepted,
     describe_score,
@@ -500,16 +501,29 @@ def _anchor_problems(
     return anchor_problems(anchor, observed, {sha for sha in accepted if sha})
 
 
-def _integrity_refusal(
-    runtime: BootstrapResult, resolved_cwd: Path, values: Any, pending_node: str | None = None
-) -> str | None:
-    """Say why this run can't go on. Control files come first: they are read without git."""
-    anchor = values.get("anchor") or {}
+def _control_files_refusal(runtime: BootstrapResult, anchor: dict[str, str]) -> str | None:
+    """Compare the control files, read without git, with what the anchor recorded."""
+    if anchor_from_older_version(anchor):
+        return (
+            "esta ejecución la empezó una versión anterior de Lictor, que anclaba el repositorio "
+            "de otra forma, y no se puede reanudar con esta. No se ha tocado nada: empieza de "
+            "nuevo con `lictor run --new`."
+        )
     if anchor.get("repo") and runtime.vcs.fingerprint() != anchor["repo"]:
         return (
             "cambiaron los ficheros de control de .git (config, hooks o info) a mitad de "
             f"ejecución, y no se ha ejecutado git con ellos. {_UNDO_OR_START_OVER}"
         )
+    return None
+
+
+def _integrity_refusal(
+    runtime: BootstrapResult, resolved_cwd: Path, values: Any, pending_node: str | None = None
+) -> str | None:
+    """Say why this run can't go on. Control files come first: they are read without git."""
+    refusal = _control_files_refusal(runtime, values.get("anchor") or {})
+    if refusal is not None:
+        return refusal
 
     saved_cfg_hash = values.get("config_hash")
     if saved_cfg_hash and runtime.config_hash != saved_cfg_hash:
