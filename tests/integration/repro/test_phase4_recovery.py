@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from lictor.application.run_files import _scratch_root
+from lictor.application.run_index import read_run_index
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     GOOD_3,
@@ -27,6 +28,7 @@ from tests.integration.repro.harness import (
     green_ids,
     quarantined,
     require,
+    run_worktree,
     write,
 )
 
@@ -62,10 +64,13 @@ NODES = (
     "report",
 )
 POINTS = [
-    point
-    for node in NODES
-    for moment in MOMENTS
-    if (point := f"{node}:{moment}") not in NOT_A_MOMENT
+    "worktree:durante",
+    *(
+        point
+        for node in NODES
+        for moment in MOMENTS
+        if (point := f"{node}:{moment}") not in NOT_A_MOMENT
+    ),
 ]
 
 
@@ -88,15 +93,20 @@ def _command(root: Path, tmp_path: Path, mode: str, *stall: str) -> list[str]:
     return [sys.executable, "-B", str(RUNNER), *args]
 
 
-def _environment() -> dict[str, str]:
+def _environment(*, in_place: bool = False, branch: str = "") -> dict[str, str]:
     paths = [str(REPO_ROOT / "src"), str(REPO_ROOT)]
-    return {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(paths), "LICTOR_KILL_BRANCH": branch}
+    if in_place:
+        env["LICTOR_KILL_IN_PLACE"] = "1"
+    return env
 
 
-def _stop_at(command: list[str], point: str, marker: Path) -> subprocess.Popen[bytes]:
+def _stop_at(
+    command: list[str], point: str, marker: Path, env: dict[str, str] | None = None
+) -> subprocess.Popen[bytes]:
     """Launch a run and return once it stands still at `point`."""
     process = subprocess.Popen(
-        command, env=_environment(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        command, env=env or _environment(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
     deadline = time.monotonic() + REACH_TIMEOUT_S
     while not marker.exists():
@@ -108,8 +118,10 @@ def _stop_at(command: list[str], point: str, marker: Path) -> subprocess.Popen[b
     return process
 
 
-def _kill_at(root: Path, tmp_path: Path, mode: str, point: str, marker: Path) -> None:
-    process = _stop_at(_command(root, tmp_path, mode, point, str(marker)), point, marker)
+def _kill_at(root: Path, mode: str, point: str, marker: Path, *, in_place: bool = False) -> None:
+    """Kill a run at `point`; the marker lives in the case's own directory, beside its flags."""
+    command = _command(root, marker.parent, mode, point, str(marker))
+    process = _stop_at(command, point, marker, _environment(in_place=in_place))
     os.kill(process.pid, signal.SIGKILL)
     process.wait(timeout=30)
     require(
@@ -117,12 +129,12 @@ def _kill_at(root: Path, tmp_path: Path, mode: str, point: str, marker: Path) ->
     )
 
 
-def _relaunch(root: Path, tmp_path: Path, mode: str) -> tuple[int, int]:
+def _relaunch(root: Path, tmp_path: Path, mode: str, *, in_place: bool = False) -> tuple[int, int]:
     """Run until it stops for good; a pause for quota is a stop like any other."""
     for relaunches in range(1, MAX_RELAUNCHES + 1):
         finished = subprocess.run(
             _command(root, tmp_path, mode),
-            env=_environment(),
+            env=_environment(in_place=in_place),
             capture_output=True,
             text=True,
             timeout=RESUME_TIMEOUT_S,
@@ -164,24 +176,31 @@ def test_kill_9_at_every_node_loses_nothing_and_invents_nothing(
     in_a_command = point == "verify:durante"
     root = make_project(extra_controls=[_control_killed_midway(marker)] if in_a_command else None)
 
-    _kill_at(root, tmp_path, mode, "" if in_a_command else point, marker)
+    head = git(root, "rev-parse", "HEAD")
+
+    _kill_at(root, mode, "" if in_a_command else point, marker)
     exit_code, relaunches = _relaunch(root, tmp_path, mode)
 
+    runs = read_run_index(root)
+    assert len(runs) == 1, "la reanudación debía encontrar la ejecución, no empezar otra"
+    worktree = Path(runs[0].worktree)
     expected_code, expected_greens, expected_quarantine = EXPECTED[mode]
     assert exit_code == expected_code
-    assert green_ids(root) == expected_greens, "ni commits dobles ni verdes perdidos"
-    assert false_greens(root) == []
-    assert sorted(set(quarantined(root))) == expected_quarantine
-    assert not git(root, "status", "--short"), "no debe quedar nada a medias en el árbol"
-    assert (root / ".lictor" / "report.md").is_file()
+    assert green_ids(worktree) == expected_greens, "ni commits dobles ni verdes perdidos"
+    assert false_greens(worktree) == []
+    assert sorted(set(quarantined(worktree))) == expected_quarantine
+    assert not git(worktree, "status", "--short"), "no debe quedar nada a medias en el árbol"
+    assert (worktree / ".lictor" / "report.md").is_file()
+    assert git(root, "rev-parse", "HEAD") == head, "el checkout de la persona no se toca"
+    assert not git(root, "status", "--short")
     _record(
         Cell(
             point,
             mode,
             relaunches,
             exit_code,
-            green_ids(root),
-            sorted(set(quarantined(root))),
+            green_ids(worktree),
+            sorted(set(quarantined(worktree))),
         )
     )
 
@@ -191,18 +210,21 @@ def test_kill_9_while_the_baseline_registers_a_collateral_green(
 ) -> None:
     """The branch moved inside the red check and the checkpoint never heard of it."""
     root = make_project()
-    require(_relaunch(root, tmp_path, "cuarentena")[0] == 30, "IVA-003 debía quedar en cuarentena")
+    require(
+        _relaunch(root, tmp_path, "cuarentena", in_place=True)[0] == 30,
+        "IVA-003 debía quedar en cuarentena",
+    )
     write(root, MODULE_PATH, GOOD_3)
     git(root, "commit", "-q", "-am", "feat: importe negativo a mano")
     point = "red_check:registro"
 
-    _kill_at(root, tmp_path, "verde", point, tmp_path / "alcanzado")
+    _kill_at(root, "verde", point, tmp_path / "alcanzado", in_place=True)
     killed_head = git(root, "rev-parse", "HEAD").strip()
     require(
         "Lictor-Collateral" in git(root, "log", "-1", "--format=%B"),
         "debía morir con el registro ya en la rama",
     )
-    exit_code, relaunches = _relaunch(root, tmp_path, "verde")
+    exit_code, relaunches = _relaunch(root, tmp_path, "verde", in_place=True)
 
     assert exit_code == 0
     assert green_ids(root) == ALL_GREEN, "ni commits dobles ni verdes perdidos"
@@ -219,13 +241,13 @@ def test_a_lock_left_by_a_killed_git_stops_and_explains(
     """Killing the whole group can take git with it: its lock stays, and nothing else is lost."""
     root = make_project()
     marker = tmp_path / "alcanzado"
-    _kill_at(root, tmp_path, "verde", "commit:antes", marker)
+    _kill_at(root, "verde", "commit:antes", marker, in_place=True)
     lock = root / ".git" / "index.lock"
     write(root, ".git/index.lock", "")
 
     stopped = subprocess.run(
         _command(root, tmp_path, "verde"),
-        env=_environment(),
+        env=_environment(in_place=True),
         capture_output=True,
         text=True,
         timeout=RESUME_TIMEOUT_S,
@@ -235,7 +257,7 @@ def test_a_lock_left_by_a_killed_git_stops_and_explains(
     assert stopped.returncode == 10
     assert "index.lock" in events_of(root, "run.stopped")[-1]["data"]["reason"]
     lock.unlink()
-    assert _relaunch(root, tmp_path, "verde")[0] == 0
+    assert _relaunch(root, tmp_path, "verde", in_place=True)[0] == 0
     assert green_ids(root) == ALL_GREEN
 
 
@@ -249,8 +271,9 @@ def test_a_second_run_is_refused_without_touching_the_first(
     point = "implement:durante"
     command = _command(root, tmp_path, "verde", point, str(marker), str(release))
     first = _stop_at(command, point, marker)
+    worktree = run_worktree(root, read_run_index(root)[0].branch)
     try:
-        journal = (root / ".lictor" / "journal.jsonl").read_bytes()
+        journal = (worktree / ".lictor" / "journal.jsonl").read_bytes()
         second = subprocess.run(
             _command(root, tmp_path, "verde"),
             env=_environment(),
@@ -262,13 +285,14 @@ def test_a_second_run_is_refused_without_touching_the_first(
 
         assert second.returncode == 10, second.stdout + second.stderr
         assert "otra ejecución" in second.stderr
-        assert list(_scratch_root(root).glob("work-*")), "la copia del agente debía seguir ahí"
-        assert (root / ".lictor" / "journal.jsonl").read_bytes() == journal
+        assert "--branch" in second.stderr, "desde el checkout, dice cómo lanzar otra en paralelo"
+        assert list(_scratch_root(worktree).glob("work-*")), "la copia del agente debía seguir ahí"
+        assert (worktree / ".lictor" / "journal.jsonl").read_bytes() == journal
     finally:
         release.touch()
     output, _ = first.communicate(timeout=RESUME_TIMEOUT_S)
 
     assert first.returncode == 0, output.decode()
-    assert green_ids(root) == ALL_GREEN
-    assert false_greens(root) == []
-    assert not events_of(root, "state.tampered")
+    assert green_ids(worktree) == ALL_GREEN
+    assert false_greens(worktree) == []
+    assert not events_of(worktree, "state.tampered")

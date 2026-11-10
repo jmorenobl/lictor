@@ -151,10 +151,13 @@ def test_d24_stale_report_does_not_hide_a_crashed_suite(
 
 
 def test_d25_dirty_tree_exit_explains_itself(make_project: ProjectFactory) -> None:
+    """The run's worktree still has to be clean; the person's checkout no longer does (0.3.0)."""
     root = make_project(sync=False)
-    write(root, "basura.txt", "x")
+    worktree = root.with_name(f"{root.name}-enlazado")
+    git(root, "worktree", "add", "-q", "-b", "trabajo", str(worktree))
+    write(worktree, "basura.txt", "x")
 
-    result = CliRunner().invoke(app, ["run", "--cwd", str(root)])
+    result = CliRunner().invoke(app, ["run", "--cwd", str(worktree)])
 
     require(result.exit_code == 10, f"se esperaba exit 10: {result.exit_code}")
     assert result.output.strip(), "exit 10 sin mensaje"

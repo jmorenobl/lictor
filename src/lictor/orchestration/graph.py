@@ -64,6 +64,7 @@ from lictor.domain.rules import (
     run_outcome,
     suspicious_driver,
 )
+from lictor.domain.run_branches import integration_hint
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -167,6 +168,8 @@ class GraphContext:
     event_log: EventLog
     clock: Clock
     profile_name: str = ""
+    # The branch of a linked worktree, which the person integrates; "" in a normal checkout.
+    result_branch: str = ""
     build_report: BuildReport | None = None
     acceptance_failure_exit_codes: Sequence[int] = (1,)
     forbidden_paths: Sequence[str] = ()
@@ -715,7 +718,10 @@ class _GraphNodes:
         exit_val = state.get("exit_code")
         if exit_val is not None:
             return self._finish(state, exit_val, state.get("exit_reason", ""))
-        return self._finish(state, *run_outcome(state.get("status", {}), state.get("reasons", {})))
+        code, reason = run_outcome(state.get("status", {}), state.get("reasons", {}))
+        if self.ctx.result_branch:
+            reason = f"{reason}. {integration_hint(self.ctx.result_branch)}"
+        return self._finish(state, code, reason)
 
 
 def _green_of(

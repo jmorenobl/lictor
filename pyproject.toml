@@ -137,6 +137,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_gherkin_source.py",
     "tests/unit/test_spec_history.py",
     "tests/unit/test_spec_rules.py",
+    "tests/unit/test_run_branches.py",
     "tests/unit/test_progress.py",
     "tests/unit/test_implement_scenario.py",
     "tests/unit/test_prepare_driver.py",
