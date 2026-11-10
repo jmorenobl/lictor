@@ -7,6 +7,20 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Cambiado
+
+- **Lictor se puede ejecutar dentro de un worktree enlazado** (`git worktree add`). En uno, `config`,
+  `hooks/` e `info/` están en el directorio común del repositorio: el ancla, la huella de los
+  ficheros de control y la comprobación de cada llamada al agente los leen ahí, además de `HEAD` y
+  `config.worktree` del worktree y de los ficheros que apuntan de uno a otro. Un cambio en ellos
+  durante una llamada falla el intento en `L0-estado` y se deshace; después de un kill, impide
+  reanudar. En un checkout normal no cambia nada (ADR-0005).
+- **La ref con la que se exporta el commit que se verifica es de cada worktree**
+  (`refs/worktree/lictor/verified`), para que dos ejecuciones en dos worktrees no se la pisen. La
+  antigua `refs/lictor/verified` ya no se usa y se puede borrar.
+- **Una ejecución empezada con la 0.2.0 no se reanuda**: sale con 10 y lo dice, en vez de leer el
+  ancla antigua como una manipulación. Hay que empezar de nuevo con `lictor run --new`.
+
 ## [0.2.0] - 2026-11-10
 
 La skill de Lictor para Claude Code y lo que la pasada greenfield `romanos` mostró que hacía falta

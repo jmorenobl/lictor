@@ -9,6 +9,7 @@ from pathlib import Path
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_file
+from lictor.domain.rules import ANCHOR_FORMAT
 
 
 def observe_anchor(vcs: Vcs, project_root: Path) -> dict[str, str]:
@@ -18,4 +19,5 @@ def observe_anchor(vcs: Vcs, project_root: Path) -> dict[str, str]:
         "head": vcs.get_head_sha(),
         "seal": hash_file(seal) if seal.is_file() else "",
         "repo": vcs.fingerprint(),
+        "format": ANCHOR_FORMAT,
     }

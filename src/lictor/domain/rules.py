@@ -828,6 +828,18 @@ def baseline_head_accepted(
     )
 
 
+# 0.3.0 also hashes the common directory of a linked worktree; 0.2.0 anchors carry no format.
+ANCHOR_FORMAT = "2"
+
+
+def anchor_from_older_version(anchor: Mapping[str, str]) -> bool:
+    """Tell an anchor another version wrote: comparing it would read as tampering.
+
+    A run that `preflight` hasn't anchored yet has nothing to compare, whoever started it.
+    """
+    return bool(anchor.get("repo")) and anchor.get("format") != ANCHOR_FORMAT
+
+
 def anchor_problems(
     anchor: Mapping[str, str],
     observed: Mapping[str, str],

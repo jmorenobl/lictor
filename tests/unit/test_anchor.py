@@ -9,6 +9,7 @@ from lictor.application import anchor
 from lictor.application.anchor import observe_anchor
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_file
+from lictor.domain.rules import ANCHOR_FORMAT
 
 
 def _vcs() -> MagicMock:
@@ -25,12 +26,22 @@ def test_anchor_records_head_seal_and_repository(tmp_path: Path) -> None:
 
     anchor = observe_anchor(_vcs(), tmp_path)
 
-    assert anchor == {"head": "abc123", "seal": hash_file(seal), "repo": "sha256:repo"}
+    assert anchor == {
+        "head": "abc123",
+        "seal": hash_file(seal),
+        "repo": "sha256:repo",
+        "format": ANCHOR_FORMAT,
+    }
     assert anchor["seal"]
 
 
 def test_anchor_without_a_seal_records_it_empty(tmp_path: Path) -> None:
-    assert observe_anchor(_vcs(), tmp_path) == {"head": "abc123", "seal": "", "repo": "sha256:repo"}
+    assert observe_anchor(_vcs(), tmp_path) == {
+        "head": "abc123",
+        "seal": "",
+        "repo": "sha256:repo",
+        "format": ANCHOR_FORMAT,
+    }
 
 
 def test_anchor_hashes_the_project_s_own_seal(

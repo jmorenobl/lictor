@@ -16,6 +16,7 @@ from lictor.domain.model import (
 )
 from lictor.domain.rules import (
     AGENT_FAILURE_LIMIT,
+    ANCHOR_FORMAT,
     PERSON_ONLY_STREAK,
     STATE_CHANGED_OUTSIDE_COPY,
     SUSPICIOUS_DRIVER,
@@ -23,6 +24,7 @@ from lictor.domain.rules import (
     RedOracle,
     ScenarioClass,
     acceptance_failure,
+    anchor_from_older_version,
     anchor_problems,
     banned_matches,
     baseline_head_accepted,
@@ -1633,3 +1635,15 @@ def test_routes_rejected_on_both_says_both() -> None:
 
     assert "repite exactamente el mismo cambio" in message
     assert message.endswith("declara el conflicto como se indica al final.")
+
+
+def test_an_anchor_without_format_comes_from_an_older_version() -> None:
+    assert anchor_from_older_version({"head": "a", "seal": "", "repo": "sha256:x"})
+    assert anchor_from_older_version({"repo": "sha256:x", "format": "1"})
+    assert not anchor_from_older_version({"repo": "sha256:x", "format": ANCHOR_FORMAT})
+
+
+def test_a_run_not_anchored_yet_is_not_from_an_older_version() -> None:
+    """Before `preflight` there is no anchor to compare, whatever version wrote the checkpoint."""
+    assert not anchor_from_older_version({})
+    assert not anchor_from_older_version({"head": "a", "repo": ""})

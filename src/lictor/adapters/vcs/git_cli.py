@@ -27,9 +27,15 @@ _INHERITED_LOCATIONS = (
     "GIT_CONFIG_COUNT",
 )
 # Files that decide what git executes or sees. `refs/` isn't here: HEAD is compared by value.
-_CONTROL_FILES = ("HEAD", "config")
-_CONTROL_DIRS = ("hooks", "info")
-_EXPORT_REF = "refs/lictor/verified"
+# A linked worktree has its own directory, `<common>/worktrees/<name>`, and shares the rest; in a
+# normal checkout both are `.git`, and the files are the same as before linked worktrees counted.
+_WORKTREE_FILES = ("HEAD", "config.worktree")
+_COMMON_FILES = ("config",)
+_COMMON_DIRS = ("hooks", "info")
+# What says where the other two are: restored first, so that the rest goes back to its place.
+_POINTERS = (".git", "commondir")
+# Per worktree: two runs in two worktrees of one repository must not move a ref they share.
+_EXPORT_REF = "refs/worktree/lictor/verified"
 _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _EXECUTABLE_MODE = "100755"
 
@@ -71,15 +77,29 @@ class GitCli(Vcs):
             return (self.repo_dir / pointer).resolve()
         return dot_git.resolve()
 
-    def _control_files(self) -> dict[str, bytes]:
+    def _common_dir(self) -> Path:
+        """Read `commondir`, which a linked worktree has and a normal checkout doesn't."""
         git_dir = self._git_dir()
-        found = {name: git_dir / name for name in _CONTROL_FILES}
-        for directory in _CONTROL_DIRS:
-            for path in (git_dir / directory).rglob("*"):
-                found[path.relative_to(git_dir).as_posix()] = path
+        commondir = git_dir / "commondir"
+        if commondir.is_file():
+            return (git_dir / commondir.read_text(encoding="utf-8").strip()).resolve()
+        return git_dir
+
+    def _control_paths(self) -> dict[str, Path]:
+        """Name each control file as it is named in a normal checkout, wherever it lives."""
+        git_dir, common = self._git_dir(), self._common_dir()
+        found = {".git": self.repo_dir / ".git", "commondir": git_dir / "commondir"}
+        found |= {name: git_dir / name for name in _WORKTREE_FILES}
+        found |= {name: common / name for name in _COMMON_FILES}
+        for directory in _COMMON_DIRS:
+            for path in (common / directory).rglob("*"):
+                found[path.relative_to(common).as_posix()] = path
+        return found
+
+    def _control_files(self) -> dict[str, bytes]:
         return {
             name: path.read_bytes()
-            for name, path in found.items()
+            for name, path in self._control_paths().items()
             if path.is_file() and not path.is_symlink()
         }
 
@@ -88,21 +108,15 @@ class GitCli(Vcs):
         return RepoPin(head=self.get_head_sha(), files=self._control_files())
 
     def restore(self, pin: RepoPin) -> list[str]:
-        """Put the control files back before running git again, then bring HEAD back."""
-        git_dir = self._git_dir()
-        current = self._control_files()
+        """Put the control files back before running git again, then bring HEAD back.
+
+        The pointers go first, one at a time, and every other path is read again after them:
+        a redirected `.git` or `commondir` would otherwise send the rest somewhere else.
+        """
         changed: list[str] = []
-        for name in sorted(current.keys() | pin.files.keys()):
-            if current.get(name) == pin.files.get(name):
-                continue
-            changed.append(f".git/{name}")
-            target = git_dir / name
-            if name in pin.files:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.unlink(missing_ok=True)
-                target.write_bytes(pin.files[name])
-            else:
-                target.unlink()
+        for pointer in _POINTERS:
+            changed += self._restore_files(pin, only={pointer})
+        changed += self._restore_files(pin, only=None)
 
         if self.get_head_sha() != pin.head:
             changed.append("HEAD")
@@ -110,6 +124,23 @@ class GitCli(Vcs):
             kept = self._run_git(["reset", "-q", "--keep", pin.head], check=False)
             if kept.returncode != 0:
                 self._run_git(["update-ref", "HEAD", pin.head])
+        return changed
+
+    def _restore_files(self, pin: RepoPin, only: set[str] | None) -> list[str]:
+        paths = self._control_paths()
+        current = self._control_files()
+        changed: list[str] = []
+        for name in sorted(current.keys() | pin.files.keys()):
+            if (only is not None and name not in only) or current.get(name) == pin.files.get(name):
+                continue
+            changed.append(name if name == ".git" else f".git/{name}")
+            target = paths.get(name) or self._common_dir() / name
+            if name in pin.files:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.unlink(missing_ok=True)
+                target.write_bytes(pin.files[name])
+            else:
+                target.unlink()
         return changed
 
     def fingerprint(self) -> str:
