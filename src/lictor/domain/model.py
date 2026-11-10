@@ -234,6 +234,23 @@ class MutationScore:
     skipped: int = 0
     total: int = 0
     percent: float = 0.0
+    kind: Literal["mutation"] = "mutation"
+
+
+@dataclass(frozen=True)
+class CoverageScore:
+    """Lines and branches the tests ran, and the share of both together, as coverage.py counts."""
+
+    covered_lines: int = 0
+    num_statements: int = 0
+    covered_branches: int = 0
+    num_branches: int = 0
+    percent: float = 0.0
+    kind: Literal["coverage"] = "coverage"
+
+
+# What a control's report scores; `kind` tells them apart once in the journal.
+Score = MutationScore | CoverageScore
 
 
 @dataclass(frozen=True)
@@ -299,7 +316,7 @@ class ControlResult:
     mode: str = "block"
     output_path: str | None = None
     skipped: str | None = None  # why the control didn't run, when it didn't
-    score: MutationScore | None = None  # only a mutation report has one
+    score: Score | None = None  # only a mutation or a coverage report has one
 
 
 @dataclass(frozen=True)

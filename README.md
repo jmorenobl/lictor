@@ -483,7 +483,15 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` aplica la misma regla a lo que verifica. Así un proyecto sin `tests/unit` no bloquea al agente.
 
-**Un control puede depender de un plugin.** Con `when_plugin`, el control se omite, con el motivo, si el entorno de verificación no carga ese plugin. La lista sale de lo que Lictor pregunta al entorno al construirlo (`plugins_command`). Si el perfil no puede preguntarlo, el control se ejecuta. Así funciona el control `coverage` de `python-uv`: mide la cobertura de `src` con los tests unitarios en modo `measure`, sin bloquear, y solo si el proyecto tiene `pytest-cov`, que tiene que añadir una persona (`uv add --dev pytest-cov`) porque el agente no puede tocar `uv.lock`. Sin él, cada ejecución lo muestra como omitido, no como fallido. El porcentaje queda en la salida del control, en `.lictor/runs/`.
+**Un control puede depender de un plugin.** Con `when_plugin`, el control se omite, con el motivo, si el entorno de verificación no carga ese plugin. La lista sale de lo que Lictor pregunta al entorno al construirlo (`plugins_command`). Si el perfil no puede preguntarlo, el control se ejecuta. Así funciona el control `coverage` de `python-uv`: mide la cobertura de `src` con los tests unitarios en modo `measure`, sin bloquear, y solo si el proyecto tiene `pytest-cov`, que tiene que añadir una persona (`uv add --dev pytest-cov`) porque el agente no puede tocar `uv.lock`. Sin él, cada ejecución lo muestra como omitido, no como fallido.
+
+**La cobertura es una puntuación.** El control `coverage` de `python-uv` lee el JSON que exporta coverage.py (`--cov-report=json:{out}`, lector `coverage`) y guarda el porcentaje de líneas y ramas juntas, el mismo que da `--cov-fail-under`. Se ve junto al resultado en `lictor check`, en `verify.finished` y en «Puntuaciones» de `report.md`, como la de mutación: «87,5 % (412 de 450 líneas, 90 de 110 ramas)». Los porcentajes se cortan a un decimal, sin redondear, para que un 89,96 no se lea como un 90 que no alcanza. Un mínimo lo decide el proyecto, cambiando el control por `id`:
+
+```json
+{"controls": [{"id": "coverage", "min_score": 80}]}
+```
+
+En `measure`, por debajo del mínimo el control sale como fallido sin bloquear; con `"mode": "block"` también bloquea. Una pasada sin tests (código 5) no tiene puntuación, y con un mínimo falla: lo que no se midió no llega a ninguno.
 
 ### El oráculo y el ciclo de escenarios
 

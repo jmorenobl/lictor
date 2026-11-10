@@ -1,13 +1,15 @@
 """Unit tests for ResultReader implementations: ExitCodeReader and JUnitReader."""
 
+import json
 from pathlib import Path
 
 import pytest
 
+from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
-from lictor.domain.model import ControlResult, MutationScore
+from lictor.domain.model import ControlResult, CoverageScore, MutationScore
 
 
 def test_exit_code_reader_success() -> None:
@@ -227,3 +229,78 @@ def test_mutation_reader_refuses_a_report_it_cannot_trust(
     assert res.ok is False
     assert res.error is not None
     assert res.error.startswith(f"El informe de mutación no es válido: {why}")
+
+
+def _coverage(
+    tmp_path: Path, content: str | None, exit_code: int = 0, empty: tuple[int, ...] = ()
+) -> ControlResult:
+    report = tmp_path / "coverage.json"
+    if content is not None:
+        report.write_text(content, encoding="utf-8")
+    return CoverageReader().read(
+        output=str(report), exit_code=exit_code, duration_ms=3, empty_exit_codes=empty
+    )
+
+
+_COVERAGE_JSON = json.dumps(
+    {
+        "meta": {"format": 3},
+        "files": {},
+        "totals": {
+            "covered_lines": 9,
+            "num_statements": 10,
+            "covered_branches": 1,
+            "num_branches": 2,
+            "percent_covered": 83.33,
+        },
+    }
+)
+
+
+def test_coverage_reader_scores_the_totals_of_coverage_py(tmp_path: Path) -> None:
+    res = _coverage(tmp_path, _COVERAGE_JSON)
+
+    assert (res.ok, res.error, res.duration_ms) == (True, None, 3)
+    assert res.score == CoverageScore(
+        covered_lines=9,
+        num_statements=10,
+        covered_branches=1,
+        num_branches=2,
+        percent=100 * 10 / 12,
+    )
+
+
+def test_coverage_reader_keeps_the_score_when_the_tests_fail(tmp_path: Path) -> None:
+    res = _coverage(tmp_path, _COVERAGE_JSON, exit_code=1)
+
+    assert res.ok is False
+    assert res.error == "Los tests de la cobertura fallaron con el código 1"
+    assert res.score is not None
+
+
+def test_coverage_reader_without_tests_to_run_passes_with_no_score(tmp_path: Path) -> None:
+    res = _coverage(tmp_path, None, exit_code=5, empty=(5,))
+
+    assert (res.ok, res.error, res.score) == (True, None, None)
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (None, "Sin informe de cobertura"),
+        ("{", "no es JSON"),
+        ("[]", "no tiene 'totals'"),
+        ('{"totals": {"covered_lines": "9", "num_statements": 10}}', "'covered_lines'"),
+        ('{"totals": {"covered_lines": -1, "num_statements": 10}}', "'covered_lines'"),
+        ('{"totals": {"covered_lines": true, "num_statements": 10}}', "'covered_lines'"),
+    ],
+)
+def test_coverage_reader_without_a_valid_report_fails(
+    tmp_path: Path, content: str | None, reason: str
+) -> None:
+    res = _coverage(tmp_path, content)
+
+    assert res.ok is False
+    assert res.error is not None
+    assert reason in res.error
+    assert res.score is None

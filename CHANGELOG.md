@@ -62,6 +62,16 @@ en su significado se anota en «Cambiado».
   `python-uv@0.1`: no ha cambiado.
 - `lictor init` no repite en `.gitignore` lo que ya dice otra línea: `.venv` cubre `.venv/`, y
   `*.py[oc]`, `*.pyc`.
+- **La cobertura es una puntuación.** El control `coverage` de `python-uv` exporta el JSON de
+  coverage.py (`--cov-report=json:{out}`) y el lector nuevo `coverage` guarda el porcentaje de
+  líneas y ramas juntas. Se ve junto al resultado en `lictor check`, en `verify.finished` y en
+  «Puntuaciones» de `report.md`, como el de mutación. `min_score` vale también para la cobertura:
+  `{"controls": [{"id": "coverage", "min_score": 80}]}`. Un control con mínimo que no midió nada,
+  como una pasada sin tests, falla. El control sigue en `measure` y el perfil sigue siendo
+  `python-uv@0.1`. Un `lictor.json` con los controles copiados de la 0.2.0 conserva el `coverage`
+  antiguo, sin puntuación: quita esa entrada de la lista para recibir el del perfil.
+- Las puntuaciones se muestran cortadas a un decimal, sin redondear: un 94,18 % se ve como 94,1 %,
+  y un 89,96 % ya no se lee como un 90 % que no alcanza.
 - **Una ejecución empezada con la 0.2.0 no se reanuda**: sale con 10 y lo dice, en vez de leer el
   ancla antigua como una manipulación. Hay que empezar de nuevo con `lictor run --new`.
 

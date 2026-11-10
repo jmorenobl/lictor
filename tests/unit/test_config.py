@@ -1006,10 +1006,12 @@ def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> N
             LimitsConfig(error_max_chars=chars)
 
 
-def test_min_score_belongs_to_a_mutation_control() -> None:
+def test_min_score_belongs_to_a_control_with_a_score() -> None:
     mutation = {"id": "m", "level": "L5", "run": "x {out}", "report": "mutation"}
+    coverage = {"id": "c", "level": "L2", "run": "x {out}", "report": "coverage"}
     assert ControlConfig(**mutation, min_score=95).min_score == 95
-    with pytest.raises(ValidationError, match="solo vale con report='mutation'"):
+    assert ControlConfig(**coverage, min_score=80).min_score == 80
+    with pytest.raises(ValidationError, match="solo vale con report='mutation' o 'coverage'"):
         ControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
 
 
@@ -1117,3 +1119,21 @@ def test_the_profile_measures_coverage_only_where_the_plugin_is_installed() -> N
     assert coverage.when_plugin == "pytest_cov.plugin"
     assert coverage.when_exists == "tests/unit"
     assert "--cov" in coverage.run
+
+
+def test_the_profile_keeps_the_coverage_as_a_score() -> None:
+    """F29: the percentage was only in the log; now it is the control's score."""
+    [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
+
+    assert coverage.report == "coverage"
+    assert "--cov-report=json:{out}" in coverage.run
+    assert "--cov-branch" in coverage.run
+    assert coverage.min_score is None
+
+
+def test_a_project_asks_for_a_minimum_coverage_by_id(tmp_path: Path) -> None:
+    path = _project(tmp_path, controls=[{"id": "coverage", "min_score": 80}])
+
+    [coverage] = [c for c in load_config(path).controls if c.id == "coverage"]
+
+    assert (coverage.min_score, coverage.mode) == (80, "measure")

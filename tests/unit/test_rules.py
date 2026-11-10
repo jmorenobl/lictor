@@ -1309,7 +1309,7 @@ def test_mutation_score_without_tried_mutants_is_zero(counts: dict[str, int]) ->
 def test_describe_score_names_what_was_not_killed() -> None:
     score = mutation_score({"killed": 923, "survived": 57, "total": 980})
 
-    assert describe_score(score) == "94,2 % (923 de 980 muertos; 57 vivos, 0 por tiempo)"
+    assert describe_score(score) == "94,1 % (923 de 980 muertos; 57 vivos, 0 por tiempo)"
 
 
 def test_describe_score_adds_the_other_outcomes_only_when_there_are_some() -> None:
@@ -1513,7 +1513,6 @@ def test_a_score_below_the_minimum_fails_the_control_and_says_both() -> None:
     [
         ControlResult(ok=True, score=SCORE_94),
         ControlResult(ok=False, error="la pasada cayó", score=SCORE_94),
-        ControlResult(ok=True),
     ],
 )
 def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -> None:

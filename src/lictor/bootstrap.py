@@ -16,6 +16,7 @@ from lictor.adapters.config.loader import (
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig
+from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
@@ -140,6 +141,7 @@ def bootstrap_runtime(
         "exit-code": ExitCodeReader(),
         "junit": JUnitReader(),
         "mutation": MutationReader(),
+        "coverage": CoverageReader(),
     }
     spec_source = GherkinSource()
 

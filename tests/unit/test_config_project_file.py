@@ -24,6 +24,7 @@ from lictor.domain.errors import ConfigError, ExitCode
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
 PROFILE_IDS = ["lint", "types", "unit", "coverage"]
+FINGERPRINT_IN_0_2_0 = "b029641d0ac869c22476fc5dcc1550193b91b95a69778c4d41cc9edc4dbca36f"
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -62,15 +63,18 @@ def test_init_writes_only_what_the_person_decides(tmp_path: Path) -> None:
 
 
 def test_a_lictor_json_of_0_2_0_keeps_its_fingerprint(tmp_path: Path) -> None:
-    """A full copy that resolves to the same thing lets a run started with 0.2.0 resume."""
-    root = _python_project(tmp_path / "nuevo")
-    init_config_file(root)
-    copied = tmp_path / "copiado" / "lictor.json"
-    _python_project(copied.parent)
+    """A full copy still means what it meant, so a run started with 0.2.0 sees the same config.
+
+    The hash is the one `v0.2.0` computes for this same file. It changes only if the copy stops
+    resolving to itself, or if a defence of the profile changes.
+    """
+    copied = _python_project(tmp_path) / "lictor.json"
     copied.write_text(WRITTEN_BY_0_2_0.read_text(encoding="utf-8"), encoding="utf-8")
 
-    assert load_config(copied) == load_config(root)
-    assert _fingerprint(copied) == _fingerprint(root / "lictor.json")
+    resolved = load_config(copied).model_dump(mode="json")
+
+    assert resolved == json.loads(WRITTEN_BY_0_2_0.read_text(encoding="utf-8"))
+    assert _fingerprint(copied) == FINGERPRINT_IN_0_2_0
 
 
 def test_without_controls_the_project_gets_the_profiles(tmp_path: Path) -> None:

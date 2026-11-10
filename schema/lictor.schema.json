@@ -14,7 +14,8 @@
           "enum": [
             "exit-code",
             "junit",
-            "mutation"
+            "mutation",
+            "coverage"
           ],
           "title": "Report",
           "type": "string"
@@ -137,7 +138,8 @@
               "enum": [
                 "exit-code",
                 "junit",
-                "mutation"
+                "mutation",
+                "coverage"
               ],
               "type": "string"
             },
