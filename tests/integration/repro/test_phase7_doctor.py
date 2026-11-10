@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from lictor.application.run_files import exclusive_run
 from lictor.cli import app
 from tests.integration.repro.conftest import ProjectFactory
-from tests.integration.repro.harness import Agent, events_of, git, require, run_lictor
+from tests.integration.repro.harness import Agent, events_of, git, require, run_lictor, write
 
 MISSING_PROGRAM = {
     "id": "secretos",
@@ -133,3 +133,31 @@ def test_doctor_beside_a_run_checks_everything_else(make_project: ProjectFactory
 
     assert code == 0, output
     assert "Entorno de verificación: no comprobado: hay una ejecución en curso" in output
+
+
+def test_doctor_only_warns_of_what_isnt_committed_in_the_persons_checkout(
+    make_project: ProjectFactory,
+) -> None:
+    """`run` from there starts from the last commit in a worktree of its own (0.3.0)."""
+    root = make_project()
+    write(root, "notas.txt", "a mano\n")
+
+    code, output = _doctor(root)
+
+    assert code == 0, output
+    assert "⚠ Árbol git limpio" in output
+    assert "notas.txt" in output
+
+
+def test_doctor_inside_a_linked_worktree_still_needs_it_clean(
+    make_project: ProjectFactory,
+) -> None:
+    root = make_project()
+    worktree = root.with_name(f"{root.name}-enlazado")
+    git(root, "worktree", "add", "-q", "-b", "trabajo", str(worktree))
+    write(worktree, "notas.txt", "a mano\n")
+
+    code, output = _doctor(worktree)
+
+    assert code == 10, output
+    assert "✗ Árbol git limpio" in output
