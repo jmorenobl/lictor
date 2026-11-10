@@ -1,5 +1,6 @@
 """Unit tests for GitCli VCS adapter."""
 
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -684,3 +685,129 @@ def test_has_commits_tells_a_repository_just_created(tmp_path: Path, git_repo: P
 
     assert GitCli(repo_dir=empty).has_commits() is False
     assert GitCli(repo_dir=git_repo).has_commits() is True
+
+
+def _linked_worktree(git_repo: Path, tmp_path: Path) -> Path:
+    other = tmp_path.with_name(f"{tmp_path.name}-enlazado")
+    subprocess.run(
+        [GIT_BIN, "worktree", "add", "-q", "-b", "enlazado", str(other)],
+        cwd=git_repo,
+        check=True,
+    )
+    return other
+
+
+def test_a_linked_worktree_sees_the_control_files_of_the_common_directory(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`config`, `hooks/` and `info/` live in the common directory, not in the worktree's."""
+    worktree = _linked_worktree(git_repo, tmp_path)
+    own = git_repo / ".git" / "worktrees" / worktree.name
+    cli = GitCli(repo_dir=worktree)
+    before = cli.fingerprint()
+
+    def no_git(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no debe ejecutarse git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    targets = [
+        git_repo / ".git" / "config",
+        git_repo / ".git" / "hooks" / "post-commit",
+        git_repo / ".git" / "info" / "attributes",
+        own / "config.worktree",
+        own / "commondir",
+        worktree / ".git",
+    ]
+    for target in targets:
+        target.parent.mkdir(exist_ok=True)
+        original = target.read_bytes() if target.exists() else None
+        target.write_bytes((original or b"") + b"\n# x\n")
+        assert cli.fingerprint() != before, target
+        if original is None:
+            target.unlink()
+        else:
+            target.write_bytes(original)
+        assert cli.fingerprint() == before, target
+
+
+def test_restore_in_a_linked_worktree_brings_back_the_common_directory(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    worktree = _linked_worktree(git_repo, tmp_path)
+    cli = GitCli(repo_dir=worktree)
+    config = git_repo / ".git" / "config"
+    original = config.read_bytes()
+    pin = cli.pin()
+    config.write_text("[core]\n\tfsmonitor = /x\n", encoding="utf-8")
+    hook = git_repo / ".git" / "hooks" / "post-commit"
+    hook.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    changed = cli.restore(pin)
+
+    assert sorted(changed) == [".git/config", ".git/hooks/post-commit"]
+    assert config.read_bytes() == original
+    assert not hook.exists()
+    assert cli.restore(pin) == []
+
+
+def test_restore_follows_the_pointers_it_put_back(git_repo: Path, tmp_path: Path) -> None:
+    """A redirected `.git` or `commondir` must not decide where the rest is restored."""
+    worktree = _linked_worktree(git_repo, tmp_path)
+    cli = GitCli(repo_dir=worktree)
+    commondir = git_repo / ".git" / "worktrees" / worktree.name / "commondir"
+    original = commondir.read_bytes()
+    pin = cli.pin()
+    decoy = tmp_path / "señuelo"
+    (decoy / "hooks").mkdir(parents=True)
+    commondir.write_text(f"{decoy}\n", encoding="utf-8")
+    config = git_repo / ".git" / "config"
+    config.write_text("[core]\n\tfsmonitor = /x\n", encoding="utf-8")
+
+    changed = cli.restore(pin)
+
+    assert ".git/commondir" in changed
+    assert ".git/config" in changed
+    assert commondir.read_bytes() == original
+    assert b"fsmonitor" not in config.read_bytes()
+    assert not (decoy / "config").exists()
+
+
+def test_a_normal_checkout_keeps_the_fingerprint_it_had(git_repo: Path) -> None:
+    """Same files, same names: a checkout that isn't a linked worktree hashes as in 0.2.0."""
+    git_dir = git_repo / ".git"
+    files = {"HEAD": git_dir / "HEAD", "config": git_dir / "config"}
+    for directory in ("hooks", "info"):
+        for path in (git_dir / directory).rglob("*"):
+            files[path.relative_to(git_dir).as_posix()] = path
+    digest = hashlib.sha256()
+    for name, path in sorted(files.items()):
+        if path.is_file():
+            digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+
+    assert GitCli(repo_dir=git_repo).fingerprint() == f"sha256:{digest.hexdigest()}"
+
+
+def test_each_worktree_exports_through_its_own_ref(git_repo: Path, tmp_path: Path) -> None:
+    """Two runs in two worktrees must not move a ref they share."""
+    worktree = _linked_worktree(git_repo, tmp_path)
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "w"], cwd=worktree, check=True)
+    main, linked = GitCli(repo_dir=git_repo), GitCli(repo_dir=worktree)
+
+    main.export_tree("HEAD", tmp_path / "desde-main")
+    linked.export_tree("HEAD", tmp_path / "desde-enlazado")
+
+    shared = subprocess.run(
+        [GIT_BIN, "for-each-ref", "refs/lictor/"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert shared.stdout == ""
+    assert main._run_git(["rev-parse", "refs/worktree/lictor/verified"]).stdout.strip() == (
+        main.get_head_sha()
+    )
+    assert linked._run_git(["rev-parse", "refs/worktree/lictor/verified"]).stdout.strip() == (
+        linked.get_head_sha()
+    )
+    assert main.get_head_sha() != linked.get_head_sha()
