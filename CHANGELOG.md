@@ -26,6 +26,17 @@ en su significado se anota en «Cambiado».
     nunca puede estar en el directorio temporal: un reinicio borraría las ejecuciones a medias.
   - Dentro de un worktree enlazado, creado a mano o por otra herramienta, `run` trabaja en él tal
     cual.
+- **`lictor retire <nombre>`** retira el worktree de una ejecución después de integrar su rama.
+  Se niega con cambios sin confirmar o con una ejecución que se puede reanudar, y nunca borra la
+  rama sin preguntar: con `--delete-branch`, o si contestas que sí en una terminal, y solo si ya
+  está integrada (`git branch -d`).
+- **`lictor status --branch <nombre>` y `lictor report --branch <nombre>`** muestran el estado y
+  regeneran el informe de esa ejecución desde tu checkout.
+
+### Quitado
+
+- **La regla «no hagas commits durante el run»** desaparece del README y de la skill: la ejecución
+  trabaja en su propio worktree. La guía rápida acaba integrando la rama `lictor/…`.
 
 ### Cambiado
 

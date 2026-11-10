@@ -87,25 +87,30 @@ ejecutar, y el run lo salta.
      `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
    - Los `controls` son los del perfil cuando se hizo `init`. No des por hecho cómo se actualizan
      si el perfil cambia en otra versión de Lictor.
-2. Pide a la persona que haga el commit: Lictor parte de un árbol limpio. Conviene commitear
-   también `.claude/skills/lictor/`: el esbozo lo comparte el equipo y el agente de Lictor no lo
-   carga.
+2. Pide a la persona que haga el commit: el run parte del último commit, y lo que no esté
+   confirmado no entra. Conviene commitear también `.claude/skills/lictor/`: el esbozo lo comparte
+   el equipo y el agente de Lictor no lo carga.
 3. `lictor doctor` comprueba la configuración, el repositorio, la identidad git, el ejecutor, los
    comandos, el entorno de verificación y los escenarios. Antes del commit marca con ✗ el
    repositorio y el árbol, y no construye el entorno, pero los escenarios sí los valida.
    `lictor check` ejecuta los controles en un clon limpio, como haría un run.
 4. Si ya hay código que cumple escenarios: `lictor register <ID>…`, antes del primer run y
    lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
-5. Dale el comando: `lictor run`. Mientras dure, nadie hace commits en ese checkout.
-   `lictor status`, en otra terminal, dice por dónde va.
+5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`. Trabaja en un worktree y una
+   rama propios (`lictor/<nombre>`): la persona puede seguir trabajando y haciendo commits en su
+   checkout. `lictor status`, en otra terminal, dice por dónde va y dónde está el worktree. Al
+   acabar, la persona integra la rama (un merge o una pull request) y después
+   `lictor retire <nombre>` retira el worktree.
 
 ## 4. Diagnosticar
 
 - `lictor status`: el escenario y el intento en curso, los verdes, las llamadas y el coste.
-- `.lictor/report.md`: el informe del último run; el de cada run queda también en
-  `.lictor/runs/<run_id>/report.md`, para compararlos. Las secciones que más dicen son «Verificaciones»
-  (qué puerta paró cada intento), «Intentos fallidos por nivel», «Cuarentenas», «Drivers
-  rechazados», «Denegaciones» (órdenes que el agente intentó y no podía), «Verdes colaterales» y
+- `.lictor/report.md`, en el worktree de la ejecución (`lictor status` lo dice, o
+  `lictor report --branch <nombre>` desde el checkout): el informe del último run; el de cada run
+  queda también en `.lictor/runs/<run_id>/report.md`, para compararlos. Las secciones que más
+  dicen son «Verificaciones» (qué puerta paró cada intento), «Intentos fallidos por nivel»,
+  «Cuarentenas», «Drivers rechazados», «Denegaciones» (órdenes que el agente intentó y no podía),
+  «Verdes colaterales» y
   «Verdes registrados a mano».
 - Si hace falta más: `.lictor/runs/<run_id>/<escenario o driver>/`, con el prompt de cada intento
   (`NNN-implement.prompt.md`), la salida cruda y, por verificación, `NNN-verify/error.txt`.
@@ -113,8 +118,8 @@ ejecutar, y el run lo salta.
 
 | Código | Significa | Qué hacer |
 |---|---|---|
-| 0 | Todo en verde | Revisar con la persona el código y el driver que quedaron |
-| 10 | Hay que cambiar algo del proyecto | Leer el motivo, que el run imprime: árbol sucio, configuración, un feature inválido, el sello alterado, una ruta que solo puede tocar una persona, un escenario nuevo que pasa con un driver nuevo (un test vacío, o código que ya cumple: `lictor register`), un escenario reabierto que sigue pasando (solo la persona sabe si el cambio fue de redacción) |
+| 0 | Todo en verde | Revisar con la persona el código y el driver de la rama `lictor/<nombre>`, y que la integre |
+| 10 | Hay que cambiar algo del proyecto | Leer el motivo, que el run imprime: árbol sucio en el worktree, una rama que ya existe, varias ejecuciones que reanudar sin `--branch`, configuración, un feature inválido, el sello alterado, una ruta que solo puede tocar una persona, un escenario nuevo que pasa con un driver nuevo (un test vacío, o código que ya cumple: `lictor register`), un escenario reabierto que sigue pasando (solo la persona sabe si el cambio fue de redacción) |
 | 11 | El agente declaró un conflicto de especificación | Leer el motivo en el informe y revisar los escenarios con la persona |
 | 30 | Cuarentena tras agotar los intentos | «Intentos fallidos por nivel» y `error.txt`; el motivo `driver_sospechoso` apunta al driver |
 | 40 | El entorno no deja ejecutar | `lictor doctor` dice qué; no es culpa de ningún escenario |
