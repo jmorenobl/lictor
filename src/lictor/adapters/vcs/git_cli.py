@@ -169,6 +169,18 @@ class GitCli(Vcs, Worktrees):
                 f"{added.stderr.strip()}"
             )
 
+    def remove_worktree(self, path: Path) -> None:
+        """Never `--force`: what git would refuse to lose isn't Lictor's to throw away."""
+        removed = self._run_git(["worktree", "remove", str(path)], check=False)
+        if removed.returncode != 0:
+            raise CandidateError(f"No se pudo retirar el worktree {path}: {removed.stderr.strip()}")
+
+    def delete_branch(self, branch: str) -> None:
+        """`-d`, never `-D`: a branch that isn't integrated stays."""
+        deleted = self._run_git(["branch", "-d", branch], check=False)
+        if deleted.returncode != 0:
+            raise CandidateError(f"No se ha borrado la rama {branch}: {deleted.stderr.strip()}")
+
     def fingerprint(self) -> str:
         """Hash the control files, read as bytes: no git command runs here."""
         digest = hashlib.sha256()

@@ -221,7 +221,7 @@ Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.
 La versión de Python de `hints` sale del `requires-python` de `pyproject.toml`. Revisa `hints` antes del commit (ver «Qué va en `hints`», más abajo).
 
 ```bash
-git add -A && git commit -m "chore: proyecto inicial"   # Lictor parte de un árbol limpio
+git add -A && git commit -m "chore: proyecto inicial"   # la ejecución parte del último commit
 
 # Comprueba lo mismo que `lictor run` antes de llamar al agente, entorno de verificación incluido
 lictor doctor
@@ -274,15 +274,17 @@ El fichero es solo un esbozo: al cargarse, Claude Code ejecuta `lictor skill --s
 ### 3️⃣ Ejecuta el ciclo autónomo y consulta el informe
 
 ```bash
-# Implementa y verifica todos los escenarios de forma determinista
-lictor run
+# Implementa y verifica todos los escenarios, en un worktree y una rama propios
+lictor run --branch iva
 
-# Consulta el estado actual de la ejecución, también desde otra terminal mientras trabaja
+# Consulta el estado de cada ejecución, también desde otra terminal mientras trabaja
 lictor status
 
-# Regenera y muestra la ruta del informe en Markdown (.lictor/report.md)
-lictor report
+# Regenera y muestra la ruta del informe en Markdown de una ejecución
+lictor report --branch iva
 ```
+
+`lictor run` no trabaja en tu checkout: crea un worktree desde el último commit en `~/.lictor/worktrees/<repo>-<hash>/iva`, con la rama `lictor/iva`, y ejecuta allí todo el run. Puedes seguir trabajando y haciendo commits en tu checkout mientras corre. Lo que no hayas confirmado no entra, y `run` te lo avisa. Sin `--branch`, la rama se llama como la ejecución (`lictor/20261110-101500-3f9c`). Un `lictor run` posterior desde tu checkout reanuda la que quedó a medias; si hay varias, pide `--branch`, y `--new` empieza otra a su lado, así que pueden correr varias a la vez. Para usar otro sitio en esta máquina, apunta `LICTOR_HOME` a otro directorio, nunca dentro del temporal. Si lanzas `lictor run` dentro de un worktree enlazado que ya tengas, trabaja en él tal cual.
 
 Mientras trabaja, `lictor run` cuenta cada paso en stderr, y stdout queda para el resultado. Con `--quiet` no cuenta nada:
 
@@ -300,7 +302,7 @@ IVA-003: verde, intento 1, 31 s, 0,02 $.
 Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 ```
 
-`lictor status` dice en qué escenario e intento está, cuántos verdes lleva y cómo llegaron (implementados, colaterales, de antes), y las llamadas y el coste acumulados.
+`lictor status` dice, para cada ejecución con su rama, en qué escenario e intento está, cuántos verdes lleva y cómo llegaron (implementados, colaterales, de antes), y las llamadas y el coste acumulados. El informe y la evidencia están en el `.lictor/` del worktree.
 
 <details>
 <summary>📄 <strong>Ver ejemplo de informe generado en <code>.lictor/report.md</code></strong></summary>
@@ -355,6 +357,17 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 
 </details>
 
+### 4️⃣ Integra la rama `lictor/…`
+
+El resultado es la rama de la ejecución, ya en tu repositorio, y el motivo final te lo recuerda: «El resultado está en la rama lictor/iva: intégralo con `git merge lictor/iva` o con una pull request». Lictor nunca integra en tu rama. Revisa el código y el driver, y después:
+
+```bash
+git merge lictor/iva                  # o abre una pull request desde lictor/iva
+lictor retire iva --delete-branch     # retira el worktree y borra la rama, ya integrada
+```
+
+Si tu rama avanzó mientras corría la ejecución, el merge junta las dos: vuelve a verificar antes de dar el resultado por bueno (`lictor check`).
+
 ---
 
 ## 🛠️ Referencia de la CLI
@@ -365,12 +378,13 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 | :--- | :--- | :--- |
 | `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f`<br/>`--no-skill` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado), actualiza `.gitignore` e instala el esbozo de la skill de Lictor para Claude Code (salvo con `--no-skill`). |
 | `lictor skill` | `--show` | Instala o restaura el esbozo de la skill en `.claude/skills/lictor/SKILL.md`, sin tocar `lictor.json`. Con `--show` imprime la skill completa de la versión instalada, sin escribir nada. |
-| `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, árbol `git` limpio, identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
+| `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, el árbol `git` (en tu checkout, lo sin confirmar es un aviso: no entra en la ejecución), identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
 | `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
 | `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |
-| `lictor run` | `--new`<br/>`--quiet, -q` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios. Cuenta cada paso en stderr salvo con `--quiet`. |
-| `lictor status` | `--json` | Muestra el estado de la ejecución actual a partir del checkpoint SQLite y la bitácora de eventos: escenario e intento en curso, verdes implementados y colaterales, llamadas y coste. Se puede lanzar durante una ejecución. |
-| `lictor report` | `--run <run_id>` | Regenera el informe `.lictor/report.md` a partir de `.lictor/journal.jsonl`, deja una copia en `.lictor/runs/<run_id>/report.md` y muestra su ruta. |
+| `lictor run` | `--branch <nombre>`<br/>`--new`<br/>`--quiet, -q` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios, en un worktree y una rama propios (`lictor/<nombre>`) creados desde el último commit. Desde tu checkout reanuda la ejecución a medias, o la de `--branch`; `--new` empieza otra. Cuenta cada paso en stderr salvo con `--quiet`. |
+| `lictor status` | `--branch <nombre>`<br/>`--json` | Muestra el estado de cada ejecución lanzada desde tu checkout, con su rama y su worktree, a partir del checkpoint SQLite y la bitácora de eventos: escenario e intento en curso, verdes implementados y colaterales, llamadas y coste. Se puede lanzar durante una ejecución. |
+| `lictor report` | `--branch <nombre>`<br/>`--run <run_id>` | Regenera el informe `.lictor/report.md` de una ejecución a partir de su `.lictor/journal.jsonl`, deja una copia en `.lictor/runs/<run_id>/report.md` y muestra su ruta. |
+| `lictor retire` | `<nombre>`<br/>`--delete-branch` | Retira el worktree de la ejecución de `lictor/<nombre>` después de integrarla. Se niega si tiene cambios sin confirmar o una ejecución que se puede reanudar. Nunca borra la rama sin que lo pidas, y con `--delete-branch` solo si ya está integrada (`git branch -d`). |
 
 ### Códigos de Salida Estables
 
@@ -475,9 +489,9 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **`prepare` tiene su propio entorno.** La red y las credenciales pasan por `prepare_inherit`, que los comandos no ven. También usa un `HOME` vacío: el intérprete se pregunta a `uv` (`prepare_ask`) y `~/.netrc` se le indica por `NETRC` (`prepare_home_files`). Usa `--no-cache`, porque una entrada envenenada de la caché compartida de `uv` llegaba al entorno y el hash la daba por buena. A cambio, cada construcción descarga contra los hashes de `uv.lock`, una vez por ejecución: sin red, exit 40. Un proyecto que necesite otra variable en `prepare`, como `PYENV_ROOT`, la declara en `verification.prepare_inherit`.
 
-**Tu árbol de trabajo es tuyo.** El agente no trabaja en él, y Lictor solo lo toca al guardar un commit verde, con un *fast-forward*: tus ediciones sobreviven y, si un commit pisaría una, se para con exit 10 sin perder nada. `lictor run` lo reanuda cuando lo resuelvas, sin repetir el trabajo verificado. El agente recibe una copia de HEAD sin ficheros ignorados, así que no ve un `.env` ni datos locales; tampoco los verá la verificación.
+**Tu árbol de trabajo es tuyo.** La ejecución trabaja en su propio worktree y su propia rama, y Lictor nunca integra en la tuya: eso lo haces tú, con un merge o una pull request. Dentro del worktree, Lictor solo avanza la rama al guardar un commit verde, con un *fast-forward*. El agente recibe una copia de HEAD sin ficheros ignorados, así que no ve un `.env` ni datos locales; tampoco los verá la verificación.
 
-**Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. La única excepción al HEAD registrado es el commit vacío con el que el rojo registra verdes sin agente, si la ejecución murió justo después: se acepta solo con el rojo pendiente, sobre la cabeza registrada y con su mismo árbol, y el rojo repetido vuelve a probar cada verde.
+**Reanudar comprueba qué pasó mientras tanto.** `lictor run` compara el hash de `lictor.json` combinado con su perfil, incluido el contenido de `files`, y el HEAD, el `seal.json` y los ficheros de control de `.git` que registró la ejecución. También rechaza reanudar con cambios sin confirmar en el worktree, sin tocarlos. En todos los casos sale con exit 10 y dice qué hacer. Un cambio solo de formato en `lictor.json` no cuenta. La única excepción al HEAD registrado es el commit vacío con el que el rojo registra verdes sin agente, si la ejecución murió justo después: se acepta solo con el rojo pendiente, sobre la cabeza registrada y con su mismo árbol, y el rojo repetido vuelve a probar cada verde.
 
 **Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` aplica la misma regla a lo que verifica. Así un proyecto sin `tests/unit` no bloquea al agente.
 

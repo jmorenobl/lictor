@@ -73,9 +73,19 @@ def read_run_index(main_root: Path) -> list[RunEntry]:
 def add_to_run_index(main_root: Path, entry: RunEntry) -> None:
     """Record a run before its worktree exists, so a kill in between leaves it findable."""
     runs = [run for run in read_run_index(main_root) if run.branch != entry.branch]
+    _write_index(main_root, [*runs, entry])
+
+
+def _write_index(main_root: Path, runs: list[RunEntry]) -> None:
     path = _index_path(main_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f"{INDEX_FILE}.tmp")
-    payload = {"version": _INDEX_VERSION, "runs": [asdict(run) for run in [*runs, entry]]}
+    payload = {"version": _INDEX_VERSION, "runs": [asdict(run) for run in runs]}
     partial.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     partial.replace(path)
+
+
+def remove_from_run_index(main_root: Path, branch: str) -> None:
+    """Forget a run whose worktree was retired."""
+    runs = [run for run in read_run_index(main_root) if run.branch != branch]
+    _write_index(main_root, runs)

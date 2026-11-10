@@ -11,6 +11,7 @@ from lictor.application.run_index import (
     add_to_run_index,
     lictor_home,
     read_run_index,
+    remove_from_run_index,
     run_worktree,
 )
 from lictor.domain.errors import EnvironmentUnavailableError
@@ -71,3 +72,14 @@ def test_a_missing_or_damaged_index_points_nowhere(tmp_path: Path, content: str 
         (tmp_path / ".lictor" / "worktrees.json").write_text(content, encoding="utf-8")
 
     assert read_run_index(tmp_path) == []
+
+
+def test_a_retired_run_leaves_the_index(tmp_path: Path) -> None:
+    first, second = RunEntry("lictor/a", "/w/a", "R1"), RunEntry("lictor/b", "/w/b", "R2")
+    add_to_run_index(tmp_path, first)
+    add_to_run_index(tmp_path, second)
+
+    remove_from_run_index(tmp_path, "lictor/a")
+    remove_from_run_index(tmp_path, "lictor/c")
+
+    assert read_run_index(tmp_path) == [second]

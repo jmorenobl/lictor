@@ -30,6 +30,7 @@ from lictor.application.run_index import (
     RunEntry,
     add_to_run_index,
     read_run_index,
+    remove_from_run_index,
     run_worktree,
 )
 from lictor.application.skill import SKILL_FILE, install_skill_stub
@@ -47,7 +48,7 @@ from lictor.bootstrap import (
     observed_journal,
     skill_content,
 )
-from lictor.domain.errors import ExitCode, LictorError, RunInProgressError
+from lictor.domain.errors import CandidateError, ExitCode, LictorError, RunInProgressError
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
 from lictor.domain.rules import (
@@ -982,12 +983,16 @@ def _confirmed() -> bool:
 
 
 @app.command()
-def status(
-    as_json: Annotated[
+def retire(
+    name: Annotated[
+        str,
+        typer.Argument(help="Nombre de la ejecución: la de la rama lictor/<nombre>"),
+    ],
+    delete_branch: Annotated[
         bool,
         typer.Option(
-            "--json",
-            help="Mostrar estado en formato JSON",
+            "--delete-branch",
+            help="Borrar también la rama, solo si ya está integrada (git branch -d)",
         ),
     ] = False,
     cwd: Annotated[
@@ -999,10 +1004,139 @@ def status(
         ),
     ] = DEFAULT_CWD,
 ) -> None:
-    """Muestra el estado de la ejecución actual a partir del checkpoint y la bitácora."""
+    """Retira el worktree de una ejecución, después de integrar su rama.
+
+    Nunca borra la rama sin que lo pidas, y se niega si el worktree tiene cambios sin confirmar o
+    una ejecución que se puede reanudar.
+    """
+
+    def _execute() -> int:
+        main_root = cwd.resolve()
+        found = _indexed_run(main_root, name)
+        if isinstance(found, int):
+            return found
+        with exclusive_run(main_root, "lictor retire"):
+            refused = _remove_run_worktree(found, name)
+            if refused is not None:
+                return refused
+            remove_from_run_index(main_root, found.branch)
+        return _retire_branch(main_root, found.branch, delete=delete_branch)
+
+    _safe_run(_execute)
+
+
+def _remove_run_worktree(run: RunEntry, name: str) -> int | None:
+    """Take the worktree away, holding it, unless something in it could still be lost."""
+    worktree = Path(run.worktree)
+    if not worktree.is_dir():
+        return None
+    with exclusive_run(worktree, "lictor retire"):
+        if _can_go_on(run):
+            typer.echo(
+                f"Error: la ejecución de la rama {run.branch} se puede reanudar. No se ha tocado "
+                f"nada: termínala con `lictor run --branch {name}` antes de retirarla.",
+                err=True,
+            )
+            return int(ExitCode.PRECONDITION)
+        repository = checkout_repository(worktree)
+        changed = repository.status()
+        if changed:
+            typer.echo(
+                f"Error: el worktree {worktree} tiene cambios sin confirmar: "
+                f"{', '.join(changed)}. No se ha tocado nada: confírmalos o descártalos allí y "
+                "vuelve a lanzar.",
+                err=True,
+            )
+            return int(ExitCode.PRECONDITION)
+        repository.remove_worktree(worktree)
+    typer.echo(f"Worktree retirado: {worktree}")
+    return None
+
+
+def _retire_branch(main_root: Path, branch: str, *, delete: bool) -> int:
+    """Delete the branch only when asked, and only if git sees it integrated."""
+    asked = delete or (
+        sys.stdin.isatty() and typer.confirm(f"¿Borro también la rama {branch}?", default=False)
+    )
+    if not asked:
+        typer.echo(f"La rama {branch} se queda. Cuando ya no la quieras: `git branch -d {branch}`.")
+        return 0
+    try:
+        checkout_repository(main_root).delete_branch(branch)
+    except CandidateError as err:
+        typer.echo(
+            f"Error: {err}. Intégrala primero y bórrala con `git branch -d {branch}`.", err=True
+        )
+        return int(ExitCode.PRECONDITION)
+    typer.echo(f"Rama {branch} borrada.")
+    return 0
+
+
+def _indexed_run(main_root: Path, name: str) -> RunEntry | int:
+    """Find, in the index of the person's checkout, the run `--branch <name>` names."""
+    if checkout_repository(main_root).is_linked_worktree():
+        typer.echo(
+            "Error: esto es un worktree enlazado. Lánzalo desde el checkout principal, donde "
+            "está el índice de las ejecuciones.",
+            err=True,
+        )
+        return int(ExitCode.PRECONDITION)
+    problem = branch_name_problem(name)
+    if problem is not None:
+        typer.echo(f"Error: {problem}", err=True)
+        return int(ExitCode.PRECONDITION)
+    branch = run_branch(name, "")
+    runs = read_run_index(main_root)
+    for run in runs:
+        if run.branch == branch:
+            return run
+    known = ", ".join(run.branch for run in runs) or "ninguna"
+    typer.echo(
+        f"Error: este checkout no ha lanzado ninguna ejecución en la rama {branch}. "
+        f"Las que tiene: {known}.",
+        err=True,
+    )
+    return int(ExitCode.PRECONDITION)
+
+
+@app.command()
+def status(
+    as_json: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Mostrar estado en formato JSON",
+        ),
+    ] = False,
+    branch: Annotated[
+        str | None,
+        typer.Option(
+            "--branch",
+            help="La ejecución de la rama lictor/<nombre>, lanzada desde este checkout",
+        ),
+    ] = None,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Muestra el estado de las ejecuciones a partir del checkpoint y la bitácora.
+
+    Desde tu checkout, el de cada ejecución que lanzaste, con su rama; con --branch, solo esa.
+    """
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
+        if branch is not None:
+            found = _indexed_run(resolved_cwd, branch)
+            if isinstance(found, int):
+                return found
+            _show_indexed_runs([found], as_json=as_json)
+            return 0
         runs = _indexed_runs(resolved_cwd)
         if runs:
             _show_indexed_runs(runs, as_json=as_json)
@@ -1115,6 +1249,13 @@ def report(
             help="Identificador de la ejecución (por defecto la actual)",
         ),
     ] = None,
+    branch: Annotated[
+        str | None,
+        typer.Option(
+            "--branch",
+            help="La ejecución de la rama lictor/<nombre>, lanzada desde este checkout",
+        ),
+    ] = None,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -1128,9 +1269,14 @@ def report(
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
+        target_run = run_id
+        if branch is not None:
+            found = _indexed_run(resolved_cwd, branch)
+            if isinstance(found, int):
+                return found
+            resolved_cwd, target_run = Path(found.worktree), target_run or found.run_id
         lictor_dir = resolved_cwd / ".lictor"
 
-        target_run = run_id
         if not target_run:
             current_run_file = lictor_dir / "current_run"
             if current_run_file.is_file():
