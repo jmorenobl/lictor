@@ -10,7 +10,6 @@ import json
 import os
 import stat
 import sys
-import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -22,6 +21,7 @@ from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.application.ports import Executor
 from lictor.domain.model import AgentResult, AgentTask, CommandOutput, PermissionDenial, Tokens
+from tests.conftest import Detached
 
 CAPTURE = Path(__file__).resolve().parents[1] / "fixtures" / "claude_stream.jsonl"
 CAPTURE_2_1_317 = CAPTURE.with_name("claude_stream_2_1_317.jsonl")
@@ -507,24 +507,25 @@ class TestClaudeCLIRun:
 
 
 ORPHAN_CLAUDE = """#!{python}
-import os, subprocess, sys
-subprocess.Popen([sys.executable, "-c", "import time; time.sleep(6)"], start_new_session=True)
-os.write(1, open({capture!r}, "rb").read().replace(b'"result":"', b'"result":"\\xff', 1))
+import os
+{orphan}os.write(1, open({capture!r}, "rb").read().replace(b'"result":"', b'"result":"\\xff', 1))
 """
 
 
 def test_a_real_process_with_bad_bytes_and_an_orphan_does_not_hang_the_call(
-    tmp_path: Path,
+    tmp_path: Path, detached: Detached
 ) -> None:
     binary = tmp_path / "claude.py"
-    binary.write_text(ORPHAN_CLAUDE.format(python=sys.executable, capture=str(CAPTURE)))
+    script = ORPHAN_CLAUDE.format(
+        python=sys.executable, orphan=detached.code("huérfano"), capture=str(CAPTURE)
+    )
+    binary.write_text(script)
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     task = _sample_task(tmp_path, tmp_path / "raw.json")
-    started = time.monotonic()
 
     res = ClaudeCLI(SubprocessRunner(), cli_binary=str(binary)).run(task)
 
-    assert time.monotonic() - started < 4
+    assert detached.alive("huérfano"), "la llamada esperó al huérfano que sujetaba stdout"
     assert res.status == "ok"
     assert res.text.startswith("\ufffd")
     assert res.cli_version == "2.1.316"
