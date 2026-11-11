@@ -16,6 +16,7 @@ from lictor.adapters.runner.subprocess_runner import (
     SubprocessRunner,
 )
 from lictor.domain.model import CommandOutput
+from tests.conftest import DETACHED_LIFE_S, Detached
 
 
 def test_subprocess_runner_success(tmp_path: Path) -> None:
@@ -70,15 +71,17 @@ def test_subprocess_runner_nonzero_exit(tmp_path: Path) -> None:
     assert out.stderr == "failed"
 
 
-def test_subprocess_runner_timeout(tmp_path: Path) -> None:
-    runner = SubprocessRunner()
-    # Sleep longer than timeout
-    cmd = [sys.executable, "-c", "import time; time.sleep(5)"]
-    start = time.monotonic()
-    out = runner.run(cmd, cwd=tmp_path, timeout_s=1)
-    duration = time.monotonic() - start
+def _sleeps_then_marks(marker: Path) -> str:
+    """A command that, unless it is killed, outlives any wait under test and leaves `marker`."""
+    return f"import time; time.sleep({DETACHED_LIFE_S}); open({str(marker)!r}, 'w')"
 
-    assert duration < 3.0  # Killed promptly
+
+def test_subprocess_runner_timeout(tmp_path: Path) -> None:
+    marker = tmp_path / "terminó"
+    cmd = [sys.executable, "-c", _sleeps_then_marks(marker)]
+    out = SubprocessRunner().run(cmd, cwd=tmp_path, timeout_s=1)
+
+    assert not marker.exists(), "debía matarla al vencer el plazo, no esperar a que acabe"
     assert out.returncode != 0
     assert out.timed_out is True
     assert "Sin tiempo tras 1 s" in out.stderr
@@ -119,20 +122,13 @@ def test_subprocess_runner_replaces_bytes_that_are_not_utf8(tmp_path: Path) -> N
     assert out.timed_out is False
 
 
-ORPHAN = (
-    "import subprocess, sys\n"
-    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(6)'],"
-    " start_new_session=True)\n"
-    "print('hecho', flush=True)\n"
-    "sys.exit(3)\n"
-)
+def test_subprocess_runner_returns_when_the_command_ends_despite_an_orphan(
+    tmp_path: Path, detached: Detached
+) -> None:
+    orphan = detached.code("huérfano") + "print('hecho', flush=True)\nsys.exit(3)\n"
+    out = SubprocessRunner().run([sys.executable, "-c", orphan], cwd=tmp_path, timeout_s=600)
 
-
-def test_subprocess_runner_returns_when_the_command_ends_despite_an_orphan(tmp_path: Path) -> None:
-    started = time.monotonic()
-    out = SubprocessRunner().run([sys.executable, "-c", ORPHAN], cwd=tmp_path, timeout_s=30)
-
-    assert time.monotonic() - started < 2.5
+    assert detached.alive("huérfano"), "esperó al huérfano que sujetaba las tuberías"
     assert (out.returncode, out.stdout.strip(), out.timed_out) == (3, "hecho", False)
     assert LEFT_OPEN in out.stderr
 
@@ -149,19 +145,18 @@ def test_subprocess_runner_kills_the_group_when_the_command_ends(tmp_path: Path)
 
 def test_subprocess_runner_gives_the_command_no_input(tmp_path: Path) -> None:
     code = "import sys; print(repr(sys.stdin.read()))"
-    started = time.monotonic()
-    out = SubprocessRunner().run([sys.executable, "-c", code], cwd=tmp_path, timeout_s=5)
+    out = SubprocessRunner().run([sys.executable, "-c", code], cwd=tmp_path, timeout_s=60)
 
-    assert time.monotonic() - started < 2
+    assert out.timed_out is False, "con una entrada heredada, read() se queda esperando"
     assert (out.returncode, out.stdout.strip()) == (0, "''")
 
 
 def test_subprocess_runner_honours_the_timeout_after_the_pipes_close(tmp_path: Path) -> None:
-    code = "import os, time; os.close(1); os.close(2); time.sleep(5)"
-    started = time.monotonic()
+    marker = tmp_path / "terminó"
+    code = f"import os; os.close(1); os.close(2); {_sleeps_then_marks(marker)}"
     out = SubprocessRunner().run([sys.executable, "-c", code], cwd=tmp_path, timeout_s=1)
 
-    assert time.monotonic() - started < 2.5
+    assert not marker.exists(), "con las tuberías cerradas, el plazo debía seguir valiendo"
     assert out.timed_out is True
 
 

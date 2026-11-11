@@ -13,6 +13,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -72,6 +73,44 @@ POINTS = [
         if (point := f"{node}:{moment}") not in NOT_A_MOMENT
     ),
 ]
+# Each class is one recovery mechanism: what the kill leaves and what the resume has to do with it.
+# The first point of each one runs in every PR; the rest only in the exhaustive matrix (nightly and
+# on a tag), where every point still runs.
+KILL_CLASSES: dict[str, tuple[str, ...]] = {
+    # The index points to a worktree where nothing started: the resume takes it as pending.
+    "índice sin ejecución": ("worktree:durante",),
+    # The environment may be built and the anchor isn't recorded: preflight runs again.
+    "preflight sin ancla": ("preflight:despues", "preflight:antes", "preflight:durante"),
+    # Nothing outside the checkpoint changed since the last step: the node repeats.
+    "repetir desde el checkpoint": (
+        "commit:antes",
+        "load_spec:antes",
+        "load_spec:durante",
+        "load_spec:despues",
+        "build_driver:antes",
+        "red_check:antes",
+        "pick_next:antes",
+        "pick_next:despues",
+        "implement:antes",
+        "verify:antes",
+    ),
+    # The driver is in the state and not sealed: the call repeats from HEAD.
+    "driver sin sellar": ("build_driver:despues", "build_driver:durante"),
+    # The agent worked in a copy outside the project: the copy goes and the call repeats.
+    "llamada al agente": ("implement:durante", "implement:despues"),
+    # A command in the clean clone outlives Lictor: the clone goes and verification repeats.
+    "verificación a medias": ("verify:durante", "red_check:durante"),
+    # Sealed, with the branch moved, and the checkpoint doesn't know.
+    "sello sin registrar": ("red_check:despues",),
+    # A verified candidate outside the branch that the checkpoint doesn't know.
+    "candidato sin registrar": ("verify:despues",),
+    # The branch moved to the candidate and the checkpoint doesn't know.
+    "rama movida sin registrar": ("commit:durante", "commit:despues"),
+    "cuarentena": ("quarantine:durante", "quarantine:antes", "quarantine:despues"),
+    "pausa": ("pause:durante", "pause:antes"),
+    "informe": ("report:durante", "report:antes", "report:despues"),
+}
+REPRESENTATIVES = frozenset(points[0] for points in KILL_CLASSES.values())
 
 
 @dataclass(frozen=True)
@@ -166,7 +205,14 @@ def _control_killed_midway(marker: Path) -> dict[str, str]:
     }
 
 
-@pytest.mark.parametrize("point", POINTS)
+def _matrix() -> list[Any]:
+    return [
+        pytest.param(point, marks=() if point in REPRESENTATIVES else pytest.mark.exhaustive)
+        for point in POINTS
+    ]
+
+
+@pytest.mark.parametrize("point", _matrix())
 def test_kill_9_at_every_node_loses_nothing_and_invents_nothing(
     make_project: ProjectFactory, tmp_path: Path, point: str
 ) -> None:
@@ -296,3 +342,18 @@ def test_a_second_run_is_refused_without_touching_the_first(
     assert green_ids(worktree) == ALL_GREEN
     assert false_greens(worktree) == []
     assert not events_of(worktree, "state.tampered")
+
+
+def test_every_point_has_a_class_and_every_class_a_cell_in_the_pr() -> None:
+    """The PR runs one cell per recovery mechanism; a class with no cell there tests nothing."""
+    classified = [point for points in KILL_CLASSES.values() for point in points]
+
+    assert sorted(classified) == sorted(POINTS), "cada punto en una sola clase"
+    for name, points in KILL_CLASSES.items():
+        assert points, f"la clase {name} no tiene celda"
+        assert points[0] in REPRESENTATIVES
+    assert len(REPRESENTATIVES) == len(KILL_CLASSES)
+    marks = {param.values[0]: [mark.name for mark in param.marks] for param in _matrix()}
+    assert [p for p, names in marks.items() if "exhaustive" not in names] == [
+        p for p in POINTS if p in REPRESENTATIVES
+    ]
