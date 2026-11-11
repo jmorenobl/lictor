@@ -50,6 +50,7 @@ from lictor.domain.rules import (
     missing_plugin,
     path_within,
     plugin_skip_reason,
+    registration_subject,
     render_full_error,
     routes_rejected,
     suite_crash_reason,
@@ -337,7 +338,7 @@ class VerifyAttempt:
         """
         chained = self.vcs.commit_tree(
             candidate.tree,
-            message=f"test({', '.join(collateral)}): verde colateral",
+            message=registration_subject(collateral, "verde colateral"),
             trailers={
                 "Scenario": list(collateral),
                 "Lictor-Collateral": candidate.sha,

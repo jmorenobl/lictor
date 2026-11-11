@@ -341,6 +341,7 @@ class _GraphNodes:
                 forbidden_paths=self.ctx.forbidden_paths,
                 driver_exempt_paths=self.ctx.driver_exempt_paths,
                 max_driver_attempts=self.ctx.max_driver_attempts,
+                check_commands=self.ctx.check_commands,
                 suppressions=self.ctx.suppressions,
             )
         )

@@ -354,6 +354,17 @@ def collateral_greens(
     return [sid for sid in pending_ids if sid != current and scenario_results.get(sid) == "passed"]
 
 
+def registration_subject(scenario_ids: Sequence[str], what: str) -> str:
+    """Return the subject of a commit that registers scenarios without changing a file.
+
+    One scenario keeps its ID as the scope. Several are counted: the `Scenario:` trailers name
+    each of them, and eleven IDs made a subject of 120 characters (F38).
+    """
+    if len(scenario_ids) == 1:
+        return f"test({scenario_ids[0]}): {what}"
+    return f"test: {what}, {len(scenario_ids)} escenarios"
+
+
 def suspicious_driver(
     failures: Sequence[tuple[str, str] | None], driver_paths: Sequence[str]
 ) -> bool:

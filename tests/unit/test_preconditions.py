@@ -302,3 +302,31 @@ def test_doctor_says_nothing_of_a_project_without_the_skill(tmp_path: Path, bin_
     )
 
     assert "Skill de Lictor" not in [check.name for check in report.checks]
+
+
+def test_without_a_config_what_needs_it_is_skipped_and_the_rest_is_checked(
+    tmp_path: Path,
+) -> None:
+    """F30: with no executor or environment to build, `doctor` still tells everything else."""
+    vcs = MagicMock(spec=Vcs)
+    vcs.has_commits.return_value = True
+    vcs.status.return_value = []
+    vcs.committer_identity.return_value = "Ana <ana@example.com>"
+    use_case = CheckPreconditions(vcs, None, None, tmp_path)
+
+    report = use_case.execute(
+        PreconditionsRequest(run_id="r1", environment="throwaway", config_problem="no carga")
+    )
+
+    assert [(c.name, c.skipped) for c in report.checks] == [
+        ("Configuración", None),
+        ("Repositorio con commits", None),
+        ("Árbol git limpio", None),
+        ("Identidad git", None),
+        ("Ejecutor", "no comprobado: la configuración no carga"),
+        ("Directorio temporal", None),
+        ("Comandos de verificación", "no comprobado: la configuración no carga"),
+        ("Entorno de verificación", "no comprobado: la configuración no carga"),
+    ]
+    assert [(p.kind, p.message) for p in report.problems] == [("config", "no carga")]
+    assert report.cli_version is None

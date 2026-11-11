@@ -117,6 +117,19 @@ def new_run_id() -> str:
     return SystemClock().generate_run_id()
 
 
+def unconfigured_preconditions(project_root: Path) -> tuple[CheckPreconditions, Clock]:
+    """What `doctor` can still check when `lictor.json` doesn't load (F30).
+
+    Without a configuration there is no executor to ask and no environment to build: the
+    repository, git, the features, the skill and the temporary directory don't need either.
+    """
+    resolved_root = project_root.resolve()
+    checks = CheckPreconditions(
+        GitCli(resolved_root), None, None, resolved_root, spec_source=GherkinSource()
+    )
+    return checks, SystemClock()
+
+
 def bootstrap_runtime(
     project_root: Path,
     *,

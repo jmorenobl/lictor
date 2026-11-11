@@ -14,8 +14,9 @@ Reglas:
   {driver_paths}. Se descartan: lo que hay ahí lo cambia solo una persona.
 - Trabajas en una copia sin historial: no hay git ni commits.
 - No añadas supresiones: {suppressions}. El driver queda sellado: si las lleva, se rechaza.
-- Crea y edita archivos solo con las herramientas Edit y Write. Bash es solo para ejecutar las
-  comprobaciones: cualquier otra orden se deniega y te cuesta turnos.
+- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
+- Bash solo admite: {check_commands}. Cualquier otra orden, un intérprete o un script incluidos,
+  se deniega y te cuesta turnos.
 - Cada test debe llevar el ID de su escenario en el nombre.
 - Los escenarios {green_ids} ya funcionan y sus tests deben pasar.
 {reabiertos}

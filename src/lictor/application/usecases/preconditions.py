@@ -22,6 +22,7 @@ from lictor.domain.rules import NO_COMMITS, missing_executables
 from lictor.domain.run_branches import uncommitted_left_out
 
 EnvironmentCheck = Literal["run", "throwaway", "none"]
+UNCONFIGURED = "no comprobado: la configuración no carga"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class PreconditionsRequest:
     skip_reason: str = ""
     features: bool = False
     skill: bool = False
+    # Why the configuration didn't load, for `doctor` to tell it beside everything else (F30).
+    config_problem: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,11 +78,13 @@ class CheckPreconditions:
     `commands` maps a label that completes "el comando …" to each command verification runs.
     `aside` is the environment a throwaway is made from, so that its events stay out of the runs'
     journal; without it, the run's own is used. `spec_source` checks the features when asked.
+    Without a configuration there is neither an executor nor an environment to build: what needs
+    them is skipped, and the rest is checked all the same (F30).
     """
 
     vcs: Vcs
-    executor: Executor
-    environment: VerificationEnvironment
+    executor: Executor | None
+    environment: VerificationEnvironment | None
     project_root: Path
     commands: Mapping[str, str] = field(default_factory=dict)
     aside: VerificationEnvironment | None = None
@@ -87,7 +92,11 @@ class CheckPreconditions:
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
-        checks: list[PreconditionCheck] = [self._commits(has_commits)]
+        checks: list[PreconditionCheck] = []
+        if req.config_problem is not None:
+            problem = PreconditionProblem("config", req.config_problem)
+            checks.append(PreconditionCheck("Configuración", (problem,)))
+        checks.append(self._commits(has_commits))
         if req.clean_tree:
             checks.append(self._clean_tree(warn=req.uncommitted_warns))
         if req.features:
@@ -99,18 +108,26 @@ class CheckPreconditions:
         checks.append(executor)
         scratch = self._scratch()
         checks.append(scratch)
+        environment = self.environment
+        if environment is None:
+            checks.append(PreconditionCheck("Comandos de verificación", skipped=UNCONFIGURED))
+            checks.append(PreconditionCheck("Entorno de verificación", skipped=UNCONFIGURED))
+            return PreconditionsReport(tuple(checks), cli_version)
         checks.append(
             PreconditionCheck(
                 "Comandos de verificación",
                 tuple(
                     missing_executables(
-                        self.commands, lambda program: self._found(program, has_commits)
+                        self.commands,
+                        lambda program: self._found(environment, program, has_commits),
                     )
                 ),
             )
         )
         checks.append(
-            self._environment(req, checks, scratch_ok=not scratch.problems, has_commits=has_commits)
+            self._environment(
+                environment, req, checks, scratch_ok=not scratch.problems, has_commits=has_commits
+            )
         )
         return PreconditionsReport(tuple(checks), cli_version)
 
@@ -156,6 +173,8 @@ class CheckPreconditions:
         return PreconditionCheck("Identidad git")
 
     def _executor(self) -> tuple[PreconditionCheck, str | None]:
+        if self.executor is None:
+            return PreconditionCheck("Ejecutor", skipped=UNCONFIGURED), None
         health = self.executor.health()
         if health.ok:
             return PreconditionCheck("Ejecutor"), health.cli_version
@@ -171,20 +190,21 @@ class CheckPreconditions:
             )
         return PreconditionCheck("Directorio temporal")
 
-    def _found(self, program: str, has_commits: bool) -> bool:
+    def _found(self, environment: VerificationEnvironment, program: str, has_commits: bool) -> bool:
         """Resolve a program as the clone will: on the commands' PATH, or committed in HEAD.
 
         Without a HEAD a relative program can't be judged, and isn't: the missing commit already
         stops the command, and calling it missing would send the person to fix the machine.
         """
         if "/" not in program:
-            return shutil.which(program, path=self.environment.search_path()) is not None
+            return shutil.which(program, path=environment.search_path()) is not None
         if os.path.isabs(program):
             return os.path.isfile(program) and os.access(program, os.X_OK)
         return not has_commits or self.vcs.is_executable("HEAD", posixpath.normpath(program))
 
     def _environment(
         self,
+        environment: VerificationEnvironment,
         req: PreconditionsRequest,
         earlier: list[PreconditionCheck],
         *,
@@ -205,11 +225,11 @@ class CheckPreconditions:
             )
         try:
             if req.environment == "run":
-                self.environment.ensure(req.run_id)
+                environment.ensure(req.run_id)
             else:
                 if req.log_dir is None:
                     raise InternalLictorError("Un entorno desechable necesita dónde dejar su log")
-                source = self.aside or self.environment
+                source = self.aside or environment
                 with source.throwaway("HEAD", req.log_dir) as env:
                     env.ensure(req.run_id)
         except EnvironmentUnavailableError as err:

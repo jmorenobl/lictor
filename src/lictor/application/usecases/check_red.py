@@ -37,6 +37,7 @@ from lictor.domain.rules import (
     impostor_survivors,
     judge_red,
     map_test_cases_to_scenarios,
+    registration_subject,
     render_full_error,
     suite_crash_reason,
     suppression_matches,
@@ -487,7 +488,7 @@ class CheckRed:
             trailers["Lictor-Run"] = request.run_id
             registered = self.vcs.commit_tree(
                 base.tree,
-                message=f"test({', '.join(names)}): {registration.subject}",
+                message=registration_subject(names, registration.subject),
                 trailers=trailers,
                 parent=base.sha,
                 empty=True,

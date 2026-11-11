@@ -56,6 +56,7 @@ from lictor.domain.rules import (
     precondition_exit_code,
     red_failure_problem,
     registration_problems,
+    registration_subject,
     render_full_error,
     routes_rejected,
     run_outcome,
@@ -1646,3 +1647,14 @@ def test_a_run_not_anchored_yet_is_not_from_an_older_version() -> None:
     """Before `preflight` there is no anchor to compare, whatever version wrote the checkpoint."""
     assert not anchor_from_older_version({})
     assert not anchor_from_older_version({"head": "a", "repo": ""})
+
+
+def test_a_registration_of_one_scenario_names_it_in_the_subject() -> None:
+    assert registration_subject(["DNI-005"], "verde colateral") == "test(DNI-005): verde colateral"
+
+
+def test_a_registration_of_several_counts_them_and_leaves_the_ids_to_the_trailers() -> None:
+    """F38: eleven IDs made a 120-character subject; the `Scenario:` trailers already name them."""
+    ids = [f"DNI-{n:03d}" for n in range(14, 25)]
+
+    assert registration_subject(ids, "verde colateral") == "test: verde colateral, 11 escenarios"

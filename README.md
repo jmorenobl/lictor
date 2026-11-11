@@ -150,7 +150,7 @@ uv sync --all-groups
 uv run lictor --help
 ```
 
-Esa copia es editable, y con el venv del repositorio activado puede ir delante de la instalada en el `PATH`. `lictor --version` lo dice: `lictor 0.2.0 (editable, desde /ruta/al/repositorio)`. Una instalación desde PyPI dice solo la versión.
+Esa copia es editable, y con el venv del repositorio activado puede ir delante de la instalada en el `PATH`. `lictor --version` lo dice: `lictor 0.3.0 (editable, desde /ruta/al/repositorio)`. Una instalación desde PyPI dice solo la versión.
 
 ---
 
@@ -170,7 +170,31 @@ uv add --dev pytest pytest-bdd ruff mypy      # las herramientas que usan los co
 
 `uv init --lib` deja un paquete en `src/`. El driver crea ahí la interfaz que necesiten sus pasos, sin lógica, y el agente la implementa escenario a escenario. Todas las dependencias, también las de desarrollo, van antes de la primera ejecución: el agente no puede tocar `pyproject.toml` ni `uv.lock`. Si quieres medir cobertura, añade también `pytest-cov`.
 
-### 1️⃣ Escribe tus escenarios Gherkin en `features/`
+### 1️⃣ Inicializa el proyecto
+
+```bash
+# Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
+lictor init
+```
+
+```text
+Configuración inicializada en 'lictor.json':
+  Perfil: python-uv@0.1
+  Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
+  hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
+    Lo lee el agente en cada llamada: ajústalo a tu proyecto.
+  .gitignore: añadidas .lictor/, __pycache__/, *.pyc, .venv/, .pytest_cache/, .mypy_cache/, .ruff_cache/
+  Skill de Lictor para Claude Code: .claude/skills/lictor/SKILL.md
+Siguiente paso: escribe los escenarios en features/ si aún no están (en Claude Code, la skill de Lictor te ayuda a redactarlos), haz commit y ejecuta `lictor doctor`.
+```
+
+La versión de Python de `hints` sale del `requires-python` de `pyproject.toml`. Revisa `hints` antes del commit (ver «Qué va en `hints`», más abajo).
+
+`init` va antes que los escenarios porque instala la skill que ayuda a escribirlos (ver «La skill de Lictor para Claude Code»).
+
+### 2️⃣ Escribe tus escenarios Gherkin en `features/`
+
+Con Claude Code, pídeselos a la skill de Lictor: te propone escenarios, te pregunta por los casos que quedan abiertos y no escribe nada que no hayas aprobado.
 
 Cada escenario debe ir etiquetado con un identificador único `@<PREFIJO>-<NÚMERO>` (por ejemplo, `@IVA-001`):
 
@@ -200,25 +224,7 @@ Característica: IVA de una factura
 
 > 💡 *Puedes explorar este proyecto de ejemplo directamente en el directorio [`examples/demo-iva/`](https://github.com/jmorenobl/lictor/tree/master/examples/demo-iva).*
 
-### 2️⃣ Inicializa y diagnostica el proyecto
-
-```bash
-# Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
-lictor init
-```
-
-```text
-Configuración inicializada en 'lictor.json':
-  Perfil: python-uv@0.1
-  Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
-  hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
-    Lo lee el agente en cada llamada: ajústalo a tu proyecto.
-  .gitignore: añadidas .lictor/, __pycache__/, *.pyc, .venv/, .pytest_cache/, .mypy_cache/, .ruff_cache/
-  Skill de Lictor para Claude Code: .claude/skills/lictor/SKILL.md
-Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.
-```
-
-La versión de Python de `hints` sale del `requires-python` de `pyproject.toml`. Revisa `hints` antes del commit (ver «Qué va en `hints`», más abajo).
+### 3️⃣ Haz commit y diagnostica
 
 ```bash
 git add -A && git commit -m "chore: proyecto inicial"   # la ejecución parte del último commit
@@ -229,7 +235,9 @@ lictor doctor
 
 ```text
 ✓ Configuración válida: perfil 'python-uv@0.1'
+✓ Repositorio con commits
 ✓ Árbol git limpio
+✓ Escenarios
 ✓ Identidad git
 ✓ Ejecutor
 ✓ Directorio temporal
@@ -238,7 +246,7 @@ lictor doctor
 Doctor: todas las comprobaciones pasaron.
 ```
 
-`doctor` construye de verdad el entorno de verificación, en un directorio desechable, sin tocar el de una ejecución. Si hay una ejecución en curso, comprueba todo lo demás y deja el entorno como «no comprobado».
+`doctor` construye de verdad el entorno de verificación, en un directorio desechable, sin tocar el de una ejecución. Si hay una ejecución en curso, comprueba todo lo demás y deja el entorno como «no comprobado». Si `lictor.json` no carga, lo marca con ✗ y comprueba igualmente lo que no depende de él.
 
 ### 📝 Qué va en `hints`
 
@@ -271,7 +279,7 @@ el ejecutable.
 
 El fichero es solo un esbozo: al cargarse, Claude Code ejecuta `lictor skill --show`, que imprime la skill de la versión instalada, así que al actualizar Lictor la skill se actualiza sola. Commitéalo para que lo tenga todo el equipo: el agente de Lictor no lo carga. Si el esbozo no es el de tu versión, `lictor doctor` lo avisa y `lictor skill` lo restaura. Si no la quieres, usa `lictor init --no-skill`.
 
-### 3️⃣ Ejecuta el ciclo autónomo y consulta el informe
+### 4️⃣ Ejecuta el ciclo autónomo y consulta el informe
 
 ```bash
 # Implementa y verifica todos los escenarios, en un worktree y una rama propios
@@ -357,7 +365,7 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 
 </details>
 
-### 4️⃣ Integra la rama `lictor/…`
+### 5️⃣ Integra la rama `lictor/…`
 
 El resultado es la rama de la ejecución, ya en tu repositorio, y el motivo final te lo recuerda: «El resultado está en la rama lictor/iva: intégralo con `git merge lictor/iva` o con una pull request». Lictor nunca integra en tu rama. Revisa el código y el driver, y después:
 

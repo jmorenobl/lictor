@@ -517,6 +517,21 @@ def test_report_lists_collateral_greens(tmp_path: Path) -> None:
     assert "*Ningún verde colateral.*" in _report(tmp_path, [])
 
 
+def test_collateral_greens_are_listed_by_id_not_by_commit(tmp_path: Path) -> None:
+    """F38: DNI-024 went green in an earlier commit than DNI-005 and was listed first."""
+    ids = ["DNI-024", "DNI-005", "DNI-014"]
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": i, "name": i} for i in ids]})
+    greens = [
+        _event("lictor.scenario.green.v1", {"commit": "c" * 40, "collateral": True}, sid)
+        for sid in ids
+    ]
+
+    section = _report(tmp_path, [loaded, *greens]).split("## Verdes colaterales")[1].split("##")[0]
+
+    listed = [line.split("**")[1] for line in section.splitlines() if line.startswith("- **")]
+    assert listed == ["DNI-005", "DNI-014", "DNI-024"]
+
+
 def _verification(path: str, ok: bool, failed_at: str | None = None) -> Event:
     return _event(
         "lictor.verify.finished.v1",

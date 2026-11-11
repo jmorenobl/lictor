@@ -12,6 +12,7 @@ from lictor.domain.progress import (
     cost_text,
     describe_status,
     duration_text,
+    id_ranges,
     node_text,
     status_text,
 )
@@ -332,6 +333,58 @@ def test_status_of_a_run_in_progress_names_the_scenario_and_its_attempt() -> Non
         "  - A-003: pendiente (en curso)",
         "  - A-004: pendiente",
     ]
+
+
+def test_status_groups_the_pending_scenarios_on_one_line() -> None:
+    """F38: 27 pending scenarios were listed one by one under a summary that already counts them."""
+    ids = [f"DNI-{n:03d}" for n in range(1, 28)]
+    status = {sid: "pending" for sid in ids} | {"DNI-001": "green", "DNI-011": "quarantined"}
+    progress = _folded(_spec(*ids), _event("scenario.green", "DNI-001", attempt=1))
+
+    lines = _status(["implement"], {"current": "DNI-002", "attempt": 0, "status": status}, progress)
+
+    assert lines[lines.index("Escenarios:") + 1 :] == [
+        "  - DNI-001: verde (implementado)",
+        "  - DNI-002: pendiente (en curso)",
+        "  - DNI-011: en cuarentena",
+        "  - DNI-003 a DNI-010, DNI-012 a DNI-027: pendientes",
+    ]
+
+
+def test_status_groups_the_greens_from_before_as_it_groups_the_pending() -> None:
+    """F42: after F38, the 27 greens of an earlier run were still listed one by one."""
+    ids = [f"DNI-{n:03d}" for n in range(1, 30)]
+    status = dict.fromkeys(ids, "green")
+    progress = _folded(
+        _spec(*ids, green=tuple(ids[:27])),
+        _event("scenario.green", "DNI-028", attempt=1),
+        _event("scenario.green", "DNI-029", collateral=True),
+    )
+
+    lines = _status([], {"status": status}, progress, by_hand=frozenset({"DNI-005"}))
+
+    assert lines[lines.index("Escenarios:") + 1 :] == [
+        "  - DNI-005: verde (registrado a mano)",
+        "  - DNI-028: verde (implementado)",
+        "  - DNI-029: verde (colateral)",
+        "  - DNI-001 a DNI-004, DNI-006 a DNI-027: verdes (de antes)",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ids", "expected"),
+    [
+        (["A-001"], "A-001"),
+        (["A-001", "A-002"], "A-001, A-002"),
+        (["A-001", "A-002", "A-003"], "A-001 a A-003"),
+        (["A-001", "A-003", "A-004", "A-005", "B-006"], "A-001, A-003 a A-005, B-006"),
+        (["A-009", "A-010", "A-011"], "A-009 a A-011"),
+        (["A-1", "A-2", "A-03"], "A-1, A-2, A-03"),
+        (["X", "Y", "Z"], "X, Y, Z"),
+    ],
+)
+def test_consecutive_ids_are_written_as_a_range(ids: list[str], expected: str) -> None:
+    assert id_ranges(ids) == expected
 
 
 def test_status_counts_the_attempt_being_verified_as_it_is() -> None:

@@ -203,7 +203,7 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         *([*by_hand, _BY_HAND_NOTE] if by_hand else ["- *Ningún verde registrado a mano.*"]),
         "",
         "## Verdes colaterales",
-        *(info["collateral"] or ["- *Ningún verde colateral.*"]),
+        *(sorted(info["collateral"]) or ["- *Ningún verde colateral.*"]),
     ]
 
 
