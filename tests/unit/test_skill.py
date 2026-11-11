@@ -93,7 +93,7 @@ def test_a_stub_that_is_not_this_version_s_says_how_to_restore_it(tmp_path: Path
 
 
 def _section(text: str, title: str) -> str:
-    return text.split(f"## {title}")[1].split("\n## ")[0]
+    return text.split(f"## {title}")[1].split("\n## ", maxsplit=1)[0]
 
 
 def test_every_decision_gets_a_scenario_or_is_left_to_the_agent_out_loud() -> None:

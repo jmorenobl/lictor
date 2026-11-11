@@ -72,6 +72,12 @@ en su significado se anota en «Cambiado».
   antiguo, sin puntuación: quita esa entrada de la lista para recibir el del perfil.
 - Las puntuaciones se muestran cortadas a un decimal, sin redondear: un 94,18 % se ve como 94,1 %,
   y un 89,96 % ya no se lee como un 90 % que no alcanza.
+- **La skill cruza lo decidido con los escenarios.** Antes de escribir `features/` nombra las
+  decisiones aprobadas en la conversación que no tienen escenario y pregunta si añade uno o quedan
+  a criterio del agente, porque lo que solo se habló no existe para Lictor. Para una entrada que se
+  valida pregunta también por los formatos que existen pero no se aceptan, los espacios alrededor
+  y el formato completo del mensaje de error. Al configurar ofrece un mínimo de cobertura que
+  bloquee: en `measure` el agente no ve el resultado.
 - **Una ejecución empezada con la 0.2.0 no se reanuda**: sale con 10 y lo dice, en vez de leer el
   ancla antigua como una manipulación. Hay que empezar de nuevo con `lictor run --new`.
 
