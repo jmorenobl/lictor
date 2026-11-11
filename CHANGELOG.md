@@ -96,8 +96,8 @@ puntuación con mínimo, y la skill cruza lo decidido con los escenarios.
   `agent_commands` del perfil, y que para leer y editar están Read, Grep, Glob, Edit y Write.
 - «Verdes colaterales» de `report.md` va ordenado por ID. El asunto de un commit que registra
   varios escenarios sin el agente los cuenta (`test: verde colateral, 11 escenarios`); los IDs
-  siguen en los trailers `Scenario:`. `lictor status` agrupa los pendientes en una línea, con
-  rangos (`DNI-003 a DNI-027: pendientes`).
+  siguen en los trailers `Scenario:`. `lictor status` agrupa en una línea los pendientes y en otra
+  los verdes de antes de la ejecución, con rangos (`DNI-003 a DNI-027: pendientes`).
 
 ## [0.2.0] - 2026-11-10
 

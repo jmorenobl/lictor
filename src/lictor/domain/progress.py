@@ -388,19 +388,27 @@ def id_ranges(ids: Sequence[str]) -> str:
 
 
 def _scenario_lines(view: StatusView, status: Mapping[str, str]) -> list[str]:
-    """Each scenario on its line, but those simply waiting, which share one at the end (F38)."""
+    """Each scenario on its line, but the greens from before and those simply waiting.
+
+    Those two say nothing about this run one by one, so each shares a line at the end, with its
+    IDs as ranges (F38, F42).
+    """
     if not status:
         return []
     order = [sid for sid in view.progress.scenario_ids if sid in status]
     order += [sid for sid in status if sid not in order]
     current = view.values.get("current") if view.next_nodes else None
     lines = ["Escenarios:"]
+    previous: list[str] = []
     waiting: list[str] = []
     for sid in order:
         st = status[sid]
         label = ""
         if st == "green":
             kind = _green_kind(view, sid)
+            if kind == "previous" and sid not in view.by_hand:
+                previous.append(sid)
+                continue
             label = "registrado a mano" if sid in view.by_hand else _LABELS.get(kind, "")
         elif sid == current:
             label = "en curso"
@@ -408,6 +416,9 @@ def _scenario_lines(view: StatusView, status: Mapping[str, str]) -> list[str]:
             waiting.append(sid)
             continue
         lines.append(f"  - {sid}: {status_text(st)}{f' ({label})' if label else ''}")
+    if previous:
+        many = "verdes" if len(previous) > 1 else status_text("green")
+        lines.append(f"  - {id_ranges(previous)}: {many} (de antes)")
     if waiting:
         many = "pendientes" if len(waiting) > 1 else status_text("pending")
         lines.append(f"  - {id_ranges(waiting)}: {many}")

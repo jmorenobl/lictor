@@ -351,6 +351,26 @@ def test_status_groups_the_pending_scenarios_on_one_line() -> None:
     ]
 
 
+def test_status_groups_the_greens_from_before_as_it_groups_the_pending() -> None:
+    """F42: after F38, the 27 greens of an earlier run were still listed one by one."""
+    ids = [f"DNI-{n:03d}" for n in range(1, 30)]
+    status = dict.fromkeys(ids, "green")
+    progress = _folded(
+        _spec(*ids, green=tuple(ids[:27])),
+        _event("scenario.green", "DNI-028", attempt=1),
+        _event("scenario.green", "DNI-029", collateral=True),
+    )
+
+    lines = _status([], {"status": status}, progress, by_hand=frozenset({"DNI-005"}))
+
+    assert lines[lines.index("Escenarios:") + 1 :] == [
+        "  - DNI-005: verde (registrado a mano)",
+        "  - DNI-028: verde (implementado)",
+        "  - DNI-029: verde (colateral)",
+        "  - DNI-001 a DNI-004, DNI-006 a DNI-027: verdes (de antes)",
+    ]
+
+
 @pytest.mark.parametrize(
     ("ids", "expected"),
     [
