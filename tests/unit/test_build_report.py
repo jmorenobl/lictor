@@ -286,7 +286,7 @@ def test_report_shows_the_mutation_score_beside_the_result(tmp_path: Path) -> No
 
     section = report.split("## Controles en medición")[1].split("##")[0]
     assert (
-        "**mutation** (IVA-001, intento 1): correcto, 94,2 % (923 de 980 muertos; 57 vivos, "
+        "**mutation** (IVA-001, intento 1): correcto, 94,1 % (923 de 980 muertos; 57 vivos, "
         "0 por tiempo), código 0, salida en `r/m.log`"
     ) in section
     assert "**odd** (IVA-001, intento 1): correcto, código 0" in section
@@ -306,6 +306,27 @@ def test_report_shows_the_score_of_a_blocking_control(tmp_path: Path) -> None:
     assert "**mutation** (IVA-001, intento 1): fallo, 75,0 % (3 de 4 muertos; 1 vivos" in section
     assert "lint" not in section
     assert "*Ningún control en medición.*" in report
+
+
+def test_report_shows_the_coverage_score(tmp_path: Path) -> None:
+    score = {
+        "kind": "coverage",
+        "covered_lines": 9,
+        "num_statements": 10,
+        "covered_branches": 1,
+        "num_branches": 2,
+        "percent": 100 * 10 / 12,
+    }
+    controls: dict[str, object] = {
+        "coverage": {"ok": True, "mode": "measure", "exit_code": 0, "score": score},
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Puntuaciones")[1].split("##")[0]
+    assert "**coverage** (IVA-001, intento 1): correcto, 83,3 % (9 de 10 líneas, 1 de 2 ramas)" in (
+        section
+    )
 
 
 def test_report_says_when_no_control_was_scored(tmp_path: Path) -> None:

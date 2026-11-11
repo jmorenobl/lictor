@@ -5,7 +5,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation"]
+ReportFormat = Literal["exit-code", "junit", "mutation", "coverage"]
 ControlMode = Literal["block", "measure"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
 RedKind = Literal["assertion", "not_implemented", "error"]
@@ -235,7 +235,7 @@ class ControlConfig(BaseModel):
     when_exists: str | None = None
     # A plugin the control needs, as the profile lists them: without it the control is skipped.
     when_plugin: str | None = Field(default=None, min_length=1)
-    # The lowest mutation score that passes, in percent; only a mutation report has one.
+    # The lowest score that passes, in percent; only a mutation or a coverage report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="before")
@@ -250,8 +250,11 @@ class ControlConfig(BaseModel):
         if self.report != "exit-code" and "{out}" not in self.run:
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)
-        if self.min_score is not None and self.report != "mutation":
-            msg = f"El control '{self.id}' declara min_score, que solo vale con report='mutation'"
+        if self.min_score is not None and self.report not in ("mutation", "coverage"):
+            msg = (
+                f"El control '{self.id}' declara min_score, que solo vale con report='mutation' "
+                "o 'coverage'"
+            )
             raise ValueError(msg)
         return self
 

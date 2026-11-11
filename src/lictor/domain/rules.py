@@ -13,9 +13,11 @@ from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
     ControlResult,
+    CoverageScore,
     MutationScore,
     PreconditionProblem,
     ScenarioId,
+    Score,
     TestCaseResult,
 )
 
@@ -791,13 +793,51 @@ def mutation_score(counts: Mapping[str, int]) -> MutationScore:
     found = {name: counts.get(name, 0) for name in (*_MUTATION_COUNTS, "skipped", "total")}
     tried = found["total"] - found["skipped"]
     percent = 100 * found["killed"] / tried if tried > 0 else 0.0
-    return MutationScore(**found, percent=percent)
+    return MutationScore(
+        killed=found["killed"],
+        survived=found["survived"],
+        timeout=found["timeout"],
+        no_tests=found["no_tests"],
+        suspicious=found["suspicious"],
+        segfault=found["segfault"],
+        skipped=found["skipped"],
+        total=found["total"],
+        percent=percent,
+    )
 
 
-def describe_score(score: MutationScore) -> str:
-    """Say a mutation score with what wasn't killed beside it, so a ✓ never stands alone."""
+def coverage_score(totals: Mapping[str, int]) -> CoverageScore:
+    """Score a coverage run as coverage.py does: lines and branches run, out of all of them.
+
+    With nothing to measure nothing is left uncovered, so it is complete, as coverage.py says.
+    """
+    lines, statements = totals.get("covered_lines", 0), totals.get("num_statements", 0)
+    branches, all_branches = totals.get("covered_branches", 0), totals.get("num_branches", 0)
+    measured = statements + all_branches
+    percent = 100 * (lines + branches) / measured if measured > 0 else 100.0
+    return CoverageScore(
+        covered_lines=lines,
+        num_statements=statements,
+        covered_branches=branches,
+        num_branches=all_branches,
+        percent=percent,
+    )
+
+
+def _percent_text(percent: float) -> str:
+    """One decimal, cut and not rounded: 89,99 must never read as a 90 it doesn't reach."""
+    tenths = int(percent * 10 + 1e-9)
+    return f"{tenths // 10},{tenths % 10} %"
+
+
+def describe_score(score: Score) -> str:
+    """Say a score with what it counts beside it, so a ✓ never stands alone."""
+    if isinstance(score, CoverageScore):
+        counted = f"{score.covered_lines} de {score.num_statements} líneas"
+        if score.num_branches:
+            counted += f", {score.covered_branches} de {score.num_branches} ramas"
+        return f"{_percent_text(score.percent)} ({counted})"
     tried = score.total - score.skipped
-    percent = f"{score.percent:.1f}".replace(".", ",")
     apart = [f"{score.survived} vivos", f"{score.timeout} por tiempo"]
     for count, label in (
         (score.no_tests, "sin tests"),
@@ -807,7 +847,26 @@ def describe_score(score: MutationScore) -> str:
     ):
         if count:
             apart.append(f"{count} {label}")
-    return f"{percent} % ({score.killed} de {tried} muertos; {', '.join(apart)})"
+    return f"{_percent_text(score.percent)} ({score.killed} de {tried} muertos; {', '.join(apart)})"
+
+
+def score_from_record(raw: object) -> Score | None:
+    """Read back a score the journal recorded, or None if it can't be read.
+
+    0.2.0 only had mutation scores and wrote no `kind`, so a record without one is a mutation's.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None
+    fields = {key: value for key, value in raw.items() if key != "kind"}
+    kind = raw.get("kind", "mutation")
+    try:
+        if kind == "coverage":
+            return CoverageScore(**fields)
+        if kind == "mutation":
+            return MutationScore(**fields)
+    except TypeError:
+        return None
+    return None
 
 
 def baseline_head_accepted(
@@ -911,8 +970,8 @@ def runs_to_prune(run_ids: Collection[str], keep: int, protected: Collection[str
     return sorted(rid for rid in runs[max(keep, 0) :] if rid not in protected)
 
 
-def score_meets(score: MutationScore, minimum: float | None) -> bool:
-    """Tell whether a mutation score reaches the minimum its control declares, if any."""
+def score_meets(score: Score, minimum: float | None) -> bool:
+    """Tell whether a score reaches the minimum its control declares, if any."""
     return minimum is None or score.percent >= minimum
 
 
@@ -933,16 +992,21 @@ def registration_problems(
 
 
 def enforce_min_score(result: ControlResult, minimum: float | None) -> ControlResult:
-    """Fail a control whose mutation score is below the minimum it declares.
+    """Fail a control whose score is below the minimum it declares.
 
-    A result that already failed, or has no score, is left as it is: a pass that crashed says so
-    itself, and only a mutation report carries a score.
+    A result that already failed is left as it is: a run that crashed says so itself. One that
+    passed with no score measured nothing (a coverage run with no tests), which no minimum meets.
     """
-    if not result.ok or result.score is None or score_meets(result.score, minimum):
+    if minimum is None or not result.ok:
         return result
     floor = f"{minimum:g}".replace(".", ",")
-    error = (
-        f"La puntuación de mutación, {describe_score(result.score)}, no llega al mínimo de "
-        f"{floor} %"
+    if result.score is None:
+        error = f"El control no midió nada y declara un mínimo de {floor} %"
+        return replace(result, ok=False, error=error)
+    if score_meets(result.score, minimum):
+        return result
+    what = (
+        "La cobertura" if isinstance(result.score, CoverageScore) else "La puntuación de mutación"
     )
+    error = f"{what}, {describe_score(result.score)}, no llega al mínimo de {floor} %"
     return replace(result, ok=False, error=error)

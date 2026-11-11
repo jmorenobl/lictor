@@ -1447,6 +1447,7 @@ def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
         "skipped": 0,
         "total": 10,
         "percent": 90.0,
+        "kind": "mutation",
     }
     json.dumps(summaries)
 

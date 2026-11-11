@@ -9,9 +9,9 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
-from lictor.domain.model import Event, JournalDamage, MutationScore
+from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
-from lictor.domain.rules import describe_score
+from lictor.domain.rules import describe_score, score_from_record
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -93,12 +93,8 @@ def _new_owner() -> dict[str, Any]:
 
 def _score_text(raw: object) -> str:
     """The score a control recorded, if it recorded one the journal can still read."""
-    if not isinstance(raw, dict) or not raw:
-        return ""
-    try:
-        return f", {describe_score(MutationScore(**raw))}"
-    except TypeError:
-        return ""
+    score = score_from_record(raw)
+    return f", {describe_score(score)}" if score is not None else ""
 
 
 @dataclass(frozen=True)
