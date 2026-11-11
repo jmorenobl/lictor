@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from lictor.adapters.config.loader import profile_skill_sections
 from lictor.application.skill import (
     SKILL_FILE,
     install_skill_stub,
@@ -89,3 +90,54 @@ def test_a_stub_that_is_not_this_version_s_says_how_to_restore_it(tmp_path: Path
     assert warning is not None
     assert ".claude/skills/lictor/SKILL.md" in warning
     assert "ejecuta `lictor skill`" in warning
+
+
+def _section(text: str, title: str) -> str:
+    return text.split(f"## {title}")[1].split("\n## ")[0]
+
+
+def test_every_decision_gets_a_scenario_or_is_left_to_the_agent_out_loud() -> None:
+    """F34: a decision approved in the conversation and written nowhere doesn't exist for Lictor."""
+    drafting = _section(render_skill("0", []), "2. Redactar los escenarios con la persona")
+    check = drafting.index("Antes de escribir `features/`")
+
+    assert "cada decisión aprobada" in drafting[check:]
+    assert "a criterio del agente" in drafting[check:]
+    assert check < drafting.index("Después de escribir")
+
+
+@pytest.mark.parametrize(
+    "gap",
+    [
+        "prefijos o formatos que existen pero no se aceptan",
+        "espacios alrededor",
+        "el formato completo del mensaje de error",
+        "`usage:`",
+    ],
+)
+def test_a_cli_that_validates_input_is_asked_about_its_quieter_gaps(gap: str) -> None:
+    """F35: what nobody asked, the agent decided."""
+    assert gap in _section(render_skill("0", []), "2. Redactar los escenarios con la persona")
+
+
+def test_configuring_offers_a_minimum_coverage_that_the_agent_sees() -> None:
+    """F36: measuring without a threshold doesn't change what the agent does."""
+    configuring = _section(render_skill("0", []), "3. Configurar")
+
+    assert '{"id": "coverage", "mode": "block", "min_score": 80}' in configuring
+    assert "el agente no ve" in configuring
+
+
+def test_the_profile_says_the_coverage_is_a_score_in_the_report() -> None:
+    [(_, section)] = [s for s in profile_skill_sections() if s[0] == "python-uv"]
+
+    assert "Puntuaciones" in section
+    assert "su porcentaje queda en la salida del control" not in section
+
+
+def test_the_own_worktree_takes_one_line_and_no_rule_about_commits() -> None:
+    text = render_skill("0", [])
+
+    assert "nadie hace commits" not in text
+    [line] = [line for line in text.splitlines() if "propio worktree" in line]
+    assert "puede seguir haciendo commits" in line
