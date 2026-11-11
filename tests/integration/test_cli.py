@@ -227,3 +227,47 @@ def test_cli_skill_show_prints_the_content_anywhere_and_writes_nothing(tmp_path:
     assert "## Perfil python-uv" in result.output
     assert "No lances `lictor run`" in result.output
     assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_doctor_with_a_config_that_doesnt_load_checks_everything_else(tmp_path: Path) -> None:
+    """F30: a refused `lictor.json` stopped `doctor` at the first error, without the rest."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert runner.invoke(app, ["init", "--cwd", str(tmp_path)]).exit_code == 0
+    config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    config["acceptance"] = {"driver_hints": "lo del proyecto"}
+    (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "x.feature").write_text(
+        "Feature: X\n  @X-001 @X-002\n  Scenario: Uno\n    Given algo\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
+
+    result = runner.invoke(app, ["doctor", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 10
+    assert "✗ Configuración: lictor.json no puede declarar acceptance.driver_hints" in result.output
+    assert "✓ Repositorio con commits" in result.output
+    assert "✓ Identidad git" in result.output
+    assert "✗ Escenarios:" in result.output
+    assert "- Ejecutor: no comprobado: la configuración no carga" in result.output
+    assert "- Entorno de verificación: no comprobado: la configuración no carga" in result.output
+    assert "Error (10)" not in result.output
+
+
+def test_cli_init_sends_to_the_scenarios_and_to_the_skill_before_the_commit(
+    tmp_path: Path,
+) -> None:
+    """F32: the skill that helps write the scenarios arrives with `init`, so they come after it."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+
+    with_skill = runner.invoke(app, ["init", "--cwd", str(tmp_path)]).output
+    (tmp_path / "lictor.json").unlink()
+    without = runner.invoke(app, ["init", "--cwd", str(tmp_path), "--no-skill"]).output
+
+    step = with_skill[with_skill.index("Siguiente paso:") :]
+    assert step.index("features/") < step.index("commit") < step.index("lictor doctor")
+    assert "la skill de Lictor" in step
+    assert "skill" not in without[without.index("Siguiente paso:") :]

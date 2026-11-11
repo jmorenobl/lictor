@@ -60,6 +60,7 @@ class PrepareDriverRequest:
     driver_exempt_paths: Sequence[str] = ()
     max_driver_attempts: int = 0  # only to tell whoever watches; the graph decides
     suppressions: Sequence[str] = ()
+    check_commands: Sequence[str] = ()  # the only commands Bash admits
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ class PrepareDriver:
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
             "{suppressions}": ", ".join(request.suppressions) or "ninguna",
+            "{check_commands}": ", ".join(request.check_commands) or "los tests del proyecto",
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,

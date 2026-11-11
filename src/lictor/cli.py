@@ -18,6 +18,7 @@ from lictor import __version__
 from lictor.adapters.config.models import ControlConfig
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
+from lictor.application.ports import Clock
 from lictor.application.run_files import (
     DOCTOR_DIR,
     aside_dir,
@@ -38,7 +39,11 @@ from lictor.application.usecases.build_report import BuildReportRequest
 from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
-from lictor.application.usecases.preconditions import PreconditionsRequest
+from lictor.application.usecases.preconditions import (
+    CheckPreconditions,
+    PreconditionsReport,
+    PreconditionsRequest,
+)
 from lictor.bootstrap import (
     BootstrapResult,
     bootstrap_init,
@@ -47,8 +52,15 @@ from lictor.bootstrap import (
     new_run_id,
     observed_journal,
     skill_content,
+    unconfigured_preconditions,
 )
-from lictor.domain.errors import CandidateError, ExitCode, LictorError, RunInProgressError
+from lictor.domain.errors import (
+    CandidateError,
+    ConfigError,
+    ExitCode,
+    LictorError,
+    RunInProgressError,
+)
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
 from lictor.domain.rules import (
@@ -143,11 +155,14 @@ def describe_init(res: InitProjectResult) -> str:
         "    Lo lee el agente en cada llamada: ajústalo a tu proyecto.",
         f"  .gitignore: añadidas {added}" if added else "  .gitignore: ya tenía todo",
     ]
+    helper = ""
     if res.skill_path:
         lines.append(f"  Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
-    lines += [
-        "Siguiente paso: haz commit de estos cambios y ejecuta `lictor doctor`.",
-    ]
+        helper = " (en Claude Code, la skill de Lictor te ayuda a redactarlos)"
+    lines.append(
+        f"Siguiente paso: escribe los escenarios en features/ si aún no están{helper}, "
+        "haz commit y ejecuta `lictor doctor`."
+    )
     return "\n".join(lines)
 
 
@@ -263,6 +278,41 @@ def skill_command(
     _safe_run(_execute)
 
 
+def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
+    """The checks `doctor` makes, and why the configuration didn't load, if it didn't."""
+    try:
+        runtime = bootstrap_runtime(root)
+    except ConfigError as err:
+        # Everything that doesn't need the configuration is still worth telling (F30).
+        checks, clock = unconfigured_preconditions(root)
+        return checks, clock, str(err)
+    typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
+    return runtime.preconditions, runtime.clock, None
+
+
+def _echo_checks(report: PreconditionsReport) -> int:
+    """Print every check, and return the exit code the domain gives what they found."""
+    for check in report.checks:
+        if check.skipped:
+            typer.echo(f"- {check.name}: {check.skipped}")
+        elif check.problems:
+            for problem in check.problems:
+                typer.echo(f"✗ {check.name}: {problem.message}", err=True)
+        elif not check.warnings:
+            typer.echo(f"✓ {check.name}")
+        for warning in check.warnings:
+            typer.echo(f"⚠ {check.name}: {warning}")
+
+    code = precondition_exit_code(report.problems)
+    if code:
+        typer.echo("Doctor: hay que resolver lo marcado con ✗.", err=True)
+    else:
+        warned = any(check.warnings for check in report.checks)
+        suffix = ", con avisos (⚠) que no impiden ejecutar" if warned else ""
+        typer.echo(f"Doctor: todas las comprobaciones pasaron{suffix}.")
+    return code
+
+
 @app.command()
 def doctor(
     cwd: Annotated[
@@ -278,8 +328,7 @@ def doctor(
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
-        runtime = bootstrap_runtime(resolved_cwd)
-        typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
+        preconditions, clock, config_problem = _doctor_checks(resolved_cwd)
 
         # Building takes the temporary directory, which a run starting now would sweep.
         with holding_project(resolved_cwd) as held:
@@ -287,35 +336,17 @@ def doctor(
             if held:
                 shutil.rmtree(log_dir, ignore_errors=True)
             request = PreconditionsRequest(
-                run_id=f"doctor-{runtime.clock.generate_run_id()}",
+                run_id=f"doctor-{clock.generate_run_id()}",
                 environment="throwaway" if held else "none",
                 log_dir=log_dir,
                 skip_reason="no comprobado: hay una ejecución en curso",
                 features=True,
                 skill=True,
                 uncommitted_warns=not checkout_repository(resolved_cwd).is_linked_worktree(),
+                config_problem=config_problem,
             )
-            report = runtime.preconditions.execute(request)
-
-        for check in report.checks:
-            if check.skipped:
-                typer.echo(f"- {check.name}: {check.skipped}")
-            elif check.problems:
-                for problem in check.problems:
-                    typer.echo(f"✗ {check.name}: {problem.message}", err=True)
-            elif not check.warnings:
-                typer.echo(f"✓ {check.name}")
-            for warning in check.warnings:
-                typer.echo(f"⚠ {check.name}: {warning}")
-
-        code = precondition_exit_code(report.problems)
-        if code:
-            typer.echo("Doctor: hay que resolver lo marcado con ✗.", err=True)
-        else:
-            warned = any(check.warnings for check in report.checks)
-            suffix = ", con avisos (⚠) que no impiden ejecutar" if warned else ""
-            typer.echo(f"Doctor: todas las comprobaciones pasaron{suffix}.")
-        return code
+            report = preconditions.execute(request)
+        return _echo_checks(report)
 
     _safe_run(_execute)
 

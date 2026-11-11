@@ -886,7 +886,7 @@ def test_check_red_registers_reopened_and_collateral_in_one_commit(tmp_path: Pat
 
     vcs.commit_tree.assert_called_once()
     call = vcs.commit_tree.call_args
-    assert call.kwargs["message"] == "test(IVA-001, IVA-002): registrar sin agente"
+    assert call.kwargs["message"] == "test: registrar sin agente, 2 escenarios"
     assert call.kwargs["trailers"]["Scenario"] == ["IVA-001", "IVA-002"]
     assert [e.scenarioid for e in _events(event_log, "lictor.scenario.reregistered.v1")] == [
         "IVA-001"

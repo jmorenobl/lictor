@@ -4,6 +4,7 @@ The same fold gives the lines `lictor run` prints as it works (F10) and the coun
 shows (F11), so both say the same thing: what the journal recorded, never a guess.
 """
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -351,13 +352,50 @@ def _spend_line(progress: RunProgress) -> str:
 _LABELS: Final[Mapping[str, str]] = {kind: one for kind, one, _ in _KINDS}
 
 
+_NUMBERED: Final = re.compile(r"(.*?)(\d+)")
+SHORTEST_RANGE: Final = 3  # two consecutive IDs read better as they are
+
+
+def _numbered(sid: str) -> tuple[str, int, int] | None:
+    found = _NUMBERED.fullmatch(sid)
+    if found is None:
+        return None
+    return found.group(1), int(found.group(2)), len(found.group(2))
+
+
+def _follows(previous: str, sid: str) -> bool:
+    before, after = _numbered(previous), _numbered(sid)
+    return (
+        before is not None
+        and after is not None
+        and (before[0], before[2]) == (after[0], after[2])
+        and after[1] == before[1] + 1
+    )
+
+
+def id_ranges(ids: Sequence[str]) -> str:
+    """Write the IDs in order, three or more consecutive ones as a range: `A-003 a A-027`."""
+    runs: list[list[str]] = []
+    for sid in ids:
+        if runs and _follows(runs[-1][-1], sid):
+            runs[-1].append(sid)
+        else:
+            runs.append([sid])
+    parts: list[str] = []
+    for run in runs:
+        parts.extend([f"{run[0]} a {run[-1]}"] if len(run) >= SHORTEST_RANGE else run)
+    return ", ".join(parts)
+
+
 def _scenario_lines(view: StatusView, status: Mapping[str, str]) -> list[str]:
+    """Each scenario on its line, but those simply waiting, which share one at the end (F38)."""
     if not status:
         return []
     order = [sid for sid in view.progress.scenario_ids if sid in status]
     order += [sid for sid in status if sid not in order]
     current = view.values.get("current") if view.next_nodes else None
     lines = ["Escenarios:"]
+    waiting: list[str] = []
     for sid in order:
         st = status[sid]
         label = ""
@@ -366,7 +404,13 @@ def _scenario_lines(view: StatusView, status: Mapping[str, str]) -> list[str]:
             label = "registrado a mano" if sid in view.by_hand else _LABELS.get(kind, "")
         elif sid == current:
             label = "en curso"
+        elif st == "pending":
+            waiting.append(sid)
+            continue
         lines.append(f"  - {sid}: {status_text(st)}{f' ({label})' if label else ''}")
+    if waiting:
+        many = "pendientes" if len(waiting) > 1 else status_text("pending")
+        lines.append(f"  - {id_ranges(waiting)}: {many}")
     return lines
 
 

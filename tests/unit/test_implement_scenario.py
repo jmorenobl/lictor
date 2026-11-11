@@ -611,3 +611,13 @@ def test_the_start_of_the_call_is_in_the_journal_before_the_agent_runs(tmp_path:
         3,
     )
     assert started.data["prompt"] == finished.data["prompt"]
+
+
+def test_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> None:
+    """F37: the implementer tried an interpreter through Bash to rewrite a file, and was denied."""
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), check_commands=["make test"])
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "Bash solo admite: make test." in prompt
+    assert "un intérprete o un script" in prompt
+    assert "Lee con Read, Grep y Glob" in prompt
