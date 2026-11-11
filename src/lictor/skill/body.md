@@ -66,10 +66,20 @@ persona, y en cada pregunta da tu recomendación y deja que decida ella.
 - Números escritos como texto: ceros a la izquierda (`01`), signo (`+7`, `-7`), espacios (`" 7"`),
   decimales y lo que no es un número. Las conversiones del lenguaje suelen aceptar más de lo que la
   persona espera.
-- Una CLI: el código de salida de cada error y qué se comprueba del mensaje; el idioma de los
-  errores que genera la biblioteca de argumentos, que pueden salir en inglés; qué hacen `--help`,
-  una orden desconocida y los argumentos de más o de menos.
+- Una CLI: el código de salida de cada error y el formato completo del mensaje de error (qué
+  stream, qué texto fijo, en qué idioma). La biblioteca de argumentos añade el suyo: argparse
+  antepone un `usage:` en inglés, y el resultado mezcla idiomas si nadie lo decide. Qué hacen
+  `--help`, una orden desconocida y los argumentos de más o de menos.
+- Una entrada que se valida o se convierte: los prefijos o formatos que existen pero no se aceptan
+  (un documento de otro tipo, una variante antigua del formato), y los espacios alrededor, que la
+  shell no produce pero `main(argv)` o una librería sí reciben.
 - Una librería: qué excepción y con qué mensaje; los tipos no válidos.
+
+**Antes de escribir `features/`**, cruza cada decisión aprobada en la conversación con los
+escenarios del borrador, y nombra las que no tienen ninguno: «Ñ, O y U no tienen escenario: añado
+uno o quedan a criterio del agente». Lo que solo se decidió hablando no existe para Lictor: si no
+hay escenario, el agente puede decidir lo contrario, y la verificación no lo ve. Que la persona
+elija para cada una, y que quedarse a criterio del agente sea una decisión suya, dicha.
 
 Después de escribir: `lictor doctor`, que en «Escenarios» valida los features. Arregla con la
 persona lo marcado con ✗; un ⚠ (un fichero vacío, una característica sin escenarios) no impide
@@ -89,6 +99,11 @@ ejecutar, y el run lo salta.
      con el de un control del perfil cambian solo los campos escritos (`{"id": "unit",
      "timeout_s": 900}`), `"enabled": false` lo quita y otro `id` añade un control, con `level`,
      `run` y `report`.
+   - Si a la persona le importan los tests unitarios, ofrécele un mínimo de cobertura. Con
+     `{"id": "coverage", "mode": "block", "min_score": 80}` el control bloquea por debajo, y el
+     agente recibe el fallo en el siguiente intento. En `measure` el porcentaje solo sale en el
+     informe: el agente no ve lo que no bloquea, y medir sin umbral no cambia lo que hace. El
+     número lo decide la persona.
 2. Pide a la persona que haga el commit: el run parte del último commit, y lo que no esté
    confirmado no entra. Conviene commitear también `.claude/skills/lictor/`: el esbozo lo comparte
    el equipo y el agente de Lictor no lo carga.
@@ -98,11 +113,10 @@ ejecutar, y el run lo salta.
    `lictor check` ejecuta los controles en un clon limpio, como haría un run.
 4. Si ya hay código que cumple escenarios: `lictor register <ID>…`, antes del primer run y
    lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
-5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`. Trabaja en un worktree y una
-   rama propios (`lictor/<nombre>`): la persona puede seguir trabajando y haciendo commits en su
-   checkout. `lictor status`, en otra terminal, dice por dónde va y dónde está el worktree. Al
-   acabar, la persona integra la rama (un merge o una pull request) y después
-   `lictor retire <nombre>` retira el worktree.
+5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
+   Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
+   `lictor status`, en otra terminal, dice por dónde va. Al acabar, la persona integra la rama (un
+   merge o una pull request) y `lictor retire <nombre>` retira el worktree.
 
 ## 4. Diagnosticar
 
