@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from lictor.application.run_files import exclusive_run
 from lictor.cli import app
 from tests.integration.repro.conftest import ProjectFactory
-from tests.integration.repro.harness import Agent, events_of, git, require, run_lictor, write
+from tests.integration.repro.harness import Agent, events_of, git, require, run_lictor, smoke, write
 
 MISSING_PROGRAM = {
     "id": "secretos",
@@ -87,6 +87,7 @@ def test_a_prepare_that_fails_stops_before_the_driver(
     assert "No se pudo preparar el entorno" in events_of(root, "run.finished")[0]["data"]["reason"]
 
 
+@smoke
 def test_doctor_passes_on_a_project_from_lictor_init(make_project: ProjectFactory) -> None:
     root = make_project()
 

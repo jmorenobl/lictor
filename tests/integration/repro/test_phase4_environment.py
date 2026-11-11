@@ -11,6 +11,7 @@ from tests.integration.repro.harness import (
     MODULE_PATH,
     VERIFY_ENV,
     Agent,
+    all_controls,
     events_of,
     false_greens,
     green_ids,
@@ -52,6 +53,7 @@ def _user_home_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict
     ("control", "code"),
     [("lint", "import os\n"), ("types", 'VALOR: int = "texto"\n')],
 )
+@all_controls
 def test_user_configuration_does_not_decide_a_control(
     make_project: ProjectFactory,
     tmp_path: Path,
