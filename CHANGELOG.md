@@ -7,6 +7,12 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.3.0] - 2026-11-11
+
+Cada ejecución trabaja en su propio worktree y su propia rama, así que puedes seguir haciendo
+commits mientras corre. `lictor.json` guarda solo lo que decides tú, la cobertura pasa a ser una
+puntuación con mínimo, y la skill cruza lo decidido con los escenarios.
+
 ### Añadido
 
 - **Cada ejecución trabaja en un worktree y una rama propios** (ADR-0005). `lictor run` desde tu
@@ -80,6 +86,18 @@ en su significado se anota en «Cambiado».
   bloquee: en `measure` el agente no ve el resultado.
 - **Una ejecución empezada con la 0.2.0 no se reanuda**: sale con 10 y lo dice, en vez de leer el
   ancla antigua como una manipulación. Hay que empezar de nuevo con `lictor run --new`.
+- **`lictor doctor` con un `lictor.json` que no carga sigue con lo demás.** Lo marca como
+  «✗ Configuración» y comprueba el repositorio, el árbol, los escenarios, la skill, la identidad y
+  el directorio temporal; el ejecutor, los comandos y el entorno quedan «no comprobado». Sale con
+  10, como antes, pero con la lista entera.
+- **`lictor init` va antes que los escenarios.** La guía rápida del README empieza por `init`, que
+  instala la skill que ayuda a redactarlos, y el «Siguiente paso» de `init` lo dice.
+- Los prompts del driver y del implementador nombran las únicas órdenes que admite Bash, las
+  `agent_commands` del perfil, y que para leer y editar están Read, Grep, Glob, Edit y Write.
+- «Verdes colaterales» de `report.md` va ordenado por ID. El asunto de un commit que registra
+  varios escenarios sin el agente los cuenta (`test: verde colateral, 11 escenarios`); los IDs
+  siguen en los trailers `Scenario:`. `lictor status` agrupa los pendientes en una línea, con
+  rangos (`DNI-003 a DNI-027: pendientes`).
 
 ## [0.2.0] - 2026-11-10
 
@@ -306,7 +324,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.2.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jmorenobl/lictor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jmorenobl/lictor/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jmorenobl/lictor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jmorenobl/lictor/releases/tag/v0.1.0
