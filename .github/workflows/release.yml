@@ -1,7 +1,8 @@
 name: Release
 
-# Publicar es empujar una etiqueta `vX.Y.Z` sobre un commit de master: se construyen el wheel y el
-# sdist, se suben a TestPyPI, se comprueba que TestPyPI sirve los mismos bytes, se suben a PyPI y se
+# Publicar es empujar una etiqueta `vX.Y.Z` sobre un commit de master: primero pasa la suite
+# completa (suite-completa.yml: todas las plataformas, con lo que una pull request deja fuera), y
+# solo entonces se construyen el wheel y el sdist, se suben a TestPyPI, se comprueba que TestPyPI sirve los mismos bytes, se suben a PyPI y se
 # crea la release de GitHub con la sección del CHANGELOG. Lanzado a mano (workflow_dispatch) es un
 # ensayo: solo llega a TestPyPI.
 #
@@ -23,8 +24,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  full-suite:
+    name: Suite completa
+    uses: ./.github/workflows/suite-completa.yml
+
   release:
     name: Publicar
+    needs: full-suite
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
