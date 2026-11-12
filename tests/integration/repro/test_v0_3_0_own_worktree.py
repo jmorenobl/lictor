@@ -26,6 +26,7 @@ from tests.integration.repro.harness import (
     require,
     run_from_checkout,
     run_worktree,
+    smoke,
     write,
 )
 from tests.integration.repro.test_phase4_recovery import (
@@ -50,6 +51,7 @@ def _killing_first_calls(count: int) -> Agent:
     return Agent(impl=impl)
 
 
+@smoke
 def test_a_run_from_the_checkout_works_in_its_own_worktree_and_branch(
     make_project: ProjectFactory, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

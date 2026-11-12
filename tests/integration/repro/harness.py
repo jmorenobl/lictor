@@ -101,6 +101,28 @@ def known_limitation(finding: str) -> pytest.MarkDecorator:
     )
 
 
+# A case runs on a light project: the profile's lint, type, unit and coverage controls, dropped by
+# `id` the way a person would, cost `mypy` and `pytest` on every verification and decide nothing
+# about a defence that the acceptance and the L0 gates prove. These marks keep all of them.
+smoke = pytest.mark.smoke
+"""Part of the small group that proves, with the whole configuration, that everything fits."""
+all_controls = pytest.mark.all_controls
+"""The defence is about a control the light project drops: without it the case proves nothing."""
+LIGHT_DISABLED = ("lint", "types", "unit", "coverage")
+
+
+def uses_all_controls(marks: set[str]) -> bool:
+    return bool(marks & {"smoke", "all_controls"})
+
+
+def light_config(written: dict[str, Any]) -> dict[str, Any]:
+    """`written` without the controls of `LIGHT_DISABLED`, unless it changes one itself."""
+    changes = list(written.get("controls", []))
+    named = {change["id"] for change in changes}
+    dropped = [{"id": id_, "enabled": False} for id_ in LIGHT_DISABLED if id_ not in named]
+    return {**written, "controls": dropped + changes}
+
+
 def require(condition: object, message: str) -> None:
     """Check a precondition of the case, as opposed to the behaviour under test."""
     if not condition:

@@ -11,6 +11,7 @@ from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
     Outcome,
+    all_controls,
     good_impl,
     run_lictor,
     write,
@@ -39,6 +40,7 @@ Característica: X
 '''
 
 
+@all_controls
 def test_e20_non_utf8_output_does_not_crash_the_run(make_project: ProjectFactory) -> None:
     root = make_project()
 

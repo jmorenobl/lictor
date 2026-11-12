@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from lictor.application.run_files import exclusive_run
 from lictor.cli import app
 from tests.integration.repro.conftest import ProjectFactory
-from tests.integration.repro.harness import git, require, write
+from tests.integration.repro.harness import all_controls, git, require, smoke, write
 from tests.integration.repro.test_phase4_environment import PERMISSIVE_RUFF, _user_home_with
 
 LOCAL_VENV = {
@@ -39,6 +39,7 @@ def test_check_doesnt_pass_on_what_only_the_working_tree_has(
     assert f"Verificado: HEAD {git(root, 'rev-parse', 'HEAD')[:12]}" in output
 
 
+@all_controls
 def test_check_ignores_the_users_configuration(
     make_project: ProjectFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -54,6 +55,7 @@ def test_check_ignores_the_users_configuration(
     assert git(root, "status", "--short").strip() == "?? src/iva/extra.py"
 
 
+@smoke
 def test_check_passes_and_filters_by_level_and_id(make_project: ProjectFactory) -> None:
     root = make_project()
 

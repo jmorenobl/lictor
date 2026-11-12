@@ -104,6 +104,8 @@ timeout_method = "signal"
 markers = [
     "repro: audit reproduction cases run against a real uv project (slow)",
     "exhaustive: cells of a matrix beyond one per class; nightly and on a tag, not in a PR",
+    "smoke: repro cases that prove, with the whole configuration, that everything fits",
+    "all_controls: repro cases whose defence needs the controls a light project drops",
 ]
 filterwarnings = [
     "ignore:cannot collect test class 'TestCaseResult'.*:pytest.PytestCollectionWarning",

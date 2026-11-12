@@ -16,8 +16,10 @@ from tests.integration.repro.harness import (
     copy_project,
     git,
     isolated_env,
+    light_config,
     require,
     shell,
+    uses_all_controls,
     uv_sync,
 )
 
@@ -93,9 +95,28 @@ def _case_profiles(forbidden: tuple[str, ...], dest: Path, *, downloads: bool) -
     return dest
 
 
+def _read_config(root: Path) -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads((root / "lictor.json").read_text(encoding="utf-8"))
+    return loaded
+
+
+def _write_config(root: Path, config: dict[str, Any]) -> None:
+    (root / "lictor.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
 @pytest.fixture
-def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch) -> ProjectFactory:
-    """Return a factory of per-case projects, with optional `lictor.json` overrides."""
+def make_project(
+    tmp_path: Path,
+    template: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> ProjectFactory:
+    """Return a factory of per-case projects, with optional `lictor.json` overrides.
+
+    The project is light (`light_config`) unless the case is marked `smoke` or `all_controls`.
+    Light rewrites the template's only commit, so the history has the same shape either way.
+    """
+    light = not uses_all_controls({mark.name for mark in request.node.iter_markers()})
 
     def factory(
         *,
@@ -109,12 +130,14 @@ def make_project(tmp_path: Path, template: Path, monkeypatch: pytest.MonkeyPatch
         copy_project(template, root)
         profiles = _case_profiles(allowed_paths, tmp_path / "perfiles", downloads=downloads)
         monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
+        if light:
+            _write_config(root, light_config(_read_config(root)))
+            git(root, "commit", "-q", "-a", "--amend", "--no-edit")
         if extra_controls or config_changes:
-            config_path = root / "lictor.json"
-            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config = _read_config(root)
             config.setdefault("controls", []).extend(extra_controls or [])
             config.update(config_changes or {})
-            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            _write_config(root, light_config(config) if light else config)
             git(root, "add", "-A")
             git(root, "commit", "-q", "--allow-empty", "-m", "chore: controles del caso")
         if sync:

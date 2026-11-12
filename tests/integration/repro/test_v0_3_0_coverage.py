@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from lictor.cli import app
 from tests.integration.repro.conftest import ProjectFactory
-from tests.integration.repro.harness import git, require, shell, write
+from tests.integration.repro.harness import git, require, shell, smoke, write
 
 UNIT_TEST = "from iva import hello\n\n\ndef test_hello() -> None:\n    assert hello()\n"
 UNCOVERED = (
@@ -34,6 +34,7 @@ def _check_coverage(root: Path) -> tuple[int, str]:
     return result.exit_code, result.output
 
 
+@smoke
 def test_check_shows_the_coverage_as_a_score(make_project: ProjectFactory) -> None:
     root = make_project(sync=False)
     _with_unit_tests_and_pytest_cov(root)
@@ -45,6 +46,7 @@ def test_check_shows_the_coverage_as_a_score(make_project: ProjectFactory) -> No
     assert "100,0 % (2 de 2 líneas)" in output
 
 
+@smoke
 def test_a_minimum_coverage_asked_for_by_id_fails_below_it(make_project: ProjectFactory) -> None:
     change = {"id": "coverage", "mode": "block", "min_score": 90}
     root = make_project(sync=False, config_changes={"controls": [change]})

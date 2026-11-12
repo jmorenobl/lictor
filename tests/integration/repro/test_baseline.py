@@ -18,12 +18,14 @@ from tests.integration.repro.harness import (
     green_ids,
     require,
     run_lictor,
+    smoke,
     write,
 )
 
 ALL_SCENARIOS = ["IVA-001", "IVA-002", "IVA-003"]
 
 
+@smoke
 def test_c0_honest_agent_on_real_profile(make_project: ProjectFactory) -> None:
     root = make_project()
     agent = Agent()
@@ -93,6 +95,7 @@ def test_d15b_crash_after_green_commit_resumes_without_duplicates(
     assert green_ids(root) == ALL_SCENARIOS
 
 
+@smoke
 def test_repro_projects_use_the_real_profile(make_project: ProjectFactory) -> None:
     root: Path = make_project(sync=False)
     config = load_config(root)

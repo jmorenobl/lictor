@@ -28,6 +28,7 @@ from tests.integration.repro.harness import (
     VERIFY_ENV,
     Agent,
     Outcome,
+    all_controls,
     events_of,
     false_greens,
     git,
@@ -39,6 +40,7 @@ from tests.integration.repro.harness import (
     require,
     run_lictor,
     shell,
+    smoke,
     write,
 )
 
@@ -715,6 +717,7 @@ def test_c4b_module_in_src_does_not_replace_a_transitive_dependency(
     assert not marker.exists()
 
 
+@all_controls
 def test_project_code_only_runs_where_the_tests_import_it(
     make_project: ProjectFactory, tmp_path: Path
 ) -> None:
@@ -845,6 +848,7 @@ def test_project_without_pythonpath_of_its_own_reaches_the_sources(
     assert false_greens(root) == []
 
 
+@smoke
 def test_type_control_still_reads_the_sources(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         good_impl(task, scenario_id)
@@ -902,6 +906,7 @@ def test_e23_tree_changed_after_the_checks(make_project: ProjectFactory) -> None
     assert "tocado tras L0" not in git(root, "show", "HEAD:pyproject.toml")
 
 
+@all_controls
 def test_d22_writable_paths_cannot_neutralize_l1_and_l2(make_project: ProjectFactory) -> None:
     root = make_project()
     evasions = {
