@@ -12,21 +12,29 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The time budget of each job is in scripts/ci_budget.py and in AGENTS.md («What to run and
+# when»). `timeout-minutes` is only the cut against a hung job, about 2.5 times what a job usually
+# takes: runners differ up to 1.8 times, and a cut near the budget would fail work that didn't grow.
+# The `budget` job at the end is the alarm: it warns, and never fails.
+
 jobs:
-  # A pull request runs in layers. Every platform runs everything small and medium; the audit
-  # reproduction cases (`repro`, each one a real project built with uv) run once under coverage in
-  # the self-verification, on Linux, and once on macOS, split in three by duration. The cells of a
-  # matrix beyond one per class (`exhaustive`) and `repro` on every platform run in
-  # suite-completa.yml: every night, and before every release.
+  # A pull request runs in layers. Everything small and medium runs on Linux with every Python and
+  # on macOS with one: Python 3.12 on macOS is what a maintainer runs locally. The audit
+  # reproduction cases (`repro`, each one a real project built with uv) run once on Linux and once
+  # on macOS, split in three by duration. The cells of a matrix beyond one per class (`exhaustive`)
+  # and `repro` on every platform run in suite-completa.yml: every night, and before every release.
   gates:
     name: Puertas (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
-        python: ["3.12", "3.13", "3.14"]
+        include:
+          - {os: ubuntu-24.04, python: "3.12"}
+          - {os: ubuntu-24.04, python: "3.13"}
+          - {os: ubuntu-24.04, python: "3.14"}
+          - {os: macos-15, python: "3.14"}
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
@@ -43,19 +51,28 @@ jobs:
       - run: uv run python scripts/check_architecture.py
       # Coverage, with its thresholds, is enforced once by the self-verification (the `coverage`
       # and `coverage-domain` controls of lictor.json); measuring it here too doubled the cost.
-      - run: uv run pytest tests -n auto -q -m "not repro"
+      - run: uv run pytest tests -n auto -q -m "not repro" --junitxml "$RUNNER_TEMP/gates.xml"
+      # A test outside `repro` slower than 10 s is a warning, never a failure.
+      - if: always()
+        run: uv run python scripts/ci_budget.py slow-tests "$RUNNER_TEMP/gates.xml"
 
-  repro-macos:
-    name: Repro (macos-15, Python 3.14, parte ${{ matrix.group }} de 3)
-    runs-on: macos-15
-    # The whole of repro took 35-50 min here in one job; a part, about a third of that.
-    timeout-minutes: 40
+  repro:
+    name: Repro (${{ matrix.os }}, Python ${{ matrix.python }}, parte ${{ matrix.group }} de 3)
+    runs-on: ${{ matrix.os }}
+    # A part took 6-12 min on macOS. Three parts keep a Linux one (about 7 min) under a macOS one,
+    # which sets the critical path; four would shorten nothing.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-24.04, macos-15]
         group: [1, 2, 3]
+        include:
+          # Python 3.13 on Linux: the self-verification runs 3.12, and so does a maintainer.
+          - {os: ubuntu-24.04, python: "3.13"}
+          - {os: macos-15, python: "3.14"}
     env:
-      UV_PYTHON: "3.14"
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,7 +89,7 @@ jobs:
   supply-chain:
     name: Dependencias y secretos
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,7 +111,7 @@ jobs:
   self-verification:
     name: Lictor se verifica a sí mismo
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,9 +128,10 @@ jobs:
           rm gitleaks.tar.gz
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: uv sync --all-groups --frozen
-      # Every control, without the acceptance (L3): its suite, tests/integration, already runs inside
-      # the `coverage` control, which fails on any failed test, so running it again cost ~20 min.
-      # A control declared at L3 in lictor.json would be skipped here too: Lictor declares none.
+      # Every control, without the acceptance (L3): it is the `repro` cases, which the `repro` jobs
+      # run in parts, and the `coverage` control runs everything else. The acceptance runs no test
+      # the `coverage` control runs. A control declared at L3 in lictor.json would be skipped here
+      # too: Lictor declares none.
       - run: uv run lictor check --keep-going --level L1,L2,L4,L5
       # Logs, reports and the mutation survivors: what tells two passes or two platforms apart.
       - if: always()
@@ -122,3 +140,27 @@ jobs:
           name: autoverificacion
           path: .lictor/check/
           retention-days: 30
+
+  budget:
+    name: Presupuesto
+    needs: [gates, repro, supply-chain, self-verification]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100"
+          > "$RUNNER_TEMP/jobs.json"
+      # Only the reader's own dependency, not the whole environment: this job reads, nothing else.
+      - run: uv run --no-project --with defusedxml python scripts/ci_budget.py jobs "$RUNNER_TEMP/jobs.json"

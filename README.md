@@ -635,11 +635,16 @@ Los cambios de cada versión están en [`CHANGELOG.md`](https://github.com/jmore
 Lictor se verifica a sí mismo con su propio perfil de puertas `L1`–`L5` definido en [`lictor.json`](https://github.com/jmorenobl/lictor/blob/master/lictor.json):
 
 ```bash
-# Todos los controles de calidad y la aceptación, en un clon limpio y en el entorno de verificación,
-# sin parar en el primer fallo
+# Al cerrar un cambio (unos 2,5 min): los controles rápidos, la cobertura sin los casos repro y
+# los 8 casos de humo. El verde lo da el CI
+uv run lictor check --level L1,L2,L4
+uv run pytest tests -n auto -q -m smoke
+
+# Todos los controles y la aceptación (los casos repro), en un clon limpio y en el entorno de
+# verificación, sin parar en el primer fallo; cada test corre una vez, y tarda lo que la suite entera
 uv run lictor check --keep-going
 
-# Lo que ejecuta el CI: todo salvo la aceptación, cuya suite ya corre el control de cobertura
+# Lo que ejecuta la autoverificación del CI: todo salvo la aceptación, que el CI reparte en partes
 uv run lictor check --keep-going --level L1,L2,L4,L5
 
 # O filtrar por niveles o por control
@@ -659,12 +664,12 @@ uv run mypy --strict src scripts
 # L2: Pruebas unitarias rápidas
 uv run pytest tests/unit -q
 
-# L3: Pruebas de integración y aceptación
-uv run pytest tests/integration -n auto -q
+# L3: La aceptación de Lictor, los casos de reproducción de la auditoría
+uv run pytest tests/integration -n auto -q -m "repro and not exhaustive"
 
 # L4: Contratos de arquitectura y cobertura de ramas (>= 90% global, >= 95% dominio)
 uv run python scripts/check_architecture.py
-uv run pytest tests -n auto --cov=lictor --cov-branch --cov-fail-under=90 -q
+uv run pytest tests -n auto -m "not repro and not exhaustive" --cov=lictor --cov-branch --cov-fail-under=90 -q
 uv run coverage report --include="*/lictor/domain/*" --fail-under=95
 
 # L4: Auditoría de dependencias y detección de secretos

@@ -3,10 +3,18 @@ name: Suite completa
 # Everything a pull request leaves out: `repro` on every platform and every Python, and the
 # `exhaustive` cells of the matrices. Every night, by hand, and before every release (release.yml
 # calls it, and publishes only if it passes).
+#
+# Two cells also measure, without blocking anything:
+# - Linux with Python 3.12 runs under coverage. A pull request enforces the coverage of everything
+#   but `repro` (the `coverage` control of lictor.json); this is the whole number, `repro` included.
+# - Linux with Python 3.13, the Python of the `repro` jobs of a pull request, keeps the duration of
+#   every `repro` case, without coverage: copied over .test_durations, it is what splits them in
+#   parts.
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    # Not on the hour: GitHub delays the scheduled runs it has most of, by hours.
+    - cron: "17 1 * * *"
   workflow_dispatch:
   workflow_call:
 
@@ -26,6 +34,8 @@ jobs:
         python: ["3.12", "3.13", "3.14"]
     env:
       UV_PYTHON: ${{ matrix.python }}
+      MEASURES_COVERAGE: ${{ matrix.os == 'ubuntu-24.04' && matrix.python == '3.12' }}
+      KEEPS_DURATIONS: ${{ matrix.os == 'ubuntu-24.04' && matrix.python == '3.13' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,4 +44,25 @@ jobs:
         with:
           version: "0.12.18"
       - run: uv sync --all-groups --frozen
-      - run: uv run pytest tests -n auto -q
+      - if: env.MEASURES_COVERAGE != 'true' && env.KEEPS_DURATIONS != 'true'
+        run: uv run pytest tests -n auto -q
+      - if: env.MEASURES_COVERAGE == 'true'
+        run: uv run pytest tests -n auto -q --cov=lictor --cov-branch --cov-report=term
+      - if: always() && env.MEASURES_COVERAGE == 'true'
+        run: >-
+          echo "Cobertura completa, con repro: $(uv run coverage report --format=total) %"
+          >> "$GITHUB_STEP_SUMMARY"
+      - if: env.KEEPS_DURATIONS == 'true'
+        run: >-
+          uv run pytest tests -n auto -q
+          --store-durations --durations-path "$RUNNER_TEMP/all-durations.json"
+      - if: env.KEEPS_DURATIONS == 'true'
+        run: >-
+          jq --indent 2 'with_entries(select(.key | startswith("tests/integration/repro/"))) | map_values(. * 1000 | round / 1000)'
+          "$RUNNER_TEMP/all-durations.json" > "$RUNNER_TEMP/test_durations"
+      - if: env.KEEPS_DURATIONS == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test_durations
+          path: ${{ runner.temp }}/test_durations
+          retention-days: 30

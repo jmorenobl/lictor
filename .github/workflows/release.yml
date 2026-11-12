@@ -6,6 +6,10 @@ name: Release
 # crea la release de GitHub con la sección del CHANGELOG. Lanzado a mano (workflow_dispatch) es un
 # ensayo: solo llega a TestPyPI.
 #
+# La suite completa puede fallar sin que falle ningún test, si GitHub no encuentra una máquina
+# macOS («not acquired by runner»). Entonces `gh run rerun --failed <id>` la repite, y con ella la
+# publicación que la esperaba.
+#
 # Sin tokens: PyPI y TestPyPI confían en este workflow por OIDC (trusted publishing). Configuración
 # de una vez, en pypi.org y en test.pypi.org → Publishing → «Add a new pending publisher» (GitHub):
 #   Project: lictor   Owner: jmorenobl   Repository: lictor
