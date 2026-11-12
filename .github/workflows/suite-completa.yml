@@ -58,7 +58,7 @@ jobs:
           --store-durations --durations-path "$RUNNER_TEMP/all-durations.json"
       - if: env.KEEPS_DURATIONS == 'true'
         run: >-
-          jq --indent 2 'with_entries(select(.key | startswith("tests/integration/repro/")))'
+          jq --indent 2 'with_entries(select(.key | startswith("tests/integration/repro/"))) | map_values(. * 1000 | round / 1000)'
           "$RUNNER_TEMP/all-durations.json" > "$RUNNER_TEMP/test_durations"
       - if: env.KEEPS_DURATIONS == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
