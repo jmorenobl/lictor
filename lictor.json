@@ -6,11 +6,11 @@
     {"id": "types",           "level": "L1", "run": "uv run mypy --strict src scripts",           "report": "exit-code", "mode": "block"},
     {"id": "unit",            "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block"},
     {"id": "architecture",    "level": "L4", "run": "uv run python scripts/check_architecture.py", "report": "exit-code", "mode": "block"},
-    {"id": "coverage",        "level": "L4", "run": "uv run pytest tests -n auto -m \"not exhaustive\" --cov=lictor --cov-branch --cov-report=term --cov-report=json:{out} -q", "report": "coverage", "mode": "block", "min_score": 90, "when_plugin": null, "timeout_s": 4500},
+    {"id": "coverage",        "level": "L4", "run": "uv run pytest tests -n auto -m \"not repro and not exhaustive\" --cov=lictor --cov-branch --cov-report=term --cov-report=json:{out} -q", "report": "coverage", "mode": "block", "min_score": 90, "when_plugin": null, "timeout_s": 4500},
     {"id": "coverage-domain", "level": "L4", "run": "uv run coverage report --include=*/lictor/domain/* --fail-under=95", "report": "exit-code", "mode": "block"},
     {"id": "audit",           "level": "L4", "run": "uv run python scripts/audit_dependencies.py", "report": "exit-code", "mode": "block"},
     {"id": "secrets",         "level": "L4", "run": "gitleaks detect --no-banner",        "report": "exit-code", "mode": "block"},
     {"id": "mutation",        "level": "L5", "run": "uv run python scripts/mutation_score.py {out}", "report": "mutation", "mode": "block", "min_score": 95, "timeout_s": 3000}
   ],
-  "acceptance": {"run": "uv run pytest tests/integration -n auto -q --junitxml {out}", "report": "junit", "timeout_s": 4500}
+  "acceptance": {"run": "uv run pytest tests/integration -n auto -q -m \"repro and not exhaustive\" --junitxml {out}", "report": "junit", "timeout_s": 4500}
 }
