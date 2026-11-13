@@ -54,6 +54,7 @@ from lictor.application.verification_env import VerificationEnvironment, Verific
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle
+from lictor.domain.stages import controls_of_stage
 from lictor.orchestration.graph import GraphContext
 
 
@@ -243,7 +244,10 @@ def bootstrap_runtime(
         evidence_dir=check_dir,
     )
 
-    commands = {f"del control '{c.id}'": c.run for c in active_config.controls}
+    # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.
+    attempt_controls = controls_of_stage(active_config.controls, "attempt")
+    check_controls = controls_of_stage(active_config.controls, "check")
+    commands = {f"del control '{c.id}'": c.run for c in attempt_controls}
     commands["de la aceptación"] = active_config.acceptance.run
     doctor_audit = AuditSink(
         JsonlEventLog(aside_dir(resolved_root, DOCTOR_DIR) / "journal.jsonl"), active_clock
@@ -254,6 +258,7 @@ def bootstrap_runtime(
         environment=environment,
         project_root=resolved_root,
         commands=commands,
+        check_commands={c.id: c.run for c in check_controls},
         aside=VerificationEnvironment(
             vcs, runner, doctor_audit, resolved_root, defences.verification
         ),
@@ -279,7 +284,8 @@ def bootstrap_runtime(
         acceptance_run=active_config.acceptance.run,
         acceptance_report=active_config.acceptance.report,
         acceptance_timeout_s=active_config.acceptance.timeout_s,
-        controls=active_config.controls,
+        controls=attempt_controls,
+        check_controls=check_controls,
         prepare_driver=prepare_driver_uc,
         check_red=check_red_uc,
         implement_scenario=implement_uc,

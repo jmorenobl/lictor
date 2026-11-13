@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.application.usecases.build_report import (
@@ -335,6 +337,48 @@ def test_report_says_when_no_control_was_scored(tmp_path: Path) -> None:
 
 def test_report_says_when_nothing_was_measured(tmp_path: Path) -> None:
     assert "*Ningún control en medición.*" in _report(tmp_path, [_verify_event({})])
+
+
+def _started(**data: object) -> Event:
+    return _event("lictor.run.started.v1", {"lictor_version": "0.4.0", **data})
+
+
+def test_report_lists_the_controls_only_check_runs_before_the_measures(tmp_path: Path) -> None:
+    started = _started(
+        check_controls=[
+            {"id": "mutation", "level": "L5", "mode": "block", "min_score": 95.0},
+            {"id": "audit", "level": "L4", "mode": "measure", "min_score": None},
+            {"id": "cov", "level": "L4", "mode": "block", "min_score": 90.5},
+        ]
+    )
+
+    report = _report(tmp_path, [started, _verify_event({})])
+
+    assert report.index("## Controles solo en `lictor check`") < report.index(
+        "## Controles en medición"
+    )
+    section = report.split("## Controles solo en `lictor check`")[1].split("##")[0]
+    assert "- **mutation** (L5, bloquea, mínimo 95 %)" in section
+    assert "- **audit** (L4, mide)" in section
+    assert "- **cov** (L4, bloquea, mínimo 90,5 %)" in section
+
+
+def test_check_controls_are_not_skipped_controls(tmp_path: Path) -> None:
+    started = _started(check_controls=[{"id": "mutation", "level": "L5", "mode": "block"}])
+
+    report = _report(tmp_path, [started, _verify_event({})])
+
+    assert "mutation" not in report.split("## Controles omitidos")[1].split("##")[0]
+
+
+@pytest.mark.parametrize("data", [{}, {"check_controls": []}, {"check_controls": "roto"}])
+def test_a_journal_without_check_controls_lists_none(
+    tmp_path: Path, data: dict[str, object]
+) -> None:
+    report = _report(tmp_path, [_started(**data), _verify_event({})])
+
+    section = report.split("## Controles solo en `lictor check`")[1].split("##")[0]
+    assert "*Ninguno: todos los controles corren en cada intento.*" in section
 
 
 def test_report_lists_every_attempt_with_its_error(tmp_path: Path) -> None:

@@ -304,6 +304,8 @@ def test_the_resume_guard_checks_preconditions_without_the_tree_or_a_new_environ
 
     [request] = runtime.preconditions.requests
     assert (request.run_id, request.clean_tree, request.environment) == ("r1", False, "none")
+    # Only the `attempt` controls' programs: one `check` uses can't stop a resume (ADR-0007).
+    assert request.check_stage is False
     assert runtime.stops() == []
 
 

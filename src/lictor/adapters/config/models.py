@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
 ReportFormat = Literal["exit-code", "junit", "mutation", "coverage"]
 ControlMode = Literal["block", "measure"]
+# When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
+ControlStage = Literal["attempt", "check"]
 ProfileStatus = Literal["stable", "beta", "alpha"]
 RedKind = Literal["assertion", "not_implemented", "error"]
 MapLinkKind = Literal["name", "scenario"]
@@ -230,6 +232,7 @@ class ControlConfig(BaseModel):
     run: str = Field(min_length=1)
     report: ReportFormat
     mode: ControlMode = "block"
+    stage: ControlStage = "attempt"
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     when_exists: str | None = None
@@ -285,6 +288,7 @@ class ControlChange(BaseModel):
     run: str | None = Field(default=None, min_length=1)
     report: ReportFormat | None = None
     mode: ControlMode | None = None
+    stage: ControlStage | None = None
     empty_exit_codes: list[int] | None = None
     timeout_s: int | None = Field(default=None, gt=0)
     when_exists: str | None = None

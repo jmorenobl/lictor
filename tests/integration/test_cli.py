@@ -88,6 +88,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     assert runner.invoke(app, ["init", "--cwd", str(tmp_path)]).exit_code == 0
     config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
     config["backend"]["kind"] = "fake"
+    config["controls"] = [{"id": "unit", "stage": "check"}]
     (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
     (tmp_path / "features").mkdir()
     (tmp_path / "features" / "x.feature").write_text(
@@ -106,6 +107,10 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     # The stub isn't this version's: worth telling, but not what stops the run.
     assert "⚠ Skill de Lictor:" in result.output
     assert "ejecuta `lictor skill`" in result.output
+    assert (
+        "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit."
+        in result.output
+    )
 
 
 @pytest.mark.parametrize("command", [["run"], ["init", "--force"]])

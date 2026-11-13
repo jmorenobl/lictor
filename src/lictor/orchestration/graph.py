@@ -64,7 +64,7 @@ from lictor.domain.rules import (
     run_outcome,
     suspicious_driver,
 )
-from lictor.domain.run_branches import integration_hint
+from lictor.domain.stages import committed_greens, final_reason
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -127,6 +127,8 @@ class GraphState(TypedDict, total=False):
     seal_ok: bool
     resume_to: str | None
     reopened: list[str]
+    # Green when the spec loaded: their commits aren't this run's.
+    green_at_load: list[str]
     failures: list[list[str] | None]
     rejected_paths: list[list[str] | None]
 
@@ -153,6 +155,7 @@ class GraphContext:
     acceptance_run: str
     acceptance_report: str
     acceptance_timeout_s: int
+    # Only the `attempt` controls: the `check` ones never run in a run (ADR-0007).
     controls: Sequence[Any]
     prepare_driver: PrepareDriver
     check_red: CheckRed
@@ -178,6 +181,8 @@ class GraphContext:
     oracle: RedOracle = field(default_factory=RedOracle)
     map_link: MapLink = "name"
     impostors: Impostors | None = None
+    # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
+    check_controls: Sequence[Any] = ()
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -199,13 +204,30 @@ class _GraphNodes:
         self.ctx = ctx
 
     def _finish(
-        self, state: GraphState, code: int, reason: str, *, report: bool = True
+        self,
+        state: GraphState,
+        code: int,
+        reason: str,
+        *,
+        report: bool = True,
+        reached_end: bool = False,
     ) -> dict[str, Any]:
         """End the run leaving its reason in the journal, the report and the state.
 
         A run that stops before starting (`report=False`) leaves `report.md` alone: it still holds
         the last run that did something. The reason stays in the journal and on stderr.
+
+        Every exit comes through here, so here the reason tells what the run left to
+        `lictor check` (ADR-0007), and, at the end of a run in a linked worktree, how its branch
+        gets in.
         """
+        reason = final_reason(
+            reason,
+            check_ids=[control.id for control in self.ctx.check_controls],
+            committed=committed_greens(state.get("status", {}), state.get("green_at_load", [])),
+            branch=self.ctx.result_branch if reached_end else "",
+            worktree=str(self.ctx.project_root),
+        )
         event = new_event(
             self.ctx.clock,
             "lictor.run.finished.v1",
@@ -242,6 +264,15 @@ class _GraphNodes:
                 "cli_version": report.cli_version,
                 "profile": self.ctx.profile_name,
                 "config_hash": state.get("config_hash", ""),
+                "check_controls": [
+                    {
+                        "id": control.id,
+                        "level": control.level,
+                        "mode": control.mode,
+                        "min_score": control.min_score,
+                    }
+                    for control in self.ctx.check_controls
+                ],
             },
         )
         self.ctx.event_log.append(event)
@@ -302,6 +333,7 @@ class _GraphNodes:
                 sid: "green" if cls == "green" else "pending" for sid, cls in classes.items()
             },
             "reopened": reopened,
+            "green_at_load": [sid for sid, cls in classes.items() if cls == "green"],
             "seal_ok": seal_ok,
             "driver_fresh": not seal_ok,
         }
@@ -720,9 +752,7 @@ class _GraphNodes:
         if exit_val is not None:
             return self._finish(state, exit_val, state.get("exit_reason", ""))
         code, reason = run_outcome(state.get("status", {}), state.get("reasons", {}))
-        if self.ctx.result_branch:
-            reason = f"{reason}. {integration_hint(self.ctx.result_branch)}"
-        return self._finish(state, code, reason)
+        return self._finish(state, code, reason, reached_end=True)
 
 
 def _green_of(

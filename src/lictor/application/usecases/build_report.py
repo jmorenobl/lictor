@@ -113,6 +113,15 @@ class BuildReportResult:
     content: str
 
 
+def _check_control_line(control: Mapping[str, Any]) -> str:
+    """A control the run left to `lictor check`, as `run.started` listed it."""
+    mode = "mide" if control.get("mode") == "measure" else "bloquea"
+    minimum = control.get("min_score")
+    shown = f"{minimum:g}".replace(".", ",") if isinstance(minimum, int | float) else ""
+    floor = f", mínimo {shown} %" if shown else ""
+    return f"- **{control.get('id', '')}** ({control.get('level', '')}, {mode}{floor})"
+
+
 def _journal_lines(damage: JournalDamage) -> list[str]:
     if damage.total == 0:
         return ["- *Ninguna línea descartada.*"]
@@ -322,6 +331,7 @@ class BuildReport:
             "quarantines": {},
             "failed_by_level": defaultdict(int),
             "attempts": [],
+            "check_controls": [],
             "measures": [],
             "scores": [],
             "skipped_controls": [],
@@ -368,6 +378,13 @@ class BuildReport:
         info["lictor_version"] = ev.data.get("lictor_version", "0.1.0")
         info["cli_version"] = ev.data.get("cli_version", info["cli_version"])
         info["profile"] = ev.data.get("profile", info["profile"])
+        # A journal without the field, from before ADR-0007, had no `check` controls.
+        listed = ev.data.get("check_controls", [])
+        info["check_controls"] = [
+            _check_control_line(c)
+            for c in (listed if isinstance(listed, list) else [])
+            if isinstance(c, dict)
+        ]
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
         scens = ev.data.get("scenarios", [])
@@ -607,6 +624,11 @@ class BuildReport:
             lines.extend(["", "## Verificaciones", "| Escenario | Intento | Resultado | Error |"])
             lines.append("|---|---|---|---|")
             lines.extend(info["attempts"])
+
+        lines.extend(["", "## Controles solo en `lictor check`"])
+        lines.extend(
+            info["check_controls"] or ["- *Ninguno: todos los controles corren en cada intento.*"]
+        )
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])

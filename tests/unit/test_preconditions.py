@@ -43,7 +43,13 @@ def bin_dir(tmp_path: Path) -> Path:
 class _Parts:
     """The doubles of one case, so each test reaches the one it needs."""
 
-    def __init__(self, tmp_path: Path, bin_dir: Path, commands: dict[str, str]) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        bin_dir: Path,
+        commands: dict[str, str],
+        check_commands: dict[str, str] | None = None,
+    ) -> None:
         self.vcs = MagicMock(spec=Vcs)
         self.vcs.has_commits.return_value = True
         self.vcs.status.return_value = []
@@ -54,7 +60,12 @@ class _Parts:
         self.environment = MagicMock(spec=VerificationEnvironment)
         self.environment.search_path.return_value = str(bin_dir)
         self.use_case = CheckPreconditions(
-            self.vcs, self.executor, self.environment, tmp_path, commands
+            self.vcs,
+            self.executor,
+            self.environment,
+            tmp_path,
+            commands,
+            check_commands=check_commands or {},
         )
 
     def check(self, request: PreconditionsRequest = RUN) -> list[PreconditionProblem]:
@@ -187,6 +198,65 @@ def test_a_program_is_looked_up_on_the_path_the_commands_get(tmp_path: Path, bin
     assert "'otra-que-no-esta'" in problems[0].message
 
 
+def _with_check_stage(tmp_path: Path, bin_dir: Path) -> _Parts:
+    """A run that verifies with `herramienta` and leaves `mutation` and `audit` to `check`."""
+    return _Parts(
+        tmp_path,
+        bin_dir,
+        {"del control 'a'": "herramienta"},
+        check_commands={"mutation": "no-instalado run", "audit": "herramienta audit"},
+    )
+
+
+def test_a_run_doesnt_look_for_the_programs_of_the_check_controls(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_check_stage(tmp_path, bin_dir)
+
+    report = parts.use_case.execute(RUN)
+
+    assert report.problems == []
+    assert [check.name for check in report.checks] == NAMES
+
+
+def test_a_resume_doesnt_look_for_the_programs_of_the_check_controls(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_check_stage(tmp_path, bin_dir)
+
+    resume = PreconditionsRequest(run_id="r1", clean_tree=False, environment="none")
+
+    assert parts.check(resume) == []
+
+
+def test_doctor_looks_for_every_program_and_warns_of_the_check_controls(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_check_stage(tmp_path, bin_dir)
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", check_stage=True))
+
+    assert len(report.problems) == 1
+    assert "'no-instalado'" in report.problems[0].message
+    assert "mutation" in report.problems[0].message
+    warned = next(c for c in report.checks if c.name == "Momento de los controles")
+    assert warned.problems == ()
+    assert warned.warnings == (
+        "Controles que solo corren en `lictor check`: mutation y audit. Un run no los "
+        "ejecuta: solo protegen lo que integras si tu CI ejecuta `lictor check`.",
+    )
+
+
+def test_doctor_says_nothing_of_the_stage_when_every_control_runs_in_each_attempt(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _parts(tmp_path, bin_dir)
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", check_stage=True))
+
+    assert [check.name for check in report.checks] == NAMES
+
+
 def test_a_relative_program_must_be_committed_and_executable(tmp_path: Path, bin_dir: Path) -> None:
     parts = _parts(tmp_path, bin_dir, {"del control 'a'": "./scripts/../scripts/run.sh"})
     parts.vcs.is_executable.return_value = True
@@ -307,7 +377,10 @@ def test_doctor_says_nothing_of_a_project_without_the_skill(tmp_path: Path, bin_
 def test_without_a_config_what_needs_it_is_skipped_and_the_rest_is_checked(
     tmp_path: Path,
 ) -> None:
-    """F30: with no executor or environment to build, `doctor` still tells everything else."""
+    """F30: with no executor or environment to build, `doctor` still tells everything else.
+
+    Without a configuration there are no `check` controls to warn of (ADR-0007).
+    """
     vcs = MagicMock(spec=Vcs)
     vcs.has_commits.return_value = True
     vcs.status.return_value = []
@@ -315,7 +388,9 @@ def test_without_a_config_what_needs_it_is_skipped_and_the_rest_is_checked(
     use_case = CheckPreconditions(vcs, None, None, tmp_path)
 
     report = use_case.execute(
-        PreconditionsRequest(run_id="r1", environment="throwaway", config_problem="no carga")
+        PreconditionsRequest(
+            run_id="r1", environment="throwaway", config_problem="no carga", check_stage=True
+        )
     )
 
     assert [(c.name, c.skipped) for c in report.checks] == [

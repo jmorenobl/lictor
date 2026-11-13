@@ -13,6 +13,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.adapters.config.models import ControlConfig
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.spec.gherkin_source import GherkinSource
@@ -298,6 +299,99 @@ def test_graph_mode_good(tmp_path: Path) -> None:
     trailers = context.vcs.get_trailers("Scenario")
     assert "IVA-001" in trailers
     assert "IVA-002" in trailers
+
+
+CHECK_CONTROLS = [
+    ControlConfig(
+        id="mutation",
+        level="L5",
+        run="mutar {out}",
+        report="mutation",
+        stage="check",
+        min_score=95,
+    ),
+    ControlConfig(id="audit", level="L4", run="auditar", report="exit-code", stage="check"),
+]
+GOOD_FILES = {
+    "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},
+    "IVA-001": {"src/iva.py": "# IVA-001: OK\n"},
+    "IVA-002": {"src/iva.py": "# IVA-001: OK\n# IVA-002: OK\n"},
+}
+
+
+def _run_to_the_end(context: GraphContext, run_id: str) -> dict[str, Any]:
+    graph = create_graph(
+        context, checkpointer=get_sqlite_saver(context.project_root / ".lictor" / "c.sqlite")
+    )
+    return cast(
+        dict[str, Any],
+        graph.invoke(
+            {"run_id": run_id, "config_hash": "h", "driver_attempts": 0, "status": {}},
+            config={"configurable": {"thread_id": run_id}},
+            durability=DURABILITY,
+        ),
+    )
+
+
+def test_a_run_lists_its_check_controls_once_and_says_they_are_left(tmp_path: Path) -> None:
+    executor = FakeExecutor(mode="good", files_to_write=GOOD_FILES)
+    context = dataclasses.replace(
+        _setup_test_environment(tmp_path, executor), check_controls=CHECK_CONTROLS
+    )
+
+    final = _run_to_the_end(context, "20261113-100000-0001")
+
+    assert final["exit_code"] == 0
+    assert final["exit_reason"] == (
+        "Ejecución completada: 2 escenarios en verde. Quedan sin comprobar mutation y audit, "
+        "que solo corren en `lictor check`: ejecútalo antes de integrar."
+    )
+    events = context.event_log.events(run_id="20261113-100000-0001")
+    started = next(e for e in events if e.type == "lictor.run.started.v1")
+    assert started.data["check_controls"] == [
+        {"id": "mutation", "level": "L5", "mode": "block", "min_score": 95},
+        {"id": "audit", "level": "L4", "mode": "block", "min_score": None},
+    ]
+    finished = next(e for e in events if e.type == "lictor.run.finished.v1")
+    assert finished.data["reason"] == final["exit_reason"]
+
+
+def test_in_a_linked_worktree_the_hint_names_the_worktree_and_what_is_left(
+    tmp_path: Path,
+) -> None:
+    executor = FakeExecutor(mode="good", files_to_write=GOOD_FILES)
+    context = dataclasses.replace(
+        _setup_test_environment(tmp_path, executor),
+        check_controls=CHECK_CONTROLS,
+        result_branch="lictor/iva",
+    )
+
+    final = _run_to_the_end(context, "20261113-100000-0002")
+
+    assert final["exit_reason"] == (
+        f"Ejecución completada: 2 escenarios en verde. El resultado está en la rama lictor/iva, "
+        f"en `{tmp_path}`. Quedan sin comprobar mutation y audit, que solo corren en "
+        "`lictor check`: ejecútalo en ese worktree, o deja que lo haga la CI de la pull "
+        "request, antes de integrarlo con `git merge lictor/iva` o con una pull request."
+    )
+
+
+def test_a_run_that_commits_no_green_says_nothing_of_the_check_controls(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        mode="fail",
+        files_to_write={
+            "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},
+            "fail": {"src/iva.py": "# Unfinished implementation\n"},
+        },
+    )
+    context = dataclasses.replace(
+        _setup_test_environment(tmp_path, executor), check_controls=CHECK_CONTROLS
+    )
+
+    final = _run_to_the_end(context, "20261113-100000-0003")
+
+    assert final["exit_code"] == 30
+    assert "lictor check" not in final["exit_reason"]
 
 
 def test_graph_mode_fail(tmp_path: Path) -> None:

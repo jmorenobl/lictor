@@ -7,6 +7,29 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Añadido
+
+- **Cada control dice cuándo corre: `"stage": "attempt"` o `"check"`** (ADR-0007). Con
+  `attempt`, el valor por defecto, corre en cada intento de un run, como hasta ahora. Con `check`,
+  el run no lo ejecuta y solo corre en `lictor check`: para lo que no cabe en un intento, como la
+  mutación, o lo que el agente no puede cambiar, como la auditoría de dependencias. Se escribe por
+  `id`, como `mode`, y vale con los dos modos y con `min_score`.
+  - El run los nombra en «Controles solo en `lictor check`» de `report.md` (desde `run.started`,
+    que los lista en `check_controls`) y, si guardó algún verde, en una frase del motivo final;
+    en un worktree enlazado, junto a la ruta del worktree y a cómo integrar la rama.
+  - `lictor check` los ejecuta con los demás y los marca «(solo en check)». `lictor doctor` busca
+    sus programas y avisa (⚠) de que un run no los ejecuta, sin cambiar su código de salida. El
+    `preflight` y la reanudación de un run solo buscan los programas de los controles `attempt`.
+  - Ningún control del perfil `python-uv` cambia: todos van en cada intento. La skill explica
+    cuándo proponer `check`.
+  - Si `lictor check` falla después de un run, los escenarios siguen en verde: el arreglo es de la
+    persona.
+
+### Cambiado
+
+- `stage` entra en la huella de la configuración, así que una ejecución a medias de la 0.3.0 no se
+  reanuda con esta versión (exit 10): termínala antes o empieza otra con `--new`.
+
 ## [0.3.0] - 2026-11-11
 
 Cada ejecución trabaja en su propio worktree y su propia rama, así que puedes seguir haciendo

@@ -166,6 +166,22 @@
           "default": null,
           "title": "Mode"
         },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "attempt",
+                "check"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stage"
+        },
         "empty_exit_codes": {
           "anyOf": [
             {

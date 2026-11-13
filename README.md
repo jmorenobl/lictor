@@ -386,8 +386,8 @@ Si tu rama avanzó mientras corría la ejecución, el merge junta las dos: vuelv
 | :--- | :--- | :--- |
 | `lictor init` | `--profile, -p <nombre>`<br/>`--model, -m <id>`<br/>`--force, -f`<br/>`--no-skill` | Inicializa `lictor.json` en el repositorio detectando el perfil del proyecto (o aplicando el indicado), actualiza `.gitignore` e instala el esbozo de la skill de Lictor para Claude Code (salvo con `--no-skill`). |
 | `lictor skill` | `--show` | Instala o restaura el esbozo de la skill en `.claude/skills/lictor/SKILL.md`, sin tocar `lictor.json`. Con `--show` imprime la skill completa de la versión instalada, sin escribir nada. |
-| `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, el árbol `git` (en tu checkout, lo sin confirmar es un aviso: no entra en la ejecución), identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles y de la aceptación, y que `verification.prepare` construye el entorno. Lo informa todo, sin parar en el primer fallo. |
-| `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
+| `lictor doctor` | — | Comprueba, sin llamar al agente, lo mismo que `lictor run` al empezar: `lictor.json`, el árbol `git` (en tu checkout, lo sin confirmar es un aviso: no entra en la ejecución), identidad git, ejecutor, directorio temporal privado, que existen los programas de los controles (también los de `"stage": "check"`, que un run no busca) y de la aceptación, y que `verification.prepare` construye el entorno. Avisa (⚠) si hay controles que solo corren en `lictor check`. Lo informa todo, sin parar en el primer fallo. |
+| `lictor check` | `--level, -l <niveles>`<br/>`--control, -c <id>` (repetible)<br/>`--keep-going` | Verifica como `lictor run`: los controles y la aceptación (`--control acceptance`) en un clon limpio y en el entorno de verificación. Ejecuta también los controles con `"stage": "check"`, que un run deja para aquí, y los marca «(solo en check)». Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo, fuera de la rama. Para en el primer fallo bloqueante salvo con `--keep-going`. Deja la evidencia en `.lictor/check/`. |
 | `lictor register` | `<ID>...`<br/>`--yes` | Registra en verde escenarios que el código ya cumple, como afirmación tuya (ver «Adoptar Lictor en un proyecto existente»). Explica lo que afirmas y pide confirmación. |
 | `lictor run` | `--branch <nombre>`<br/>`--new`<br/>`--quiet, -q` | Ejecuta o reanuda el grafo determinista desde el último checkpoint para implementar y verificar todos los escenarios, en un worktree y una rama propios (`lictor/<nombre>`) creados desde el último commit. Desde tu checkout reanuda la ejecución a medias, o la de `--branch`; `--new` empieza otra. Cuenta cada paso en stderr salvo con `--quiet`. |
 | `lictor status` | `--branch <nombre>`<br/>`--json` | Muestra el estado de cada ejecución lanzada desde tu checkout, con su rama y su worktree, a partir del checkpoint SQLite y la bitácora de eventos: escenario e intento en curso, verdes implementados y colaterales, llamadas y coste. Se puede lanzar durante una ejecución. |
@@ -428,7 +428,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | **L2** | Pruebas unitarias | Ejecución rápida de tests unitarios aislados (`pytest tests/unit`) con lectura de JUnit XML. | `block` |
 | **L3** | Aceptación y no regresión | Enlaza cada test con el escenario de Gherkin que ejecutó (en `python-uv`, el que informa el plugin del perfil; sin él, por el `@ID-NNN` del nombre): exige que el escenario actual pase **y que ningún escenario previamente en verde haya regresionado**. Los pendientes que el mismo árbol también hace pasar se registran como verdes colaterales sin llamar al agente. | `block` |
 | **L4** | Arquitectura, cobertura y seguridad | Contratos de capas (`lint-imports`), cobertura de ramas (`>= 90 %` global, `>= 95 %` dominio), vulnerabilidades (`pip-audit`) y secretos (`gitleaks`). | `block` |
-| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio y los módulos pequeños de la aplicación para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio. Registra resultado, salida y puntuación: `scripts/mutation_score.py` deja los recuentos donde los lee el lector `mutation` (si la exportación falla, no deja informe y el control falla), y el informe muestra, en «Puntuaciones» sea cual sea el modo, por ejemplo, «96,1 % (1585 de 1649 muertos; 64 vivos, 0 por tiempo)», y deja la lista de supervivientes en `mutation-survivors.txt`. Con `min_score` el control falla por debajo de ese porcentaje: el de Lictor exige un 95 %. | `block` (con `min_score`) o `measure` |
+| **L5** | Mutación | Pruebas de mutación (`mutmut`) sobre el dominio y los módulos pequeños de la aplicación para medir la fortaleza real de la suite unitaria. En GitHub Actions corre con `schedule` y `workflow_dispatch`, no en cada cambio, y en un run de Lictor sobre sí mismo no corre en cada intento (`"stage": "check"`). Registra resultado, salida y puntuación: `scripts/mutation_score.py` deja los recuentos donde los lee el lector `mutation` (si la exportación falla, no deja informe y el control falla), y el informe muestra, en «Puntuaciones» sea cual sea el modo, por ejemplo, «96,1 % (1585 de 1649 muertos; 64 vivos, 0 por tiempo)», y deja la lista de supervivientes en `mutation-survivors.txt`. Con `min_score` el control falla por debajo de ese porcentaje: el de Lictor exige un 95 %. | `block` (con `min_score`) o `measure` |
 
 ---
 
@@ -470,7 +470,15 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 }
 ```
 
-Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, sigue valiendo: si resuelve a lo mismo, una ejecución a medias se reanuda. Una lista vacía ya no quita los controles: cada uno se quita con `"enabled": false`.
+Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, sigue valiendo. Una lista vacía ya no quita los controles: cada uno se quita con `"enabled": false`.
+
+**Cada control dice cuándo corre** (`stage`, [ADR-0007](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0007-momento-de-cada-control.md)). Por defecto es `"attempt"`: corre en cada intento de un run, y el agente recibe su fallo. Con `"stage": "check"` el run no lo ejecuta, y solo corre en `lictor check`. Va en `check` lo que el agente no necesita ver para corregir su trabajo: lo que no cabe en el tiempo de un intento, como la mutación, o lo que el intento no puede cambiar, como la auditoría de las dependencias. Se escribe por `id`, como `mode`, y vale con los dos modos y con `min_score`:
+
+```json
+{"controls": [{"id": "mutation", "stage": "check"}]}
+```
+
+Un control `check` solo protege lo que integras si tu CI ejecuta `lictor check`. El run los nombra en «Controles solo en `lictor check`» de `report.md` y en el motivo final, si guardó algún verde; `lictor doctor` lo recuerda con un ⚠. Si `lictor check` falla después de un run, los escenarios siguen en verde y el arreglo es tuyo, como el de una CI que falla después de fusionar. Los controles del perfil `python-uv` van todos en cada intento; en el `lictor.json` de Lictor, `mutation` y `audit` van en `check`.
 
 **Qué manda cada lado.** Lo que garantiza la verificación lo declara solo el perfil y se lee de él en cada carga: un `lictor.json` no lo contiene, así que no puede quedar obsoleto. Declarar en `lictor.json` cualquiera de estos campos es un error de configuración.
 
@@ -625,6 +633,7 @@ flowchart TB
 - 📌 **[ADR-0004](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0004-oraculo-y-ciclo-de-escenarios.md):** El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit.
 - 📝 **[ADR-0005](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0005-worktree-y-rama-propios.md):** Cada ejecución trabaja en su propio worktree y en su propia rama.
 - 📌 **[ADR-0006](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
+- 📌 **[ADR-0007](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0007-momento-de-cada-control.md):** Cada control declara su momento: en cada intento o solo en `lictor check`.
 
 Los cambios de cada versión están en [`CHANGELOG.md`](https://github.com/jmorenobl/lictor/blob/master/CHANGELOG.md).
 

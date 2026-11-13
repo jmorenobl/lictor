@@ -80,3 +80,34 @@ def test_bootstrap_hands_the_acceptance_failure_codes_to_the_graph(tmp_path: Pat
     runtime = bootstrap_runtime(tmp_path)
 
     assert runtime.graph_context.acceptance_failure_exit_codes == [1, 2]
+
+
+def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path: Path) -> None:
+    """ADR-0007: the run never runs a `check` control, and only looks for `attempt` programs."""
+    config = {
+        "profile": "python-uv@0.1",
+        "backend": {"kind": "fake", "model": "claude-sonnet-4-5-20250929"},
+        "controls": [
+            {"id": "unit", "stage": "check"},
+            {"id": "audit", "level": "L4", "run": "auditar", "report": "exit-code"},
+            {
+                "id": "mutation",
+                "level": "L5",
+                "run": "mutar {out}",
+                "report": "mutation",
+                "stage": "check",
+            },
+        ],
+    }
+    (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
+
+    runtime = bootstrap_runtime(tmp_path)
+
+    context = runtime.graph_context
+    assert [c.id for c in context.controls] == ["lint", "types", "audit", "coverage"]
+    assert [c.id for c in context.check_controls] == ["unit", "mutation"]
+    checks = runtime.preconditions
+    assert "del control 'unit'" not in checks.commands
+    assert "del control 'audit'" in checks.commands
+    assert list(checks.check_commands) == ["unit", "mutation"]
+    assert checks.check_commands["mutation"] == "mutar {out}"
