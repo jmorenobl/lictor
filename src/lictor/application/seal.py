@@ -1,6 +1,7 @@
 """Monitored file collection and seal utilities."""
 
 import hashlib
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -15,17 +16,43 @@ def hash_file(file_path: Path) -> str:
     return f"sha256:{digest}"
 
 
+def _sorted_entries(directory: str) -> list[os.DirEntry[str]]:
+    # rglob skips a directory it can't list, and so does this.
+    try:
+        with os.scandir(directory) as entries:
+            return sorted(entries, key=lambda entry: entry.name)
+    except OSError:
+        return []
+
+
 def hash_tree(root: Path) -> str:
-    """Hash every file under a directory: paths, modes, link targets and content."""
+    """Hash every file under a directory: paths, modes, link targets and content.
+
+    A preorder walk with each directory's names sorted visits paths in the order of
+    `sorted(root.rglob("*"))`, which compares them part by part, so the hash is the one that
+    walk gave. Like rglob, it never follows a link to a directory.
+    """
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8", "surrogateescape"))
-        if path.is_symlink():
+    stack: list[tuple[str, os.DirEntry[str]]] = [
+        (entry.name, entry) for entry in reversed(_sorted_entries(str(root)))
+    ]
+    while stack:
+        relative, entry = stack.pop()
+        digest.update(relative.encode("utf-8", "surrogateescape"))
+        if entry.is_symlink():
             digest.update(b"\0link\0")
-            digest.update(str(path.readlink()).encode("utf-8", "surrogateescape"))
-        elif path.is_file():
-            digest.update(b"\0exec\0" if path.stat().st_mode & EXECUTABLE_BITS else b"\0file\0")
-            digest.update(path.read_bytes())
+            # Through Path, as before: it normalizes the target (`./a/` becomes `a`).
+            target = str(Path(os.readlink(entry.path)))
+            digest.update(target.encode("utf-8", "surrogateescape"))
+        elif entry.is_file():
+            digest.update(b"\0exec\0" if entry.stat().st_mode & EXECUTABLE_BITS else b"\0file\0")
+            with open(entry.path, "rb") as handle:
+                digest.update(handle.read())
+        elif entry.is_dir():  # a link never gets here: the first branch took it
+            stack.extend(
+                (f"{relative}/{child.name}", child)
+                for child in reversed(_sorted_entries(entry.path))
+            )
         digest.update(b"\0")
     return f"sha256:{digest.hexdigest()}"
 
