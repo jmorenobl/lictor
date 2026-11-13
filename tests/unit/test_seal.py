@@ -1,5 +1,6 @@
 """Unit tests for the hashes the seal, the environment and the evidence rely on."""
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -192,3 +193,52 @@ def test_a_name_that_is_not_utf8_is_hashed_as_its_bytes(tmp_path: Path) -> None:
         pytest.skip("este sistema de ficheros solo admite nombres UTF-8")
 
     assert hash_tree(tmp_path).startswith("sha256:")
+
+
+def _hash_tree_by_rglob(root: Path) -> str:
+    """The walk hash_tree replaced, kept to prove the faster one gives the same hash."""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8", "surrogateescape"))
+        if path.is_symlink():
+            digest.update(b"\0link\0")
+            digest.update(str(path.readlink()).encode("utf-8", "surrogateescape"))
+        elif path.is_file():
+            digest.update(b"\0exec\0" if path.stat().st_mode & 0o111 else b"\0file\0")
+            digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _tricky_tree(root: Path) -> Path:
+    # Names whose order as strings differs from their order part by part: `a-b` < `a/b` as text,
+    # but the directory `a` goes first.
+    for rel in ("a/b", "a/c/d", "a-b", "a.txt", "a0", "B", "Z/z", ".oculto", "ñ", "a/c-e"):
+        _write(root, rel, rel)
+    _write(root, "bin/run", "#!/bin/sh\n", mode=0o755)
+    (root / "vacio" / "dentro").mkdir(parents=True)
+    (root / "al-dir").symlink_to("a")  # a link to a directory is never followed
+    (root / "roto").symlink_to("no-existe")
+    (root / "normalizado").symlink_to("./a//c/")  # Path writes the target as `a/c`
+    (root / "a" / "arriba").symlink_to("../a.txt")
+    return root
+
+
+def test_hash_tree_matches_the_rglob_walk_it_replaced(tmp_path: Path) -> None:
+    root = _tricky_tree(tmp_path)
+    expected = _hash_tree_by_rglob(root)
+
+    assert hash_tree(root) == expected
+    # Pinned too, so the reference can't drift with pathlib.
+    assert expected == "sha256:0e1ca5a92735fdc2b2ac0442ba6e59825f618fed1ef5feed2a35d53b5851dd98"
+
+
+def test_hash_tree_matches_the_rglob_walk_with_a_name_that_is_not_utf8(tmp_path: Path) -> None:
+    try:
+        _write(tmp_path, os.fsdecode(b"a\xff/b\xfe"), "x")
+        _write(tmp_path, "a/b", "y")
+        os.symlink(os.fsdecode(b"\xfd"), tmp_path / "enlace")
+    except OSError:
+        pytest.skip("este sistema de ficheros solo admite nombres UTF-8")
+
+    assert hash_tree(tmp_path) == _hash_tree_by_rglob(tmp_path)
