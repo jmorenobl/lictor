@@ -917,6 +917,10 @@ def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
         f".lictor/runs/{req.run_id}/IVA-001/002-verify/control_mut.log"
     )
     json.dumps(summaries)
+    logs = sorted((verifier.project_root / ".lictor" / "runs" / req.run_id).rglob("*.log"))
+    assert {log.name for log in logs} >= {"control_mut.log", "acceptance.log"}
+    for log in logs:
+        assert log.read_text(encoding="utf-8").startswith("Comando: "), log
 
 
 def test_verify_runs_every_command_in_the_tree_of_the_candidate(tmp_path: Path) -> None:

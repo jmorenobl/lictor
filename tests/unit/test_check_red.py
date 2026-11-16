@@ -568,6 +568,7 @@ def test_check_red_passing_keeps_its_output(tmp_path: Path) -> None:
     assert use_case.execute(request).ok is True
     log = runner.paths[0].parent / "acceptance.log"
     assert "stderr crudo" in log.read_text(encoding="utf-8")
+    assert log.read_text(encoding="utf-8").startswith("Comando: ")
 
 
 @pytest.mark.parametrize(
@@ -999,7 +1000,8 @@ def test_check_red_seals_a_driver_whose_new_tests_fail_with_some_impostor(tmp_pa
     ]
     spec_source.write_seal.assert_called_once()
     step = runner.paths[0].parent
-    assert (step / "impostor-1" / "acceptance.log").is_file()
+    impostor_log = (step / "impostor-1" / "acceptance.log").read_text(encoding="utf-8")
+    assert impostor_log.startswith("Comando: ")
     assert (step / "impostor-2" / "acceptance.xml").is_file()
 
 

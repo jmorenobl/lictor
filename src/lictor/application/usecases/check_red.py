@@ -249,8 +249,8 @@ class CheckRed:
         tree: Path,
     ) -> tuple[CheckRedResult, _Registration | None]:
         out_file = step_dir / "acceptance.xml"
-        output, tampered = self._run_acceptance_suite(request, out_file, tree)
-        save_output(step_dir / "acceptance.log", output)
+        command, output, tampered = self._run_acceptance_suite(request, out_file, tree)
+        save_output(step_dir / "acceptance.log", command, output)
         if tampered:
             reason = describe_tampering(tampered)
             if not request.driver_fresh:
@@ -326,10 +326,10 @@ class CheckRed:
             run_dir.mkdir()
             with verification_tree(self.vcs, rev, request.project_root) as clone:
                 self._impersonate(clone, request.oracle, impostors.pattern, replacement)
-                output, tampered = self._run_acceptance_suite(
+                command, output, tampered = self._run_acceptance_suite(
                     request, run_dir / "acceptance.xml", clone
                 )
-            save_output(run_dir / "acceptance.log", output)
+            save_output(run_dir / "acceptance.log", command, output)
             if tampered:
                 return _Rejection("L0-estado", describe_tampering(tampered))
             env_problem = self.environment.ensure(request.run_id)
@@ -390,14 +390,14 @@ class CheckRed:
         request: CheckRedRequest,
         out_file: Path,
         tree: Path,
-    ) -> tuple[CommandOutput, list[str]]:
+    ) -> tuple[list[str], CommandOutput, list[str]]:
         cmd_args = fill_report_path(request.acceptance_run, out_file)
 
         lictor_dir = request.project_root / ".lictor"
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
         output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s)
         snapshot.verify_and_restore()
-        return output, snapshot.changes
+        return cmd_args, output, snapshot.changes
 
     def _reject_or_raise(
         self,

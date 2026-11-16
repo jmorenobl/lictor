@@ -41,6 +41,8 @@ def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
     assert res.control_results["lint"].ok is True
     assert "acceptance" in res.control_results
     assert res.control_results["acceptance"].ok is True
+    log = tmp_path / ".lictor" / "check" / "acceptance.log"
+    assert log.read_text(encoding="utf-8").startswith("Comando: echo test ")
 
 
 def test_check_project_blocking_control_fails_and_stops_early(tmp_path: Path) -> None:
@@ -319,7 +321,7 @@ def test_commands_run_in_the_tree_and_leave_evidence_apart(tmp_path: Path) -> No
     )
 
     assert runner.calls[0]["cwd"] == tree
-    assert (evidence / "lint.log").is_file()
+    assert (evidence / "lint.log").read_text(encoding="utf-8").startswith("Comando: ")
     assert res.control_results["lint"].output_path == ".lictor/check/lint.log"
 
 

@@ -245,7 +245,7 @@ class CheckProject:
         log_file = params.evidence_dir / f"{params.step_id}.log"
         cmd_args = fill_report_path(params.command_template, out_file)
         cmd_out = self.runner.run(cmd=cmd_args, cwd=params.tree, timeout_s=params.timeout_s)
-        save_output(log_file, cmd_out)
+        save_output(log_file, cmd_args, cmd_out)
         return cmd_out, out_file, log_file
 
     def _run_command(self, params: _RunStepParams) -> ControlResult:

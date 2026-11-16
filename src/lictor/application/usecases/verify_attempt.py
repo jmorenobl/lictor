@@ -590,7 +590,7 @@ class VerifyAttempt:
         snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
         cmd_out = self._run_project_command(cmd_tokens, req, ctrl.timeout_s)
         tampered = not snapshot.verify_and_restore()
-        save_output(log_file, cmd_out)
+        save_output(log_file, cmd_tokens, cmd_out)
 
         def recorded(result: ControlResult) -> ControlResult:
             return replace(
@@ -621,7 +621,7 @@ class VerifyAttempt:
         snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
         cmd_out = self._run_project_command(cmd_tokens, req, req.acceptance_timeout_s)
         tampered = not snapshot.verify_and_restore()
-        save_output(log_file, cmd_out)
+        save_output(log_file, cmd_tokens, cmd_out)
         if tampered:
             return self._fail(
                 req,

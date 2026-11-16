@@ -14,7 +14,7 @@ import shlex
 import shutil
 import stat
 import tempfile
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Collection, Iterator, Sequence
 from pathlib import Path
 from typing import NoReturn
 
@@ -244,10 +244,11 @@ def format_output(output: CommandOutput) -> str:
     return f"{output.stdout}\n{output.stderr}".strip()
 
 
-def save_output(path: Path, output: CommandOutput) -> None:
-    """Keep the exit code and both streams of a command."""
+def save_output(path: Path, command: Sequence[str], output: CommandOutput) -> None:
+    """Keep what ran, as its tokens were given, with its exit code and both streams (ADR-0009)."""
     write_text(
         path,
+        f"Comando: {shlex.join(command)}\n"
         f"Código de salida: {output.returncode}\n\n"
         f"--- stdout ---\n{output.stdout}\n--- stderr ---\n{output.stderr}\n",
     )
