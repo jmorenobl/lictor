@@ -943,6 +943,14 @@ def precondition_exit_code(problems: Sequence[PreconditionProblem]) -> int:
     return int(ExitCode.PRECONDITION)
 
 
+def control_label(control_id: str) -> str:
+    """How a control's command is named in a precondition: it completes "el comando …"."""
+    return f"del control '{control_id}'"
+
+
+CHECK_STAGE_ONLY = "Un run no lo necesita: solo lo ejecuta `lictor check`."
+
+
 def missing_executables(
     commands: Mapping[str, str], found: Callable[[str], bool]
 ) -> list[PreconditionProblem]:
@@ -1002,6 +1010,11 @@ def registration_problems(
     return problems
 
 
+def minimum_text(minimum: float) -> str:
+    """A declared minimum score as a person wrote it, with a decimal comma: «95», «92,5»."""
+    return f"{minimum:g}".replace(".", ",")
+
+
 def enforce_min_score(result: ControlResult, minimum: float | None) -> ControlResult:
     """Fail a control whose score is below the minimum it declares.
 
@@ -1010,7 +1023,7 @@ def enforce_min_score(result: ControlResult, minimum: float | None) -> ControlRe
     """
     if minimum is None or not result.ok:
         return result
-    floor = f"{minimum:g}".replace(".", ",")
+    floor = minimum_text(minimum)
     if result.score is None:
         error = f"El control no midió nada y declara un mínimo de {floor} %"
         return replace(result, ok=False, error=error)

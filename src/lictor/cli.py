@@ -76,7 +76,6 @@ from lictor.domain.run_branches import (
     run_branch,
     uncommitted_left_out,
 )
-from lictor.domain.stages import controls_of_stage
 from lictor.orchestration.graph import (
     DURABILITY,
     create_graph,
@@ -417,7 +416,7 @@ def check(
 
         typer.echo(f"Verificado: {res.subject}")
         # A failure after a run reads as what it is: something the run left for later (ADR-0007).
-        only_here = {c.id for c in controls_of_stage(config.controls, "check")}
+        only_here = {c.id for c in runtime.graph_context.check_controls}
         for name, cr in res.check.control_results.items():
             stage = " (solo en check)" if name in only_here else ""
             if cr.skipped:

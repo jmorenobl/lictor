@@ -48,7 +48,7 @@ class _Parts:
         tmp_path: Path,
         bin_dir: Path,
         commands: dict[str, str],
-        check_commands: dict[str, str] | None = None,
+        check_stage_commands: dict[str, str] | None = None,
     ) -> None:
         self.vcs = MagicMock(spec=Vcs)
         self.vcs.has_commits.return_value = True
@@ -65,7 +65,7 @@ class _Parts:
             self.environment,
             tmp_path,
             commands,
-            check_commands=check_commands or {},
+            check_stage_commands=check_stage_commands or {},
         )
 
     def check(self, request: PreconditionsRequest = RUN) -> list[PreconditionProblem]:
@@ -204,7 +204,7 @@ def _with_check_stage(tmp_path: Path, bin_dir: Path) -> _Parts:
         tmp_path,
         bin_dir,
         {"del control 'a'": "herramienta"},
-        check_commands={"mutation": "no-instalado run", "audit": "herramienta audit"},
+        check_stage_commands={"mutation": "no-instalado run", "audit": "herramienta audit"},
     )
 
 
@@ -236,15 +236,32 @@ def test_doctor_looks_for_every_program_and_warns_of_the_check_controls(
 
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", check_stage=True))
 
-    assert len(report.problems) == 1
-    assert "'no-instalado'" in report.problems[0].message
-    assert "mutation" in report.problems[0].message
+    # A run would start without it: only `lictor check` fails, so it warns and stops nothing.
+    assert report.problems == []
+    commands = next(c for c in report.checks if c.name == "Comandos de verificación")
+    assert commands.warnings == (
+        "No se encuentra 'no-instalado', con el que empieza el comando del control "
+        "'mutation' ('no-instalado run'). Instálalo o corrige el comando en lictor.json. "
+        "Un run no lo necesita: solo lo ejecuta `lictor check`.",
+    )
     warned = next(c for c in report.checks if c.name == "Momento de los controles")
     assert warned.problems == ()
     assert warned.warnings == (
         "Controles que solo corren en `lictor check`: mutation y audit. Un run no los "
         "ejecuta: solo protegen lo que integras si tu CI ejecuta `lictor check`.",
     )
+
+
+def test_doctor_still_fails_on_an_empty_command_of_a_check_control(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _Parts(
+        tmp_path, bin_dir, {"del control 'a'": "herramienta"}, check_stage_commands={"audit": " "}
+    )
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", check_stage=True))
+
+    assert [p.message for p in report.problems] == ["El comando del control 'audit' está vacío"]
 
 
 def test_doctor_says_nothing_of_the_stage_when_every_control_runs_in_each_attempt(

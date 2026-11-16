@@ -4,6 +4,7 @@ import pytest
 
 from lictor.domain.run_branches import integration_hint
 from lictor.domain.stages import (
+    ResultBranch,
     check_controls_warning,
     check_stage_note,
     committed_greens,
@@ -70,6 +71,13 @@ def test_the_note_names_the_check_controls_and_says_to_run_check() -> None:
     )
 
 
+def test_the_note_of_a_linked_worktree_says_where_to_run_check() -> None:
+    assert check_stage_note(["mutation"], "lictor/x", "/w/x") == (
+        "Quedan sin comprobar mutation, que solo corren en `lictor check`: ejecútalo en "
+        "`/w/x`, donde está la rama lictor/x, antes de integrar."
+    )
+
+
 def test_the_hint_with_check_controls_names_branch_worktree_and_how_to_integrate() -> None:
     assert integration_with_check_stage("lictor/x", "/w/x", ["mutation", "audit"]) == (
         "El resultado está en la rama lictor/x, en `/w/x`. Quedan sin comprobar mutation y "
@@ -125,23 +133,56 @@ def test_check_controls_after_a_commit_add_the_note() -> None:
     )
 
 
-def test_in_a_linked_worktree_without_check_controls_the_hint_is_todays() -> None:
-    reason = final_reason("Hecho", check_ids=[], committed=True, branch="lictor/x", worktree="/w")
-
-    assert reason == f"Hecho. {integration_hint('lictor/x')}"
-
-
-def test_in_a_linked_worktree_without_commits_the_hint_is_todays() -> None:
+def test_at_the_end_of_a_linked_worktree_without_check_controls_the_hint_comes_alone() -> None:
     reason = final_reason(
-        "Hecho", check_ids=["mutation"], committed=False, branch="lictor/x", worktree="/w"
+        "Hecho",
+        check_ids=[],
+        committed=True,
+        result=ResultBranch("lictor/x", "/w", reached_end=True),
     )
 
-    assert reason == f"Hecho. {integration_hint('lictor/x')}"
+    assert reason == f"Hecho. {integration_hint('lictor/x', '/w')}"
 
 
-def test_in_a_linked_worktree_the_note_goes_into_the_hint() -> None:
+def test_at_the_end_of_a_linked_worktree_without_commits_the_hint_comes_alone() -> None:
     reason = final_reason(
-        "Hecho", check_ids=["mutation"], committed=True, branch="lictor/x", worktree="/w"
+        "Hecho",
+        check_ids=["mutation"],
+        committed=False,
+        result=ResultBranch("lictor/x", "/w", reached_end=True),
+    )
+
+    assert reason == f"Hecho. {integration_hint('lictor/x', '/w')}"
+
+
+def test_at_the_end_of_a_linked_worktree_the_note_goes_into_the_hint() -> None:
+    reason = final_reason(
+        "Hecho",
+        check_ids=["mutation"],
+        committed=True,
+        result=ResultBranch("lictor/x", "/w", reached_end=True),
     )
 
     assert reason == f"Hecho. {integration_with_check_stage('lictor/x', '/w', ['mutation'])}"
+
+
+def test_a_linked_worktree_that_stops_early_says_where_to_run_check_without_integrating() -> None:
+    reason = final_reason(
+        "Parado",
+        check_ids=["mutation"],
+        committed=True,
+        result=ResultBranch("lictor/x", "/w", reached_end=False),
+    )
+
+    assert reason == f"Parado. {check_stage_note(['mutation'], 'lictor/x', '/w')}"
+
+
+def test_a_linked_worktree_that_stops_early_without_commits_adds_nothing() -> None:
+    reason = final_reason(
+        "Parado",
+        check_ids=["mutation"],
+        committed=False,
+        result=ResultBranch("lictor/x", "/w", reached_end=False),
+    )
+
+    assert reason == "Parado"

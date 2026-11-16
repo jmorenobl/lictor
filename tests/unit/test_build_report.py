@@ -349,6 +349,7 @@ def test_report_lists_the_controls_only_check_runs_before_the_measures(tmp_path:
             {"id": "mutation", "level": "L5", "mode": "block", "min_score": 95.0},
             {"id": "audit", "level": "L4", "mode": "measure", "min_score": None},
             {"id": "cov", "level": "L4", "mode": "block", "min_score": 90.5},
+            {"id": "raro", "level": "L4", "mode": "block", "min_score": True},
         ]
     )
 
@@ -361,6 +362,7 @@ def test_report_lists_the_controls_only_check_runs_before_the_measures(tmp_path:
     assert "- **mutation** (L5, bloquea, mínimo 95 %)" in section
     assert "- **audit** (L4, mide)" in section
     assert "- **cov** (L4, bloquea, mínimo 90,5 %)" in section
+    assert "- **raro** (L4, bloquea)" in section
 
 
 def test_check_controls_are_not_skipped_controls(tmp_path: Path) -> None:

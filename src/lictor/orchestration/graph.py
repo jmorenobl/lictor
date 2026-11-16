@@ -64,7 +64,7 @@ from lictor.domain.rules import (
     run_outcome,
     suspicious_driver,
 )
-from lictor.domain.stages import committed_greens, final_reason
+from lictor.domain.stages import ResultBranch, committed_greens, final_reason
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -225,8 +225,11 @@ class _GraphNodes:
             reason,
             check_ids=[control.id for control in self.ctx.check_controls],
             committed=committed_greens(state.get("status", {}), state.get("green_at_load", [])),
-            branch=self.ctx.result_branch if reached_end else "",
-            worktree=str(self.ctx.project_root),
+            result=(
+                ResultBranch(self.ctx.result_branch, str(self.ctx.project_root), reached_end)
+                if self.ctx.result_branch
+                else None
+            ),
         )
         event = new_event(
             self.ctx.clock,

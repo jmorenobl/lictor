@@ -11,7 +11,7 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
-from lictor.domain.rules import describe_score, score_from_record
+from lictor.domain.rules import describe_score, minimum_text, score_from_record
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -117,8 +117,10 @@ def _check_control_line(control: Mapping[str, Any]) -> str:
     """A control the run left to `lictor check`, as `run.started` listed it."""
     mode = "mide" if control.get("mode") == "measure" else "bloquea"
     minimum = control.get("min_score")
-    shown = f"{minimum:g}".replace(".", ",") if isinstance(minimum, int | float) else ""
-    floor = f", mínimo {shown} %" if shown else ""
+    # The journal is read as data: a `true` there is no minimum, though Python counts it an int.
+    floor = ""
+    if isinstance(minimum, int | float) and not isinstance(minimum, bool):
+        floor = f", mínimo {minimum_text(minimum)} %"
     return f"- **{control.get('id', '')}** ({control.get('level', '')}, {mode}{floor})"
 
 

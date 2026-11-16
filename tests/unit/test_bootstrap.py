@@ -109,5 +109,5 @@ def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path:
     checks = runtime.preconditions
     assert "del control 'unit'" not in checks.commands
     assert "del control 'audit'" in checks.commands
-    assert list(checks.check_commands) == ["unit", "mutation"]
-    assert checks.check_commands["mutation"] == "mutar {out}"
+    assert list(checks.check_stage_commands) == ["unit", "mutation"]
+    assert checks.check_stage_commands["mutation"] == "mutar {out}"

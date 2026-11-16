@@ -6,6 +6,7 @@ which controls go where and what that sentence says.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from lictor.domain.run_branches import integration_hint
@@ -46,11 +47,16 @@ def committed_greens(status: Mapping[str, str], green_at_load: Sequence[str]) ->
     return any(st == "green" and sid not in before for sid, st in status.items())
 
 
-def check_stage_note(check_ids: Sequence[str]) -> str:
-    """What is left to check after a run without a linked worktree."""
+def check_stage_note(check_ids: Sequence[str], branch: str = "", worktree: str = "") -> str:
+    """What is left to check after a run that didn't reach the end of a linked worktree.
+
+    With a branch, the run stopped early in a linked worktree: what it committed is there, and
+    `lictor check` anywhere else would verify something else.
+    """
+    where = f" en `{worktree}`, donde está la rama {branch}," if branch else ""
     return (
         f"Quedan sin comprobar {spoken_list(check_ids)}, que solo corren en `lictor check`: "
-        "ejecútalo antes de integrar."
+        f"ejecútalo{where} antes de integrar."
     )
 
 
@@ -85,28 +91,39 @@ def with_sentence(reason: str, sentence: str) -> str:
     return f"{reason.rstrip().removesuffix('.')}. {sentence}"
 
 
+@dataclass(frozen=True)
+class ResultBranch:
+    """The branch of a linked worktree, where a run leaves its result, and whether it ended."""
+
+    branch: str
+    worktree: str
+    reached_end: bool
+
+
 def final_reason(
     reason: str,
     *,
     check_ids: Sequence[str],
     committed: bool,
-    branch: str = "",
-    worktree: str = "",
+    result: ResultBranch | None = None,
 ) -> str:
     """The reason a run ends with, telling what is left to check and how the result gets in.
 
-    `branch` is given only to a run that reached the end in a linked worktree: then the result
-    is that branch, and the sentence on the `check` controls goes into `integration_hint`. The
-    sentence only comes when the run committed a green: without commits nothing is left to check.
+    A run that reached its end in a linked worktree gets `integration_hint`, with the sentence on
+    the `check` controls fused into it; one that stopped early there gets only that sentence,
+    naming the worktree. The sentence only comes when the run committed a green: without commits
+    nothing is left to check.
     """
     pending = bool(check_ids) and committed
-    if branch:
+    if result is not None and result.reached_end:
         hint = (
-            integration_with_check_stage(branch, worktree, check_ids)
+            integration_with_check_stage(result.branch, result.worktree, check_ids)
             if pending
-            else integration_hint(branch)
+            else integration_hint(result.branch, result.worktree)
         )
         return with_sentence(reason, hint)
-    if pending:
+    if not pending:
+        return reason
+    if result is None:
         return with_sentence(reason, check_stage_note(check_ids))
-    return reason
+    return with_sentence(reason, check_stage_note(check_ids, result.branch, result.worktree))

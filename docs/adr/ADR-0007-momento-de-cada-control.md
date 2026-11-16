@@ -49,15 +49,16 @@ El plan aprobado (decisión 8) fija la primera versión: un campo `stage: attemp
 
    **Lo que se compruebe antes de empezar depende del momento:**
    - el `preflight` de un run y la reanudación (`_check_resume_guard`) buscan solo el programa de los controles `attempt`: uno que solo usa `check`, como un `gitleaks` que está en la CI y no en la máquina, no impide empezar ni reanudar;
-   - `doctor` busca el de todos, como hoy, porque responde también por `lictor check`.
+   - `doctor` busca el de todos, porque responde también por `lictor check`, pero el que falta de un control `check` es un aviso (⚠), no un fallo: un run empezaría igual, y solo `lictor check` fallaría. Un comando vacío sigue siendo un fallo, sea del momento que sea, porque es un error del proyecto.
 
    **La huella de la configuración incluye los controles `check` enteros.** Cambiar el momento de un control, o el `run` o el `min_score` de uno `check`, impide reanudar (exit 10), como cualquier otro cambio de lo que se verifica. Se acepta aunque el run no ejecute esos controles: `run.started` ya los listó, y el motivo final los nombra.
 4. **En el run, los controles `check` se nombran dos veces, nunca por intento:**
    - **En `report.md`.** `run.started` los lista en `check_controls`: una lista de `{id, level, mode, min_score}`. `report.md` los saca de ahí, en una sección propia, «Controles solo en `lictor check`», antes de «Controles en medición». Un journal sin el campo cuenta como una lista vacía. No salen en «Controles omitidos»: omitido es lo que tocaba en el intento y no se pudo ejecutar.
    - **En el motivo final, en una sola frase.** La añade `_finish`, que es por donde pasan todas las salidas, cuando hay controles `check` y la ejecución commiteó al menos un verde: implementado, colateral o registrado de nuevo. Una salida sin commits, como «Spec inválida» o un error interno, no la lleva. Una parada que se reanuda (pausa, reanudación rechazada) tampoco, porque no pasa por `_finish`.
-     - Por defecto, también en un worktree enlazado cuando el run para antes de su final (por ejemplo, con exit 10 después de algunos verdes): «Quedan sin comprobar mutation y audit, que solo corren en `lictor check`: ejecútalo antes de integrar.»
+     - Por defecto: «Quedan sin comprobar mutation y audit, que solo corren en `lictor check`: ejecútalo antes de integrar.»
+     - En un worktree enlazado, cuando el run para antes de su final (por ejemplo, con exit 10 después de algunos verdes), la frase nombra dónde ejecutarlo, sin invitar a integrar: «… ejecútalo en `<ruta del worktree>`, donde está la rama lictor/x, antes de integrar.» Sin la ruta, la persona lo ejecutaría en su checkout, que verifica otro commit.
      - Cuando un run en un worktree enlazado llega a su final, que es cuando sale `integration_hint`, se funde con él: «El resultado está en la rama lictor/x, en `<ruta del worktree>`. Quedan sin comprobar mutation y audit, que solo corren en `lictor check`: ejecútalo en ese worktree, o deja que lo haga la CI de la pull request, antes de integrarlo con `git merge lictor/x` o con una pull request.»
-     - Sin controles `check`, `integration_hint` dice lo de hoy.
+     - Sin controles `check`, o sin commits, `integration_hint` sale solo, y también nombra la ruta del worktree: «El resultado está en la rama lictor/x, en `<ruta del worktree>`: intégralo con `git merge lictor/x` o con una pull request.»
 
    `lictor status` y las líneas de progreso de `RunProgress` no los muestran.
 5. **Si `lictor check` falla tras el run, los escenarios siguen verdes y el arreglo es de la persona.** Es lo mismo que una CI que falla después de fusionar:

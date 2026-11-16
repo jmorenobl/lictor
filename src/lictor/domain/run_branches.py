@@ -47,11 +47,11 @@ def resume_choice(pending: Sequence[str], wanted: str | None) -> tuple[str | Non
     return None, None
 
 
-def integration_hint(branch: str) -> str:
+def integration_hint(branch: str, worktree: str) -> str:
     """Tell where the result is and how it gets in: always a step of the person's own."""
     return (
-        f"El resultado está en la rama {branch}: intégralo con `git merge {branch}` "
-        "o con una pull request."
+        f"El resultado está en la rama {branch}, en `{worktree}`: intégralo con "
+        f"`git merge {branch}` o con una pull request."
     )
 
 

@@ -16,9 +16,11 @@ en su significado se anota en «Cambiado».
   `id`, como `mode`, y vale con los dos modos y con `min_score`.
   - El run los nombra en «Controles solo en `lictor check`» de `report.md` (desde `run.started`,
     que los lista en `check_controls`) y, si guardó algún verde, en una frase del motivo final;
-    en un worktree enlazado, junto a la ruta del worktree y a cómo integrar la rama.
+    en un worktree enlazado, con la ruta del worktree donde ejecutar `lictor check`, también si
+    el run paró antes de su final.
   - `lictor check` los ejecuta con los demás y los marca «(solo en check)». `lictor doctor` busca
-    sus programas y avisa (⚠) de que un run no los ejecuta, sin cambiar su código de salida. El
+    sus programas y avisa (⚠) de que un run no los ejecuta, sin cambiar su código de salida; si
+    falta el programa de uno, también es un aviso, porque un run empezaría igual. El
     `preflight` y la reanudación de un run solo buscan los programas de los controles `attempt`.
   - Ningún control del perfil `python-uv` cambia: todos van en cada intento. La skill explica
     cuándo proponer `check`.
@@ -29,6 +31,8 @@ en su significado se anota en «Cambiado».
 
 - `stage` entra en la huella de la configuración, así que una ejecución a medias de la 0.3.0 no se
   reanuda con esta versión (exit 10): termínala antes o empieza otra con `--new`.
+- Al terminar un run en un worktree enlazado, el motivo final nombra también la ruta del worktree,
+  además de la rama y de cómo integrarla.
 
 ## [0.3.0] - 2026-11-11
 
