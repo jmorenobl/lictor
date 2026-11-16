@@ -197,7 +197,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
    | `Unjudged` | No se lee | No consta: la verificación acaba en `L0-estado` | — |
    | `Judged` que pasó, sin casos | `MissingReport`, o válido sin nada medido | `Read` que pasa | Ninguna: con `min_score` falla porque no midió nada |
    | `Judged`, cualquier otro | `MissingReport` | `Read` que falla: «Sin informe de cobertura» | Ninguna |
-   | `Judged`, cualquier otro | Válido sin nada medido | `Read` que falla: «El informe de cobertura no midió nada: lo que mide `--cov` no tiene código» (ADR-0009, cambio 6) | Ninguna |
+   | `Judged`, cualquier otro | Válido sin nada medido | `Read` que falla: «El informe de cobertura no midió nada: lo que mide no tiene código» (ADR-0009, cambio 6) | Ninguna |
    | `Judged`, cualquiera | `InvalidReport` | `Read` que falla: «El informe de cobertura no es válido: <motivo>» | Ninguna |
    | `Judged`, cualquiera | Válido, con algo medido | `Read` que pasa, y después `min_score` | La del informe; con `unit` fallido, marcada (punto 8) |
 

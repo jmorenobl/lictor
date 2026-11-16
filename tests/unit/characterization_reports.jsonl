@@ -658,12 +658,12 @@
 {"table": "coverage", "report": "0 de 2 líneas", "code": 1, "empty": [5], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 1", "cases": 0, "score": "coverage 0.0"}}
 {"table": "coverage", "report": "0 de 2 líneas", "code": 5, "empty": [], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 5", "cases": 0, "score": "coverage 0.0"}}
 {"table": "coverage", "report": "0 de 2 líneas", "code": 5, "empty": [5], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 0.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 0, "empty": [], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 100.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 0, "empty": [5], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 100.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 1, "empty": [], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 1", "cases": 0, "score": "coverage 100.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 1, "empty": [5], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 1", "cases": 0, "score": "coverage 100.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 5, "empty": [], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 5", "cases": 0, "score": "coverage 100.0"}}
-{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 5, "empty": [5], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 100.0"}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 0, "empty": [], "expected": {"ok": false, "error": "El informe de cobertura no midió nada: lo que mide no tiene código", "cases": 0, "score": null}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 0, "empty": [5], "expected": {"ok": false, "error": "El informe de cobertura no midió nada: lo que mide no tiene código", "cases": 0, "score": null}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 1, "empty": [], "expected": {"ok": false, "error": "El informe de cobertura no midió nada: lo que mide no tiene código", "cases": 0, "score": null}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 1, "empty": [5], "expected": {"ok": false, "error": "El informe de cobertura no midió nada: lo que mide no tiene código", "cases": 0, "score": null}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 5, "empty": [], "expected": {"ok": false, "error": "El informe de cobertura no midió nada: lo que mide no tiene código", "cases": 0, "score": null}}
+{"table": "coverage", "report": "0 sentencias y 0 ramas", "code": 5, "empty": [5], "expected": {"ok": true, "error": null, "cases": 0, "score": null}}
 {"table": "coverage", "report": "0 sentencias y 1 de 2 ramas", "code": 0, "empty": [], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 50.0"}}
 {"table": "coverage", "report": "0 sentencias y 1 de 2 ramas", "code": 0, "empty": [5], "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 50.0"}}
 {"table": "coverage", "report": "0 sentencias y 1 de 2 ramas", "code": 1, "empty": [], "expected": {"ok": false, "error": "Los tests de la cobertura fallaron con el código 1", "cases": 0, "score": "coverage 50.0"}}

@@ -20,6 +20,7 @@ from lictor.domain.reports import (
 )
 
 _FAILED = ("failure", "error")
+NOTHING_MEASURED = "El informe de cobertura no midió nada: lo que mide no tiene código"
 _TAIL_LINES = 40
 
 
@@ -86,17 +87,22 @@ def coverage_verdict(
     """A coverage control that ran its own tests: a report, and tests that ended well."""
     match report:
         case MissingReport():
-            if exit_code in empty_exit_codes:
-                return Passed()
-            return Failed("Sin informe de cobertura")
+            return _nothing_to_score(exit_code, empty_exit_codes, "Sin informe de cobertura")
         case InvalidReport(reason=reason):
             return Failed(f"El informe de cobertura no es válido: {reason}")
+        case CoverageReport(measured=False):
+            return _nothing_to_score(exit_code, empty_exit_codes, NOTHING_MEASURED)
         case CoverageReport():
             if exit_code != 0 and exit_code not in empty_exit_codes:
                 return Failed(f"Los tests de la cobertura fallaron con el código {exit_code}")
             return Passed()
         case _:
             assert_never(report)
+
+
+def _nothing_to_score(exit_code: int, empty_exit_codes: Collection[int], reason: str) -> Verdict:
+    """No report and a report that measured nothing are one fact: only an empty run explains it."""
+    return Passed() if exit_code in empty_exit_codes else Failed(reason)
 
 
 def mutation_verdict(report: ReportOf[MutationReport], exit_code: int) -> Verdict:
@@ -122,8 +128,10 @@ def report_cases(report: Report | None) -> tuple[TestCaseResult, ...]:
 
 
 def report_score(report: Report | None) -> Score | None:
-    """The score a report gives; only a coverage or a mutation report has one."""
-    if isinstance(report, CoverageReport | MutationReport):
+    """The score a report gives; only a coverage or a mutation report that measured has one."""
+    if isinstance(report, CoverageReport):
+        return report.score if report.measured else None
+    if isinstance(report, MutationReport):
         return report.score
     return None
 

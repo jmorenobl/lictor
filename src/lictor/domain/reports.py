@@ -47,6 +47,11 @@ class CoverageReport:
     num_branches: int = 0
 
     @property
+    def measured(self) -> bool:
+        """Whether there was anything to measure: with no statement and no branch, there wasn't."""
+        return self.num_statements + self.num_branches > 0
+
+    @property
     def score(self) -> CoverageScore:
         return coverage_score(
             {

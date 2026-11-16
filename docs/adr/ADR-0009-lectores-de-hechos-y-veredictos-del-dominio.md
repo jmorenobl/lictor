@@ -151,7 +151,7 @@ Las filas del contrato confirman lo anterior y fijan estos defectos. Cada uno es
       - **Qué es no medir nada:** un informe válido con 0 sentencias y 0 ramas. Uno al que le faltan `covered_lines` o `num_statements`, como `{"totals": {}}`, no es válido (punto 2).
       - **Su veredicto es el de un informe ausente,** con su propio motivo, porque es el mismo hecho: no hay nada que puntuar.
         - **Con un código de `empty_exit_codes`, pasa sin puntuación,** y con `min_score` falla porque no midió nada.
-        - **Con cualquier otro código, también el 0,** falla con «El informe de cobertura no midió nada: lo que mide `--cov` no tiene código».
+        - **Con cualquier otro código, también el 0,** falla con «El informe de cobertura no midió nada: lo que mide no tiene código».
 
         Antes daba un 100 % que cumplía cualquier mínimo.
    7. **Un informe con recuentos imposibles no es válido** (punto 2). Antes daba porcentajes por encima del 100 %.

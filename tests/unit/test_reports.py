@@ -138,3 +138,17 @@ def test_mutation_may_count_every_mutant() -> None:
 )
 def test_mutation_that_cannot_be_true_is_invalid(data: object, reason: str) -> None:
     assert mutation_report(data) == InvalidReport(reason)
+
+
+@pytest.mark.parametrize(
+    ("report", "measured"),
+    [
+        (CoverageReport(0, 0), False),
+        (CoverageReport(0, 1), True),
+        (CoverageReport(0, 0, 0, 1), True),
+    ],
+)
+def test_coverage_measured_something_if_it_had_a_statement_or_a_branch(
+    report: CoverageReport, measured: bool
+) -> None:
+    assert report.measured is measured

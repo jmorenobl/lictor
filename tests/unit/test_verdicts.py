@@ -15,6 +15,7 @@ from lictor.domain.reports import (
     MutationReport,
 )
 from lictor.domain.verdicts import (
+    NOTHING_MEASURED,
     Failed,
     Passed,
     coverage_verdict,
@@ -91,6 +92,7 @@ def test_junit(
 
 
 _COVERAGE = CoverageReport(1, 2)
+_NOTHING = CoverageReport(0, 0)  # ADR-0009, change 6: nothing to measure is no score
 
 
 @pytest.mark.parametrize(
@@ -109,6 +111,11 @@ _COVERAGE = CoverageReport(1, 2)
         (_COVERAGE, 5, (5,), Passed()),
         (_COVERAGE, 1, (), Failed("Los tests de la cobertura fallaron con el código 1")),
         (_COVERAGE, 5, (), Failed("Los tests de la cobertura fallaron con el código 5")),
+        (_NOTHING, 5, (5,), Passed()),
+        (_NOTHING, 0, (), Failed(NOTHING_MEASURED)),
+        (_NOTHING, 0, (5,), Failed(NOTHING_MEASURED)),
+        (_NOTHING, 1, (), Failed(NOTHING_MEASURED)),
+        (CoverageReport(0, 0, 1, 2), 0, (), Passed()),
     ],
 )
 def test_coverage(
@@ -150,6 +157,8 @@ def test_only_junit_has_cases_and_only_scores_have_scores() -> None:
     assert report_cases(_COVERAGE) == ()
     assert report_cases(None) == ()
     assert report_score(_COVERAGE) == _COVERAGE.score
+    assert report_score(_NOTHING) is None
+    assert report_score(CoverageReport(0, 0, 1, 2)) is not None
     assert report_score(_MUTANTS) == _MUTANTS.score
     assert report_score(JUnitReport(cases)) is None
     assert report_score(MissingReport()) is None
