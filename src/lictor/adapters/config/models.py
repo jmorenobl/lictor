@@ -1,4 +1,5 @@
 import re
+import shlex
 from pathlib import PurePosixPath
 from typing import Literal, Self
 
@@ -52,6 +53,16 @@ def _validate_regexes(patterns: list[str]) -> list[str]:
             msg = f"banned_patterns contiene una expresión inválida '{pattern}': {exc}"
             raise ValueError(msg) from exc
     return patterns
+
+
+def split_command(command: str, owner: str) -> str:
+    """Refuse a command `shlex` can't split, naming whose it is: run, it would only raise then."""
+    try:
+        shlex.split(command)
+    except ValueError as exc:
+        msg = f"El comando de {owner} no se puede trocear como en una shell ({exc}): {command}"
+        raise ValueError(msg) from exc
+    return command
 
 
 def _validate_unique_control_ids(controls: list["ControlConfig"]) -> list["ControlConfig"]:
@@ -139,6 +150,7 @@ class AcceptanceConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
+        split_command(self.run, "acceptance")
         if "{out}" not in self.run:
             msg = "La sección acceptance debe incluir '{out}' en run: ahí deja su informe JUnit"
             raise ValueError(msg)
@@ -266,6 +278,7 @@ class ControlConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
+        split_command(self.run, f"run del control '{self.id}'")
         if self.report != "exit-code" and "{out}" not in self.run:
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)

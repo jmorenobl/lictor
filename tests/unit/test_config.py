@@ -199,6 +199,33 @@ def test_the_acceptance_needs_out_where_it_leaves_its_report() -> None:
     assert AcceptanceConfig.model_validate({"run": "cmd {out}"}).run == "cmd {out}"
 
 
+def test_a_control_whose_command_doesnt_split_is_refused_at_load_naming_it() -> None:
+    """ADR-0008, point 1: an unclosed quote is a configuration error, not a crash in a run."""
+    with pytest.raises(ValidationError, match=r"run del control 'unit'.*No closing quotation"):
+        ControlConfig.model_validate(
+            {"id": "unit", "level": "L2", "run": "cmd 'tests --xml {out}", "report": "junit"}
+        )
+
+
+def test_an_acceptance_whose_command_doesnt_split_is_refused_at_load() -> None:
+    with pytest.raises(ValidationError, match=r"acceptance.*No closing quotation"):
+        AcceptanceConfig.model_validate({"run": 'cmd "{out}'})
+
+
+def test_a_project_control_that_doesnt_split_stops_the_load(tmp_path: Path) -> None:
+    (tmp_path / "lictor.json").write_text(
+        json.dumps(
+            {
+                "profile": "python-uv",
+                "controls": [{"id": "lint", "run": "uv run ruff check 'src"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"run del control 'lint'"):
+        load_config(tmp_path)
+
+
 @pytest.mark.parametrize("report", ["junit", "exit-code"])
 def test_the_acceptance_report_is_refused_and_says_why(report: str) -> None:
     """ADR-0009: the acceptance always reads JUnit, so the field decided nothing."""
