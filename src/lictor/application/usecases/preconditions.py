@@ -7,7 +7,7 @@ code from the kind of each problem: the project's (10) or the machine's (40).
 import os
 import posixpath
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -85,8 +85,9 @@ class CheckPreconditions:
     """Check the repository, git, the agent, the temporary directory and the commands.
 
     `commands` maps a label that completes "el comando …" to each command a run verifies with;
-    `check_stage_commands` maps the id of each control only `lictor check` runs to its command
-    (ADR-0007).
+    `check_stage_ids` are the controls only `lictor check` runs (ADR-0007), which `doctor` warns
+    about; `check_stage_commands` maps those that run a command of their own to it, whose
+    program it looks for: a reader runs nothing (ADR-0008).
     `aside` is the environment a throwaway is made from, so that its events stay out of the runs'
     journal; without it, the run's own is used. `spec_source` checks the features when asked.
     Without a configuration there is neither an executor nor an environment to build: what needs
@@ -98,6 +99,7 @@ class CheckPreconditions:
     environment: VerificationEnvironment | None
     project_root: Path
     commands: Mapping[str, str] = field(default_factory=dict)
+    check_stage_ids: Sequence[str] = ()
     check_stage_commands: Mapping[str, str] = field(default_factory=dict)
     aside: VerificationEnvironment | None = None
     spec_source: SpecSource | None = None
@@ -115,7 +117,7 @@ class CheckPreconditions:
             checks.append(self._features())
         if req.skill and (warning := skill_stub_warning(self.project_root)):
             checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
-        if req.check_stage and self.check_stage_commands:
+        if req.check_stage and self.check_stage_ids:
             checks.append(self._check_stage())
         checks.append(self._identity())
         executor, cli_version = self._executor()
@@ -173,7 +175,7 @@ class CheckPreconditions:
         """Warn, without stopping anything, that a run leaves some controls to `lictor check`."""
         return PreconditionCheck(
             "Momento de los controles",
-            warnings=(check_controls_warning(list(self.check_stage_commands)),),
+            warnings=(check_controls_warning(list(self.check_stage_ids)),),
         )
 
     def _commands(

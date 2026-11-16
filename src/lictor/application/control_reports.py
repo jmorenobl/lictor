@@ -21,7 +21,7 @@ from lictor.application.run_files import (
     relative_to_project,
     save_output,
 )
-from lictor.domain.controls import ReadStep, RunStep
+from lictor.domain.controls import ReadStep, RunStep, Step, executed_as, lent_by_check
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import CommandOutput
 from lictor.domain.results import (
@@ -90,21 +90,58 @@ type EvidenceOf = Callable[[str], ControlEvidence]
 
 @dataclass(frozen=True)
 class ControlRun:
-    """A control after its turn, with what its command printed, which a failure may need.
-
-    `read` is what its reader will find at its turn, when it has one in this verification: kept
-    from the moment the command ended. A run that tampered leaves nothing to find.
-    """
+    """A control after its turn, with what its command printed, which a failure may need."""
 
     entry: ControlEntry
     output: str = ""
-    read: ReadSource | None = None
 
 
-def not_run(step: RunStep, outcome: Skipped | NotExecuted) -> ControlRun:
+@dataclass
+class Readings:
+    """What each reader of one verification will find at its turn; a retry starts a new one.
+
+    It is kept from the moment its read control's turn ends: a skipped or unrunnable control
+    leaves the same to its reader, one that ran leaves its verdict and the coverage it wrote,
+    and one that tampered leaves nothing, because the verification ends there.
+    """
+
+    _found: dict[str, ReadSource] = field(default_factory=dict)
+
+    def keep(self, step: RunStep, source: ReadSource) -> None:
+        if step.read_by is not None:
+            self._found[step.read_by.id] = source
+
+    def turn(self, step: ReadStep) -> ControlRun:
+        """A reader's turn: skipped without its plugin, or its verdict over what was kept.
+
+        Its read control always comes before it and has a turn; one that tampered ended the
+        verification before this one.
+        """
+        reader = step.control
+        if step.missing is not None:
+            return ControlRun(ReaderEntry(reader, Skipped(plugin_skip_reason(step.missing))))
+        source = self._found.get(reader.id)
+        if source is None:
+            msg = f"El lector '{reader.id}' llegó a su turno antes que '{reader.reads}'"
+            raise InternalLictorError(msg)
+        return ControlRun(ReaderEntry(reader, reader_outcome(reader, source)))
+
+
+def take_turn(step: Step, readings: Readings, run: Callable[[RunStep], ControlRun]) -> ControlRun:
+    """A step's turn, as both the run and `lictor check` take it: `run` does a control's."""
+    match step:
+        case ReadStep():
+            return readings.turn(step)
+        case RunStep():
+            return run(step)
+        case _:
+            assert_never(step)
+
+
+def not_run(step: RunStep, outcome: Skipped | NotExecuted, readings: Readings) -> ControlRun:
     """A control whose turn came and that didn't run: its reader finds the same."""
-    read = outcome if step.read_by is not None else None
-    return ControlRun(CommandEntry(step.control, outcome), read=read)
+    readings.keep(step, outcome)
+    return ControlRun(CommandEntry(step.control, outcome))
 
 
 def run_control(
@@ -112,10 +149,12 @@ def run_control(
     readers: ReportReaders,
     evidence_of: EvidenceOf,
     execute: Execute,
+    readings: Readings,
 ) -> ControlRun:
     """Run a control's effective command, keep its log, then read and judge what it left.
 
     A command that changed the run's state is not judged: none of its reports is even read.
+    Its reader's report is read right then, under the same conditions as its own.
     """
     control = step.control
     evidence = evidence_of(control.id)
@@ -134,36 +173,23 @@ def run_control(
     judged = read_and_judge(readers, control.verdict_rule, evidence.report, output)
     verdict = enforce_min_score(judged.verdict, judged.score, control.min_score)
     judgement = Judged(judged.report, verdict)
-    read: ReadSource | None = None
     if step.read_by is not None:
         coverage = readers.coverage.read(evidence_of(step.read_by.id).report)
-        read = ReadFact(judgement, coverage)
+        readings.keep(step, ReadFact(judgement, coverage))
     entry = CommandEntry(control, Executed(ran, judgement))
-    return ControlRun(entry, format_output(output), read)
+    return ControlRun(entry, format_output(output))
 
 
-@dataclass
-class Readings:
-    """What each reader of one verification will find at its turn; a retry starts a new one."""
+def failure_reason(step: Step, entry: ControlEntry, reason: str) -> str:
+    """A failure's reason, with the command it ran when that isn't its `run` (ADR-0008, 4)."""
+    if not isinstance(step, RunStep):
+        return reason
+    note = executed_as(step.command, ran=isinstance(entry.outcome, Executed))
+    return f"{note}\n{reason}" if note else reason
 
-    _found: dict[str, ReadSource] = field(default_factory=dict)
 
-    def keep(self, step: RunStep, ran: ControlRun) -> None:
-        """Keep what a control's reader will find, if that reader is in this verification."""
-        if step.read_by is not None and ran.read is not None:
-            self._found[step.read_by.id] = ran.read
-
-    def turn(self, step: ReadStep) -> ControlRun:
-        """A reader's turn: skipped without its plugin, or its verdict over what was kept.
-
-        Its read control always comes before it and has a turn; one that tampered ended the
-        verification before this one.
-        """
-        reader = step.control
-        if step.missing is not None:
-            return ControlRun(ReaderEntry(reader, Skipped(plugin_skip_reason(step.missing))))
-        source = self._found.get(reader.id)
-        if source is None:
-            msg = f"El lector '{reader.id}' llegó a su turno antes que '{reader.reads}'"
-            raise InternalLictorError(msg)
-        return ControlRun(ReaderEntry(reader, reader_outcome(reader, source)))
+def lent_note(step: Step, entry: ControlEntry) -> str | None:
+    """The mark of a control that ran with a `check` reader's arguments, if it ran at all."""
+    if not isinstance(step, RunStep) or not isinstance(entry.outcome, Executed):
+        return None
+    return lent_by_check(step.command)

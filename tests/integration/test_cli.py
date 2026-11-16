@@ -108,7 +108,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     assert "⚠ Skill de Lictor:" in result.output
     assert "ejecuta `lictor skill`" in result.output
     assert (
-        "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit."
+        "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit y coverage."
         in result.output
     )
 

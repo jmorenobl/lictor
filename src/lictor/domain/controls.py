@@ -9,7 +9,7 @@ selection, and the steps a verification follows.
 """
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -180,15 +180,36 @@ class CommandPart:
 
 @dataclass(frozen=True)
 class EffectiveCommand:
-    """What a control runs: its `run`, and the `adds` of its reader when that reader runs too."""
+    """What a control runs: its `run`, and the `adds` of the reader that lends them, if any.
 
-    parts: tuple[CommandPart, ...]
+    The parts derive from the two controls, so a command can't carry arguments of no reader.
+    """
+
+    control: CommandControl
     reader: ReaderControl | None = None
+
+    @property
+    def parts(self) -> tuple[CommandPart, ...]:
+        own = CommandPart(self.control.run, self.control.id)
+        if self.reader is None:
+            return (own,)
+        return (own, CommandPart(self.reader.adds, self.reader.id))
 
     @property
     def configured(self) -> str:
         """The command as configured, each `{out}` where a report goes, for a person to read."""
         return " ".join(part.text for part in self.parts)
+
+
+# The plugin each control lacks, by id: decided once per verification for every use of it.
+type Missing = Mapping[str, str | None]
+
+
+def missing_plugins(
+    controls: Sequence[Control], installed: Collection[str]
+) -> dict[str, str | None]:
+    """The plugin each control needs and the environment lacks, or None, by its id."""
+    return {c.id: missing_plugin(c.when_plugin, installed) for c in controls}
 
 
 def effective_command(
@@ -200,28 +221,41 @@ def effective_command(
     selected. The reader's `adds` join only while the reader runs there and its plugin is loaded:
     without it the arguments would break the read control's own run.
     """
-    own = CommandPart(control.run, control.id)
+    return _effective(control, verified, missing_plugins(verified, installed))
+
+
+def _effective(
+    control: CommandControl, verified: Sequence[Control], missing: Missing
+) -> EffectiveCommand:
     reader = reader_of(control.id, verified)
-    if reader is None or missing_plugin(reader.when_plugin, installed) is not None:
-        return EffectiveCommand((own,))
-    return EffectiveCommand((own, CommandPart(reader.adds, reader.id)), reader)
+    if reader is None or missing.get(reader.id) is not None:
+        return EffectiveCommand(control)
+    return EffectiveCommand(control, reader)
 
 
-def executed_as(control: CommandControl, command: EffectiveCommand) -> str | None:
+REPORT_PATHS_NOTE = (
+    "Cada {out} es la ruta donde Lictor deja un informe, fuera de tu copia: para reproducirlo, "
+    "pon en cada uno una ruta distinta fuera del proyecto."
+)
+
+
+def executed_as(command: EffectiveCommand, ran: bool) -> str | None:
     """What the agent reads about a failed control whose command isn't its `run`, or None.
 
     Its own commands don't measure coverage: naming the command lets it reproduce a test that
-    only fails under it, instead of spending attempts with one that passes.
+    only fails under it, instead of spending attempts with one that passes. A control that never
+    ran, skipped or unable to run, ran no command to name.
     """
-    if command.reader is None:
+    if command.reader is None or not ran:
         return None
-    return f"{control.id} se ejecutó como: {command.configured}"
+    return f"{command.control.id} se ejecutó como: {command.configured}\n{REPORT_PATHS_NOTE}"
 
 
 def lent_by_check(command: EffectiveCommand) -> str | None:
     """How `lictor check` marks a control that ran with the arguments of a `check` reader.
 
     Its run in each attempt didn't have them, so a failure here may be one the run never saw.
+    The caller only asks for a control that ran: a skipped one ran with nothing.
     """
     reader = command.reader
     if reader is None or reader.stage != CHECK:
@@ -234,15 +268,23 @@ def lent_by_check(command: EffectiveCommand) -> str | None:
 
 @dataclass(frozen=True)
 class RunStep:
-    """Run a control's command; `read_by` is the reader whose report is read once it ends.
+    """Run a control's command, and read its reader's report once it ends if `reads` says so.
 
-    `missing` is the control's own plugin the environment lacks: then it is skipped.
+    `missing` is the control's own plugin the environment lacks: then it is skipped. The reader
+    whose report is read can only be the one lending its arguments (`read_by`).
     """
 
-    control: CommandControl
     command: EffectiveCommand
     missing: str | None = None
-    read_by: ReaderControl | None = None
+    reads: bool = False
+
+    @property
+    def control(self) -> CommandControl:
+        return self.command.control
+
+    @property
+    def read_by(self) -> ReaderControl | None:
+        return self.command.reader if self.reads else None
 
 
 @dataclass(frozen=True)
@@ -261,21 +303,21 @@ def verification_steps(
 ) -> tuple[Step, ...]:
     """The steps for the `selected` controls of a verification that runs `verified`.
 
-    The plugin of each reader is decided once, here, for both the command of its read control and
-    its own turn, so they can't contradict each other. A reader's report is only read when the
-    reader is selected: `lictor check --control unit` runs the same command and reads nothing.
+    The plugin of each control is decided once, here, and the same decision gives both the
+    command of a read control and its reader's own turn, so they can't contradict each other. A
+    reader's report is only read when the reader is selected: `lictor check --control unit` runs
+    the same command and reads nothing.
     """
+    missing = missing_plugins(verified, installed)
     selected_ids = {control.id for control in selected}
     steps: list[Step] = []
     for control in selected:
-        missing = missing_plugin(control.when_plugin, installed)
         if isinstance(control, ReaderControl):
-            steps.append(ReadStep(control, missing))
+            steps.append(ReadStep(control, missing.get(control.id)))
             continue
-        command = effective_command(control, verified, installed)
-        reader = command.reader
-        read_by = reader if reader is not None and reader.id in selected_ids else None
-        steps.append(RunStep(control, command, missing, read_by))
+        command = _effective(control, verified, missing)
+        reads = command.reader is not None and command.reader.id in selected_ids
+        steps.append(RunStep(command, missing.get(control.id), reads))
     return tuple(steps)
 
 

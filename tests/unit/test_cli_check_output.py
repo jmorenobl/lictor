@@ -1,7 +1,8 @@
 """How `lictor check` shows a reader: «lee unit», its score, the mark and its control's log."""
 
-from lictor.cli import _check_lines
-from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.application.usecases.check_project import CheckProjectResult
+from lictor.cli import _check_lines, _check_output
+from lictor.domain.controls import Added, CommandControl, ReaderControl
 from lictor.domain.reports import CoverageReport, JUnitReport, MissingReport
 from lictor.domain.results import (
     CommandEntry,
@@ -47,4 +48,23 @@ def test_a_failed_reader_points_to_the_log_of_the_run_it_read() -> None:
     assert _check_lines("coverage", " (solo en check)", entries[1], entries) == [
         "✗ coverage (solo en check) lee unit: Sin informe de cobertura",
         "  salida: .lictor/check/unit.log",
+    ]
+
+
+def test_check_says_what_it_added_and_marks_what_ran_with_a_check_readers_arguments() -> None:
+    unit = CommandControl("unit", "L2", "pytest {out}", "junit")
+    reader = ReaderControl("coverage", "L2", "unit", "--cov {out}", stage="check")
+    ran = CommandEntry(unit, Executed(_RAN, Judged(JUnitReport(()), Passed())))
+    read = ReaderEntry(reader, Read("unit", CoverageReport(3, 4), Passed()))
+    check = CheckProjectResult(
+        ok=True,
+        controls=(ran, read),
+        added=(Added(unit, reader),),
+        lent={"unit": " (con los argumentos de coverage, que solo corre en check)"},
+    )
+
+    assert _check_output(check, {"coverage"}) == [
+        "Se ejecuta también unit, cuya ejecución lee coverage.",
+        "✓ unit (con los argumentos de coverage, que solo corre en check) (7ms)",
+        "✓ coverage (solo en check) lee unit: 75,0 % (3 de 4 líneas)",
     ]

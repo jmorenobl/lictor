@@ -3,7 +3,7 @@
 import json
 import shutil
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import closing
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
@@ -425,19 +425,9 @@ def check(
             )
 
         typer.echo(f"Verificado: {res.subject}")
-        for added in res.check.added:
-            typer.echo(f"{added.sentence}.")
-        # A failure after a run reads as what it is: something the run left for later (ADR-0007).
         only_here = {c.id for c in runtime.graph_context.check_controls}
-        for entry in res.check.controls:
-            name = entry.control.id
-            stage = " (solo en check)" if name in only_here else ""
-            stage += res.check.lent.get(name, "")
-            for line in _check_lines(name, stage, entry, res.check.controls):
-                typer.echo(line)
-        if res.check.acceptance is not None:
-            for line in _acceptance_lines(res.check):
-                typer.echo(line)
+        for line in _check_output(res.check, only_here):
+            typer.echo(line)
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
@@ -449,6 +439,23 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+def _check_output(check: CheckProjectResult, only_here: Collection[str]) -> list[str]:
+    """What `lictor check` prints of what it verified, after naming what it verified.
+
+    A failure after a run reads as what it is: something the run left for later (ADR-0007), or a
+    read control that ran with the arguments of a reader the run never runs (ADR-0008).
+    """
+    lines = [f"{added.sentence}." for added in check.added]
+    for entry in check.controls:
+        name = entry.control.id
+        stage = " (solo en check)" if name in only_here else ""
+        stage += check.lent.get(name, "")
+        lines += _check_lines(name, stage, entry, check.controls)
+    if check.acceptance is not None:
+        lines += _acceptance_lines(check)
+    return lines
 
 
 def _check_lines(

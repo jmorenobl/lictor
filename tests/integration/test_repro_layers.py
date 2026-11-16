@@ -35,7 +35,9 @@ SMOKE = {
     "test_v0_3_0_own_worktree": (
         "test_a_run_from_the_checkout_works_in_its_own_worktree_and_branch",
     ),
-    "test_v0_4_0_coverage_reads_unit": ("test_unit_runs_once_and_coverage_scores_that_run",),
+    "test_v0_4_0_coverage_reads_unit": (
+        "test_each_verification_of_a_run_runs_the_unit_tests_once",
+    ),
 }
 
 # Cases whose defence is about a control the light project drops: without it they would pass
@@ -50,6 +52,7 @@ ALL_CONTROLS = {
     "test_phase6_robustness": ("test_e20_non_utf8_output_does_not_crash_the_run",),
     "test_phase7_check": ("test_check_ignores_the_users_configuration",),
     "test_v0_4_0_coverage_reads_unit": (
+        "test_unit_runs_once_and_coverage_scores_that_run",
         "test_the_projects_fail_under_doesnt_fail_unit",
         "test_without_pytest_cov_unit_runs_as_it_is_and_coverage_is_skipped",
         "test_coverage_only_in_check_measures_there_and_never_in_the_run",
@@ -116,6 +119,19 @@ def test_a_case_that_names_either_of_the_pair_keeps_both(tmp_path: Path, named: 
 
     assert {"unit", "coverage"} <= ids
     assert not {"lint", "types"} & ids
+
+
+@pytest.mark.parametrize("dropped", ["unit", "coverage"])
+def test_a_case_that_drops_either_of_the_pair_drops_both(tmp_path: Path, dropped: str) -> None:
+    written: dict[str, object] = {
+        "profile": "python-uv@0.2",
+        "controls": [{"id": dropped, "enabled": False}],
+    }
+    (tmp_path / "lictor.json").write_text(json.dumps(light_config(written)), encoding="utf-8")
+
+    ids = {c.id for c in load_config(tmp_path).controls}
+
+    assert not {"unit", "coverage"} & ids
 
 
 def test_a_change_the_case_writes_wins_over_the_light_project() -> None:

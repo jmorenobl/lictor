@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from lictor.domain.controls import (
+    REPORT_PATHS_NOTE,
     CommandControl,
     CommandPart,
     Control,
@@ -195,10 +196,12 @@ def test_the_agent_reads_the_effective_command_only_when_it_isnt_the_run() -> No
     lent = effective_command(UNIT, [UNIT, COVERAGE], COV)
     own = effective_command(UNIT, [UNIT, COVERAGE], ())
 
-    assert executed_as(UNIT, lent) == (
-        "unit se ejecutó como: pytest --junitxml {out} --cov --json={out}"
+    assert executed_as(lent, ran=True) == (
+        "unit se ejecutó como: pytest --junitxml {out} --cov --json={out}\n" + REPORT_PATHS_NOTE
     )
-    assert executed_as(UNIT, own) is None
+    assert executed_as(own, ran=True) is None
+    # A control that never ran ran no command: skipped, or unable to run.
+    assert executed_as(lent, ran=False) is None
 
 
 def test_the_run_and_check_give_one_command_whatever_is_selected() -> None:
@@ -218,10 +221,16 @@ def test_the_run_and_check_give_one_command_whatever_is_selected() -> None:
 def test_the_steps_decide_the_readers_plugin_once_for_both_turns() -> None:
     without = verification_steps([UNIT, COVERAGE], [UNIT, COVERAGE], ())
 
-    assert without == (
-        RunStep(UNIT, EffectiveCommand((CommandPart(UNIT.run, "unit"),))),
-        ReadStep(COVERAGE, "cov.plugin"),
-    )
+    assert without == (RunStep(EffectiveCommand(UNIT)), ReadStep(COVERAGE, "cov.plugin"))
+
+
+def test_a_step_reads_only_the_report_of_the_reader_lending_its_arguments() -> None:
+    lent = RunStep(EffectiveCommand(UNIT, COVERAGE), reads=True)
+
+    assert (lent.control, lent.read_by) == (UNIT, COVERAGE)
+    assert RunStep(EffectiveCommand(UNIT, COVERAGE)).read_by is None
+    # Without a reader there is no report to read, whatever the flag says.
+    assert RunStep(EffectiveCommand(UNIT), reads=True).read_by is None
 
 
 def test_a_command_control_without_its_plugin_is_a_step_that_skips() -> None:

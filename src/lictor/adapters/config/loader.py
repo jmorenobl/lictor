@@ -22,7 +22,6 @@ from lictor.adapters.config.models import (
     ReaderControlConfig,
     allow_empty_message,
     driver_hints_message,
-    no_shape_message,
     plugin_without_list_message,
     two_shapes_message,
 )
@@ -394,9 +393,8 @@ def _new_control(
         return written
     if not reads:
         msg = (
-            f"{adds}. {no_shape_message(control_id)}: un control que ejecuta necesita level, "
-            'report y run, y uno que lee la ejecución de otro, level, report: "coverage", reads '
-            "y adds."
+            f"{adds}, pero no dice qué ejecuta. Un control que ejecuta necesita level, report y "
+            'run, y uno que lee la ejecución de otro, level, report: "coverage", reads y adds.'
         )
         raise ConfigError(msg)
     missing = [name for name in ("level", "report", "reads", "adds") if name not in written]
@@ -423,11 +421,14 @@ def _check_reader_report(control_id: str, written: dict[str, object]) -> None:
 
 
 def _run_fields_message(control_id: str, run_fields: Sequence[str], reads: str) -> str:
-    return (
-        f"El control '{control_id}' lee la ejecución de '{reads}' y no ejecuta nada: "
-        f"{_names(run_fields)} son de una ejecución y no se aplicarían. Quítalos, o "
-        f"escríbelos en '{reads}'."
-    )
+    if len(run_fields) == 1:
+        what = f"{run_fields[0]} es de una ejecución y no se aplicaría. Quítalo, o escríbelo"
+    else:
+        what = (
+            f"{_names(run_fields)} son de una ejecución y no se aplicarían. Quítalos, o escríbelos"
+        )
+    reader = f"El control '{control_id}' lee la ejecución de '{reads}' y no ejecuta nada"
+    return f"{reader}: {what} en '{reads}'."
 
 
 def _without(control: dict[str, object], names: Sequence[str]) -> dict[str, object]:
@@ -459,7 +460,7 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     try:
         written = LictorFile.model_validate(parsed)
     except ValidationError as exc:
-        msg = f"Configuración inválida en '{config_path}': {exc}"
+        msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
     merged = _merge_profile_defaults(parsed, written, profiles_dir, config_path.parent)
     try:

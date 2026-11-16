@@ -49,6 +49,7 @@ class _Parts:
         bin_dir: Path,
         commands: dict[str, str],
         check_stage_commands: dict[str, str] | None = None,
+        check_stage_ids: list[str] | None = None,
     ) -> None:
         self.vcs = MagicMock(spec=Vcs)
         self.vcs.has_commits.return_value = True
@@ -65,6 +66,9 @@ class _Parts:
             self.environment,
             tmp_path,
             commands,
+            check_stage_ids=(
+                check_stage_ids if check_stage_ids is not None else list(check_stage_commands or {})
+            ),
             check_stage_commands=check_stage_commands or {},
         )
 
@@ -250,6 +254,23 @@ def test_doctor_looks_for_every_program_and_warns_of_the_check_controls(
         "Controles que solo corren en `lictor check`: mutation y audit. Un run no los "
         "ejecuta: solo protegen lo que integras si tu CI ejecuta `lictor check`.",
     )
+
+
+def test_doctor_warns_of_a_reader_only_in_check_and_looks_for_no_program_of_it(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """ADR-0008: a reader runs nothing, but a run still leaves it to `lictor check`."""
+    parts = _Parts(
+        tmp_path, bin_dir, {"del control 'a'": "herramienta"}, check_stage_ids=["coverage"]
+    )
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", check_stage=True))
+
+    assert report.problems == []
+    warned = next(c for c in report.checks if c.name == "Momento de los controles")
+    assert "solo corren en `lictor check`: coverage." in warned.warnings[0]
+    commands = next(c for c in report.checks if c.name == "Comandos de verificación")
+    assert commands.warnings == ()
 
 
 def test_doctor_still_fails_on_an_empty_command_of_a_check_control(

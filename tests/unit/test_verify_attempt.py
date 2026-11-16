@@ -1712,3 +1712,17 @@ def test_verify_a_blocking_reader_fails_with_its_reason_alone(tmp_path: Path) ->
     assert "Sin informe de cobertura" in (result.condensed_error or "")
     assert "salida de" not in (result.condensed_error or "")
     assert ids(result) == ["unit", "coverage"]
+
+
+def test_verify_names_no_command_for_a_unit_the_attempt_removed(tmp_path: Path) -> None:
+    unit = replace(_UNIT, when_exists="tests/unit")
+    verifier, req, runner = _reading(tmp_path, {}, controls=(unit, _READER))
+    req = replace(req, paths_writable=("src/", "tests/unit/"))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.deleted = ["tests/unit/test_a.py"]
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "unit"
+    assert "se ejecutó como" not in (result.condensed_error or "")
+    assert [call["cmd"][0] for call in runner.calls] == []

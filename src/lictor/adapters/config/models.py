@@ -2,7 +2,7 @@ import re
 import shlex
 from collections.abc import Sequence
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -392,7 +392,9 @@ def two_shapes_message(control_id: str) -> str:
 
 def _control_shape(data: object) -> str | None:
     if isinstance(data, dict):
-        return "reads" if "reads" in data else "run" if "run" in data else None
+        if "reads" in data or "adds" in data:
+            return "reads"
+        return "run" if "run" in data else None
     if isinstance(data, ReaderControlConfig):
         return "reads"
     return "run" if isinstance(data, CommandControlConfig) else None
@@ -454,8 +456,15 @@ def _check_readers(controls: Sequence[CommandControlConfig | ReaderControlConfig
 
 
 def _no_default(schema: JsonDict) -> None:
-    """A field that is optional to write but never null: its unwritten value is never read."""
     schema.pop("default", None)
+
+
+def _unwritten(**constraints: Any) -> Any:
+    """A field that is optional to write but never null: its unwritten value is never read.
+
+    Pydantic doesn't validate a default, so the schema shows none, and the type has no None.
+    """
+    return Field(default=None, json_schema_extra=_no_default, **constraints)
 
 
 ADDS_DESCRIPTION = (
@@ -478,23 +487,20 @@ class ControlChange(BaseModel):
 
     id: str = Field(min_length=1)
     enabled: bool = True
-    level: ControlLevel | None = None
-    # Written is in `model_fields_set`: the default of these three is never read.
-    run: str = Field(default="", min_length=1, json_schema_extra=_no_default)
-    reads: str = Field(
-        default="",
+    # Written is in `model_fields_set`: the unwritten value of these is never read, and none
+    # takes null, which would mean nothing. Only the last three take it, to clear a value.
+    level: ControlLevel = _unwritten()
+    run: str = _unwritten(min_length=1)
+    reads: str = _unwritten(
         min_length=1,
-        json_schema_extra=_no_default,
         description="El id del control, con report junit, cuya ejecución lee este control.",
     )
-    adds: str = Field(
-        default="", min_length=1, json_schema_extra=_no_default, description=ADDS_DESCRIPTION
-    )
-    report: ReportFormat | None = None
-    mode: ControlMode | None = None
-    stage: Stage | None = None
-    empty_exit_codes: list[int] | None = None
-    timeout_s: int | None = Field(default=None, gt=0)
+    adds: str = _unwritten(min_length=1, description=ADDS_DESCRIPTION)
+    report: ReportFormat = _unwritten()
+    mode: ControlMode = _unwritten()
+    stage: Stage = _unwritten()
+    empty_exit_codes: list[int] = _unwritten()
+    timeout_s: int = _unwritten(gt=0)
     when_exists: str | None = None
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
@@ -594,6 +600,13 @@ class Profile(BaseModel):
     @classmethod
     def _check_regexes(cls, patterns: list[str]) -> list[str]:
         return _validate_regexes(patterns)
+
+    @model_validator(mode="after")
+    def _validate_retired_versions(self) -> Self:
+        if self.version in self.retired_versions:
+            msg = f"El perfil {self.name} retira su propia versión, {self.version}"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _validate_plugins_can_be_listed(self) -> Self:

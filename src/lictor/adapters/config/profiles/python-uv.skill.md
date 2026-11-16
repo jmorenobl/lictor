@@ -52,9 +52,11 @@ mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
   vale: `unit` en `check` con `coverage` en cada intento es un error, porque en el run no habría
   qué leer; van los dos en `check`, o se quita `coverage`.
 - **Un `coverage` con su propio comando:** se le escribe `run`, con todo lo que esa ejecución
-  necesita (`--cov=src --cov-branch --cov-report=json:{out}`, y `empty_exit_codes` o
-  `timeout_s` si hacen falta), y ejecuta los tests otra vez. Solo tiene sentido si mide otra
-  suite que `unit`.
+  necesita (`--cov=src --cov-branch --cov-report=json:{out}`, y `empty_exit_codes`, `timeout_s`
+  o `when_exists` si hacen falta, porque no los hereda de nadie), y ejecuta los tests otra vez.
+  Conserva del perfil `mode: "measure"` y `when_plugin: "pytest_cov.plugin"`: si mide con otra
+  herramienta, escribe también `"when_plugin": null`, o se saltará por un plugin que no usa. Solo
+  tiene sentido si mide otra suite que `unit`.
 
 **Cuándo corre cada control:** los cuatro del perfil (`lint`, `types`, `unit` y `coverage`) van
 en cada intento. Si la persona añade una mutación (por ejemplo, con `mutmut`) o una auditoría de

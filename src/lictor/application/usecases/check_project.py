@@ -11,8 +11,11 @@ from lictor.application.control_reports import (
     ControlEvidence,
     ControlRun,
     Readings,
+    failure_reason,
+    lent_note,
     not_run,
     run_control,
+    take_turn,
 )
 from lictor.application.ports import CommandRunner, ReportReaders
 from lictor.application.run_files import (
@@ -27,12 +30,8 @@ from lictor.domain.controls import (
     ACCEPTANCE_ID,
     Added,
     Control,
-    ReadStep,
     RunStep,
-    Step,
     check_selection,
-    executed_as,
-    lent_by_check,
     verification_steps,
 )
 from lictor.domain.model import CommandOutput
@@ -140,14 +139,18 @@ class CheckProject:
         steps = verification_steps(selection.controls, req.controls, installed)
         entries: list[ControlEntry] = []
         readings = Readings()
+        lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
 
         for step in steps:
-            ctrl_run = self._step(req, step, readings)
+            ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
             entries.append(ctrl_run.entry)
+            if note := lent_note(step, ctrl_run.entry):
+                lent[step.control.id] = note
             failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
             if failure is not None:
-                failure = replace(failure, reason=_with_command(step, failure.reason))
+                reason = failure_reason(step, ctrl_run.entry, failure.reason)
+                failure = replace(failure, reason=reason)
                 first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
@@ -164,11 +167,6 @@ class CheckProject:
                 failure = Block(verdict.reason, acceptance_cases(accepted))
                 first_failure = first_failure or (ACCEPTANCE_ID, failure)
 
-        lent = {
-            step.control.id: note
-            for step in steps
-            if isinstance(step, RunStep) and (note := lent_by_check(step.command))
-        }
         done = CheckProjectResult(
             ok=True,
             controls=tuple(entries),
@@ -187,35 +185,24 @@ class CheckProject:
         )
         return replace(done, ok=False, failed_at=failed_at, condensed_error=condensed)
 
-    def _step(self, req: CheckProjectRequest, step: Step, readings: Readings) -> ControlRun:
-        match step:
-            case ReadStep():
-                return readings.turn(step)
-            case RunStep():
-                ctrl_run = self._control(req, step)
-                readings.keep(step, ctrl_run)
-                return ctrl_run
-            case _:
-                assert_never(step)
-
-    def _control(self, req: CheckProjectRequest, step: RunStep) -> ControlRun:
+    def _control(self, req: CheckProjectRequest, step: RunStep, readings: Readings) -> ControlRun:
         """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
         ctrl = step.control
         tree = req.tree or req.project_root
         if step.missing is not None:
-            return not_run(step, Skipped(plugin_skip_reason(step.missing)))
+            return not_run(step, Skipped(plugin_skip_reason(step.missing)), readings)
         if ctrl.when_exists:
             in_tree = os.path.lexists(tree / ctrl.when_exists)
             status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=req.deleted)
             if status == "absent":
                 reason = f"No existe {ctrl.when_exists} en lo verificado"
-                return not_run(step, Skipped(reason))
+                return not_run(step, Skipped(reason), readings)
             if status == "removed":
                 reason = (
                     f"Lo verificado elimina {ctrl.when_exists}, que existía en HEAD: "
                     f"el control {ctrl.id} ya no puede ejecutarse"
                 )
-                return not_run(step, NotExecuted(reason))
+                return not_run(step, NotExecuted(reason), readings)
 
         def execute(
             command: Sequence[str], timeout_s: int
@@ -223,7 +210,7 @@ class CheckProject:
             # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
             return self.runner.run(cmd=command, cwd=tree, timeout_s=timeout_s), ()
 
-        return run_control(step, self.readers, partial(self._evidence, req), execute)
+        return run_control(step, self.readers, partial(self._evidence, req), execute, readings)
 
     def _evidence(self, req: CheckProjectRequest, step_id: str) -> ControlEvidence:
         evidence_dir = req.evidence_dir or aside_dir(req.project_root, CHECK_DIR)
@@ -245,12 +232,6 @@ class CheckProject:
         execution = Execution.of(cmd_out, acceptance.timeout_s)
         ran = Ran(tuple(command), execution, relative_to_project(evidence.log, req.project_root))
         return AcceptanceRun(ran, trust(junit, execution, acceptance.failure_exit_codes))
-
-
-def _with_command(step: Step, reason: str) -> str:
-    """Name the command a failed control ran when it isn't its `run` (ADR-0008, point 4)."""
-    note = executed_as(step.control, step.command) if isinstance(step, RunStep) else None
-    return f"{note}\n{reason}" if note else reason
 
 
 def _blocking(outcome: Consequence) -> Block | None:

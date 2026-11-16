@@ -110,6 +110,8 @@ def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path:
     assert "del control 'unit'" not in checks.commands
     assert "del control 'audit'" in checks.commands
     # A reader runs nothing: it names no program to look for.
+    # A reader runs nothing: it names no program to look for, and doctor still warns of it.
     assert "coverage" not in checks.check_stage_commands
+    assert list(checks.check_stage_ids) == ["unit", "coverage", "mutation"]
     assert list(checks.check_stage_commands) == ["unit", "mutation"]
     assert checks.check_stage_commands["mutation"] == "mutar {out}"

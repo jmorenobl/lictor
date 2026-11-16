@@ -120,13 +120,17 @@ def uses_all_controls(marks: set[str]) -> bool:
 def light_config(written: dict[str, Any]) -> dict[str, Any]:
     """`written` without the controls of `LIGHT_DISABLED`, unless it changes one itself.
 
-    A case that names either of a pair keeps both: a reader needs the control it reads.
+    A case that names either of a pair keeps both, since a reader needs the control it reads;
+    one that drops either drops both.
     """
     changes = list(written.get("controls", []))
     named = {change["id"] for change in changes}
     for pair in LIGHT_PAIRS:
         if named & pair:
             named |= pair
+            if any(c["id"] in pair and c.get("enabled") is False for c in changes):
+                gone = {c["id"] for c in changes if c["id"] in pair}
+                changes += [{"id": id_, "enabled": False} for id_ in sorted(pair - gone)]
     dropped = [{"id": id_, "enabled": False} for id_ in LIGHT_DISABLED if id_ not in named]
     return {**written, "controls": dropped + changes}
 

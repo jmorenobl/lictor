@@ -257,6 +257,7 @@ def bootstrap_runtime(
         environment=environment,
         project_root=resolved_root,
         commands=commands,
+        check_stage_ids=[c.id for c in check_controls],
         check_stage_commands={c.id: c.run for c in command_controls(check_controls)},
         aside=VerificationEnvironment(
             vcs, runner, doctor_audit, resolved_root, defences.verification

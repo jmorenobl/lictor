@@ -104,7 +104,7 @@ def test_runs_and_reads_with_another_report_is_refused() -> None:
 
 
 def test_runs_and_reads_with_a_run_field_is_refused() -> None:
-    _refused(COVERS, "timeout_s son de una ejecución", reads="unit", adds="a {out}", timeout_s=9)
+    _refused(COVERS, "timeout_s es de una ejecución", reads="unit", adds="a {out}", timeout_s=9)
 
 
 @pytest.mark.parametrize("written", [{"reads": "unit"}, {"adds": "a {out}"}])
@@ -146,7 +146,16 @@ def test_reads_and_a_run_runs_with_the_run_fields_it_writes_or_their_defaults() 
 )
 def test_reads_and_a_run_field_without_run_is_refused(written: dict[str, object]) -> None:
     """A null written is written: `when_exists: null` on a reader would apply nothing."""
-    _refused(READS, "son de una ejecución y no se aplicarían.*escríbelos en 'unit'", **written)
+    _refused(READS, "es de una ejecución y no se aplicaría.*escríbelo en 'unit'", **written)
+
+
+def test_several_run_fields_are_named_together() -> None:
+    _refused(
+        READS,
+        "timeout_s y when_exists son de una ejecución y no se aplicarían. Quítalos, o escríbelos",
+        timeout_s=9,
+        when_exists="tests",
+    )
 
 
 @pytest.mark.parametrize("base", [RUNS, READS, None])
@@ -169,7 +178,7 @@ def test_a_new_id_with_level_coverage_reads_and_adds_reads() -> None:
 @pytest.mark.parametrize(
     ("written", "match"),
     [
-        ({"level": "L2"}, "no dice qué ejecuta: escribe run, o reads y adds"),
+        ({"level": "L2"}, r"así que lo añade, pero no dice qué ejecuta\. Un control que"),
         ({"run": "x"}, "escribe también level y report"),
         ({"reads": "unit", "level": "L2"}, "escribe también report y adds"),
         (
@@ -178,7 +187,7 @@ def test_a_new_id_with_level_coverage_reads_and_adds_reads() -> None:
         ),
         (
             {"reads": "u", "adds": "a {out}", "level": "L2", "report": "coverage", "timeout_s": 1},
-            "timeout_s son de una ejecución",
+            "timeout_s es de una ejecución",
         ),
     ],
 )
@@ -227,15 +236,56 @@ def test_dropping_a_control_writes_nothing_else(tmp_path: Path, profiles: Path) 
         load_config(root, profiles)
 
 
-@pytest.mark.parametrize("field", ["run", "reads", "adds"])
-def test_a_null_shape_field_is_refused(field: str) -> None:
-    with pytest.raises(ValidationError, match="string"):
+@pytest.mark.parametrize(
+    "field",
+    ["run", "reads", "adds", "level", "report", "mode", "stage", "timeout_s", "empty_exit_codes"],
+)
+def test_a_null_that_would_mean_nothing_is_refused(field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
         ControlChange.model_validate({"id": "coverage", field: None})
+
+
+@pytest.mark.parametrize("field", ["when_exists", "when_plugin", "min_score"])
+def test_a_null_clears_what_takes_it(field: str) -> None:
+    assert ControlChange.model_validate({"id": "unit", field: None}).model_fields_set == {
+        "id",
+        field,
+    }
+
+
+def test_the_schema_takes_no_null_where_it_would_mean_nothing() -> None:
+    properties = ControlChange.model_json_schema()["properties"]
+
+    for field in ("run", "reads", "adds", "level", "report", "mode", "stage", "timeout_s"):
+        assert "null" not in json.dumps(properties[field]), field
+        assert "default" not in properties[field], field
 
 
 def test_a_control_with_neither_run_nor_reads_names_both() -> None:
     with pytest.raises(ValidationError, match="'x' no dice qué ejecuta: escribe run, o reads"):
         _CONTROL.validate_python({"id": "x", "level": "L2", "report": "junit"})
+
+
+def test_a_control_with_adds_and_no_reads_is_a_reader_missing_reads() -> None:
+    """Built by hand or in a profile, never the error of a union's discriminator."""
+    with pytest.raises(ValidationError, match=r"reads\n  Field required"):
+        _CONTROL.validate_python({"id": "c", "level": "L2", "adds": "{out}", "report": "coverage"})
+
+
+def test_a_profile_cant_retire_its_own_version() -> None:
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["retired_versions"] = {data["version"]: "nada"}
+
+    with pytest.raises(ValidationError, match="retira su propia versión"):
+        Profile.model_validate(data)
+
+
+def test_an_acceptance_that_doesnt_split_is_refused_with_its_own_message(tmp_path: Path) -> None:
+    root = _project(tmp_path, acceptance={"run": "pytest '{out}"})
+
+    with pytest.raises(ConfigError, match=r"acceptance no se puede trocear") as refused:
+        load_config(root, DEFAULT_PROFILES_DIR)
+    assert "input_value" not in str(refused.value)
 
 
 def test_a_reader_with_a_run_field_cant_be_built() -> None:

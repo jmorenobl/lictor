@@ -515,3 +515,24 @@ def test_check_doesnt_mark_a_unit_whose_reader_runs_in_every_attempt(tmp_path: P
     result, _ = _check(tmp_path, Leaves(junit=_GREEN))
 
     assert result.lent == {}
+
+
+def test_check_names_no_command_for_a_unit_that_couldnt_run(tmp_path: Path) -> None:
+    """A unit whose path the checked tree removed ran nothing: there is no command to name."""
+    unit = replace(_UNIT, when_exists="tests/unit")
+    result, runner = _check(
+        tmp_path, Leaves(junit=_GREEN), controls=(unit, _READER), deleted=["tests/unit/test_a.py"]
+    )
+
+    assert runner.calls == []
+    assert result.failed_at == "unit"
+    assert "se ejecutó como" not in (result.condensed_error or "")
+
+
+def test_check_doesnt_mark_a_skipped_unit_with_the_arguments_it_never_got(tmp_path: Path) -> None:
+    unit = replace(_UNIT, when_exists="tests/unit")
+    late = replace(_READER, stage=CHECK)
+    result, _ = _check(tmp_path, Leaves(junit=_GREEN), controls=(unit, late))
+
+    assert seen(result, "unit").skipped is not None
+    assert result.lent == {}

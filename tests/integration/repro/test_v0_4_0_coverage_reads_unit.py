@@ -18,6 +18,7 @@ from tests.integration.repro.harness import (
     Agent,
     Outcome,
     all_controls,
+    events_of,
     git,
     require,
     run_lictor,
@@ -63,6 +64,41 @@ def _runs_of_the_unit_tests(evidence: Path) -> list[Path]:
 
 
 @smoke
+def test_each_verification_of_a_run_runs_the_unit_tests_once(make_project: ProjectFactory) -> None:
+    """The whole cycle: unit runs with coverage's arguments, and coverage reads that run."""
+    root = make_project(sync=False)
+    _add_pytest_cov(root)
+    _commit(root, "chore: pytest-cov")
+
+    assert run_lictor(root, Agent()) == Outcome(0)
+
+    verifications = sorted((root / ".lictor" / "runs").glob("*/*/*-verify*"))
+    require(verifications, "el run no verificó nada")
+    for step in verifications:
+        (unit_log,) = _runs_of_the_unit_tests(step)
+        assert unit_log.name == "control_unit.log"
+        assert "--cov=src" in _command(unit_log)
+        assert not (step / "control_coverage.log").exists()
+    finished = events_of(root, "verify.finished")
+    reads = [event["data"]["controls"]["coverage"] for event in finished]
+    assert {read["outcome"] for read in reads} == {"read"}
+    assert {read["reads"] for read in reads} == {"unit"}
+
+    # The last verification is HEAD: a run of its own gives the same score.
+    last = reads[-1]["score"]
+    again = root.parent / "again.json"
+    report = f"--cov-report=json:{again}"
+    alone = shell(
+        ["uv", "run", "pytest", "tests/unit", "-q", "--cov=src", "--cov-branch", report], root
+    )
+    require(alone.returncode == 0, f"la cobertura aparte falló: {alone.stdout}{alone.stderr}")
+    totals = json.loads(again.read_text(encoding="utf-8"))["totals"]
+    keys = ("covered_lines", "num_statements", "covered_branches", "num_branches")
+    assert {key: last[key] for key in keys} == {key: totals[key] for key in keys}
+    assert "lee unit, correcto" in (root / ".lictor" / "report.md").read_text(encoding="utf-8")
+
+
+@all_controls
 def test_unit_runs_once_and_coverage_scores_that_run(make_project: ProjectFactory) -> None:
     root = make_project(sync=False)
     write(root, "src/iva/__init__.py", UNCOVERED)

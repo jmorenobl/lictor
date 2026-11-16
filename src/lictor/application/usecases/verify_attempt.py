@@ -8,14 +8,16 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal, assert_never
+from typing import Literal
 
 from lictor.application.control_reports import (
     ControlEvidence,
     ControlRun,
     Readings,
+    failure_reason,
     not_run,
     run_control,
+    take_turn,
 )
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import (
@@ -33,10 +35,7 @@ from lictor.application.run_files import (
 from lictor.application.seal import collect_monitored_files
 from lictor.domain.controls import (
     Control,
-    ReadStep,
     RunStep,
-    Step,
-    executed_as,
     verification_steps,
 )
 from lictor.domain.errors import DriverError, InternalLictorError, SpecError
@@ -229,12 +228,6 @@ def describe_tampering(changes: Sequence[str]) -> str:
     return f"{STATE_TAMPERED}: {', '.join(changes)}. Se ha restaurado."
 
 
-def _with_command(step: Step, reason: str) -> str:
-    """Name the command a failed control ran when it isn't its `run` (ADR-0008, point 4)."""
-    note = executed_as(step.control, step.command) if isinstance(step, RunStep) else None
-    return f"{note}\n{reason}" if note else reason
-
-
 def _scenario_str(scenario_id: str | ScenarioId) -> str:
     return str(scenario_id.value if isinstance(scenario_id, ScenarioId) else scenario_id).strip()
 
@@ -357,7 +350,9 @@ class VerifyAttempt:
         readings = Readings()
         installed = self.environment.installed_plugins
         for step in verification_steps(req.controls, req.controls, installed):
-            ctrl_run = self._run_step(step, req, readings)
+            ctrl_run = take_turn(
+                step, readings, lambda run: self._run_present_control(run, req, readings)
+            )
             entries.append(ctrl_run.entry)
             ctrl = step.control
             match consequence(ctrl_run.entry, ctrl_run.output):
@@ -369,7 +364,7 @@ class VerifyAttempt:
                 case Block(reason=reason, cases=cases):
                     failure = _Failure(
                         ctrl.id,
-                        _with_command(step, reason),
+                        failure_reason(step, ctrl_run.entry, reason),
                         label=f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id,
                         cases=cases,
                         output=ctrl_run.output,
@@ -379,17 +374,6 @@ class VerifyAttempt:
                 case Proceed():
                     pass
         return self._run_acceptance(req, tuple(entries))
-
-    def _run_step(self, step: Step, req: VerifyAttemptRequest, readings: Readings) -> ControlRun:
-        match step:
-            case ReadStep():
-                return readings.turn(step)
-            case RunStep():
-                ctrl_run = self._run_present_control(step, req)
-                readings.keep(step, ctrl_run)
-                return ctrl_run
-            case _:
-                assert_never(step)
 
     def _fail(self, req: VerifyAttemptRequest, failure: _Failure) -> VerifyResult:
         """Condense the failure for the agent and keep it whole in the attempt's directory."""
@@ -508,31 +492,35 @@ class VerifyAttempt:
 
         return VerifyResult(ok=True)
 
-    def _run_present_control(self, step: RunStep, req: VerifyAttemptRequest) -> ControlRun:
+    def _run_present_control(
+        self, step: RunStep, req: VerifyAttemptRequest, readings: Readings
+    ) -> ControlRun:
         """Skip a control whose path neither HEAD nor the candidate has; fail one removed.
 
         Skip one whose plugin the environment lacks, too: the dependency is the project's.
         """
         ctrl = step.control
         if step.missing is not None:
-            return not_run(step, Skipped(plugin_skip_reason(step.missing)))
+            return not_run(step, Skipped(plugin_skip_reason(step.missing)), readings)
         if ctrl.when_exists is None:
-            return self._run_single_control(step, req)
+            return self._run_single_control(step, req, readings)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
         deleted = [change.path for change in self.vcs.changes(self._tree(req)) if change.is_deleted]
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
-            return not_run(step, Skipped(reason))
+            return not_run(step, Skipped(reason), readings)
         if status == "removed":
             reason = (
                 f"El intento elimina {ctrl.when_exists}, que existía: "
                 f"el control {ctrl.id} ya no puede ejecutarse"
             )
-            return not_run(step, NotExecuted(reason))
-        return self._run_single_control(step, req)
+            return not_run(step, NotExecuted(reason), readings)
+        return self._run_single_control(step, req, readings)
 
-    def _run_single_control(self, step: RunStep, req: VerifyAttemptRequest) -> ControlRun:
+    def _run_single_control(
+        self, step: RunStep, req: VerifyAttemptRequest, readings: Readings
+    ) -> ControlRun:
         step_dir = self._step_dir(req)
 
         def evidence_of(control_id: str) -> ControlEvidence:
@@ -550,7 +538,7 @@ class VerifyAttempt:
             snapshot.verify_and_restore()
             return output, tuple(snapshot.changes)
 
-        return run_control(step, self.readers, evidence_of, execute)
+        return run_control(step, self.readers, evidence_of, execute, readings)
 
     def _run_acceptance(
         self, req: VerifyAttemptRequest, controls: tuple[ControlEntry, ...]
