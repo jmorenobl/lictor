@@ -51,6 +51,7 @@ def test_every_row_belongs_to_a_known_table() -> None:
         "coverage",
         "mutation",
         "min_score",
+        "timed_out",
     }
     assert {row["table"] for row in _ROWS} == tables
 
@@ -119,3 +120,17 @@ def test_every_case_of_the_catalogue_has_rows(
 ) -> None:
     """A case added to the catalogue without measuring it would test nothing."""
     assert {row[key] for row in _ROWS if row["table"] == table} == set(catalogue)
+
+
+@pytest.mark.parametrize("row", _rows("timed_out", "site"))
+def test_a_command_cut_by_its_timeout(row: dict[str, Any], tmp_path: Path) -> None:
+    site = row["site"]
+    if site == "aceptación":
+        _check(row["expected"], c.timed_out_acceptance(tmp_path))
+    else:
+        _check(row["expected"], c.timed_out_control(site, tmp_path))
+
+
+def test_every_cut_site_has_a_row() -> None:
+    sites = {row["site"] for row in _ROWS if row["table"] == "timed_out"}
+    assert sites == {*c.TIMED_OUT_FORMATS, "aceptación"}

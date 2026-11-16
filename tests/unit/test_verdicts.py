@@ -6,7 +6,7 @@ rule on its own, so mutation testing reaches them.
 
 import pytest
 
-from lictor.domain.model import TestCaseResult
+from lictor.domain.model import CommandOutput, TestCaseResult
 from lictor.domain.reports import (
     CoverageReport,
     InvalidReport,
@@ -17,9 +17,11 @@ from lictor.domain.reports import (
 from lictor.domain.verdicts import (
     NOTHING_MEASURED,
     Crashed,
+    Execution,
     Failed,
     Passed,
     Reported,
+    VerdictRule,
     acceptance_check_verdict,
     coverage_verdict,
     exit_code_verdict,
@@ -32,6 +34,14 @@ from lictor.domain.verdicts import (
 )
 
 _PASSED = TestCaseResult(name="a")
+
+
+def _ran(code: int) -> Execution:
+    return Execution(code, 60)
+
+
+_CUT = Execution(-9, 60, timed_out=True)
+_CUT_REASON = "Se cortó a los 60 s, su tiempo límite"
 _SKIPPED = TestCaseResult(name="s", status="skipped")
 _FAILURE = TestCaseResult(name="f", status="failure")
 _ERROR = TestCaseResult(name="e", status="error")
@@ -52,23 +62,23 @@ def test_a_failure_needs_a_reason() -> None:
     ],
 )
 def test_exit_code(code: int, empty: tuple[int, ...], expected: object) -> None:
-    assert exit_code_verdict("inicio\nfin", code, empty) == expected
+    assert exit_code_verdict("inicio\nfin", _ran(code), empty) == expected
 
 
 def test_exit_code_keeps_the_last_40_lines() -> None:
     output = "\n".join(f"línea {i}" for i in range(100))
-    verdict = exit_code_verdict(output, 1, ())
+    verdict = exit_code_verdict(output, _ran(1), ())
     assert verdict == Failed("\n".join(f"línea {i}" for i in range(60, 100)))
 
 
 @pytest.mark.parametrize("output", ["", "\n \n", "x\n" + "\n" * 50])
 def test_exit_code_names_the_code_when_the_last_lines_say_nothing(output: str) -> None:
     """Text followed by 40 blank lines leaves nothing in the tail, as no output at all."""
-    assert exit_code_verdict(output, 3, ()) == Failed("El comando falló con el código 3")
+    assert exit_code_verdict(output, _ran(3), ()) == Failed("El comando falló con el código 3")
 
 
 def test_exit_code_trims_the_tail() -> None:
-    assert exit_code_verdict("  fallo  \n", 1, ()) == Failed("fallo")
+    assert exit_code_verdict("  fallo  \n", _ran(1), ()) == Failed("fallo")
 
 
 @pytest.mark.parametrize(
@@ -92,7 +102,7 @@ def test_junit(
     empty: tuple[int, ...],
     expected: object,
 ) -> None:
-    assert junit_verdict(report, code, empty) == expected
+    assert junit_verdict(report, _ran(code), empty) == expected
 
 
 _COVERAGE = CoverageReport(1, 2)
@@ -128,7 +138,7 @@ def test_coverage(
     empty: tuple[int, ...],
     expected: object,
 ) -> None:
-    assert coverage_verdict(report, code, empty) == expected
+    assert coverage_verdict(report, _ran(code), empty) == expected
 
 
 _MUTANTS = MutationReport({"killed": 1, "total": 2})
@@ -162,7 +172,7 @@ _MUTANTS = MutationReport({"killed": 1, "total": 2})
 def test_mutation(
     report: MutationReport | MissingReport | InvalidReport, code: int, expected: object
 ) -> None:
-    assert mutation_verdict(report, code) == expected
+    assert mutation_verdict(report, _ran(code)) == expected
 
 
 def test_only_junit_has_cases_and_only_scores_have_scores() -> None:
@@ -230,13 +240,13 @@ def test_a_judged_result_carries_the_verdict_and_what_the_report_says() -> None:
 def test_trust(
     report: JUnitReport | MissingReport | InvalidReport, code: int, expected: object
 ) -> None:
-    assert trust(report, code, (1,)) == expected
+    assert trust(report, _ran(code), (1,)) == expected
 
 
 def test_trust_takes_the_failure_codes_from_the_caller() -> None:
     report = JUnitReport((_FAILURE,))
-    assert trust(report, 2, (1, 2)) == Reported(report)
-    assert isinstance(trust(report, 2, (1,)), Crashed)
+    assert trust(report, _ran(2), (1, 2)) == Reported(report)
+    assert isinstance(trust(report, _ran(2), (1,)), Crashed)
 
 
 def test_a_trusted_report_gives_its_cases() -> None:
@@ -253,3 +263,31 @@ def test_a_trusted_report_gives_its_cases() -> None:
 )
 def test_the_acceptance_of_check(trusted: Crashed | Reported, expected: object) -> None:
     assert acceptance_check_verdict(trusted) == expected
+
+
+def test_an_execution_comes_from_how_the_command_ended() -> None:
+    output = CommandOutput(returncode=-9, stdout="", stderr="", duration_ms=12, timed_out=True)
+    assert Execution.of(output, 30) == Execution(-9, 30, timed_out=True, duration_ms=12)
+    assert Execution.of(CommandOutput(0, "", ""), 30) == Execution(0, 30)
+
+
+def test_a_command_cut_by_its_timeout_fails_whatever_it_left() -> None:
+    """ADR-0009, change 10: its exit code says nothing, so it is not what the reason names."""
+    assert exit_code_verdict("algo", _CUT, (-9,)) == Failed(_CUT_REASON)
+    assert junit_verdict(JUnitReport((_PASSED,)), _CUT, ()) == Failed(_CUT_REASON)
+    assert junit_verdict(JUnitReport(), _CUT, (-9,)) == Failed(_CUT_REASON)
+    assert coverage_verdict(_COVERAGE, _CUT, (-9,)) == Failed(_CUT_REASON)
+    assert coverage_verdict(MissingReport(), _CUT, (-9,)) == Failed(_CUT_REASON)
+    assert mutation_verdict(_MUTANTS, _CUT) == Failed(_CUT_REASON)
+
+
+def test_a_suite_cut_by_its_timeout_cannot_be_trusted() -> None:
+    expected = Crashed("La suite se cortó a los 60 s, su tiempo límite: su informe no es fiable")
+    assert trust(JUnitReport((_FAILURE,)), _CUT, (1, -9)) == expected
+    assert trust(MissingReport(), _CUT, (1,)) == expected
+
+
+def test_a_verdict_rule_says_how_a_control_is_judged() -> None:
+    rule = VerdictRule("junit", 30, (5,))
+    assert (rule.report, rule.timeout_s, rule.empty_exit_codes) == ("junit", 30, (5,))
+    assert VerdictRule("exit-code", 10).empty_exit_codes == ()

@@ -717,3 +717,8 @@
 {"table": "min_score", "case": "pasó con 0, mínimo 0", "expected": {"ok": true, "error": null, "cases": 0, "score": "coverage 0.0"}}
 {"table": "min_score", "case": "falló con 50, mínimo 90", "expected": {"ok": false, "error": "falló antes", "cases": 0, "score": "coverage 50.0"}}
 {"table": "min_score", "case": "falló sin puntuación, mínimo 90", "expected": {"ok": false, "error": "falló antes", "cases": 0, "score": null}}
+{"table": "timed_out", "site": "exit-code", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": null}}
+{"table": "timed_out", "site": "junit", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 1, "score": null}}
+{"table": "timed_out", "site": "coverage", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": "coverage 50.0"}}
+{"table": "timed_out", "site": "mutation", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": "mutation 50.0 (1 de 2)"}}
+{"table": "timed_out", "site": "aceptación", "expected": {"cases": 1, "crash": "La suite se cortó a los 600 s, su tiempo límite: su informe no es fiable"}}

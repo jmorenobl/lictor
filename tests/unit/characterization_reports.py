@@ -29,9 +29,12 @@ from lictor.application.control_reports import read_and_judge
 from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
 from lictor.domain.model import CommandOutput, ControlResult, CoverageScore, MutationScore
+from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import enforce_min_score
 from lictor.domain.verdicts import (
     Crashed,
+    Execution,
+    VerdictRule,
     acceptance_check_verdict,
     judged_result,
     junit_verdict,
@@ -150,7 +153,7 @@ def leave_report(where: Path, how: bytes | str) -> Path:
 
 def junit_as_control(report: Path, code: int, empty: tuple[int, ...]) -> Seen:
     """A JUnit control of a run or of `check`: read `{out}`, then its verdict."""
-    return _seen(lambda: read_and_judge(READERS, "junit", report, _output(code), empty))
+    return _seen(lambda: read_and_judge(READERS, _rule("junit", empty), report, _output(code)))
 
 
 @dataclass(frozen=True)
@@ -165,8 +168,8 @@ class SeenAcceptance:
 def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
     """`VerifyAttempt._run_acceptance`, with `failure_exit_codes` [1] as the profile declares."""
     junit = READERS.junit.read(report)
-    result = judged_result(junit_verdict(junit, code, ()), junit, 0)
-    trusted = trust(junit, code, (1,))
+    result = judged_result(junit_verdict(junit, _ran(code), ()), junit, 0)
+    trusted = trust(junit, _ran(code), (1,))
     crash = trusted.reason if isinstance(trusted, Crashed) else None
     reason = describe_crash(crash, "") if crash else None
     return SeenAcceptance(Seen(result.ok, result.error, len(result.test_cases)), crash, reason)
@@ -175,7 +178,7 @@ def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
 def acceptance_of_check(report: Path, code: int) -> Seen:
     """`CheckProject`: the acceptance trusts its report as in a run, then judges its cases."""
     junit = READERS.junit.read(report)
-    verdict = acceptance_check_verdict(trust(junit, code, (1,)))
+    verdict = acceptance_check_verdict(trust(junit, _ran(code), (1,)))
     return _seen(lambda: judged_result(verdict, junit, 0))
 
 
@@ -199,9 +202,20 @@ def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenRed:
     """`CheckRed`, red and impostors: `{out}` read by the JUnit reader; the stdout is never read."""
     del stdout  # ADR-0009, change 3: the stdout is no source of a report
     junit = READERS.junit.read(report)
-    trusted = trust(junit, code, (1,))
+    trusted = trust(junit, _ran(code), (1,))
     crash = trusted.reason if isinstance(trusted, Crashed) else None
     return SeenRed(len(report_cases(junit)), crash)
+
+
+TIMEOUT_S = 600
+
+
+def _rule(report_format: ReportFormat, empty: tuple[int, ...] = ()) -> VerdictRule:
+    return VerdictRule(report_format, TIMEOUT_S, empty)
+
+
+def _ran(code: int) -> Execution:
+    return Execution(code, TIMEOUT_S)
 
 
 def _output(code: int, stdout: str = "", stderr: str = "") -> CommandOutput:
@@ -223,7 +237,7 @@ EXIT_OUTPUTS: dict[str, tuple[str, str]] = {
 def exit_code_control(stdout: str, stderr: str, code: int, empty: tuple[int, ...]) -> Seen:
     """An `exit-code` control: its verdict reads stdout and stderr joined, with no report."""
     output = _output(code, stdout, stderr)
-    return _seen(lambda: read_and_judge(READERS, "exit-code", Path("no-se-usa"), output, empty))
+    return _seen(lambda: read_and_judge(READERS, _rule("exit-code", empty), Path("x"), output))
 
 
 def _coverage(totals: dict[str, object]) -> bytes:
@@ -257,7 +271,7 @@ COVERAGE_REPORTS: dict[str, bytes | str] = {
 
 
 def coverage_control(report: Path, code: int, empty: tuple[int, ...]) -> Seen:
-    return _seen(lambda: read_and_judge(READERS, "coverage", report, _output(code), empty))
+    return _seen(lambda: read_and_judge(READERS, _rule("coverage", empty), report, _output(code)))
 
 
 MUTATION_REPORTS: dict[str, bytes | str] = {
@@ -281,7 +295,7 @@ MUTATION_REPORTS: dict[str, bytes | str] = {
 
 
 def mutation_control(report: Path, code: int) -> Seen:
-    return _seen(lambda: read_and_judge(READERS, "mutation", report, _output(code), ()))
+    return _seen(lambda: read_and_judge(READERS, _rule("mutation"), report, _output(code)))
 
 
 def _coverage_result(ok: bool, percent: float | None) -> ControlResult:
@@ -310,3 +324,30 @@ MIN_SCORE_CASES: dict[str, tuple[bool, float | None, float | None]] = {
 def min_score_case(label: str) -> Seen:
     passed, percent, minimum = MIN_SCORE_CASES[label]
     return _seen(lambda: enforce_min_score(_coverage_result(passed, percent), minimum))
+
+
+# A command cut by its timeout, with a report it managed to leave (ADR-0009, change 10). These rows
+# are new: before that change a cut command was judged as its code -9, as in the other tables.
+_CUT = CommandOutput(returncode=-9, stdout="algo", stderr="", timed_out=True)
+TIMED_OUT_FORMATS: tuple[ReportFormat, ...] = ("exit-code", "junit", "coverage", "mutation")
+_LEFT_BEHIND: dict[ReportFormat, bytes] = {
+    "junit": PASS1,
+    "coverage": _coverage({"covered_lines": 1, "num_statements": 2}),
+    "mutation": json.dumps({"killed": 1, "total": 2}).encode(),
+}
+
+
+def timed_out_control(report_format: ReportFormat, tmp: Path) -> Seen:
+    """A control cut by its timeout, whatever report it left."""
+    report = tmp / "r"
+    if report_format in _LEFT_BEHIND:
+        report.write_bytes(_LEFT_BEHIND[report_format])
+    return _seen(lambda: read_and_judge(READERS, _rule(report_format), report, _CUT))
+
+
+def timed_out_acceptance(tmp: Path) -> SeenRed:
+    """An acceptance cut by its timeout, as the run, `check` and the red trust it."""
+    report = tmp / "a.xml"
+    report.write_bytes(PASS1)
+    trusted = trust(READERS.junit.read(report), Execution.of(_CUT, TIMEOUT_S), (1,))
+    return SeenRed(1, trusted.reason if isinstance(trusted, Crashed) else None)

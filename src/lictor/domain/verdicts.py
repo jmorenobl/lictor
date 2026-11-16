@@ -8,7 +8,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import assert_never
 
-from lictor.domain.model import ControlResult, Score, TestCaseResult
+from lictor.domain.model import CommandOutput, ControlResult, Score, TestCaseResult
 from lictor.domain.reports import (
     CoverageReport,
     InvalidReport,
@@ -16,6 +16,7 @@ from lictor.domain.reports import (
     MissingReport,
     MutationReport,
     Report,
+    ReportFormat,
     ReportOf,
 )
 
@@ -43,8 +44,43 @@ class Failed:
 type Verdict = Passed | Failed
 
 
-def exit_code_verdict(output: str, exit_code: int, empty_exit_codes: Collection[int]) -> Verdict:
+@dataclass(frozen=True)
+class Execution:
+    """How a command ended, as the verdicts need it: with a timeout its exit code says nothing."""
+
+    exit_code: int
+    timeout_s: int
+    timed_out: bool = False
+    duration_ms: int = 0
+
+    @classmethod
+    def of(cls, output: CommandOutput, timeout_s: int) -> "Execution":
+        return cls(output.returncode, timeout_s, output.timed_out, output.duration_ms)
+
+    @property
+    def cut_reason(self) -> str:
+        return f"Se cortó a los {self.timeout_s} s, su tiempo límite"
+
+
+@dataclass(frozen=True)
+class VerdictRule:
+    """What of a control decides its verdict: the format of its report, its timeout and its codes.
+
+    `empty_exit_codes` are the codes that mean a run with nothing to run, which may pass.
+    """
+
+    report: ReportFormat
+    timeout_s: int
+    empty_exit_codes: tuple[int, ...] = ()
+
+
+def exit_code_verdict(
+    output: str, execution: Execution, empty_exit_codes: Collection[int]
+) -> Verdict:
     """0, or a code the profile declares as an empty run, passes; else the end of the output."""
+    if execution.timed_out:
+        return Failed(execution.cut_reason)
+    exit_code = execution.exit_code
     if exit_code == 0 or exit_code in empty_exit_codes:
         return Passed()
     tail = "\n".join(output.splitlines()[-_TAIL_LINES:]).strip()
@@ -52,9 +88,12 @@ def exit_code_verdict(output: str, exit_code: int, empty_exit_codes: Collection[
 
 
 def junit_verdict(
-    report: ReportOf[JUnitReport], exit_code: int, empty_exit_codes: Collection[int]
+    report: ReportOf[JUnitReport], execution: Execution, empty_exit_codes: Collection[int]
 ) -> Verdict:
     """A JUnit control: no failed case and a 0, or no case at all with an empty-run code."""
+    if execution.timed_out:
+        return Failed(execution.cut_reason)
+    exit_code = execution.exit_code
     match report:
         case MissingReport():
             return Failed(f"La suite no dejó informe JUnit (código de salida {exit_code})")
@@ -82,9 +121,12 @@ def _cases_verdict(
 
 
 def coverage_verdict(
-    report: ReportOf[CoverageReport], exit_code: int, empty_exit_codes: Collection[int]
+    report: ReportOf[CoverageReport], execution: Execution, empty_exit_codes: Collection[int]
 ) -> Verdict:
     """A coverage control that ran its own tests: a report, and tests that ended well."""
+    if execution.timed_out:
+        return Failed(execution.cut_reason)
+    exit_code = execution.exit_code
     match report:
         case MissingReport():
             return _nothing_to_score(exit_code, empty_exit_codes, "Sin informe de cobertura")
@@ -105,8 +147,11 @@ def _nothing_to_score(exit_code: int, empty_exit_codes: Collection[int], reason:
     return Passed() if exit_code in empty_exit_codes else Failed(reason)
 
 
-def mutation_verdict(report: ReportOf[MutationReport], exit_code: int) -> Verdict:
+def mutation_verdict(report: ReportOf[MutationReport], execution: Execution) -> Verdict:
     """A mutation pass: a report, a pass that ended well, and mutants in it."""
+    if execution.timed_out:
+        return Failed(execution.cut_reason)
+    exit_code = execution.exit_code
     match report:
         case MissingReport():
             return Failed("Sin informe de mutación")
@@ -169,13 +214,19 @@ type Trust = Crashed | Reported
 
 
 def trust(
-    report: ReportOf[JUnitReport], exit_code: int, failure_exit_codes: Sequence[int]
+    report: ReportOf[JUnitReport], execution: Execution, failure_exit_codes: Sequence[int]
 ) -> Trust:
     """Whether an acceptance report can be trusted: a suite that crashed proves nothing.
 
     A non-zero exit is normal while scenarios are pending, but only with a code that means
-    "tests failed" and a report that shows it.
+    "tests failed" and a report that shows it. A suite cut by its timeout left whatever it had.
     """
+    if execution.timed_out:
+        return Crashed(
+            f"La suite se cortó a los {execution.timeout_s} s, su tiempo límite: "
+            "su informe no es fiable"
+        )
+    exit_code = execution.exit_code
     match report:
         case MissingReport():
             return Crashed(f"La suite terminó con código {exit_code} sin dejar informe")

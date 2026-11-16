@@ -56,7 +56,15 @@ from lictor.domain.rules import (
     routes_rejected,
     suppression_matches,
 )
-from lictor.domain.verdicts import Crashed, judged_result, junit_verdict, report_cases, trust
+from lictor.domain.verdicts import (
+    Crashed,
+    Execution,
+    VerdictRule,
+    judged_result,
+    junit_verdict,
+    report_cases,
+    trust,
+)
 
 RoleKind = Literal["implement", "driver"]
 
@@ -596,7 +604,8 @@ class VerifyAttempt:
             changes = tuple(snapshot.changes)
             return _ControlRun(recorded(ControlResult(ok=False)), tampered=changes)
 
-        c_res = read_and_judge(self.readers, ctrl.report, out_file, cmd_out, ctrl.empty_exit_codes)
+        rule = VerdictRule(ctrl.report, ctrl.timeout_s, tuple(ctrl.empty_exit_codes))
+        c_res = read_and_judge(self.readers, rule, out_file, cmd_out)
         return _ControlRun(recorded(enforce_min_score(c_res, ctrl.min_score)), output=cmd_out)
 
     def _run_acceptance(
@@ -625,14 +634,15 @@ class VerifyAttempt:
 
         output = format_output(cmd_out)
         junit = self.readers.junit.read(out_file)
+        execution = Execution.of(cmd_out, req.acceptance_timeout_s)
         acc_res = replace(
-            judged_result(junit_verdict(junit, cmd_out.returncode, ()), junit, cmd_out.duration_ms),
+            judged_result(junit_verdict(junit, execution, ()), junit, cmd_out.duration_ms),
             exit_code=cmd_out.returncode,
             output_path=relative_to_project(log_file, self.project_root),
         )
         control_results["acceptance"] = acc_res
 
-        trusted = trust(junit, cmd_out.returncode, req.acceptance_failure_exit_codes)
+        trusted = trust(junit, execution, req.acceptance_failure_exit_codes)
         if isinstance(trusted, Crashed):
             return self._fail(
                 req,

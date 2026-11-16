@@ -43,7 +43,7 @@ from lictor.domain.rules import (
     suppression_matches,
     unmapped_cases,
 )
-from lictor.domain.verdicts import Crashed, report_cases, trust
+from lictor.domain.verdicts import Crashed, Execution, report_cases, trust
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
@@ -260,7 +260,8 @@ class CheckRed:
 
         junit = self.reader.read(out_file)
         raw_output = format_output(output)
-        trusted = trust(junit, output.returncode, request.acceptance_failure_exit_codes)
+        execution = Execution.of(output, request.acceptance_timeout_s)
+        trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
         if isinstance(trusted, Crashed):
             rejection = _Rejection(
                 "suite_caida",
@@ -369,7 +370,8 @@ class CheckRed:
     ) -> tuple[dict[str, str], str | None]:
         junit = self.reader.read(run_dir / "acceptance.xml")
         cases = report_cases(junit)
-        trusted = trust(junit, output.returncode, request.acceptance_failure_exit_codes)
+        execution = Execution.of(output, request.acceptance_timeout_s)
+        trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
         crash = trusted.reason if isinstance(trusted, Crashed) else None
         try:
             mapped = map_test_cases_to_scenarios(

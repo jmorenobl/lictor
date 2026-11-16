@@ -24,7 +24,13 @@ from lictor.domain.rules import (
     missing_plugin,
     plugin_skip_reason,
 )
-from lictor.domain.verdicts import acceptance_check_verdict, judged_result, trust
+from lictor.domain.verdicts import (
+    Execution,
+    VerdictRule,
+    acceptance_check_verdict,
+    judged_result,
+    trust,
+)
 
 ACCEPTANCE_ID = "acceptance"
 
@@ -223,7 +229,8 @@ class CheckProject:
         params = self._params(req, ACCEPTANCE_ID, acceptance.run, acceptance.report, acceptance)
         cmd_out, out_file, log_file = self._execute(params)
         junit = self.readers.junit.read(out_file)
-        trusted = trust(junit, cmd_out.returncode, acceptance.failure_exit_codes)
+        execution = Execution.of(cmd_out, acceptance.timeout_s)
+        trusted = trust(junit, execution, acceptance.failure_exit_codes)
         result = judged_result(acceptance_check_verdict(trusted), junit, cmd_out.duration_ms)
         return replace(
             result,
@@ -244,7 +251,10 @@ class CheckProject:
     def _run_command(self, params: _RunStepParams) -> ControlResult:
         cmd_out, out_file, log_file = self._execute(params)
         result = read_and_judge(
-            self.readers, params.report_format, out_file, cmd_out, params.empty_exit_codes
+            self.readers,
+            VerdictRule(params.report_format, params.timeout_s, tuple(params.empty_exit_codes)),
+            out_file,
+            cmd_out,
         )
         return replace(
             enforce_min_score(result, params.min_score),
