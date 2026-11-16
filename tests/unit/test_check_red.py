@@ -94,7 +94,6 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
         project_root=tmp_path,
         run_id="20261030-140000-abcd",
         acceptance_run="acceptance-runner --junitxml {out}",
-        acceptance_report="junit",
         acceptance_timeout_s=600,
         driver_fresh=True,
         driver_attempts=1,

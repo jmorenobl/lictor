@@ -277,7 +277,6 @@ def bootstrap_runtime(
         max_driver_attempts=active_config.limits.max_driver_attempts,
         error_max_chars=active_config.limits.error_max_chars,
         acceptance_run=active_config.acceptance.run,
-        acceptance_report=active_config.acceptance.report,
         acceptance_timeout_s=active_config.acceptance.timeout_s,
         controls=attempt_controls,
         check_controls=check_controls,

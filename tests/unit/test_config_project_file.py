@@ -24,8 +24,6 @@ from lictor.domain.errors import ConfigError, ExitCode
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
 PROFILE_IDS = ["lint", "types", "unit", "coverage"]
-# 0.2.0 computed b029641d…; `stage` (0.4.0, ADR-0007) enters every control, so the hash moved.
-FINGERPRINT_IN_0_2_0 = "44435574ce0278abd2d4173cddb9a925159cfcc2fb46001a9e4d8f809cd54775"
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -63,22 +61,16 @@ def test_init_writes_only_what_the_person_decides(tmp_path: Path) -> None:
     assert "3.12" in written["hints"]
 
 
-def test_a_lictor_json_of_0_2_0_keeps_its_fingerprint(tmp_path: Path) -> None:
-    """A full copy still means what it meant: it resolves to itself, every control in `attempt`.
+def test_a_lictor_json_of_0_2_0_is_refused_and_says_what_to_remove(tmp_path: Path) -> None:
+    """A full copy writes `acceptance.report`, which ADR-0009 removes: no compatibility kept.
 
-    The hash was the one `v0.2.0` computed for this same file until `stage` entered every
-    control (ADR-0007, no compatibility kept). Otherwise it changes only if the copy stops
-    resolving to itself, or if a defence of the profile changes.
+    The refusal names the field, so the person knows what to delete instead of guessing.
     """
     copied = _python_project(tmp_path) / "lictor.json"
     copied.write_text(WRITTEN_BY_0_2_0.read_text(encoding="utf-8"), encoding="utf-8")
-    written = json.loads(WRITTEN_BY_0_2_0.read_text(encoding="utf-8"))
 
-    resolved = load_config(copied).model_dump(mode="json")
-
-    controls = [{**control, "stage": "attempt"} for control in written["controls"]]
-    assert resolved == {**written, "controls": controls}
-    assert _fingerprint(copied) == FINGERPRINT_IN_0_2_0
+    with pytest.raises(ConfigError, match=r"quita acceptance\.report"):
+        load_config(copied)
 
 
 def test_without_controls_the_project_gets_the_profiles(tmp_path: Path) -> None:

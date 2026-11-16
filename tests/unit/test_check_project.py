@@ -26,7 +26,7 @@ def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
     controls = [
         CheckControlSpec(id="lint", level="L1", run="echo lint", report="exit-code"),
     ]
-    acceptance = CheckAcceptanceSpec(run="echo test {out}", report="junit")
+    acceptance = CheckAcceptanceSpec(run="echo test {out}")
 
     req = CheckProjectRequest(
         project_root=tmp_path,
@@ -103,7 +103,7 @@ def test_check_project_level_filter(tmp_path: Path) -> None:
         CheckControlSpec(id="l1_ctrl", level="L1", run="echo l1", report="exit-code"),
         CheckControlSpec(id="l4_ctrl", level="L4", run="echo l4", report="exit-code"),
     ]
-    acceptance = CheckAcceptanceSpec(run="echo acc", report="junit")
+    acceptance = CheckAcceptanceSpec(run="echo acc")
 
     req = CheckProjectRequest(
         project_root=tmp_path,

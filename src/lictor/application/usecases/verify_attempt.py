@@ -133,7 +133,6 @@ class VerifyAttemptRequest:
     suppressions: Sequence[str]
     controls: Sequence[VerificationControlProtocol] = field(default_factory=tuple)
     acceptance_run: str = ""
-    acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
     pending_scenario_ids: Sequence[str] = field(default_factory=tuple)

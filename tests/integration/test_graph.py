@@ -231,7 +231,6 @@ Característica: IVA de facturas
         max_driver_attempts=2,
         error_max_chars=4000,
         acceptance_run="acceptance-runner --junitxml {out}",
-        acceptance_report="junit",
         acceptance_timeout_s=600,
         controls=[
             VerificationControl(

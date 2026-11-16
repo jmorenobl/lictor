@@ -9,17 +9,6 @@
           "title": "Run",
           "type": "string"
         },
-        "report": {
-          "default": "junit",
-          "enum": [
-            "exit-code",
-            "junit",
-            "mutation",
-            "coverage"
-          ],
-          "title": "Report",
-          "type": "string"
-        },
         "timeout_s": {
           "default": 600,
           "exclusiveMinimum": 0,

@@ -108,9 +108,16 @@ class AcceptanceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: str = Field(min_length=1)
-    report: ReportFormat = "junit"
     timeout_s: int = Field(default=600, gt=0)
     failure_exit_codes: list[int] = Field(default=[1], min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_report(cls, data: object) -> object:
+        """The acceptance always reads a JUnit report: a field of one value decides nothing."""
+        if isinstance(data, dict) and "report" in data:
+            raise ValueError(acceptance_report_message())
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -132,8 +139,8 @@ class AcceptanceConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
-        if self.report == "junit" and "{out}" not in self.run:
-            msg = "La sección acceptance con report='junit' debe incluir '{out}' en run"
+        if "{out}" not in self.run:
+            msg = "La sección acceptance debe incluir '{out}' en run: ahí deja su informe JUnit"
             raise ValueError(msg)
         return self
 
@@ -207,6 +214,14 @@ class ProjectVerification(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
     prepare_inherit: list[str] = Field(default_factory=list)
+
+
+def acceptance_report_message() -> str:
+    """Say why `acceptance.report` is refused: the oracle needs cases, which only JUnit gives."""
+    return (
+        "La aceptación siempre lee un informe JUnit, el único que da los casos que se emparejan "
+        "con los escenarios: quita acceptance.report."
+    )
 
 
 def allow_empty_message(control_id: str, profile_codes: list[int] | None) -> str:

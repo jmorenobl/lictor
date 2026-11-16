@@ -34,7 +34,7 @@ CONFIG = {
     "profile": "python-uv@0.1",
     "backend": {"kind": "fake", "model": "fake-model-1"},
     "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-    "acceptance": {"run": "echo test {out}", "report": "exit-code"},
+    "acceptance": {"run": "echo test {out}"},
     "controls": [{"id": c, "enabled": False} for c in ("lint", "types", "unit", "coverage")],
     "agent_tools": [],
     "hints": "",

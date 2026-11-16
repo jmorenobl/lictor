@@ -81,7 +81,6 @@ class CheckRedRequest:
     max_driver_attempts: int
     driver_paths: Sequence[str]
     all_scenario_ids: Sequence[ScenarioId | str]
-    acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     error_max_chars: int = 4000
     acceptance_failure_exit_codes: Sequence[int] = (1,)

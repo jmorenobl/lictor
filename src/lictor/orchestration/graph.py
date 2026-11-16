@@ -153,7 +153,6 @@ class GraphContext:
     max_driver_attempts: int
     error_max_chars: int
     acceptance_run: str
-    acceptance_report: str
     acceptance_timeout_s: int
     # Only the `attempt` controls: the `check` ones never run in a run (ADR-0007).
     controls: Sequence[Any]
@@ -423,7 +422,6 @@ class _GraphNodes:
                     max_driver_attempts=self.ctx.max_driver_attempts,
                     driver_paths=self.ctx.paths_driver,
                     all_scenario_ids=all_sids,
-                    acceptance_report=self.ctx.acceptance_report,
                     acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                     error_max_chars=self.ctx.error_max_chars,
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
@@ -617,7 +615,6 @@ class _GraphNodes:
                 suppressions=self.ctx.suppressions,
                 controls=self.ctx.controls,
                 acceptance_run=self.ctx.acceptance_run,
-                acceptance_report=self.ctx.acceptance_report,
                 acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                 green_scenario_ids=green_ids,
                 pending_scenario_ids=pending_ids,

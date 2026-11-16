@@ -404,7 +404,6 @@ def check(
                     controls=[_check_spec(c) for c in config.controls],
                     acceptance=CheckAcceptanceSpec(
                         run=config.acceptance.run,
-                        report=config.acceptance.report,
                         timeout_s=config.acceptance.timeout_s,
                         failure_exit_codes=tuple(config.acceptance.failure_exit_codes),
                     ),

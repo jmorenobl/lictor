@@ -56,7 +56,6 @@ class CheckAcceptanceSpec:
     """Specification for acceptance tests."""
 
     run: str
-    report: ReportFormat = "junit"
     timeout_s: int = 600
     failure_exit_codes: Sequence[int] = (1,)
 
@@ -226,7 +225,7 @@ class CheckProject:
         self, req: CheckProjectRequest, acceptance: CheckAcceptanceSpec
     ) -> ControlResult:
         """The acceptance is judged as in a run: a report it can trust, then its cases."""
-        params = self._params(req, ACCEPTANCE_ID, acceptance.run, acceptance.report, acceptance)
+        params = self._params(req, ACCEPTANCE_ID, acceptance.run, "junit", acceptance)
         cmd_out, out_file, log_file = self._execute(params)
         junit = self.readers.junit.read(out_file)
         execution = Execution.of(cmd_out, acceptance.timeout_s)
