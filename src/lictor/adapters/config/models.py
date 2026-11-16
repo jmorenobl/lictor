@@ -65,6 +65,15 @@ def split_command(command: str, owner: str) -> str:
     return command
 
 
+def plugin_without_list_message(control_id: str) -> str:
+    """Why a control can't need a plugin in a profile that can't list what the environment loads."""
+    return (
+        f"El control '{control_id}' declara when_plugin, pero su perfil no tiene "
+        "verification.plugins_command: sin él nadie sabe qué plugins carga el entorno, y el "
+        "control no puede depender de uno. Quita when_plugin."
+    )
+
+
 def _validate_unique_control_ids(controls: list["ControlConfig"]) -> list["ControlConfig"]:
     seen: set[str] = set()
     for ctrl in controls:
@@ -418,6 +427,14 @@ class Profile(BaseModel):
     @classmethod
     def _check_regexes(cls, patterns: list[str]) -> list[str]:
         return _validate_regexes(patterns)
+
+    @model_validator(mode="after")
+    def _validate_plugins_can_be_listed(self) -> Self:
+        if not self.verification.plugins_command:
+            for control in self.controls:
+                if control.when_plugin is not None:
+                    raise ValueError(plugin_without_list_message(control.id))
+        return self
 
 
 class RetentionConfig(BaseModel):

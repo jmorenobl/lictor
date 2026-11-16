@@ -20,6 +20,7 @@ from lictor.adapters.config.models import (
     ProjectVerification,
     allow_empty_message,
     driver_hints_message,
+    plugin_without_list_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
@@ -396,6 +397,10 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
     profile = load_profile(config.profile, profiles_dir)
     project = config.verification
     _reject_reserved_names(project, profile.verification)
+    if not profile.verification.plugins_command:
+        for control in config.controls:
+            if control.when_plugin is not None:
+                raise ConfigError(plugin_without_list_message(control.id))
     return Defences(
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,

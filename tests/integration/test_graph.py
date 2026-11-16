@@ -49,6 +49,7 @@ from lictor.orchestration.graph import (
     create_graph,
     get_sqlite_saver,
 )
+from tests.environments import PlainEnvironment
 from tests.readers import all_readers
 
 DRIVER_TEST_CODE = "def test_iva_001(): pass\ndef test_iva_002(): pass\n"
@@ -208,7 +209,7 @@ Característica: IVA de facturas
     )
     verify_attempt = VerifyAttempt(
         vcs=vcs,
-        runner=runner,
+        environment=PlainEnvironment(runner),
         readers=all_readers(),
         project_root=tmp_path,
     )

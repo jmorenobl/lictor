@@ -490,6 +490,31 @@ def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path)
         resolve_defences(config, profiles)
 
 
+def test_a_profile_control_can_only_need_a_plugin_if_the_profile_lists_them() -> None:
+    """ADR-0008, point 3: without a list, "skip without the plugin" can't be decided."""
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["verification"]["plugins_command"] = ""
+
+    with pytest.raises(ValidationError, match=r"'coverage'.*plugins_command"):
+        Profile.model_validate(data)
+
+
+def test_a_project_control_can_only_need_a_plugin_if_its_profile_lists_them(
+    tmp_path: Path,
+) -> None:
+    profiles = _profiles_copy(tmp_path / "profiles")
+    profile_file = profiles / "python-uv.json"
+    data = json.loads(profile_file.read_text(encoding="utf-8"))
+    data["verification"]["plugins_command"] = ""
+    data["controls"] = [c for c in data["controls"] if "when_plugin" not in c]
+    profile_file.write_text(json.dumps(data), encoding="utf-8")
+    extra = {"id": "extra", "level": "L2", "run": "x", "report": "exit-code", "when_plugin": "p"}
+    config = load_config(_project(tmp_path, controls=[extra]), profiles_dir=profiles)
+
+    with pytest.raises(ConfigError, match=r"'extra'.*plugins_command"):
+        resolve_defences(config, profiles)
+
+
 def test_profile_files_need_a_command_that_says_where_they_go() -> None:
     data = load_profile("python-uv").model_dump(mode="json")
     data["verification"]["files_dir_command"] = ""

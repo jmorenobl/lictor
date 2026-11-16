@@ -33,6 +33,7 @@ def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
         project_root=tmp_path,
         controls=controls,
         acceptance=acceptance,
+        installed_plugins=(),
     )
     res = use_case.execute(req)
 
@@ -58,7 +59,7 @@ def test_check_project_blocking_control_fails_and_stops_early(tmp_path: Path) ->
         CommandControl(id="types", level="L1", run="echo pass", report="exit-code", mode="block"),
     ]
 
-    req = CheckProjectRequest(project_root=tmp_path, controls=controls)
+    req = CheckProjectRequest(project_root=tmp_path, controls=controls, installed_plugins=())
     res = use_case.execute(req)
 
     assert res.ok is False
@@ -83,7 +84,7 @@ def test_check_project_measure_mode_does_not_block(tmp_path: Path) -> None:
         CommandControl(id="types", level="L1", run="echo types", report="exit-code", mode="block"),
     ]
 
-    req = CheckProjectRequest(project_root=tmp_path, controls=controls)
+    req = CheckProjectRequest(project_root=tmp_path, controls=controls, installed_plugins=())
     res = use_case.execute(req)
 
     assert res.ok is True
@@ -109,6 +110,7 @@ def test_check_project_level_filter(tmp_path: Path) -> None:
         controls=controls,
         acceptance=acceptance,
         levels=["L1"],
+        installed_plugins=(),
     )
     res = use_case.execute(req)
 
@@ -125,7 +127,9 @@ def _project(tmp_path: Path, stdout: str, code: int) -> tuple[CheckProject, Chec
     use_case = CheckProject(runner=runner, readers=readers)
     control = CommandControl(id="mut", level="L5", run="suite", report="exit-code", mode="measure")
     junit = CommandControl(id="unit", level="L2", run="suite --out {out}", report="junit")
-    return use_case, CheckProjectRequest(project_root=tmp_path, controls=[control, junit])
+    return use_case, CheckProjectRequest(
+        project_root=tmp_path, controls=[control, junit], installed_plugins=()
+    )
 
 
 def test_check_project_does_not_reuse_an_old_report(tmp_path: Path) -> None:
@@ -163,7 +167,9 @@ def test_check_project_skips_a_control_whose_path_the_working_tree_lacks(tmp_pat
         when_exists="tests/unit",
     )
 
-    res = use_case.execute(CheckProjectRequest(project_root=tmp_path, controls=[unit]))
+    res = use_case.execute(
+        CheckProjectRequest(project_root=tmp_path, controls=[unit], installed_plugins=())
+    )
 
     assert res.ok is True
     assert runner.calls == []
@@ -179,7 +185,9 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
         id="lint", level="L1", run="lint tests/unit", report="exit-code", when_exists="tests/unit"
     )
 
-    res = use_case.execute(CheckProjectRequest(project_root=tmp_path, controls=[lint]))
+    res = use_case.execute(
+        CheckProjectRequest(project_root=tmp_path, controls=[lint], installed_plugins=())
+    )
 
     assert res.ok is True
     assert len(runner.calls) == 1
@@ -188,10 +196,10 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
 
 @pytest.mark.parametrize(
     ("installed", "runs"),
-    [(("xdist.plugin",), False), (("pytest_cov.plugin",), True), (None, True)],
+    [(("xdist.plugin",), False), (("pytest_cov.plugin",), True), ((), False)],
 )
 def test_check_project_skips_a_control_whose_plugin_the_environment_lacks(
-    tmp_path: Path, installed: tuple[str, ...] | None, runs: bool
+    tmp_path: Path, installed: tuple[str, ...], runs: bool
 ) -> None:
     runner = FakeRunner()
     runner.set_response("cov", CommandOutput(returncode=0, stdout="", stderr=""))
@@ -239,7 +247,9 @@ def test_keep_going_runs_everything_and_reports_the_first_failure(tmp_path: Path
     runner.set_response("acc", CommandOutput(0, stdout=JUNIT_OK, stderr=""))
     use_case, controls, acceptance = _three(runner)
 
-    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance, keep_going=True))
+    res = use_case.execute(
+        CheckProjectRequest(tmp_path, controls, acceptance, keep_going=True, installed_plugins=())
+    )
 
     assert res.ok is False
     assert res.failed_at == "lint"
@@ -252,7 +262,9 @@ def test_without_keep_going_acceptance_doesnt_run_after_a_failure(tmp_path: Path
     runner.set_response("lint", BAD)
     use_case, controls, acceptance = _three(runner)
 
-    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance))
+    res = use_case.execute(
+        CheckProjectRequest(tmp_path, controls, acceptance, installed_plugins=())
+    )
 
     assert ids(res) == ["lint"]
     assert len(runner.calls) == 1
@@ -266,7 +278,9 @@ def test_a_failing_acceptance_is_reported_after_passing_controls(tmp_path: Path)
     runner.set_response("acc", CommandOutput(1, stdout=failing, stderr=""))
     use_case, controls, acceptance = _three(runner)
 
-    res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance))
+    res = use_case.execute(
+        CheckProjectRequest(tmp_path, controls, acceptance, installed_plugins=())
+    )
 
     assert (res.ok, res.failed_at) == (False, "acceptance")
 
@@ -278,11 +292,18 @@ def test_controls_are_chosen_by_id_and_level_together(tmp_path: Path) -> None:
     use_case, controls, acceptance = _three(runner)
 
     by_id = use_case.execute(
-        CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["unit", "lint"])
+        CheckProjectRequest(
+            tmp_path, controls, acceptance, control_ids=["unit", "lint"], installed_plugins=()
+        )
     )
     both = use_case.execute(
         CheckProjectRequest(
-            tmp_path, controls, acceptance, levels=["L1"], control_ids=["unit", "lint"]
+            tmp_path,
+            controls,
+            acceptance,
+            levels=["L1"],
+            control_ids=["unit", "lint"],
+            installed_plugins=(),
         )
     )
 
@@ -296,7 +317,9 @@ def test_acceptance_is_chosen_by_its_id(tmp_path: Path) -> None:
     use_case, controls, acceptance = _three(runner)
 
     res = use_case.execute(
-        CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["acceptance"])
+        CheckProjectRequest(
+            tmp_path, controls, acceptance, control_ids=["acceptance"], installed_plugins=()
+        )
     )
 
     assert ids(res) == ["acceptance"]
@@ -307,7 +330,9 @@ def test_an_id_that_names_nothing_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="No hay ningún control mutacion"):
         use_case.execute(
-            CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["mutacion"])
+            CheckProjectRequest(
+                tmp_path, controls, acceptance, control_ids=["mutacion"], installed_plugins=()
+            )
         )
 
 
@@ -319,7 +344,13 @@ def test_commands_run_in_the_tree_and_leave_evidence_apart(tmp_path: Path) -> No
     use_case, controls, _ = _three(runner)
 
     res = use_case.execute(
-        CheckProjectRequest(tmp_path / "proyecto", controls[:1], tree=tree, evidence_dir=evidence)
+        CheckProjectRequest(
+            tmp_path / "proyecto",
+            controls[:1],
+            tree=tree,
+            evidence_dir=evidence,
+            installed_plugins=(),
+        )
     )
 
     assert runner.calls[0]["cwd"] == tree
@@ -331,7 +362,11 @@ def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> 
     use_case = CheckProject(FakeRunner(), all_readers())
     unit = CommandControl("unit", "L2", "u {out}", "junit", when_exists="tests/unit")
 
-    res = use_case.execute(CheckProjectRequest(tmp_path, [unit], deleted=["tests/unit/test_a.py"]))
+    res = use_case.execute(
+        CheckProjectRequest(
+            tmp_path, [unit], deleted=["tests/unit/test_a.py"], installed_plugins=()
+        )
+    )
 
     assert res.ok is False
     assert "elimina tests/unit" in (seen(res, "unit").error or "")
@@ -358,7 +393,7 @@ def test_a_mutation_control_passes_only_from_its_minimum(
     use_case = CheckProject(_MutationRunner(), all_readers())
     control = CommandControl("mut", "L5", "mut {out}", "mutation", min_score=minimum)
 
-    res = use_case.execute(CheckProjectRequest(tmp_path, [control]))
+    res = use_case.execute(CheckProjectRequest(tmp_path, [control], installed_plugins=()))
 
     assert res.ok is ok
     error = seen(res, "mut").error or ""

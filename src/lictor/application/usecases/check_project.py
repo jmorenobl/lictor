@@ -2,7 +2,7 @@
 
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import assert_never
 
@@ -66,12 +66,12 @@ class CheckProjectRequest:
     The commands run in `tree`, the project unless said otherwise, and leave their reports and
     logs in `evidence_dir`. `deleted` are the paths the checked tree removed from HEAD: a control
     whose `when_exists` path is among them fails instead of being skipped. `installed_plugins`
-    are what the environment has, or None if nobody can say: a control whose `when_plugin`
-    isn't among them is skipped.
+    are what the environment loads: a control whose `when_plugin` isn't among them is skipped.
     """
 
     project_root: Path
     controls: Sequence[CommandControl]
+    installed_plugins: Sequence[str] = field(kw_only=True)
     acceptance: CheckAcceptanceSpec | None = None
     levels: Sequence[str] | None = None
     error_max_chars: int = 4000
@@ -80,7 +80,6 @@ class CheckProjectRequest:
     keep_going: bool = False
     control_ids: Sequence[str] | None = None
     deleted: Sequence[str] = ()
-    installed_plugins: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)

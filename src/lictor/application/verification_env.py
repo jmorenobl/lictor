@@ -141,10 +141,11 @@ class VerificationEnvironment:
             yield other
 
     @property
-    def installed_plugins(self) -> tuple[str, ...] | None:
-        """The plugins the commands load, once built; None if the profile can't list them."""
-        if not self.spec.plugins_command:
-            return None
+    def installed_plugins(self) -> tuple[str, ...]:
+        """The plugins the commands load, once built: the profile's and what its command found.
+
+        Without a `plugins_command` nothing is found, and no control may need a plugin (ADR-0008).
+        """
         return (*self.spec.plugins, *self._installed_plugins)
 
     def search_path(self) -> str:

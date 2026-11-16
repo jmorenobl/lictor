@@ -23,6 +23,7 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.controls import CommandControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
+from tests.environments import PlainEnvironment
 from tests.readers import ReportingRunner, all_readers
 from tests.results import ids, seen
 
@@ -151,7 +152,9 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -175,7 +178,9 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -201,7 +206,9 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -229,7 +236,9 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -253,7 +262,9 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -281,7 +292,9 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
     )
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -320,7 +333,9 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -359,7 +374,9 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
     runner.set_report("pytest", CommandOutput(returncode=1, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -392,7 +409,9 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
     runner = MaliciousRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -427,7 +446,9 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
     runner = MaliciousRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -458,7 +479,9 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
     )
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -505,7 +528,9 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
     runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -575,7 +600,12 @@ def _verify(
         "tree": "agent-tree",
     }
     return (
-        VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root),
+        VerifyAttempt(
+            vcs=vcs,
+            environment=PlainEnvironment(runner),
+            readers=readers,
+            project_root=project_root,
+        ),
         VerifyAttemptRequest(**{**fields, **overrides}),
     )
 
@@ -750,7 +780,7 @@ def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     verifier = VerifyAttempt(
         vcs=FakeVcs(changed_files=["pyproject.toml"]),
-        runner=FakeRunner(),
+        environment=PlainEnvironment(FakeRunner()),
         readers={},
         project_root=project_root,
     )
@@ -1242,8 +1272,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
     """A dependency only a person can add mustn't show as a failure in every run (F18)."""
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
-    verifier.environment = _spied_environment([None, None], runner)
-    verifier.environment.installed_plugins = ("xdist.plugin",)
+    verifier.environment = PlainEnvironment(runner, ("xdist.plugin",))
 
     result = verifier.execute(req)
 
@@ -1257,8 +1286,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
 def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) -> None:
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "coverage": ("", 0)})
     verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
-    verifier.environment = _spied_environment([None, None], runner)
-    verifier.environment.installed_plugins = ("pytest_cov.plugin",)
+    verifier.environment = PlainEnvironment(runner, ("pytest_cov.plugin",))
 
     result = verifier.execute(req)
 

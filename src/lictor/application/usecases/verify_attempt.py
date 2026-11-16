@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.control_reports import ControlEvidence, ControlRun, run_control
-from lictor.application.ports import CommandRunner, ReportReaders, Vcs
+from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import (
     attempt_prefix,
     describe_crash,
@@ -25,7 +25,6 @@ from lictor.application.run_files import (
     write_text,
 )
 from lictor.application.seal import collect_monitored_files
-from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.controls import CommandControl
 from lictor.domain.errors import DriverError, InternalLictorError, SpecError
 from lictor.domain.model import (
@@ -228,16 +227,14 @@ class VerifyAttempt:
     def __init__(
         self,
         vcs: Vcs,
-        runner: CommandRunner,
+        environment: VerificationCommands,
         readers: ReportReaders,
         project_root: Path,
-        environment: VerificationEnvironment | None = None,
     ) -> None:
         self.vcs = vcs
-        self.runner = runner
+        self.environment = environment
         self.readers = readers
         self.project_root = project_root
-        self.environment = environment
 
     def execute(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run verification steps L0 to Acceptance sequentially."""
@@ -318,15 +315,12 @@ class VerifyAttempt:
         return self._check_suppressions(req)
 
     def _environment_problem(self, req: VerifyAttemptRequest) -> str | None:
-        return self.environment.ensure(req.run_id) if self.environment else None
+        return self.environment.ensure(req.run_id)
 
     def _run_project_command(
         self, cmd: Sequence[str], req: VerifyAttemptRequest, timeout_s: int
     ) -> CommandOutput:
-        tree = self._tree_dir(req)
-        if self.environment is None:
-            return self.runner.run(cmd, cwd=tree, timeout_s=timeout_s)
-        return self.environment.run(cmd, tree, timeout_s)
+        return self.environment.run(cmd, self._tree_dir(req), timeout_s)
 
     def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:
         return self.vcs.commit_tree(
@@ -486,8 +480,7 @@ class VerifyAttempt:
 
         Skip one whose plugin the environment lacks, too: the dependency is the project's.
         """
-        installed = self.environment.installed_plugins if self.environment else None
-        if plugin := missing_plugin(ctrl.when_plugin, installed):
+        if plugin := missing_plugin(ctrl.when_plugin, self.environment.installed_plugins):
             return ControlRun(ControlEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)

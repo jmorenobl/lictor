@@ -16,6 +16,7 @@ from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAtte
 from lictor.cli import app
 from lictor.domain.model import AgentTask, TestCaseResult
 from lictor.domain.rules import condense_error
+from tests.environments import PlainEnvironment
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     DRIVER,
@@ -131,7 +132,7 @@ def test_d24_stale_report_does_not_hide_a_crashed_suite(
         '<testsuite><testcase name="test_iva_001" classname="t"/></testsuite>',
     )
     readers = all_readers()
-    verify = VerifyAttempt(GitCli(root), SubprocessRunner(), readers, root)
+    verify = VerifyAttempt(GitCli(root), PlainEnvironment(SubprocessRunner()), readers, root)
     monkeypatch.setattr(verify, "_check_seal", lambda _req: SimpleNamespace(ok=True))
 
     result = verify.execute(

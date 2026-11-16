@@ -664,12 +664,10 @@ def test_control_path_status_tells_absent_from_removed(
         ("pytest_cov.plugin", ("pytest_cov.plugin", "xdist.plugin"), None),
         ("pytest_cov.plugin", ("xdist.plugin",), "pytest_cov.plugin"),
         ("pytest_cov.plugin", (), "pytest_cov.plugin"),
-        # Without a list of plugins nothing can be said: the control runs and tells its own story.
-        ("pytest_cov.plugin", None, None),
     ],
 )
 def test_missing_plugin_is_only_what_the_environment_is_known_to_lack(
-    required: str | None, installed: tuple[str, ...] | None, expected: str | None
+    required: str | None, installed: tuple[str, ...], expected: str | None
 ) -> None:
     assert missing_plugin(required, installed) == expected
 

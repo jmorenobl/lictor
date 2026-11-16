@@ -572,13 +572,12 @@ def control_path_status(path: str, *, in_tree: bool, deleted: Sequence[str]) -> 
     return "absent"
 
 
-def missing_plugin(required: str | None, installed: Sequence[str] | None) -> str | None:
-    """The plugin a control needs and the environment is known to lack, or None.
+def missing_plugin(required: str | None, installed: Sequence[str]) -> str | None:
+    """The plugin a control needs and the environment lacks, or None.
 
-    `installed` is None when the profile can't list what the environment has: the control then
-    runs, and its own failure says what is missing.
+    The list is always known: a control can only need a plugin in a profile that lists them.
     """
-    if required is None or installed is None or required in installed:
+    if required is None or required in installed:
         return None
     return required
 

@@ -214,10 +214,9 @@ def bootstrap_runtime(
 
     verify_attempt_uc = VerifyAttempt(
         vcs=vcs,
-        runner=runner,
+        environment=environment,
         readers=readers,
         project_root=resolved_root,
-        environment=environment,
     )
 
     commit_green_uc = CommitGreen(
