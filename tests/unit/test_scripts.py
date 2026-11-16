@@ -4,6 +4,7 @@ import importlib.util
 import json
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -98,10 +99,32 @@ def test_mutation_score_exports_the_counts_and_keeps_the_pass_exit_code(
 
     assert code == run_exit
     calls = (tmp_path / "llamadas").read_text(encoding="utf-8")
-    assert calls == "run\nexport-cicd-stats\nresults\n"
+    assert calls == "run --max-children 4\nexport-cicd-stats\nresults\n"
     assert report.read_text(encoding="utf-8").strip() == '{"killed": 3, "total": 4}'
     survivors = report.with_name("mutation-survivors.txt").read_text(encoding="utf-8")
     assert survivors == "    lictor.domain.rules.x_f__mutmut_1: survived\n"
+
+
+def test_the_mutation_pass_is_bounded_in_memory_and_in_workers(tmp_path: Path) -> None:
+    """A runaway mutant gets a MemoryError instead of filling the machine (2026-11-16, 13,8 GB)."""
+    tool = tmp_path / "mutmut"
+    tool.write_text(
+        FAKE_MUTMUT.format(run_exit=0).replace(
+            'echo "$*" >> llamadas', 'echo "$*" >> llamadas\n[ "$1" = run ] && ulimit -d > limite'
+        ),
+        encoding="utf-8",
+    )
+    tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+    script = _load("mutation_score")
+
+    script.main([str(tmp_path / "score.json")], mutmut=[str(tool)], root=tmp_path)
+
+    calls = (tmp_path / "llamadas").read_text(encoding="utf-8").splitlines()
+    assert calls[0] == f"run --max-children {script.MAX_CHILDREN}"
+    if sys.platform == "linux":
+        limit_kb = int((tmp_path / "limite").read_text(encoding="utf-8"))
+        assert limit_kb == script.WORKER_MEMORY // 1024
+    assert script.MAX_CHILDREN * script.WORKER_MEMORY <= 6 * 1024**3
 
 
 def test_mutation_score_leaves_no_report_when_nothing_was_exported(tmp_path: Path) -> None:
