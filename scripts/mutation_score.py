@@ -10,8 +10,10 @@ which mutants differ between two passes or two platforms.
 The pass is bounded in memory, whatever the machine: at most `MAX_CHILDREN` mutants run at once,
 and each process of the pass may hold at most `WORKER_MEMORY` of data. A mutant that grows past it
 gets a `MemoryError`, so its tests fail and it counts as killed instead of filling the machine:
-one that broke `hash_tree` followed a symlink loop forever and reached 13,8 GB (2026-11-16). The
-tests of the pass use about 80 MB. Linux enforces the limit; macOS doesn't enforce `RLIMIT_DATA`.
+one that made `hash_tree` list the working directory under every directory walked forever and
+reached 13,8 GB (2026-11-16). The
+tests of the pass use about 80 MB. Only Linux gets the memory limit, because only Linux enforces
+`RLIMIT_DATA`; on macOS the worker limit still holds.
 
 Usage: uv run python scripts/mutation_score.py <report.json>
 """
@@ -32,8 +34,13 @@ WORKER_MEMORY = 1024**3  # bytes of data per process of the pass: over ten times
 
 
 def limit_memory() -> None:
-    """Cap the data of this process and of every process it starts, which inherit the limit."""
-    resource.setrlimit(resource.RLIMIT_DATA, (WORKER_MEMORY, WORKER_MEMORY))
+    """Cap the data of this process and of every process it starts, which inherit the limit.
+
+    Only on Linux, which enforces it. macOS doesn't, and refuses to lower it below what a process
+    has already mapped, so there it would only break the pass.
+    """
+    if sys.platform == "linux":
+        resource.setrlimit(resource.RLIMIT_DATA, (WORKER_MEMORY, WORKER_MEMORY))
 
 
 def main(argv: Sequence[str], mutmut: Sequence[str] = MUTMUT, root: Path = REPO_ROOT) -> int:
