@@ -406,6 +406,7 @@ def check(
                         run=config.acceptance.run,
                         report=config.acceptance.report,
                         timeout_s=config.acceptance.timeout_s,
+                        failure_exit_codes=tuple(config.acceptance.failure_exit_codes),
                     ),
                     levels=[lvl.strip() for lvl in level.split(",")] if level else None,
                     control_ids=control or None,

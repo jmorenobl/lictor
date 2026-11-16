@@ -54,9 +54,9 @@ from lictor.domain.rules import (
     registration_subject,
     render_full_error,
     routes_rejected,
-    suite_crash_reason,
     suppression_matches,
 )
+from lictor.domain.verdicts import Crashed, judged_result, junit_verdict, report_cases, trust
 
 RoleKind = Literal["implement", "driver"]
 
@@ -624,23 +624,22 @@ class VerifyAttempt:
             )
 
         output = format_output(cmd_out)
+        junit = self.readers.junit.read(out_file)
         acc_res = replace(
-            read_and_judge(self.readers, "junit", out_file, cmd_out, ()),
+            judged_result(junit_verdict(junit, cmd_out.returncode, ()), junit, cmd_out.duration_ms),
             exit_code=cmd_out.returncode,
             output_path=relative_to_project(log_file, self.project_root),
         )
         control_results["acceptance"] = acc_res
 
-        crash = suite_crash_reason(
-            cmd_out.returncode, req.acceptance_failure_exit_codes, acc_res.test_cases
-        )
-        if crash is not None:
+        trusted = trust(junit, cmd_out.returncode, req.acceptance_failure_exit_codes)
+        if isinstance(trusted, Crashed):
             return self._fail(
                 req,
                 _Failure(
                     "acceptance",
-                    describe_crash(crash, acc_res, output),
-                    cases=acc_res.test_cases,
+                    describe_crash(trusted.reason, output),
+                    cases=report_cases(junit),
                     output=output,
                     control_results=control_results,
                 ),
@@ -649,7 +648,7 @@ class VerifyAttempt:
         # Map test cases to scenario IDs
         try:
             mapped = map_test_cases_to_scenarios(
-                acc_res.test_cases, req.all_scenario_ids, req.link, req.scenario_files
+                trusted.cases, req.all_scenario_ids, req.link, req.scenario_files
             )
         except DriverError as exc:
             return self._fail(
@@ -657,7 +656,7 @@ class VerifyAttempt:
                 _Failure(
                     "acceptance",
                     str(exc),
-                    cases=acc_res.test_cases,
+                    cases=trusted.cases,
                     output=output,
                     control_results=control_results,
                 ),
@@ -676,7 +675,7 @@ class VerifyAttempt:
                     "acceptance",
                     reason,
                     cases=relevant_cases,
-                    all_cases=acc_res.test_cases,
+                    all_cases=trusted.cases,
                     output=output,
                     control_results=control_results,
                     scenario_results=scenario_results,

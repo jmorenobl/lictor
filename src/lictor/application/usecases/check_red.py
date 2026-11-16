@@ -40,11 +40,10 @@ from lictor.domain.rules import (
     map_test_cases_to_scenarios,
     registration_subject,
     render_full_error,
-    suite_crash_reason,
     suppression_matches,
     unmapped_cases,
 )
-from lictor.domain.verdicts import judged_result, junit_verdict, report_cases
+from lictor.domain.verdicts import Crashed, report_cases, trust
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
@@ -260,33 +259,26 @@ class CheckRed:
             return self._reject(request, step_dir, _Rejection("L0-estado", reason)), None
 
         junit = self.reader.read(out_file)
-        control_res = judged_result(
-            junit_verdict(junit, output.returncode, ()), junit, output.duration_ms
-        )
-
         raw_output = format_output(output)
-        crash = suite_crash_reason(
-            output.returncode, request.acceptance_failure_exit_codes, control_res.test_cases
-        )
-        if crash is not None:
+        trusted = trust(junit, output.returncode, request.acceptance_failure_exit_codes)
+        if isinstance(trusted, Crashed):
             rejection = _Rejection(
                 "suite_caida",
-                describe_crash(crash, control_res, raw_output),
-                control_res.test_cases,
+                describe_crash(trusted.reason, raw_output),
+                report_cases(junit),
                 output=raw_output,
             )
             return self._reject_or_raise(request, step_dir, rejection), None
+        cases = trusted.cases
 
         ids = [_scenario_str(sid) for sid in request.all_scenario_ids]
         try:
-            mapped = map_test_cases_to_scenarios(
-                control_res.test_cases, ids, request.link, request.scenario_files
-            )
+            mapped = map_test_cases_to_scenarios(cases, ids, request.link, request.scenario_files)
         except DriverError as exc:
-            rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
+            rejection = _Rejection("mapeo", str(exc), cases, output=raw_output)
             return self._reject_or_raise(request, step_dir, rejection), None
 
-        extra = unmapped_cases(control_res.test_cases, mapped)
+        extra = unmapped_cases(cases, mapped)
         if request.driver_fresh and extra:
             names = ", ".join(case.name for case in extra)
             reason = f"El driver tiene tests que no son de ningún escenario: {names}"
@@ -303,7 +295,7 @@ class CheckRed:
                 request, step_dir, _Rejection("especificacion_cambiada", reason), final=True
             )
             raise DriverError(reason)
-        judged = _verdict_rejection(request, verdict, mapped, control_res.test_cases, raw_output)
+        judged = _verdict_rejection(request, verdict, mapped, cases, raw_output)
         if judged is not None:
             return self._reject_or_raise(request, step_dir, judged), None
         registration = _Registration(
@@ -375,8 +367,10 @@ class CheckRed:
     def _impostor_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
     ) -> tuple[dict[str, str], str | None]:
-        cases = report_cases(self.reader.read(run_dir / "acceptance.xml"))
-        crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
+        junit = self.reader.read(run_dir / "acceptance.xml")
+        cases = report_cases(junit)
+        trusted = trust(junit, output.returncode, request.acceptance_failure_exit_codes)
+        crash = trusted.reason if isinstance(trusted, Crashed) else None
         try:
             mapped = map_test_cases_to_scenarios(
                 cases,

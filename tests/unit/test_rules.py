@@ -62,7 +62,6 @@ from lictor.domain.rules import (
     run_outcome,
     runs_to_prune,
     score_meets,
-    suite_crash_reason,
     suppression_matches,
     suspicious_driver,
     unmapped_cases,
@@ -466,43 +465,6 @@ def test_acceptance_failure_without_results_for_the_ids() -> None:
 FAILED_CASE = TestCaseResult("t", status="failure")
 ERROR_CASE = TestCaseResult("t", status="error")
 PASSED_CASE = TestCaseResult("t")
-
-
-@pytest.mark.parametrize(
-    ("exit_code", "cases"),
-    [(0, (PASSED_CASE,)), (0, (FAILED_CASE,)), (1, (FAILED_CASE,)), (1, (ERROR_CASE,))],
-)
-def test_suite_ran_when_exit_code_matches_the_report(
-    exit_code: int, cases: tuple[TestCaseResult, ...]
-) -> None:
-    assert suite_crash_reason(exit_code, (1,), cases) is None
-
-
-def test_suite_crashed_without_a_report() -> None:
-    reason = suite_crash_reason(3, (1,), ())
-    assert reason is not None
-    assert "código 3" in reason
-    assert "sin" in reason
-
-
-def test_suite_without_cases_counts_as_crashed_even_on_exit_zero() -> None:
-    assert suite_crash_reason(0, (1,), ()) is not None
-
-
-def test_suite_crashed_with_a_code_that_does_not_mean_failed_tests() -> None:
-    reason = suite_crash_reason(3, (1,), (FAILED_CASE,))
-    assert reason is not None
-    assert "código 3" in reason
-
-
-def test_suite_failure_codes_come_from_the_caller() -> None:
-    assert suite_crash_reason(2, (1, 2), (FAILED_CASE,)) is None
-
-
-def test_suite_crashed_when_it_failed_but_no_test_did() -> None:
-    reason = suite_crash_reason(1, (1,), (PASSED_CASE,))
-    assert reason is not None
-    assert "ningún test" in reason
 
 
 def test_run_outcome_spec_conflict_wins() -> None:

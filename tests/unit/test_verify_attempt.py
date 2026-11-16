@@ -649,7 +649,7 @@ def test_verify_unreadable_report_reason_survives_a_long_output(tmp_path: Path) 
 
     verifier, req = _verify(tmp_path, Noisy({"suite": ("<roto", 1)}))
 
-    assert "No se pudo leer el informe JUnit" in (verifier.execute(req).condensed_error or "")
+    assert "con un informe JUnit no válido" in (verifier.execute(req).condensed_error or "")
 
 
 def test_verify_gates_need_the_step_dir_from_execute(tmp_path: Path) -> None:
@@ -687,7 +687,7 @@ def test_verify_unparsable_report_explains_why(tmp_path: Path) -> None:
     result = verifier.execute(req)
 
     assert result.ok is False
-    assert "No se pudo leer el informe JUnit" in (result.condensed_error or "")
+    assert "con un informe JUnit no válido" in (result.condensed_error or "")
 
 
 def test_verify_condensed_error_omits_pending_but_the_full_error_keeps_them(

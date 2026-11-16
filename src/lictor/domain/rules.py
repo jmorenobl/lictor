@@ -405,27 +405,6 @@ def acceptance_failure(
     return ("\n".join(reasons), tuple(cases)) if reasons else None
 
 
-def suite_crash_reason(
-    exit_code: int,
-    failure_exit_codes: Sequence[int],
-    test_cases: Sequence[TestCaseResult],
-) -> str | None:
-    """Tell a suite that crashed from one that ran, whose report can then be trusted.
-
-    A non-zero exit is normal while scenarios are pending, but only with a code that means
-    "tests failed" and a report that shows it.
-    """
-    if not test_cases:
-        return f"La suite terminó con código {exit_code} sin casos de test en su informe"
-    if exit_code == 0:
-        return None
-    if exit_code not in failure_exit_codes:
-        return f"La suite se interrumpió con código {exit_code}: su informe no es fiable"
-    if not any(tc.status in _FAILED_STATUSES for tc in test_cases):
-        return f"La suite terminó con código {exit_code} pero ningún test falló en su informe"
-    return None
-
-
 def _clip(text: str, limit: int) -> str:
     """Bound a text keeping both ends, where the reason and the summary usually are."""
     if len(text) <= limit:

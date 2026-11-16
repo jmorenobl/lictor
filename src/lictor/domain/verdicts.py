@@ -4,7 +4,7 @@ Each verdict is a rule over facts: a reader only reads. The messages are the con
 `tests/unit/characterization_reports.jsonl`; a change to one is a change of that contract.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import assert_never
 
@@ -145,3 +145,72 @@ def judged_result(verdict: Verdict, report: Report | None, duration_ms: int) -> 
         test_cases=report_cases(report),
         score=report_score(report),
     )
+
+
+@dataclass(frozen=True)
+class Crashed:
+    """The suite crashed: its report proves nothing, and the reason says why."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class Reported:
+    """The suite ran and its report can be trusted. Only `trust` makes one."""
+
+    junit: JUnitReport
+
+    @property
+    def cases(self) -> tuple[TestCaseResult, ...]:
+        return self.junit.cases
+
+
+type Trust = Crashed | Reported
+
+
+def trust(
+    report: ReportOf[JUnitReport], exit_code: int, failure_exit_codes: Sequence[int]
+) -> Trust:
+    """Whether an acceptance report can be trusted: a suite that crashed proves nothing.
+
+    A non-zero exit is normal while scenarios are pending, but only with a code that means
+    "tests failed" and a report that shows it.
+    """
+    match report:
+        case MissingReport():
+            return Crashed(f"La suite terminó con código {exit_code} sin dejar informe")
+        case InvalidReport(reason=reason):
+            return Crashed(
+                f"La suite terminó con código {exit_code} con un informe JUnit no válido: {reason}"
+            )
+        case JUnitReport(cases=cases):
+            crash = _crash_of(cases, exit_code, failure_exit_codes)
+            return Crashed(crash) if crash is not None else Reported(report)
+        case _:
+            assert_never(report)
+
+
+def _crash_of(
+    cases: tuple[TestCaseResult, ...], exit_code: int, failure_exit_codes: Sequence[int]
+) -> str | None:
+    if not cases:
+        return f"La suite terminó con código {exit_code} sin casos de test en su informe"
+    if exit_code == 0:
+        return None
+    if exit_code not in failure_exit_codes:
+        return f"La suite se interrumpió con código {exit_code}: su informe no es fiable"
+    if not any(case.status in _FAILED for case in cases):
+        return f"La suite terminó con código {exit_code} pero ningún test falló en su informe"
+    return None
+
+
+def acceptance_check_verdict(trusted: Trust) -> Verdict:
+    """The acceptance of `lictor check`: a report it can trust, with no failed case."""
+    match trusted:
+        case Crashed(reason=reason):
+            return Failed(reason)
+        case Reported(cases=cases):
+            failed = [case for case in cases if case.status in _FAILED]
+            return Failed(f"Fallaron {len(failed)} casos de test") if failed else Passed()
+        case _:
+            assert_never(trusted)

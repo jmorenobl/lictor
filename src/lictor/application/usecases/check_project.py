@@ -15,7 +15,7 @@ from lictor.application.run_files import (
     save_output,
 )
 from lictor.domain.errors import ConfigError
-from lictor.domain.model import ControlResult
+from lictor.domain.model import CommandOutput, ControlResult
 from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import (
     condense_error,
@@ -24,6 +24,7 @@ from lictor.domain.rules import (
     missing_plugin,
     plugin_skip_reason,
 )
+from lictor.domain.verdicts import acceptance_check_verdict, judged_result, trust
 
 ACCEPTANCE_ID = "acceptance"
 
@@ -51,6 +52,7 @@ class CheckAcceptanceSpec:
     run: str
     report: ReportFormat = "junit"
     timeout_s: int = 600
+    failure_exit_codes: Sequence[int] = (1,)
 
 
 @dataclass(frozen=True)
@@ -127,9 +129,7 @@ class CheckProject:
                     break
 
         if acceptance is not None and (first_failure is None or req.keep_going):
-            result = self._run_command(
-                self._params(req, ACCEPTANCE_ID, acceptance.run, acceptance.report, acceptance)
-            )
+            result = self._run_acceptance(req, acceptance)
             control_results[ACCEPTANCE_ID] = result
             if not result.ok:
                 first_failure = first_failure or (ACCEPTANCE_ID, result)
@@ -216,16 +216,33 @@ class CheckProject:
             min_score=control.min_score if control else None,
         )
 
-    def _run_command(self, params: _RunStepParams) -> ControlResult:
+    def _run_acceptance(
+        self, req: CheckProjectRequest, acceptance: CheckAcceptanceSpec
+    ) -> ControlResult:
+        """The acceptance is judged as in a run: a report it can trust, then its cases."""
+        params = self._params(req, ACCEPTANCE_ID, acceptance.run, acceptance.report, acceptance)
+        cmd_out, out_file, log_file = self._execute(params)
+        junit = self.readers.junit.read(out_file)
+        trusted = trust(junit, cmd_out.returncode, acceptance.failure_exit_codes)
+        result = judged_result(acceptance_check_verdict(trusted), junit, cmd_out.duration_ms)
+        return replace(
+            result,
+            exit_code=cmd_out.returncode,
+            output_path=relative_to_project(log_file, params.project_root),
+        )
+
+    def _execute(self, params: _RunStepParams) -> tuple[CommandOutput, Path, Path]:
+        """Run a step's command, keep its output, and say where its report and log are."""
         params.evidence_dir.mkdir(parents=True, exist_ok=True)
         out_file = params.evidence_dir / f"{params.step_id}.xml"
         log_file = params.evidence_dir / f"{params.step_id}.log"
-
         cmd_args = fill_report_path(params.command_template, out_file)
-
         cmd_out = self.runner.run(cmd=cmd_args, cwd=params.tree, timeout_s=params.timeout_s)
         save_output(log_file, cmd_out)
+        return cmd_out, out_file, log_file
 
+    def _run_command(self, params: _RunStepParams) -> ControlResult:
+        cmd_out, out_file, log_file = self._execute(params)
         result = read_and_judge(
             self.readers, params.report_format, out_file, cmd_out, params.empty_exit_codes
         )

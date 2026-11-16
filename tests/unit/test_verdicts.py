@@ -16,8 +16,11 @@ from lictor.domain.reports import (
 )
 from lictor.domain.verdicts import (
     NOTHING_MEASURED,
+    Crashed,
     Failed,
     Passed,
+    Reported,
+    acceptance_check_verdict,
     coverage_verdict,
     exit_code_verdict,
     judged_result,
@@ -25,6 +28,7 @@ from lictor.domain.verdicts import (
     mutation_verdict,
     report_cases,
     report_score,
+    trust,
 )
 
 _PASSED = TestCaseResult(name="a")
@@ -186,3 +190,66 @@ def test_a_judged_result_carries_the_verdict_and_what_the_report_says() -> None:
     )
     failed = judged_result(Failed("motivo"), _COVERAGE, 3)
     assert (failed.ok, failed.error, failed.score) == (False, "motivo", _COVERAGE.score)
+
+
+@pytest.mark.parametrize(
+    ("report", "code", "expected"),
+    [
+        (MissingReport(), 1, Crashed("La suite terminó con código 1 sin dejar informe")),
+        (
+            InvalidReport("roto"),
+            0,
+            Crashed("La suite terminó con código 0 con un informe JUnit no válido: roto"),
+        ),
+        (
+            JUnitReport(),
+            0,
+            Crashed("La suite terminó con código 0 sin casos de test en su informe"),
+        ),
+        (
+            JUnitReport((_FAILURE,)),
+            3,
+            Crashed("La suite se interrumpió con código 3: su informe no es fiable"),
+        ),
+        (
+            JUnitReport((_PASSED,)),
+            1,
+            Crashed("La suite terminó con código 1 pero ningún test falló en su informe"),
+        ),
+        (
+            JUnitReport((_SKIPPED,)),
+            1,
+            Crashed("La suite terminó con código 1 pero ningún test falló en su informe"),
+        ),
+        (JUnitReport((_PASSED,)), 0, Reported(JUnitReport((_PASSED,)))),
+        (JUnitReport((_FAILURE,)), 0, Reported(JUnitReport((_FAILURE,)))),
+        (JUnitReport((_FAILURE,)), 1, Reported(JUnitReport((_FAILURE,)))),
+        (JUnitReport((_ERROR,)), 1, Reported(JUnitReport((_ERROR,)))),
+    ],
+)
+def test_trust(
+    report: JUnitReport | MissingReport | InvalidReport, code: int, expected: object
+) -> None:
+    assert trust(report, code, (1,)) == expected
+
+
+def test_trust_takes_the_failure_codes_from_the_caller() -> None:
+    report = JUnitReport((_FAILURE,))
+    assert trust(report, 2, (1, 2)) == Reported(report)
+    assert isinstance(trust(report, 2, (1,)), Crashed)
+
+
+def test_a_trusted_report_gives_its_cases() -> None:
+    assert Reported(JUnitReport((_PASSED, _FAILURE))).cases == (_PASSED, _FAILURE)
+
+
+@pytest.mark.parametrize(
+    ("trusted", "expected"),
+    [
+        (Crashed("se cayó"), Failed("se cayó")),
+        (Reported(JUnitReport((_PASSED, _SKIPPED))), Passed()),
+        (Reported(JUnitReport((_PASSED, _FAILURE, _ERROR))), Failed("Fallaron 2 casos de test")),
+    ],
+)
+def test_the_acceptance_of_check(trusted: Crashed | Reported, expected: object) -> None:
+    assert acceptance_check_verdict(trusted) == expected

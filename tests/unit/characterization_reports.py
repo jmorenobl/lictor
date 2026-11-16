@@ -29,8 +29,15 @@ from lictor.application.control_reports import read_and_judge
 from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
 from lictor.domain.model import CommandOutput, ControlResult, CoverageScore, MutationScore
-from lictor.domain.rules import enforce_min_score, suite_crash_reason
-from lictor.domain.verdicts import report_cases
+from lictor.domain.rules import enforce_min_score
+from lictor.domain.verdicts import (
+    Crashed,
+    acceptance_check_verdict,
+    judged_result,
+    junit_verdict,
+    report_cases,
+    trust,
+)
 
 READERS = ReportReaders(junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader())
 
@@ -157,18 +164,19 @@ class SeenAcceptance:
 
 def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
     """`VerifyAttempt._run_acceptance`, with `failure_exit_codes` [1] as the profile declares."""
-    try:
-        result = read_and_judge(READERS, "junit", report, _output(code), ())
-    except Exception as exc:
-        return SeenAcceptance(Seen(RAISES, type(exc).__name__))
-    crash = suite_crash_reason(code, (1,), result.test_cases)
-    reason = describe_crash(crash, result, "").strip() if crash else None
+    junit = READERS.junit.read(report)
+    result = judged_result(junit_verdict(junit, code, ()), junit, 0)
+    trusted = trust(junit, code, (1,))
+    crash = trusted.reason if isinstance(trusted, Crashed) else None
+    reason = describe_crash(crash, "") if crash else None
     return SeenAcceptance(Seen(result.ok, result.error, len(result.test_cases)), crash, reason)
 
 
 def acceptance_of_check(report: Path, code: int) -> Seen:
-    """`CheckProject`: the acceptance is judged by the reader's `ok`, with no empty exit codes."""
-    return _seen(lambda: read_and_judge(READERS, "junit", report, _output(code), ()))
+    """`CheckProject`: the acceptance trusts its report as in a run, then judges its cases."""
+    junit = READERS.junit.read(report)
+    verdict = acceptance_check_verdict(trust(junit, code, (1,)))
+    return _seen(lambda: judged_result(verdict, junit, 0))
 
 
 RED_STDOUTS: dict[str, str] = {
@@ -191,8 +199,9 @@ def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenRed:
     """`CheckRed`, red and impostors: `{out}` read by the JUnit reader; the stdout is never read."""
     del stdout  # ADR-0009, change 3: the stdout is no source of a report
     junit = READERS.junit.read(report)
-    cases = report_cases(junit)
-    return SeenRed(len(cases), suite_crash_reason(code, (1,), cases))
+    trusted = trust(junit, code, (1,))
+    crash = trusted.reason if isinstance(trusted, Crashed) else None
+    return SeenRed(len(report_cases(junit)), crash)
 
 
 def _output(code: int, stdout: str = "", stderr: str = "") -> CommandOutput:
