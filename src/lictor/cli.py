@@ -15,7 +15,6 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from lictor import __version__
-from lictor.adapters.config.models import ControlConfig
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
 from lictor.application.ports import Clock
@@ -36,7 +35,7 @@ from lictor.application.run_index import (
 )
 from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
-from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckControlSpec
+from lictor.application.usecases.check_project import CheckAcceptanceSpec
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
@@ -401,7 +400,7 @@ def check(
             res = runtime.check_working_tree.execute(
                 CheckWorkingTreeRequest(
                     run_id=f"check-{runtime.clock.generate_run_id()}",
-                    controls=[_check_spec(c) for c in config.controls],
+                    controls=runtime.controls,
                     acceptance=CheckAcceptanceSpec(
                         run=config.acceptance.run,
                         timeout_s=config.acceptance.timeout_s,
@@ -438,21 +437,6 @@ def check(
         return 0
 
     _safe_run(_execute)
-
-
-def _check_spec(control: ControlConfig) -> CheckControlSpec:
-    return CheckControlSpec(
-        id=control.id,
-        level=control.level,
-        run=control.run,
-        report=control.report,
-        mode=control.mode,
-        empty_exit_codes=control.empty_exit_codes,
-        timeout_s=control.timeout_s,
-        when_exists=control.when_exists,
-        min_score=control.min_score,
-        when_plugin=control.when_plugin,
-    )
 
 
 @app.command()

@@ -29,8 +29,9 @@ from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
-from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
+from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl
 from lictor.domain.model import (
     AgentStatus,
     AgentTask,
@@ -233,7 +234,7 @@ Característica: IVA de facturas
         acceptance_run="acceptance-runner --junitxml {out}",
         acceptance_timeout_s=600,
         controls=[
-            VerificationControl(
+            CommandControl(
                 id="unit",
                 level="L2",
                 run="unit-runner {out}",

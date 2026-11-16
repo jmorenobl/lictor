@@ -15,12 +15,12 @@ from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
 from lictor.application.usecases.verify_attempt import (
     IntegritySnapshot,
-    VerificationControl,
     VerifyAttempt,
     VerifyAttemptRequest,
     control_summaries,
 )
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 from tests.readers import ReportingRunner, all_readers
@@ -288,12 +288,10 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="lint", level="L1", run="ruff check", report="exit-code", mode="block"
             ),
-            VerificationControl(
-                id="types", level="L1", run="mypy", report="exit-code", mode="block"
-            ),
+            CommandControl(id="types", level="L1", run="mypy", report="exit-code", mode="block"),
         ),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
@@ -329,7 +327,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="mutation",
                 level="L5",
                 run="mutmut",
@@ -400,9 +398,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        controls=(
-            VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
-        ),
+        controls=(CommandControl(id="check", level="L1", run="echo test", report="exit-code"),),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -437,9 +433,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        controls=(
-            VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
-        ),
+        controls=(CommandControl(id="check", level="L1", run="echo test", report="exit-code"),),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -471,7 +465,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="unit",
                 level="L2",
                 run="pytest tests/unit --junitxml {out}",
@@ -602,7 +596,7 @@ def test_verify_report_left_by_a_previous_step_does_not_hide_a_crash(tmp_path: P
             (step / "acceptance.xml").write_text(_GREEN_REPORT, encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Planter(), controls=(control,))
 
     result = verifier.execute(req)
@@ -786,8 +780,8 @@ def test_verify_green_attempt_writes_no_error(tmp_path: Path) -> None:
 
 def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> None:
     controls = (
-        VerificationControl(id="lint", level="L1", run="lint", report="exit-code"),
-        VerificationControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure"),
+        CommandControl(id="lint", level="L1", run="lint", report="exit-code"),
+        CommandControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure"),
     )
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
     verifier, req = _verify(tmp_path, runner, controls=controls)
@@ -814,9 +808,7 @@ def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> No
 
 
 def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="unit", level="L2", run="unit --junitxml {out}", report="junit"
-    )
+    control = CommandControl(id="unit", level="L2", run="unit --junitxml {out}", report="junit")
     runner = _PlantingRunner({"unit": ("", 4)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -841,8 +833,8 @@ def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Pat
             return CommandOutput(returncode=0, stdout="", stderr="")
 
     controls = (
-        VerificationControl(id="first", level="L1", run="first", report="exit-code"),
-        VerificationControl(id="second", level="L1", run="second", report="exit-code"),
+        CommandControl(id="first", level="L1", run="first", report="exit-code"),
+        CommandControl(id="second", level="L1", run="second", report="exit-code"),
     )
     verifier, req = _verify(tmp_path, Tamperer(), controls=controls)
 
@@ -870,7 +862,7 @@ def test_verify_repository_moved_during_a_command_fails_the_attempt(
                 verifier.vcs.moved = ["HEAD"]
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Mover(), controls=(control,))
 
     result = verifier.execute(req)
@@ -892,7 +884,7 @@ def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -
                 (tmp_path / ".lictor" / "seal.json").write_text("{}", encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Tamperer(), controls=(control,))
 
     result = verifier.execute(req)
@@ -902,9 +894,7 @@ def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -
 
 
 def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="mut", level="L5", run="mut", report="exit-code", mode="measure"
-    )
+    control = CommandControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -924,7 +914,7 @@ def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
 
 
 def test_verify_runs_every_command_in_the_tree_of_the_candidate(tmp_path: Path) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -1031,7 +1021,7 @@ def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, runner)
     verifier.environment = _spied_environment([None, None], runner)
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     req = replace(req, controls=(control,))
 
     assert verifier.execute(req).ok is True
@@ -1175,7 +1165,7 @@ def test_every_verification_records_its_evidence(tmp_path: Path) -> None:
     assert result.evidence["hash"] == hash_tree(tmp_path / result.evidence["path"])
 
 
-_UNIT_WHEN_EXISTS = VerificationControl(
+_UNIT_WHEN_EXISTS = CommandControl(
     id="unit",
     level="L2",
     run="unit --junitxml {out}",
@@ -1231,7 +1221,7 @@ def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -
     assert result.control_results["unit"].skipped is None
 
 
-_COVERAGE = VerificationControl(
+_COVERAGE = CommandControl(
     id="coverage",
     level="L2",
     run="coverage",
@@ -1272,7 +1262,7 @@ def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) 
 def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
     tmp_path: Path,
 ) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
     assert isinstance(verifier.vcs, FakeVcs)
@@ -1419,7 +1409,7 @@ def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
 
 
 def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
-    control = VerificationControl(
+    control = CommandControl(
         id="mut", level="L5", run="mut {out}", report="mutation", mode="measure"
     )
     stats = '{"killed": 9, "survived": 1, "timeout": 0, "total": 10}'
@@ -1447,7 +1437,7 @@ def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
 
 
 def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -1455,9 +1445,7 @@ def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
 
 
 def test_a_blocking_mutation_control_below_its_minimum_fails_the_attempt(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="mut", level="L5", run="mut {out}", report="mutation", min_score=95
-    )
+    control = CommandControl(id="mut", level="L5", run="mut {out}", report="mutation", min_score=95)
     stats = '{"killed": 9, "survived": 1, "total": 10}'
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": (stats, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))

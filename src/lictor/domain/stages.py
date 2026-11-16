@@ -7,28 +7,13 @@ which controls go where and what that sentence says.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal
 
 from lictor.domain.run_branches import integration_hint
 
 Stage = Literal["attempt", "check"]
 ATTEMPT: Stage = "attempt"
 CHECK: Stage = "check"
-
-
-class Staged(Protocol):
-    """A control as the domain sees it here: something with an id and a stage."""
-
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def stage(self) -> str: ...
-
-
-def controls_of_stage[StagedT: Staged](controls: Sequence[StagedT], stage: Stage) -> list[StagedT]:
-    """The controls of one stage, in the order they were declared."""
-    return [control for control in controls if control.stage == stage]
 
 
 def spoken_list(names: Sequence[str]) -> str:

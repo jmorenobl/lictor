@@ -6,10 +6,10 @@ import pytest
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
-    CheckControlSpec,
     CheckProject,
     CheckProjectRequest,
 )
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import CommandOutput
 from tests.readers import ReportingRunner, all_readers
@@ -24,7 +24,7 @@ def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
     use_case = CheckProject(runner=runner, readers=readers)
 
     controls = [
-        CheckControlSpec(id="lint", level="L1", run="echo lint", report="exit-code"),
+        CommandControl(id="lint", level="L1", run="echo lint", report="exit-code"),
     ]
     acceptance = CheckAcceptanceSpec(run="echo test {out}")
 
@@ -53,8 +53,8 @@ def test_check_project_blocking_control_fails_and_stops_early(tmp_path: Path) ->
     use_case = CheckProject(runner=runner, readers=readers)
 
     controls = [
-        CheckControlSpec(id="lint", level="L1", run="echo fail", report="exit-code", mode="block"),
-        CheckControlSpec(id="types", level="L1", run="echo pass", report="exit-code", mode="block"),
+        CommandControl(id="lint", level="L1", run="echo fail", report="exit-code", mode="block"),
+        CommandControl(id="types", level="L1", run="echo pass", report="exit-code", mode="block"),
     ]
 
     req = CheckProjectRequest(project_root=tmp_path, controls=controls)
@@ -76,12 +76,10 @@ def test_check_project_measure_mode_does_not_block(tmp_path: Path) -> None:
     use_case = CheckProject(runner=runner, readers=readers)
 
     controls = [
-        CheckControlSpec(
+        CommandControl(
             id="mutation", level="L5", run="echo mut", report="exit-code", mode="measure"
         ),
-        CheckControlSpec(
-            id="types", level="L1", run="echo types", report="exit-code", mode="block"
-        ),
+        CommandControl(id="types", level="L1", run="echo types", report="exit-code", mode="block"),
     ]
 
     req = CheckProjectRequest(project_root=tmp_path, controls=controls)
@@ -100,8 +98,8 @@ def test_check_project_level_filter(tmp_path: Path) -> None:
     use_case = CheckProject(runner=runner, readers=readers)
 
     controls = [
-        CheckControlSpec(id="l1_ctrl", level="L1", run="echo l1", report="exit-code"),
-        CheckControlSpec(id="l4_ctrl", level="L4", run="echo l4", report="exit-code"),
+        CommandControl(id="l1_ctrl", level="L1", run="echo l1", report="exit-code"),
+        CommandControl(id="l4_ctrl", level="L4", run="echo l4", report="exit-code"),
     ]
     acceptance = CheckAcceptanceSpec(run="echo acc")
 
@@ -124,10 +122,8 @@ def _project(tmp_path: Path, stdout: str, code: int) -> tuple[CheckProject, Chec
     runner.set_response("suite", CommandOutput(returncode=code, stdout=stdout, stderr="fallo"))
     readers = all_readers()
     use_case = CheckProject(runner=runner, readers=readers)
-    control = CheckControlSpec(
-        id="mut", level="L5", run="suite", report="exit-code", mode="measure"
-    )
-    junit = CheckControlSpec(id="unit", level="L2", run="suite --out {out}", report="junit")
+    control = CommandControl(id="mut", level="L5", run="suite", report="exit-code", mode="measure")
+    junit = CommandControl(id="unit", level="L2", run="suite --out {out}", report="junit")
     return use_case, CheckProjectRequest(project_root=tmp_path, controls=[control, junit])
 
 
@@ -158,7 +154,7 @@ def test_check_project_records_the_output_of_a_measure_control(tmp_path: Path) -
 def test_check_project_skips_a_control_whose_path_the_working_tree_lacks(tmp_path: Path) -> None:
     runner = FakeRunner()
     use_case = CheckProject(runner=runner, readers=all_readers())
-    unit = CheckControlSpec(
+    unit = CommandControl(
         id="unit",
         level="L2",
         run="pytest tests/unit --junitxml {out}",
@@ -178,7 +174,7 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
     runner = FakeRunner()
     runner.set_response("lint", CommandOutput(returncode=0, stdout="", stderr=""))
     use_case = CheckProject(runner=runner, readers=all_readers())
-    lint = CheckControlSpec(
+    lint = CommandControl(
         id="lint", level="L1", run="lint tests/unit", report="exit-code", when_exists="tests/unit"
     )
 
@@ -199,8 +195,13 @@ def test_check_project_skips_a_control_whose_plugin_the_environment_lacks(
     runner = FakeRunner()
     runner.set_response("cov", CommandOutput(returncode=0, stdout="", stderr=""))
     use_case = CheckProject(runner=runner, readers=all_readers())
-    cov = CheckControlSpec(
-        id="coverage", level="L2", run="cov", mode="measure", when_plugin="pytest_cov.plugin"
+    cov = CommandControl(
+        id="coverage",
+        level="L2",
+        run="cov",
+        mode="measure",
+        when_plugin="pytest_cov.plugin",
+        report="exit-code",
     )
 
     res = use_case.execute(
@@ -219,12 +220,12 @@ BAD = CommandOutput(returncode=1, stdout="mal", stderr="")
 JUNIT_OK = '<testsuite><testcase name="test_1"/></testsuite>'
 
 
-def _three(runner: FakeRunner) -> tuple[CheckProject, list[CheckControlSpec], CheckAcceptanceSpec]:
+def _three(runner: FakeRunner) -> tuple[CheckProject, list[CommandControl], CheckAcceptanceSpec]:
     use_case = CheckProject(runner, all_readers())
     controls = [
-        CheckControlSpec("lint", "L1", "lint"),
-        CheckControlSpec("types", "L1", "types"),
-        CheckControlSpec("unit", "L2", "unit"),
+        CommandControl("lint", "L1", "lint", report="exit-code"),
+        CommandControl("types", "L1", "types", report="exit-code"),
+        CommandControl("unit", "L2", "unit", report="exit-code"),
     ]
     return use_case, controls, CheckAcceptanceSpec("acc --junitxml {out}", "junit")
 
@@ -327,7 +328,7 @@ def test_commands_run_in_the_tree_and_leave_evidence_apart(tmp_path: Path) -> No
 
 def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> None:
     use_case = CheckProject(FakeRunner(), all_readers())
-    unit = CheckControlSpec("unit", "L2", "u {out}", "junit", when_exists="tests/unit")
+    unit = CommandControl("unit", "L2", "u {out}", "junit", when_exists="tests/unit")
 
     res = use_case.execute(CheckProjectRequest(tmp_path, [unit], deleted=["tests/unit/test_a.py"]))
 
@@ -354,7 +355,7 @@ def test_a_mutation_control_passes_only_from_its_minimum(
     tmp_path: Path, minimum: float | None, ok: bool
 ) -> None:
     use_case = CheckProject(_MutationRunner(), all_readers())
-    control = CheckControlSpec("mut", "L5", "mut {out}", "mutation", min_score=minimum)
+    control = CommandControl("mut", "L5", "mut {out}", "mutation", min_score=minimum)
 
     res = use_case.execute(CheckProjectRequest(tmp_path, [control]))
 

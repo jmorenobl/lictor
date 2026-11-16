@@ -37,6 +37,7 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -155,7 +156,7 @@ class GraphContext:
     acceptance_run: str
     acceptance_timeout_s: int
     # Only the `attempt` controls: the `check` ones never run in a run (ADR-0007).
-    controls: Sequence[Any]
+    controls: tuple[CommandControl, ...]
     prepare_driver: PrepareDriver
     check_red: CheckRed
     implement_scenario: ImplementScenario
@@ -181,7 +182,7 @@ class GraphContext:
     map_link: MapLink = "name"
     impostors: Impostors | None = None
     # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
-    check_controls: Sequence[Any] = ()
+    check_controls: tuple[CommandControl, ...] = ()
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the

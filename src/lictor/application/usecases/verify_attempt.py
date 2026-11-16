@@ -8,9 +8,9 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
-from lictor.application.control_reports import read_and_judge
+from lictor.application.control_reports import ControlEvidence, ControlRun, run_control
 from lictor.application.ports import CommandRunner, ReportReaders, Vcs
 from lictor.application.run_files import (
     attempt_prefix,
@@ -26,6 +26,7 @@ from lictor.application.run_files import (
 )
 from lictor.application.seal import collect_monitored_files
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import DriverError, InternalLictorError, SpecError
 from lictor.domain.model import (
     AgentResult,
@@ -37,7 +38,6 @@ from lictor.domain.model import (
     TestCaseResult,
     VerifyResult,
 )
-from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import (
     MapLink,
     acceptance_failure,
@@ -45,7 +45,6 @@ from lictor.domain.rules import (
     condense_error,
     control_path_status,
     describe_suppressions,
-    enforce_min_score,
     forbidden_paths,
     map_test_cases_to_scenarios,
     missing_plugin,
@@ -59,7 +58,6 @@ from lictor.domain.rules import (
 from lictor.domain.verdicts import (
     Crashed,
     Execution,
-    VerdictRule,
     judged_result,
     junit_verdict,
     report_cases,
@@ -69,56 +67,6 @@ from lictor.domain.verdicts import (
 RoleKind = Literal["implement", "driver"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
-
-
-class VerificationControlProtocol(Protocol):
-    """Protocol matching control configurations without binding to Pydantic."""
-
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def level(self) -> str: ...
-
-    @property
-    def run(self) -> str: ...
-
-    @property
-    def report(self) -> ReportFormat: ...
-
-    @property
-    def mode(self) -> str: ...
-
-    @property
-    def empty_exit_codes(self) -> Sequence[int]: ...
-
-    @property
-    def timeout_s(self) -> int: ...
-
-    @property
-    def when_exists(self) -> str | None: ...
-
-    @property
-    def when_plugin(self) -> str | None: ...
-
-    @property
-    def min_score(self) -> float | None: ...
-
-
-@dataclass(frozen=True)
-class VerificationControl:
-    """Concrete value object for verification controls."""
-
-    id: str
-    level: str
-    run: str
-    report: ReportFormat
-    mode: str = "block"
-    empty_exit_codes: Sequence[int] = ()
-    timeout_s: int = 600
-    when_exists: str | None = None
-    min_score: float | None = None
-    when_plugin: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -131,7 +79,7 @@ class VerifyAttemptRequest:
     paths_writable: Sequence[str]
     paths_driver: Sequence[str]
     suppressions: Sequence[str]
-    controls: Sequence[VerificationControlProtocol] = field(default_factory=tuple)
+    controls: Sequence[CommandControl] = field(default_factory=tuple)
     acceptance_run: str = ""
     acceptance_timeout_s: int = 600
     green_scenario_ids: Sequence[str] = field(default_factory=tuple)
@@ -163,15 +111,6 @@ class _Failure:
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = ()
     failure: tuple[str, str] | None = None
-
-
-@dataclass(frozen=True)
-class _ControlRun:
-    """A control after running, with the output its failure may need."""
-
-    result: ControlResult
-    tampered: tuple[str, ...] = ()
-    output: CommandOutput | None = None
 
 
 def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
@@ -548,16 +487,14 @@ class VerifyAttempt:
 
         return VerifyResult(ok=True)
 
-    def _run_present_control(
-        self, ctrl: VerificationControlProtocol, req: VerifyAttemptRequest
-    ) -> _ControlRun:
+    def _run_present_control(self, ctrl: CommandControl, req: VerifyAttemptRequest) -> ControlRun:
         """Skip a control whose path neither HEAD nor the candidate has; fail one removed.
 
         Skip one whose plugin the environment lacks, too: the dependency is the project's.
         """
         installed = self.environment.installed_plugins if self.environment else None
         if plugin := missing_plugin(ctrl.when_plugin, installed):
-            return _ControlRun(
+            return ControlRun(
                 ControlResult(ok=True, mode=ctrl.mode, skipped=plugin_skip_reason(plugin))
             )
         if ctrl.when_exists is None:
@@ -567,45 +504,32 @@ class VerifyAttempt:
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
-            return _ControlRun(ControlResult(ok=True, mode=ctrl.mode, skipped=reason))
+            return ControlRun(ControlResult(ok=True, mode=ctrl.mode, skipped=reason))
         if status == "removed":
             reason = (
                 f"El intento elimina {ctrl.when_exists}, que existía: "
                 f"el control {ctrl.id} ya no puede ejecutarse"
             )
-            return _ControlRun(ControlResult(ok=False, mode=ctrl.mode, error=reason))
+            return ControlRun(ControlResult(ok=False, mode=ctrl.mode, error=reason))
         return self._run_single_control(ctrl, req)
 
-    def _run_single_control(
-        self,
-        ctrl: VerificationControlProtocol,
-        req: VerifyAttemptRequest,
-    ) -> _ControlRun:
+    def _run_single_control(self, ctrl: CommandControl, req: VerifyAttemptRequest) -> ControlRun:
         step_dir = self._step_dir(req)
-        out_file = step_dir / f"control_{ctrl.id}.xml"
-        log_file = step_dir / f"control_{ctrl.id}.log"
-        cmd_tokens = fill_report_path(ctrl.run, out_file)
+        evidence = ControlEvidence(
+            step_dir / f"control_{ctrl.id}.xml",
+            step_dir / f"control_{ctrl.id}.log",
+            self.project_root,
+        )
 
-        snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
-        cmd_out = self._run_project_command(cmd_tokens, req, ctrl.timeout_s)
-        tampered = not snapshot.verify_and_restore()
-        save_output(log_file, cmd_tokens, cmd_out)
+        def execute(
+            command: Sequence[str], timeout_s: int
+        ) -> tuple[CommandOutput, tuple[str, ...]]:
+            snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
+            output = self._run_project_command(command, req, timeout_s)
+            snapshot.verify_and_restore()
+            return output, tuple(snapshot.changes)
 
-        def recorded(result: ControlResult) -> ControlResult:
-            return replace(
-                result,
-                exit_code=cmd_out.returncode,
-                mode=ctrl.mode,
-                output_path=relative_to_project(log_file, self.project_root),
-            )
-
-        if tampered:
-            changes = tuple(snapshot.changes)
-            return _ControlRun(recorded(ControlResult(ok=False)), tampered=changes)
-
-        rule = VerdictRule(ctrl.report, ctrl.timeout_s, tuple(ctrl.empty_exit_codes))
-        c_res = read_and_judge(self.readers, rule, out_file, cmd_out)
-        return _ControlRun(recorded(enforce_min_score(c_res, ctrl.min_score)), output=cmd_out)
+        return run_control(ctrl, self.readers, evidence, execute)
 
     def _run_acceptance(
         self,

@@ -12,19 +12,19 @@ import pytest
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import AuditSink, Clock, EventLog
-from lictor.application.usecases.check_project import CheckControlSpec
 from lictor.application.usecases.check_working_tree import (
     CheckWorkingTree,
     CheckWorkingTreeRequest,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
 from tests.readers import all_readers
 
 GIT = shutil.which("git") or "git"
-LINT = CheckControlSpec("lint", "L1", "lint src")
-UNIT = CheckControlSpec("unit", "L2", "unit", when_exists="tests/unit")
+LINT = CommandControl("lint", "L1", "lint src", report="exit-code")
+UNIT = CommandControl("unit", "L2", "unit", when_exists="tests/unit", report="exit-code")
 
 
 def _git(root: Path, *args: str) -> str:

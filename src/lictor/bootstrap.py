@@ -11,6 +11,7 @@ from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
     config_fingerprint,
+    domain_controls,
     load_config,
     profile_skill_sections,
     resolve_defences,
@@ -50,10 +51,11 @@ from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl, controls_of_stage
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle, control_label
-from lictor.domain.stages import ATTEMPT, CHECK, controls_of_stage
+from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
 
 
@@ -63,6 +65,8 @@ class BootstrapResult:
 
     config: LictorConfig
     config_hash: str
+    # Every control, in the order the configuration declares them: the only conversion.
+    controls: tuple[CommandControl, ...]
     clock: Clock
     event_log: EventLog
     vcs: Vcs
@@ -240,8 +244,9 @@ def bootstrap_runtime(
     )
 
     # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.
-    attempt_controls = controls_of_stage(active_config.controls, ATTEMPT)
-    check_controls = controls_of_stage(active_config.controls, CHECK)
+    controls = domain_controls(active_config)
+    attempt_controls = controls_of_stage(controls, ATTEMPT)
+    check_controls = controls_of_stage(controls, CHECK)
     commands = {control_label(c.id): c.run for c in attempt_controls}
     commands["de la aceptación"] = active_config.acceptance.run
     doctor_audit = AuditSink(
@@ -312,6 +317,7 @@ def bootstrap_runtime(
     return BootstrapResult(
         config=active_config,
         config_hash=config_fingerprint(active_config, defences),
+        controls=controls,
         clock=active_clock,
         event_log=active_event_log,
         vcs=vcs,

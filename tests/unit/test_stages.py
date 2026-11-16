@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 import pytest
 
 from lictor.domain.run_branches import integration_hint
@@ -8,34 +6,11 @@ from lictor.domain.stages import (
     check_controls_warning,
     check_stage_note,
     committed_greens,
-    controls_of_stage,
     final_reason,
     integration_with_check_stage,
     spoken_list,
     with_sentence,
 )
-
-
-@dataclass(frozen=True)
-class _Control:
-    id: str
-    stage: str = "attempt"
-
-
-def test_each_stage_keeps_only_its_controls_in_their_order() -> None:
-    controls = [
-        _Control("lint"),
-        _Control("mutation", "check"),
-        _Control("unit"),
-        _Control("audit", "check"),
-    ]
-
-    assert [c.id for c in controls_of_stage(controls, "attempt")] == ["lint", "unit"]
-    assert [c.id for c in controls_of_stage(controls, "check")] == ["mutation", "audit"]
-
-
-def test_no_controls_of_a_stage_is_an_empty_list() -> None:
-    assert controls_of_stage([_Control("lint")], "check") == []
 
 
 @pytest.mark.parametrize(

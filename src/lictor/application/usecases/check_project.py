@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from lictor.application.control_reports import read_and_judge
+from lictor.application.control_reports import ControlEvidence, run_control
 from lictor.application.ports import CommandRunner, ReportReaders
 from lictor.application.run_files import (
     CHECK_DIR,
@@ -14,41 +14,23 @@ from lictor.application.run_files import (
     relative_to_project,
     save_output,
 )
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import CommandOutput, ControlResult
-from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import (
     condense_error,
     control_path_status,
-    enforce_min_score,
     missing_plugin,
     plugin_skip_reason,
 )
 from lictor.domain.verdicts import (
     Execution,
-    VerdictRule,
     acceptance_check_verdict,
     judged_result,
     trust,
 )
 
 ACCEPTANCE_ID = "acceptance"
-
-
-@dataclass(frozen=True)
-class CheckControlSpec:
-    """Specification for a verification control."""
-
-    id: str
-    level: str
-    run: str
-    report: ReportFormat = "exit-code"
-    mode: str = "block"
-    empty_exit_codes: Sequence[int] = ()
-    timeout_s: int = 600
-    when_exists: str | None = None
-    min_score: float | None = None
-    when_plugin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +54,7 @@ class CheckProjectRequest:
     """
 
     project_root: Path
-    controls: Sequence[CheckControlSpec]
+    controls: Sequence[CommandControl]
     acceptance: CheckAcceptanceSpec | None = None
     levels: Sequence[str] | None = None
     error_max_chars: int = 4000
@@ -92,20 +74,6 @@ class CheckProjectResult:
     failed_at: str | None = None
     control_results: dict[str, ControlResult] = field(default_factory=dict)
     condensed_error: str | None = None
-
-
-@dataclass(frozen=True)
-class _RunStepParams:
-    tree: Path
-    evidence_dir: Path
-    project_root: Path
-    command_template: str
-    report_format: ReportFormat
-    timeout_s: int
-    empty_exit_codes: Sequence[int]
-    step_id: str
-    mode: str = "block"
-    min_score: float | None = None
 
 
 class CheckProject:
@@ -157,7 +125,7 @@ class CheckProject:
 
     def _selected(
         self, req: CheckProjectRequest
-    ) -> tuple[list[CheckControlSpec], CheckAcceptanceSpec | None]:
+    ) -> tuple[list[CommandControl], CheckAcceptanceSpec | None]:
         """Apply `levels` and `control_ids` together; an id that names nothing is refused."""
         levels = {lvl.strip().upper() for lvl in req.levels} if req.levels is not None else None
         ids = set(req.control_ids) if req.control_ids is not None else None
@@ -180,7 +148,7 @@ class CheckProject:
         )
         return controls, req.acceptance if wants_acceptance else None
 
-    def _control(self, req: CheckProjectRequest, ctrl: CheckControlSpec) -> ControlResult:
+    def _control(self, req: CheckProjectRequest, ctrl: CommandControl) -> ControlResult:
         """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
         tree = req.tree or req.project_root
         if plugin := missing_plugin(ctrl.when_plugin, req.installed_plugins):
@@ -197,67 +165,38 @@ class CheckProject:
                     f"el control {ctrl.id} ya no puede ejecutarse"
                 )
                 return ControlResult(ok=False, mode=ctrl.mode, error=reason)
-        return self._run_command(self._params(req, ctrl.id, ctrl.run, ctrl.report, ctrl))
+        evidence = self._evidence(req, ctrl.id)
 
-    def _params(
-        self,
-        req: CheckProjectRequest,
-        step_id: str,
-        run: str,
-        report: ReportFormat,
-        spec: CheckControlSpec | CheckAcceptanceSpec,
-    ) -> _RunStepParams:
-        control = spec if isinstance(spec, CheckControlSpec) else None
-        return _RunStepParams(
-            tree=req.tree or req.project_root,
-            evidence_dir=req.evidence_dir or aside_dir(req.project_root, CHECK_DIR),
-            project_root=req.project_root,
-            command_template=run,
-            report_format=report,
-            timeout_s=spec.timeout_s,
-            empty_exit_codes=control.empty_exit_codes if control else (),
-            step_id=step_id,
-            mode=control.mode if control else "block",
-            min_score=control.min_score if control else None,
+        def execute(
+            command: Sequence[str], timeout_s: int
+        ) -> tuple[CommandOutput, tuple[str, ...]]:
+            # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
+            return self.runner.run(cmd=command, cwd=tree, timeout_s=timeout_s), ()
+
+        return run_control(ctrl, self.readers, evidence, execute).result
+
+    def _evidence(self, req: CheckProjectRequest, step_id: str) -> ControlEvidence:
+        evidence_dir = req.evidence_dir or aside_dir(req.project_root, CHECK_DIR)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        return ControlEvidence(
+            evidence_dir / f"{step_id}.xml", evidence_dir / f"{step_id}.log", req.project_root
         )
 
     def _run_acceptance(
         self, req: CheckProjectRequest, acceptance: CheckAcceptanceSpec
     ) -> ControlResult:
         """The acceptance is judged as in a run: a report it can trust, then its cases."""
-        params = self._params(req, ACCEPTANCE_ID, acceptance.run, "junit", acceptance)
-        cmd_out, out_file, log_file = self._execute(params)
-        junit = self.readers.junit.read(out_file)
+        evidence = self._evidence(req, ACCEPTANCE_ID)
+        command = fill_report_path(acceptance.run, evidence.report)
+        tree = req.tree or req.project_root
+        cmd_out = self.runner.run(cmd=command, cwd=tree, timeout_s=acceptance.timeout_s)
+        save_output(evidence.log, command, cmd_out)
+        junit = self.readers.junit.read(evidence.report)
         execution = Execution.of(cmd_out, acceptance.timeout_s)
         trusted = trust(junit, execution, acceptance.failure_exit_codes)
         result = judged_result(acceptance_check_verdict(trusted), junit, cmd_out.duration_ms)
         return replace(
             result,
             exit_code=cmd_out.returncode,
-            output_path=relative_to_project(log_file, params.project_root),
-        )
-
-    def _execute(self, params: _RunStepParams) -> tuple[CommandOutput, Path, Path]:
-        """Run a step's command, keep its output, and say where its report and log are."""
-        params.evidence_dir.mkdir(parents=True, exist_ok=True)
-        out_file = params.evidence_dir / f"{params.step_id}.xml"
-        log_file = params.evidence_dir / f"{params.step_id}.log"
-        cmd_args = fill_report_path(params.command_template, out_file)
-        cmd_out = self.runner.run(cmd=cmd_args, cwd=params.tree, timeout_s=params.timeout_s)
-        save_output(log_file, cmd_args, cmd_out)
-        return cmd_out, out_file, log_file
-
-    def _run_command(self, params: _RunStepParams) -> ControlResult:
-        cmd_out, out_file, log_file = self._execute(params)
-        result = read_and_judge(
-            self.readers,
-            VerdictRule(params.report_format, params.timeout_s, tuple(params.empty_exit_codes)),
-            out_file,
-            cmd_out,
-        )
-        return replace(
-            enforce_min_score(result, params.min_score),
-            exit_code=cmd_out.returncode,
-            mode=params.mode,
-            output_path=relative_to_project(log_file, params.project_root),
+            output_path=relative_to_project(evidence.log, req.project_root),
         )
