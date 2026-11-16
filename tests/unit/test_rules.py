@@ -8,7 +8,6 @@ from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
-    ControlResult,
     MutationScore,
     PreconditionProblem,
     ScenarioId,
@@ -36,7 +35,6 @@ from lictor.domain.rules import (
     count_agent_failures,
     describe_score,
     describe_suppressions,
-    enforce_min_score,
     error_for_agent,
     forbidden_paths,
     impostor_problem,
@@ -66,6 +64,7 @@ from lictor.domain.rules import (
     suspicious_driver,
     unmapped_cases,
 )
+from lictor.domain.verdicts import Failed, Passed, enforce_min_score
 
 
 def test_map_missing_case_says_what_the_test_must_be_called() -> None:
@@ -1461,30 +1460,24 @@ SCORE_94 = mutation_score({"killed": 94, "survived": 6, "total": 100})
 
 
 def test_a_score_below_the_minimum_fails_the_control_and_says_both() -> None:
-    result = enforce_min_score(ControlResult(ok=True, score=SCORE_94), 95.5)
-
-    assert result.ok is False
-    assert result.error == (
+    assert enforce_min_score(Passed(), SCORE_94, 95.5) == Failed(
         "La puntuación de mutación, 94,0 % (94 de 100 muertos; 6 vivos, 0 por tiempo), "
         "no llega al mínimo de 95,5 %"
     )
-    assert result.score == SCORE_94
 
 
-@pytest.mark.parametrize(
-    "result",
-    [
-        ControlResult(ok=True, score=SCORE_94),
-        ControlResult(ok=False, error="la pasada cayó", score=SCORE_94),
-    ],
-)
-def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -> None:
-    minimum = None if result.ok and result.score else 99.0
-    assert enforce_min_score(result, minimum) == result
+def test_a_minimum_leaves_alone_a_verdict_that_already_failed() -> None:
+    failed = Failed("la pasada cayó")
+    assert enforce_min_score(failed, SCORE_94, 99.0) == failed
+    assert enforce_min_score(failed, None, 99.0) == failed
+
+
+def test_without_a_minimum_a_pass_stays_a_pass() -> None:
+    assert enforce_min_score(Passed(), SCORE_94, None) == Passed()
 
 
 def test_a_score_at_the_minimum_passes() -> None:
-    assert enforce_min_score(ControlResult(ok=True, score=SCORE_94), 94).ok is True
+    assert enforce_min_score(Passed(), SCORE_94, 94) == Passed()
 
 
 def test_error_for_agent_hides_the_state_files_the_agent_never_sees() -> None:

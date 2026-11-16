@@ -6,7 +6,7 @@ Includes ADR-0001 integrity snapshot for state protection.
 import json
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -32,11 +32,23 @@ from lictor.domain.model import (
     AgentResult,
     Candidate,
     CommandOutput,
-    ControlResult,
     RepoPin,
     ScenarioId,
     TestCaseResult,
+)
+from lictor.domain.results import (
+    AcceptanceRun,
+    Block,
+    ControlEntry,
+    NotExecuted,
+    Proceed,
+    Ran,
+    Skipped,
+    StateTampered,
+    Unjudged,
     VerifyResult,
+    consequence,
+    control_record,
 )
 from lictor.domain.rules import (
     MapLink,
@@ -58,8 +70,6 @@ from lictor.domain.rules import (
 from lictor.domain.verdicts import (
     Crashed,
     Execution,
-    judged_result,
-    junit_verdict,
     report_cases,
     trust,
 )
@@ -107,26 +117,16 @@ class _Failure:
     cases: Sequence[TestCaseResult] = ()
     all_cases: Sequence[TestCaseResult] | None = None
     output: str = ""
-    control_results: dict[str, ControlResult] = field(default_factory=dict)
+    controls: tuple[ControlEntry, ...] = ()
+    acceptance: AcceptanceRun | None = None
     scenario_results: dict[str, str] = field(default_factory=dict)
     reverted_files: tuple[str, ...] = ()
     failure: tuple[str, str] | None = None
 
 
 def control_summaries(result: VerifyResult) -> dict[str, dict[str, object]]:
-    """Serialize result and output of each control for the journal."""
-    return {
-        control_id: {
-            "ok": control.ok,
-            "mode": control.mode,
-            "exit_code": control.exit_code,
-            "duration_ms": control.duration_ms,
-            "output": control.output_path,
-            "skipped": control.skipped,
-            "score": asdict(control.score) if control.score else None,
-        }
-        for control_id, control in result.control_results.items()
-    }
+    """What the journal keeps of each control's result, by its id (ADR-0009)."""
+    return {entry.control.id: control_record(entry) for entry in result.controls}
 
 
 class IntegritySnapshot:
@@ -269,7 +269,12 @@ class VerifyAttempt:
         if env_problem:
             return self._fail(
                 req,
-                _Failure("L0-entorno", env_problem, control_results=result.control_results),
+                _Failure(
+                    "L0-entorno",
+                    env_problem,
+                    controls=result.controls,
+                    acceptance=result.acceptance,
+                ),
             )
         collateral = collateral_greens(result.scenario_results, req.pending_scenario_ids, scenario)
         if collateral:
@@ -335,41 +340,29 @@ class VerifyAttempt:
         )
 
     def _run_commands(self, req: VerifyAttemptRequest) -> VerifyResult:
-        control_results: dict[str, ControlResult] = {}
+        entries: list[ControlEntry] = []
         for ctrl in req.controls:
             ctrl_run = self._run_present_control(ctrl, req)
-            control_results[ctrl.id] = ctrl_run.result
-            if ctrl_run.tampered:
-                return self._fail(
-                    req,
-                    _Failure(
-                        "L0-estado",
-                        describe_tampering(ctrl_run.tampered),
-                        control_results=control_results,
-                    ),
-                )
-
-            ctrl_res = ctrl_run.result
-            if not ctrl_res.ok and ctrl.mode == "block":
-                failed_label = f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id
-                output = format_output(ctrl_run.output) if ctrl_run.output else ""
-                reason = ctrl_res.error or ""
-                # With test cases they explain themselves; without them, only the output does.
-                if ctrl.report == "junit" and not ctrl_res.test_cases:
-                    reason = f"{reason}\n{output}".strip()
-                return self._fail(
-                    req,
-                    _Failure(
+            entries.append(ctrl_run.entry)
+            match consequence(ctrl_run.entry, ctrl_run.output):
+                case StateTampered(changes=changes):
+                    failure = _Failure(
+                        "L0-estado", describe_tampering(changes), controls=tuple(entries)
+                    )
+                    return self._fail(req, failure)
+                case Block(reason=reason, cases=cases):
+                    failure = _Failure(
                         ctrl.id,
                         reason,
-                        label=failed_label,
-                        cases=ctrl_res.test_cases,
-                        output=output,
-                        control_results=control_results,
-                    ),
-                )
-
-        return self._run_acceptance(req, control_results)
+                        label=f"{ctrl.level} ({ctrl.id})" if ctrl.level else ctrl.id,
+                        cases=cases,
+                        output=ctrl_run.output,
+                        controls=tuple(entries),
+                    )
+                    return self._fail(req, failure)
+                case Proceed():
+                    pass
+        return self._run_acceptance(req, tuple(entries))
 
     def _fail(self, req: VerifyAttemptRequest, failure: _Failure) -> VerifyResult:
         """Condense the failure for the agent and keep it whole in the attempt's directory."""
@@ -386,7 +379,8 @@ class VerifyAttempt:
             condensed_error=condense_error(
                 label, failure.reason, failure.cases, max_chars=req.error_max_chars
             ),
-            control_results=failure.control_results,
+            controls=failure.controls,
+            acceptance=failure.acceptance,
             scenario_results=failure.scenario_results,
             reverted_files=failure.reverted_files,
             error_path=relative_to_project(error_path, self.project_root),
@@ -494,9 +488,7 @@ class VerifyAttempt:
         """
         installed = self.environment.installed_plugins if self.environment else None
         if plugin := missing_plugin(ctrl.when_plugin, installed):
-            return ControlRun(
-                ControlResult(ok=True, mode=ctrl.mode, skipped=plugin_skip_reason(plugin))
-            )
+            return ControlRun(ControlEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
@@ -504,13 +496,13 @@ class VerifyAttempt:
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
-            return ControlRun(ControlResult(ok=True, mode=ctrl.mode, skipped=reason))
+            return ControlRun(ControlEntry(ctrl, Skipped(reason)))
         if status == "removed":
             reason = (
                 f"El intento elimina {ctrl.when_exists}, que existía: "
                 f"el control {ctrl.id} ya no puede ejecutarse"
             )
-            return ControlRun(ControlResult(ok=False, mode=ctrl.mode, error=reason))
+            return ControlRun(ControlEntry(ctrl, NotExecuted(reason)))
         return self._run_single_control(ctrl, req)
 
     def _run_single_control(self, ctrl: CommandControl, req: VerifyAttemptRequest) -> ControlRun:
@@ -532,9 +524,7 @@ class VerifyAttempt:
         return run_control(ctrl, self.readers, evidence, execute)
 
     def _run_acceptance(
-        self,
-        req: VerifyAttemptRequest,
-        control_results: dict[str, ControlResult],
+        self, req: VerifyAttemptRequest, controls: tuple[ControlEntry, ...]
     ) -> VerifyResult:
         step_dir = self._step_dir(req)
         out_file = step_dir / "acceptance.xml"
@@ -545,27 +535,22 @@ class VerifyAttempt:
         cmd_out = self._run_project_command(cmd_tokens, req, req.acceptance_timeout_s)
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_tokens, cmd_out)
+        execution = Execution.of(cmd_out, req.acceptance_timeout_s)
+        ran = Ran(tuple(cmd_tokens), execution, relative_to_project(log_file, self.project_root))
         if tampered:
-            return self._fail(
-                req,
-                _Failure(
-                    "L0-estado",
-                    describe_tampering(snapshot.changes),
-                    control_results=control_results,
-                ),
+            changes = tuple(snapshot.changes)
+            tampering = _Failure(
+                "L0-estado",
+                describe_tampering(changes),
+                controls=controls,
+                acceptance=AcceptanceRun(ran, Unjudged(changes)),
             )
+            return self._fail(req, tampering)
 
         output = format_output(cmd_out)
         junit = self.readers.junit.read(out_file)
-        execution = Execution.of(cmd_out, req.acceptance_timeout_s)
-        acc_res = replace(
-            judged_result(junit_verdict(junit, execution, ()), junit, cmd_out.duration_ms),
-            exit_code=cmd_out.returncode,
-            output_path=relative_to_project(log_file, self.project_root),
-        )
-        control_results["acceptance"] = acc_res
-
         trusted = trust(junit, execution, req.acceptance_failure_exit_codes)
+        acceptance = AcceptanceRun(ran, trusted)
         if isinstance(trusted, Crashed):
             return self._fail(
                 req,
@@ -574,7 +559,8 @@ class VerifyAttempt:
                     describe_crash(trusted.reason, output),
                     cases=report_cases(junit),
                     output=output,
-                    control_results=control_results,
+                    controls=controls,
+                    acceptance=acceptance,
                 ),
             )
 
@@ -591,7 +577,8 @@ class VerifyAttempt:
                     str(exc),
                     cases=trusted.cases,
                     output=output,
-                    control_results=control_results,
+                    controls=controls,
+                    acceptance=acceptance,
                 ),
             )
 
@@ -610,7 +597,8 @@ class VerifyAttempt:
                     cases=relevant_cases,
                     all_cases=trusted.cases,
                     output=output,
-                    control_results=control_results,
+                    controls=controls,
+                    acceptance=acceptance,
                     scenario_results=scenario_results,
                     failure=(current.failure_kind, current.origin) if failed and current else None,
                 ),
@@ -618,6 +606,7 @@ class VerifyAttempt:
 
         return VerifyResult(
             ok=True,
-            control_results=control_results,
+            controls=controls,
+            acceptance=acceptance,
             scenario_results=scenario_results,
         )

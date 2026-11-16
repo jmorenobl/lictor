@@ -309,7 +309,8 @@ def journal(root: Path) -> list[dict[str, Any]]:
 
 
 def events_of(root: Path, name: str) -> list[dict[str, Any]]:
-    return [event for event in journal(root) if event["type"] == f"lictor.{name}.v1"]
+    """The events of one kind, whatever version of their shape this Lictor writes."""
+    return [event for event in journal(root) if event["type"].rsplit(".", 1)[0] == f"lictor.{name}"]
 
 
 def quarantined(root: Path) -> list[str]:

@@ -153,4 +153,5 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_reports.py",
     "tests/unit/test_verdicts.py",
     "tests/unit/test_controls.py",
+    "tests/unit/test_results.py",
 ]

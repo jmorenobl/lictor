@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import closing
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, assert_never
 from urllib.parse import unquote, urlparse
 
 import typer
@@ -35,7 +35,7 @@ from lictor.application.run_index import (
 )
 from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
-from lictor.application.usecases.check_project import CheckAcceptanceSpec
+from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckProjectResult
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
@@ -62,6 +62,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
+from lictor.domain.results import ControlEntry, Executed, NotExecuted, Skipped, Unjudged
 from lictor.domain.rules import (
     anchor_from_older_version,
     anchor_problems,
@@ -75,6 +76,7 @@ from lictor.domain.run_branches import (
     run_branch,
     uncommitted_left_out,
 )
+from lictor.domain.verdicts import Passed
 from lictor.orchestration.graph import (
     DURABILITY,
     create_graph,
@@ -416,16 +418,13 @@ def check(
         typer.echo(f"Verificado: {res.subject}")
         # A failure after a run reads as what it is: something the run left for later (ADR-0007).
         only_here = {c.id for c in runtime.graph_context.check_controls}
-        for name, cr in res.check.control_results.items():
-            stage = " (solo en check)" if name in only_here else ""
-            if cr.skipped:
-                typer.echo(f"- {name}{stage} omitido: {cr.skipped}")
-                continue
-            status_char = "✓" if cr.ok else "✗"
-            score = f": {describe_score(cr.score)}" if cr.score else ""
-            typer.echo(f"{status_char} {name}{stage} ({cr.duration_ms}ms){score}")
-            if not cr.ok and cr.output_path:
-                typer.echo(f"  salida: {cr.output_path}")
+        for entry in res.check.controls:
+            name = entry.control.id
+            for line in _check_lines(name, " (solo en check)" if name in only_here else "", entry):
+                typer.echo(line)
+        if res.check.acceptance is not None:
+            for line in _acceptance_lines(res.check):
+                typer.echo(line)
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
@@ -437,6 +436,36 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+def _check_lines(name: str, stage: str, entry: ControlEntry) -> list[str]:
+    """How `lictor check` shows a control: by what happened to it, not by a flag."""
+    match entry.outcome:
+        case Skipped(reason=reason):
+            return [f"- {name}{stage} omitido: {reason}"]
+        case NotExecuted(reason=reason):
+            return [f"✗ {name}{stage}: {reason}"]
+        case Executed(ran=ran, judgement=judgement):
+            took = f"({ran.execution.duration_ms}ms)"
+            if isinstance(judgement, Unjudged):
+                verdict_line = f"✗ {name}{stage} {took}: manipuló el estado; sin veredicto"
+                return [verdict_line, f"  salida: {ran.log}"]
+            score = f": {describe_score(judgement.score)}" if judgement.score else ""
+            if isinstance(judgement.verdict, Passed):
+                return [f"✓ {name}{stage} {took}{score}"]
+            return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]
+        case _:
+            assert_never(entry.outcome)
+
+
+def _acceptance_lines(check: CheckProjectResult) -> list[str]:
+    acceptance = check.acceptance
+    if acceptance is None:
+        return []
+    took = f"({acceptance.ran.execution.duration_ms}ms)"
+    if isinstance(check.acceptance_verdict, Passed):
+        return [f"✓ acceptance {took}"]
+    return [f"✗ acceptance {took}", f"  salida: {acceptance.ran.log}"]
 
 
 @app.command()

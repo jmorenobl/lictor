@@ -6,7 +6,7 @@ domain's. The run and `lictor check` both go through `run_control`.
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
@@ -18,14 +18,14 @@ from lictor.application.run_files import (
     save_output,
 )
 from lictor.domain.controls import CommandControl
-from lictor.domain.model import CommandOutput, ControlResult
-from lictor.domain.rules import enforce_min_score
+from lictor.domain.model import CommandOutput
+from lictor.domain.results import ControlEntry, Executed, Judged, Ran, Unjudged
 from lictor.domain.verdicts import (
     Execution,
     VerdictRule,
     coverage_verdict,
+    enforce_min_score,
     exit_code_verdict,
-    judged_result,
     junit_verdict,
     mutation_verdict,
 )
@@ -33,24 +33,22 @@ from lictor.domain.verdicts import (
 
 def read_and_judge(
     readers: ReportReaders, rule: VerdictRule, report_path: Path, output: CommandOutput
-) -> ControlResult:
-    """The result of a control that ran, before its minimum score is enforced."""
-    run, duration = Execution.of(output, rule.timeout_s), output.duration_ms
+) -> Judged:
+    """What a control's command left, read with the reader of its format, and its verdict."""
+    run = Execution.of(output, rule.timeout_s)
     empty_exit_codes = rule.empty_exit_codes
     match rule.report:
         case "exit-code":
-            verdict = exit_code_verdict(format_output(output), run, empty_exit_codes)
-            return judged_result(verdict, None, duration)
+            return Judged(None, exit_code_verdict(format_output(output), run, empty_exit_codes))
         case "junit":
             junit = readers.junit.read(report_path)
-            return judged_result(junit_verdict(junit, run, empty_exit_codes), junit, duration)
+            return Judged(junit, junit_verdict(junit, run, empty_exit_codes))
         case "coverage":
             coverage = readers.coverage.read(report_path)
-            verdict = coverage_verdict(coverage, run, empty_exit_codes)
-            return judged_result(verdict, coverage, duration)
+            return Judged(coverage, coverage_verdict(coverage, run, empty_exit_codes))
         case "mutation":
             mutation = readers.mutation.read(report_path)
-            return judged_result(mutation_verdict(mutation, run), mutation, duration)
+            return Judged(mutation, mutation_verdict(mutation, run))
         case _:
             assert_never(rule.report)
 
@@ -70,11 +68,10 @@ type Execute = Callable[[Sequence[str], int], tuple[CommandOutput, tuple[str, ..
 
 @dataclass(frozen=True)
 class ControlRun:
-    """A control after its turn: its result, what its command printed, and what it tampered."""
+    """A control after its turn, with what its command printed, which a failure may need."""
 
-    result: ControlResult
-    output: CommandOutput | None = None
-    tampered: tuple[str, ...] = ()
+    entry: ControlEntry
+    output: str = ""
 
 
 def run_control(
@@ -90,16 +87,16 @@ def run_control(
     command = fill_report_path(control.run, evidence.report)
     output, tampered = execute(command, control.timeout_s)
     save_output(evidence.log, command, output)
-
-    def recorded(result: ControlResult) -> ControlResult:
-        return replace(
-            result,
-            exit_code=output.returncode,
-            mode=control.mode,
-            output_path=relative_to_project(evidence.log, evidence.project_root),
-        )
-
+    ran = Ran(
+        tuple(command),
+        Execution.of(output, control.timeout_s),
+        relative_to_project(evidence.log, evidence.project_root),
+    )
+    judgement: Judged | Unjudged
     if tampered:
-        return ControlRun(recorded(ControlResult(ok=False)), output, tampered)
-    judged = read_and_judge(readers, control.verdict_rule, evidence.report, output)
-    return ControlRun(recorded(enforce_min_score(judged, control.min_score)), output)
+        judgement = Unjudged(tampered)
+    else:
+        judged = read_and_judge(readers, control.verdict_rule, evidence.report, output)
+        verdict = enforce_min_score(judged.verdict, judged.score, control.min_score)
+        judgement = Judged(judged.report, verdict)
+    return ControlRun(ControlEntry(control, Executed(ran, judgement)), format_output(output))

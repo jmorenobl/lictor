@@ -20,6 +20,7 @@ from lictor.application.verification_env import VerificationEnvironment, Verific
 from lictor.domain.controls import CommandControl
 from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
+from tests import results
 from tests.readers import all_readers
 
 GIT = shutil.which("git") or "git"
@@ -137,7 +138,7 @@ def test_what_isnt_committed_is_verified_as_a_commit_outside_the_branch(project:
     assert (seen["src/a.py"], seen["src/b.py"]) == ("a = 2\n", "b = 1\n")
     assert "ignorado.log" not in seen
     # The unit tests were removed, so their control can't pass by being skipped.
-    assert result.check.control_results["unit"].ok is False
+    assert results.seen(result.check, "unit").ok is False
     assert _git(project, "rev-parse", "HEAD") == head
     assert _git(project, "status", "--short") != ""
 

@@ -8,7 +8,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import assert_never
 
-from lictor.domain.model import CommandOutput, ControlResult, Score, TestCaseResult
+from lictor.domain.model import CommandOutput, CoverageScore, Score, TestCaseResult
 from lictor.domain.reports import (
     CoverageReport,
     InvalidReport,
@@ -19,6 +19,7 @@ from lictor.domain.reports import (
     ReportFormat,
     ReportOf,
 )
+from lictor.domain.rules import describe_score, minimum_text, score_meets
 
 _FAILED = ("failure", "error")
 NOTHING_MEASURED = "El informe de cobertura no midió nada: lo que mide no tiene código"
@@ -181,17 +182,6 @@ def report_score(report: Report | None) -> Score | None:
     return None
 
 
-def judged_result(verdict: Verdict, report: Report | None, duration_ms: int) -> ControlResult:
-    """What a control that ran ends up with, before its minimum score is enforced."""
-    return ControlResult(
-        ok=isinstance(verdict, Passed),
-        duration_ms=duration_ms,
-        error=verdict.reason if isinstance(verdict, Failed) else None,
-        test_cases=report_cases(report),
-        score=report_score(report),
-    )
-
-
 @dataclass(frozen=True)
 class Crashed:
     """The suite crashed: its report proves nothing, and the reason says why."""
@@ -265,3 +255,20 @@ def acceptance_check_verdict(trusted: Trust) -> Verdict:
             return Failed(f"Fallaron {len(failed)} casos de test") if failed else Passed()
         case _:
             assert_never(trusted)
+
+
+def enforce_min_score(verdict: Verdict, score: Score | None, minimum: float | None) -> Verdict:
+    """Fail a control whose score is below the minimum it declares.
+
+    A verdict that already failed is left as it is: a run that crashed says so itself. One that
+    passed with no score measured nothing (a coverage run with no tests), which no minimum meets.
+    """
+    if minimum is None or isinstance(verdict, Failed):
+        return verdict
+    floor = minimum_text(minimum)
+    if score is None:
+        return Failed(f"El control no midió nada y declara un mínimo de {floor} %")
+    if score_meets(score, minimum):
+        return verdict
+    what = "La cobertura" if isinstance(score, CoverageScore) else "La puntuación de mutación"
+    return Failed(f"{what}, {describe_score(score)}, no llega al mínimo de {floor} %")

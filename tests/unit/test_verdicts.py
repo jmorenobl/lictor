@@ -25,7 +25,6 @@ from lictor.domain.verdicts import (
     acceptance_check_verdict,
     coverage_verdict,
     exit_code_verdict,
-    judged_result,
     junit_verdict,
     mutation_verdict,
     report_cases,
@@ -188,18 +187,6 @@ def test_only_junit_has_cases_and_only_scores_have_scores() -> None:
     assert report_score(JUnitReport(cases)) is None
     assert report_score(MissingReport()) is None
     assert report_score(None) is None
-
-
-def test_a_judged_result_carries_the_verdict_and_what_the_report_says() -> None:
-    passed = judged_result(Passed(), JUnitReport((_PASSED,)), 7)
-    assert (passed.ok, passed.error, passed.test_cases, passed.duration_ms) == (
-        True,
-        None,
-        (_PASSED,),
-        7,
-    )
-    failed = judged_result(Failed("motivo"), _COVERAGE, 3)
-    assert (failed.ok, failed.error, failed.score) == (False, "motivo", _COVERAGE.score)
 
 
 @pytest.mark.parametrize(

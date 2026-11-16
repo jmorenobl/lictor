@@ -38,8 +38,8 @@ from lictor.domain.model import (
     CommandOutput,
     Health,
     Scenario,
-    VerifyResult,
 )
+from lictor.domain.results import VerifyResult
 from lictor.orchestration.graph import (
     DURABILITY,
     GraphContext,

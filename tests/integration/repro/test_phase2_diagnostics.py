@@ -233,12 +233,12 @@ def test_d30_failed_measure_control_is_recorded(make_project: ProjectFactory) ->
     require(len(finished) == 3, f"se esperaban 3 verificaciones: {len(finished)}")
     for event in finished:
         record = event["data"]["controls"]["mutacion"]
-        assert record["ok"] is False
+        assert record["passed"] is False
         assert record["exit_code"] == 7
         assert record["mode"] == "measure"
-        output = (root / record["output"]).read_text(encoding="utf-8")
+        output = (root / record["output_path"]).read_text(encoding="utf-8")
         assert "salida-de-la-medida" in output
-    outputs = {event["data"]["controls"]["mutacion"]["output"] for event in finished}
+    outputs = {event["data"]["controls"]["mutacion"]["output_path"] for event in finished}
     assert len(outputs) == 3, "una verificación machacó la salida de otra"
 
 
@@ -250,8 +250,8 @@ def test_d30_passing_measure_control_is_recorded_too(make_project: ProjectFactor
 
     require(outcome == Outcome(0), f"measure no debe bloquear: {outcome}")
     record = events_of(root, "verify.finished")[0]["data"]["controls"]["mutacion"]
-    assert record["ok"] is True
-    assert "todo-bien" in (root / record["output"]).read_text(encoding="utf-8")
+    assert record["passed"] is True
+    assert "todo-bien" in (root / record["output_path"]).read_text(encoding="utf-8")
     assert "mutacion" in (root / ".lictor" / "report.md").read_text(encoding="utf-8")
 
 

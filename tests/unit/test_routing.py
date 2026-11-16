@@ -1,6 +1,6 @@
 import pytest
 
-from lictor.domain.model import VerifyResult
+from lictor.domain.results import VerifyResult
 from lictor.domain.routing import (
     END,
     route_build_driver,

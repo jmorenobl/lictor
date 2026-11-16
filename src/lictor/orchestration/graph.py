@@ -46,6 +46,7 @@ from lictor.domain.errors import (
     SpecError,
 )
 from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
+from lictor.domain.results import VERIFY_FINISHED, acceptance_record, verification_duration
 from lictor.domain.routing import (
     route_build_driver,
     route_commit,
@@ -571,15 +572,15 @@ class _GraphNodes:
         self.ctx.event_log.append(
             new_event(
                 self.ctx.clock,
-                "lictor.verify.finished.v1",
+                VERIFY_FINISHED,
                 state["run_id"],
                 scenario_id=state.get("current"),
                 data={
                     "attempt": attempt,
                     "ok": False,
                     "failed_at": failed_at,
-                    "control_durations": {},
                     "controls": {},
+                    "acceptance": None,
                     "reverted_files": [],
                     "error": error,
                     "error_path": None,
@@ -631,19 +632,18 @@ class _GraphNodes:
             )
         )
 
-        verify_duration = sum(cr.duration_ms for cr in res.control_results.values())
-        control_durations = {k: v.duration_ms for k, v in res.control_results.items()}
+        verify_duration = verification_duration(res.controls, res.acceptance)
         event = new_event(
             self.ctx.clock,
-            "lictor.verify.finished.v1",
+            VERIFY_FINISHED,
             state["run_id"],
             scenario_id=current_id,
             data={
                 "attempt": state.get("attempt", 0),
                 "ok": res.ok,
                 "failed_at": res.failed_at,
-                "control_durations": control_durations,
                 "controls": control_summaries(res),
+                "acceptance": acceptance_record(res.acceptance),
                 "reverted_files": list(res.reverted_files),
                 "error": res.condensed_error,
                 "error_path": res.error_path,

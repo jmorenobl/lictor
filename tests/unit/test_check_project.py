@@ -13,6 +13,7 @@ from lictor.domain.controls import CommandControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import CommandOutput
 from tests.readers import ReportingRunner, all_readers
+from tests.results import ids, seen
 
 
 def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
@@ -37,10 +38,10 @@ def test_check_project_all_controls_and_acceptance_pass(tmp_path: Path) -> None:
 
     assert res.ok is True
     assert res.failed_at is None
-    assert "lint" in res.control_results
-    assert res.control_results["lint"].ok is True
-    assert "acceptance" in res.control_results
-    assert res.control_results["acceptance"].ok is True
+    assert "lint" in ids(res)
+    assert seen(res, "lint").ok is True
+    assert "acceptance" in ids(res)
+    assert seen(res, "acceptance").ok is True
     log = tmp_path / ".lictor" / "check" / "acceptance.log"
     assert log.read_text(encoding="utf-8").startswith("Comando: echo test ")
 
@@ -62,7 +63,7 @@ def test_check_project_blocking_control_fails_and_stops_early(tmp_path: Path) ->
 
     assert res.ok is False
     assert res.failed_at == "lint"
-    assert "types" not in res.control_results
+    assert "types" not in ids(res)
     assert "lint error" in (res.condensed_error or "")
 
 
@@ -87,8 +88,8 @@ def test_check_project_measure_mode_does_not_block(tmp_path: Path) -> None:
 
     assert res.ok is True
     assert res.failed_at is None
-    assert res.control_results["mutation"].ok is False
-    assert res.control_results["types"].ok is True
+    assert seen(res, "mutation").ok is False
+    assert seen(res, "types").ok is True
 
 
 def test_check_project_level_filter(tmp_path: Path) -> None:
@@ -112,9 +113,9 @@ def test_check_project_level_filter(tmp_path: Path) -> None:
     res = use_case.execute(req)
 
     assert res.ok is True
-    assert "l1_ctrl" in res.control_results
-    assert "l4_ctrl" not in res.control_results
-    assert "acceptance" not in res.control_results
+    assert "l1_ctrl" in ids(res)
+    assert "l4_ctrl" not in ids(res)
+    assert "acceptance" not in ids(res)
 
 
 def _project(tmp_path: Path, stdout: str, code: int) -> tuple[CheckProject, CheckProjectRequest]:
@@ -136,7 +137,7 @@ def test_check_project_does_not_reuse_an_old_report(tmp_path: Path) -> None:
 
     result = use_case.execute(request)
 
-    assert result.control_results["unit"].ok is False
+    assert seen(result, "unit").ok is False
     assert not (runs / "unit.xml").exists()
 
 
@@ -145,7 +146,7 @@ def test_check_project_records_the_output_of_a_measure_control(tmp_path: Path) -
 
     result = use_case.execute(request)
 
-    measured = result.control_results["mut"]
+    measured = seen(result, "mut")
     assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
     assert measured.output_path is not None
     assert "salida de medida" in (tmp_path / measured.output_path).read_text(encoding="utf-8")
@@ -166,7 +167,7 @@ def test_check_project_skips_a_control_whose_path_the_working_tree_lacks(tmp_pat
 
     assert res.ok is True
     assert runner.calls == []
-    assert "tests/unit" in (res.control_results["unit"].skipped or "")
+    assert "tests/unit" in (seen(res, "unit").skipped or "")
 
 
 def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: Path) -> None:
@@ -182,7 +183,7 @@ def test_check_project_runs_a_control_whose_path_the_working_tree_has(tmp_path: 
 
     assert res.ok is True
     assert len(runner.calls) == 1
-    assert res.control_results["lint"].skipped is None
+    assert seen(res, "lint").skipped is None
 
 
 @pytest.mark.parametrize(
@@ -210,7 +211,7 @@ def test_check_project_skips_a_control_whose_plugin_the_environment_lacks(
 
     assert res.ok is True
     assert len(runner.calls) == int(runs)
-    skipped = res.control_results["coverage"].skipped
+    skipped = seen(res, "coverage").skipped
     assert (skipped is None) == runs
     assert runs or "pytest_cov.plugin" in (skipped or "")
 
@@ -242,7 +243,7 @@ def test_keep_going_runs_everything_and_reports_the_first_failure(tmp_path: Path
 
     assert res.ok is False
     assert res.failed_at == "lint"
-    assert list(res.control_results) == ["lint", "types", "unit", "acceptance"]
+    assert ids(res) == ["lint", "types", "unit", "acceptance"]
     assert "Falló lint" in (res.condensed_error or "")
 
 
@@ -253,7 +254,7 @@ def test_without_keep_going_acceptance_doesnt_run_after_a_failure(tmp_path: Path
 
     res = use_case.execute(CheckProjectRequest(tmp_path, controls, acceptance))
 
-    assert list(res.control_results) == ["lint"]
+    assert ids(res) == ["lint"]
     assert len(runner.calls) == 1
 
 
@@ -285,8 +286,8 @@ def test_controls_are_chosen_by_id_and_level_together(tmp_path: Path) -> None:
         )
     )
 
-    assert list(by_id.control_results) == ["lint", "unit"]
-    assert list(both.control_results) == ["lint"]
+    assert ids(by_id) == ["lint", "unit"]
+    assert ids(both) == ["lint"]
 
 
 def test_acceptance_is_chosen_by_its_id(tmp_path: Path) -> None:
@@ -298,7 +299,7 @@ def test_acceptance_is_chosen_by_its_id(tmp_path: Path) -> None:
         CheckProjectRequest(tmp_path, controls, acceptance, control_ids=["acceptance"])
     )
 
-    assert list(res.control_results) == ["acceptance"]
+    assert ids(res) == ["acceptance"]
 
 
 def test_an_id_that_names_nothing_is_refused(tmp_path: Path) -> None:
@@ -323,7 +324,7 @@ def test_commands_run_in_the_tree_and_leave_evidence_apart(tmp_path: Path) -> No
 
     assert runner.calls[0]["cwd"] == tree
     assert (evidence / "lint.log").read_text(encoding="utf-8").startswith("Comando: ")
-    assert res.control_results["lint"].output_path == ".lictor/check/lint.log"
+    assert seen(res, "lint").output_path == ".lictor/check/lint.log"
 
 
 def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> None:
@@ -333,7 +334,7 @@ def test_a_control_whose_path_the_checked_tree_removed_fails(tmp_path: Path) -> 
     res = use_case.execute(CheckProjectRequest(tmp_path, [unit], deleted=["tests/unit/test_a.py"]))
 
     assert res.ok is False
-    assert "elimina tests/unit" in (res.control_results["unit"].error or "")
+    assert "elimina tests/unit" in (seen(res, "unit").error or "")
 
 
 class _MutationRunner(FakeRunner):
@@ -360,5 +361,5 @@ def test_a_mutation_control_passes_only_from_its_minimum(
     res = use_case.execute(CheckProjectRequest(tmp_path, [control]))
 
     assert res.ok is ok
-    error = res.control_results["mut"].error or ""
+    error = seen(res, "mut").error or ""
     assert ("no llega al mínimo de 95 %" in error) is not ok

@@ -1,5 +1,6 @@
 """Unit tests for what a run tells while it works, folded from its journal (F10, F11)."""
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -16,6 +17,28 @@ from lictor.domain.progress import (
     node_text,
     status_text,
 )
+from lictor.domain.results import VERIFY_FINISHED
+
+
+def _verified(
+    scenario: str, attempt: int, *, ok: bool, failed_at: str | None = None, duration_ms: int = 0
+) -> Event:
+    """A `verify.finished.v2` whose one control took `duration_ms`."""
+    control = {
+        "outcome": "executed",
+        "mode": "block",
+        "exit_code": 0,
+        "duration_ms": duration_ms,
+        "timed_out": False,
+        "output_path": "r/lint.log",
+        "judgement": "judged",
+        "passed": True,
+        "reason": None,
+        "score": None,
+        "cases": {},
+    }
+    data = {"attempt": attempt, "ok": ok, "failed_at": failed_at, "controls": {"lint": control}}
+    return replace(_event("verify.finished", scenario, **data), type=VERIFY_FINISHED)
 
 
 def _event(kind: str, scenario: str | None = None, **data: Any) -> Event:
@@ -139,9 +162,9 @@ def test_a_green_says_its_attempt_time_and_cost() -> None:
     lines = _lines(
         progress,
         _finished("A-001", 0.05, 60_000),
-        _event("verify.finished", "A-001", attempt=1, ok=True, control_durations={"lint": 5000}),
+        _verified("A-001", 1, ok=True, duration_ms=5000),
         _finished("A-001", 0.07, 55_000),
-        _event("verify.finished", "A-001", attempt=2, ok=True, control_durations={"a": 5000}),
+        _verified("A-001", 2, ok=True, duration_ms=5000),
         _event("scenario.green", "A-001", attempt=2),
     )
 
@@ -154,8 +177,8 @@ def test_a_failed_verification_says_where() -> None:
 
     lines = _lines(
         progress,
-        _event("verify.finished", "A-001", attempt=1, ok=False, failed_at="L1-lint"),
-        _event("verify.finished", "A-001", attempt=2, ok=False, failed_at=None),
+        _verified("A-001", 1, ok=False, failed_at="L1-lint"),
+        _verified("A-001", 2, ok=False),
     )
 
     assert lines == ["A-001: el intento 1 falló en L1-lint.", "A-001: el intento 2 falló."]

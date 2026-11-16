@@ -28,15 +28,17 @@ from lictor.adapters.readers.mutation import MutationReader
 from lictor.application.control_reports import read_and_judge
 from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
-from lictor.domain.model import CommandOutput, ControlResult, CoverageScore, MutationScore
+from lictor.domain.model import CommandOutput, CoverageScore, MutationScore, Score
 from lictor.domain.reports import ReportFormat
-from lictor.domain.rules import enforce_min_score
+from lictor.domain.results import Judged
 from lictor.domain.verdicts import (
     Crashed,
     Execution,
+    Failed,
+    Passed,
     VerdictRule,
     acceptance_check_verdict,
-    judged_result,
+    enforce_min_score,
     junit_verdict,
     report_cases,
     trust,
@@ -57,8 +59,7 @@ class Seen:
     score: str | None = None
 
 
-def _score(result: ControlResult) -> str | None:
-    score = result.score
+def _score(score: Score | None) -> str | None:
     if isinstance(score, CoverageScore):
         return f"coverage {score.percent!r}"
     if isinstance(score, MutationScore):
@@ -66,12 +67,14 @@ def _score(result: ControlResult) -> str | None:
     return None
 
 
-def _seen(call: Callable[[], ControlResult]) -> Seen:
+def _seen(call: Callable[[], Judged]) -> Seen:
     try:
-        result = call()
-    except Exception as exc:  # a reader that raises is part of what today does
+        judged = call()
+    except Exception as exc:  # a reader that raised was part of what master did
         return Seen(RAISES, type(exc).__name__)
-    return Seen(result.ok, result.error, len(result.test_cases), _score(result))
+    verdict = judged.verdict
+    error = verdict.reason if isinstance(verdict, Failed) else None
+    return Seen(isinstance(verdict, Passed), error, len(judged.cases), _score(judged.score))
 
 
 PASS1 = b'<testsuite><testcase name="a" classname="c"/></testsuite>'
@@ -168,18 +171,18 @@ class SeenAcceptance:
 def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
     """`VerifyAttempt._run_acceptance`, with `failure_exit_codes` [1] as the profile declares."""
     junit = READERS.junit.read(report)
-    result = judged_result(junit_verdict(junit, _ran(code), ()), junit, 0)
+    reader = _seen(lambda: Judged(junit, junit_verdict(junit, _ran(code), ())))
     trusted = trust(junit, _ran(code), (1,))
     crash = trusted.reason if isinstance(trusted, Crashed) else None
     reason = describe_crash(crash, "") if crash else None
-    return SeenAcceptance(Seen(result.ok, result.error, len(result.test_cases)), crash, reason)
+    return SeenAcceptance(reader, crash, reason)
 
 
 def acceptance_of_check(report: Path, code: int) -> Seen:
     """`CheckProject`: the acceptance trusts its report as in a run, then judges its cases."""
     junit = READERS.junit.read(report)
     verdict = acceptance_check_verdict(trust(junit, _ran(code), (1,)))
-    return _seen(lambda: judged_result(verdict, junit, 0))
+    return _seen(lambda: Judged(junit, verdict))
 
 
 RED_STDOUTS: dict[str, str] = {
@@ -298,13 +301,10 @@ def mutation_control(report: Path, code: int) -> Seen:
     return _seen(lambda: read_and_judge(READERS, _rule("mutation"), report, _output(code)))
 
 
-def _coverage_result(ok: bool, percent: float | None) -> ControlResult:
+def _coverage_score(percent: float | None) -> CoverageScore | None:
     if percent is None:
-        return ControlResult(ok=ok, error=None if ok else "falló antes")
-    score = CoverageScore(
-        covered_lines=round(percent * 100), num_statements=10_000, percent=percent
-    )
-    return ControlResult(ok=ok, error=None if ok else "falló antes", score=score)
+        return None
+    return CoverageScore(covered_lines=round(percent * 100), num_statements=10_000, percent=percent)
 
 
 # What `enforce_min_score` gets, and the minimum: (passed, percent or None, minimum).
@@ -323,7 +323,10 @@ MIN_SCORE_CASES: dict[str, tuple[bool, float | None, float | None]] = {
 
 def min_score_case(label: str) -> Seen:
     passed, percent, minimum = MIN_SCORE_CASES[label]
-    return _seen(lambda: enforce_min_score(_coverage_result(passed, percent), minimum))
+    score = _coverage_score(percent)
+    verdict = enforce_min_score(Passed() if passed else Failed("falló antes"), score, minimum)
+    error = verdict.reason if isinstance(verdict, Failed) else None
+    return Seen(isinstance(verdict, Passed), error, 0, _score(score))
 
 
 # A command cut by its timeout, with a report it managed to leave (ADR-0009, change 10). These rows

@@ -24,6 +24,7 @@ from lictor.domain.controls import CommandControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 from tests.readers import ReportingRunner, all_readers
+from tests.results import ids, seen
 
 _SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
 
@@ -301,8 +302,8 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
     result = verifier.execute(req)
     assert result.ok is False
     assert result.failed_at == "lint"
-    assert "lint" in result.control_results
-    assert "types" not in result.control_results  # Blocked before types
+    assert "lint" in ids(result)
+    assert "types" not in ids(result)  # Blocked before types
 
 
 def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
@@ -343,7 +344,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
 
     result = verifier.execute(req)
     assert result.ok is True
-    assert result.control_results["mutation"].ok is False
+    assert seen(result, "mutation").ok is False
 
 
 def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
@@ -486,7 +487,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
 
     result = verifier.execute(req)
     assert result.ok is True
-    assert result.control_results["unit"].ok is True
+    assert seen(result, "unit").ok is True
 
 
 def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
@@ -790,18 +791,18 @@ def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> No
 
     assert result.ok is True
     assert result.condensed_error is None
-    measured = result.control_results["mut"]
+    measured = seen(result, "mut")
     assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
     assert measured.output_path is not None
     log = (tmp_path / measured.output_path).read_text(encoding="utf-8")
     assert "salida de mut" in log
     assert "stderr crudo" in log
     assert "7" in log
-    passed = result.control_results["lint"]
+    passed = seen(result, "lint")
     assert (passed.ok, passed.exit_code, passed.mode) == (True, 0, "block")
     assert passed.output_path is not None
     assert "salida de lint" in (tmp_path / passed.output_path).read_text(encoding="utf-8")
-    accepted = result.control_results["acceptance"]
+    accepted = seen(result, "acceptance")
     assert accepted.exit_code == 0
     assert accepted.output_path is not None
     assert "salida de suite" in (tmp_path / accepted.output_path).read_text(encoding="utf-8")
@@ -816,7 +817,7 @@ def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path:
 
     assert result.failed_at == "unit"
     assert "salida de unit" in (result.condensed_error or "")
-    assert result.control_results["unit"].ok is False
+    assert seen(result, "unit").ok is False
 
 
 def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Path) -> None:
@@ -841,7 +842,7 @@ def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Pat
     result = verifier.execute(req)
 
     assert result.failed_at == "L0-estado"
-    assert result.control_results["first"].ok is True
+    assert seen(result, "first").ok is True
     assert result.error_path is not None
 
 
@@ -890,7 +891,7 @@ def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -
     result = verifier.execute(req)
 
     assert result.failed_at == "L0-estado"
-    assert "lint" in result.control_results
+    assert "lint" in ids(result)
 
 
 def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
@@ -900,10 +901,12 @@ def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
 
     summaries = control_summaries(verifier.execute(req))
 
-    assert summaries["mut"]["ok"] is False
+    assert summaries["mut"]["outcome"] == "executed"
+    assert summaries["mut"]["judgement"] == "judged"
+    assert summaries["mut"]["passed"] is False
     assert summaries["mut"]["exit_code"] == 7
     assert summaries["mut"]["mode"] == "measure"
-    assert summaries["mut"]["output"] == (
+    assert summaries["mut"]["output_path"] == (
         f".lictor/runs/{req.run_id}/IVA-001/002-verify/control_mut.log"
     )
     json.dumps(summaries)
@@ -1013,7 +1016,7 @@ def test_verify_environment_tampered_during_the_commands_fails(tmp_path: Path) -
     assert result.ok is False
     assert result.failed_at == "L0-entorno"
     assert result.candidate is None
-    assert "acceptance" in result.control_results
+    assert "acceptance" in ids(result)
 
 
 def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
@@ -1182,11 +1185,15 @@ def test_verify_skips_a_control_whose_path_neither_tree_has(tmp_path: Path) -> N
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["suite"]
-    skipped = result.control_results["unit"]
+    skipped = seen(result, "unit")
     assert skipped.ok is True
     assert skipped.skipped is not None
     assert "tests/unit" in skipped.skipped
-    assert control_summaries(result)["unit"]["skipped"] == skipped.skipped
+    assert control_summaries(result)["unit"] == {
+        "outcome": "skipped",
+        "mode": "block",
+        "reason": skipped.skipped,
+    }
 
 
 def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> None:
@@ -1199,8 +1206,8 @@ def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> N
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["unit", "suite"]
-    assert result.control_results["unit"].skipped is None
-    assert control_summaries(result)["unit"]["skipped"] is None
+    assert seen(result, "unit").skipped is None
+    assert control_summaries(result)["unit"]["outcome"] == "executed"
 
 
 def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -> None:
@@ -1218,7 +1225,7 @@ def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -
     assert result.failed_at == "unit"
     assert "elimina tests/unit" in (result.condensed_error or "")
     assert runner.calls == []
-    assert result.control_results["unit"].skipped is None
+    assert seen(result, "unit").skipped is None
 
 
 _COVERAGE = CommandControl(
@@ -1242,7 +1249,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["suite"]
-    skipped = result.control_results["coverage"]
+    skipped = seen(result, "coverage")
     assert (skipped.ok, skipped.mode) == (True, "measure")
     assert "pytest_cov.plugin" in (skipped.skipped or "")
 
@@ -1256,7 +1263,7 @@ def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) 
     result = verifier.execute(req)
 
     assert [call["cmd"][0] for call in runner.calls] == ["coverage", "suite"]
-    assert result.control_results["coverage"].skipped is None
+    assert seen(result, "coverage").skipped is None
 
 
 def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
@@ -1420,7 +1427,7 @@ def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
     summaries = control_summaries(result)
 
     assert result.ok is True
-    assert summaries["mut"]["ok"] is True
+    assert summaries["mut"]["passed"] is True
     assert summaries["mut"]["score"] == {
         "killed": 9,
         "survived": 1,
