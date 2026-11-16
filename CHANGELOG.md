@@ -32,6 +32,30 @@ en su significado se anota en «Cambiado».
 
 ### Cambiado
 
+- **El perfil pasa a `python-uv@0.2`: `coverage` puntúa la ejecución de `unit`** (ADR-0008). Los
+  tests unitarios corren una vez por intento: `coverage` es un control lector (`reads: "unit"` y
+  `adds`, los argumentos que `unit` recibe al final de su comando) y no ejecuta nada. Lo que cambia:
+  - **Un `lictor.json` con `python-uv@0.1` sale con 10**, con un mensaje que lo dice: las copias
+    enteras de la 0.2.0 ya no cargan. La huella cambia, así que un run a medias no se reanuda.
+  - **El `fail_under` de `[tool.coverage.report]` deja de aplicarse en la verificación**
+    (`--cov-fail-under=0`): sin eso haría fallar `unit` sin ningún test en rojo. El umbral se
+    escribe como `min_score` de `coverage`.
+  - **Un test que solo falla bajo cobertura pasa a bloquear**, porque rompe `unit`. El error que
+    recibe el agente nombra el comando con que se ejecutó `unit`.
+  - **Un test en rojo ya no bloquea a través de `coverage`.** Con `unit` en `measure` y `coverage`
+    en `block`, `coverage` puntúa, marca la puntuación «(de un unit fallido)» y bloquea solo si no
+    llega a su mínimo. Para que un test en rojo bloquee, `unit` va en `block`, como en el perfil.
+  - **Una pasada sin tests, con código en `src`, puntúa un 0 %.**
+  - `lictor check --control coverage` ejecuta también `unit` y lo dice; `--control unit` ejecuta
+    el mismo `unit` que el run. Con `{"id": "coverage", "stage": "check"}` la cobertura se mide
+    solo en `check`, y la línea de `unit` lo marca.
+  - El `coverage` del `lictor.json` de Lictor escribe su propio `run`, como antes.
+- **`when_plugin` exige un perfil con `plugins_command`.** Sin él, un control con `when_plugin`
+  es un error de carga, también en uno que añade el proyecto: antes se ejecutaba a ciegas.
+- **Todo comando se trocea al cargar.** Un `run`, un `adds` o un `acceptance.run` con comillas sin
+  cerrar es un error de configuración que nombra el control (exit 10), no una excepción al
+  ejecutarse.
+
 - **Los informes se leen como hechos y los veredictos los da el dominio** (ADR-0009). Un informe
   que no se puede leer ya no hace fallar a Lictor con una excepción: es un informe no válido, con
   su motivo. Lo que se juzga es lo mismo que antes, salvo estos cambios, que corrigen defectos:
