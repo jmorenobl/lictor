@@ -11,12 +11,11 @@ from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
     config_fingerprint,
-    domain_controls,
     load_config,
     profile_skill_sections,
     resolve_defences,
 )
-from lictor.adapters.config.models import LictorConfig
+from lictor.adapters.config.models import LictorConfig, domain_controls
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader

@@ -78,7 +78,7 @@
     },
     "ControlChange": {
       "additionalProperties": false,
-      "description": "Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.\n\nCon el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo\nquita. Con otro `id`, añade un control, y entonces `level`, `run` y `report` hacen falta.",
+      "description": "Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.\n\nCon el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo\nquita. Con otro `id`, añade un control: uno que ejecuta necesita `level`, `report` y `run`, y\nuno que lee la ejecución de otro, `level`, `report: \"coverage\"`, `reads` y `adds`. `run`,\n`reads` y `adds` se escriben o no, pero nunca con null.",
       "properties": {
         "id": {
           "minLength": 1,
@@ -109,17 +109,21 @@
           "title": "Level"
         },
         "run": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Run"
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "reads": {
+          "description": "El id del control, con report junit, cuya ejecución lee este control.",
+          "minLength": 1,
+          "title": "Reads",
+          "type": "string"
+        },
+        "adds": {
+          "description": "Los argumentos que el control que nombra reads recibe al final de su comando, con el {out} de este control. Se escribe entero: lo que no escribas no se añade, así que conserva lo que el perfil pone (por ejemplo, el argumento que anula el umbral propio de la herramienta).",
+          "minLength": 1,
+          "title": "Adds",
+          "type": "string"
         },
         "report": {
           "anyOf": [

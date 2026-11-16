@@ -30,7 +30,7 @@ from lictor.adapters.config.models import (
     DEFAULT_MODEL,
     AcceptanceConfig,
     BackendConfig,
-    ControlConfig,
+    CommandControlConfig,
     LictorConfig,
     LimitsConfig,
     PathsConfig,
@@ -142,7 +142,7 @@ def test_controls_must_have_unique_ids() -> None:
 
 @pytest.mark.parametrize("level", ["L1", "L2", "L4", "L5"])
 def test_control_allowed_levels(level: str) -> None:
-    ctrl = ControlConfig.model_validate(
+    ctrl = CommandControlConfig.model_validate(
         {
             "id": "chk",
             "level": level,
@@ -157,7 +157,7 @@ def test_control_allowed_levels(level: str) -> None:
 @pytest.mark.parametrize("invalid_level", ["L0", "L3", "L6", "invalid"])
 def test_control_rejects_disallowed_levels(invalid_level: str) -> None:
     with pytest.raises(ValidationError):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {
                 "id": "chk",
                 "level": invalid_level,
@@ -170,7 +170,7 @@ def test_control_rejects_disallowed_levels(invalid_level: str) -> None:
 
 def test_junit_report_requires_out_placeholder_in_control() -> None:
     with pytest.raises(ValidationError, match=r"\{out\}"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {
                 "id": "unit",
                 "level": "L2",
@@ -180,7 +180,7 @@ def test_junit_report_requires_out_placeholder_in_control() -> None:
             }
         )
 
-    valid = ControlConfig.model_validate(
+    valid = CommandControlConfig.model_validate(
         {
             "id": "unit",
             "level": "L2",
@@ -202,7 +202,7 @@ def test_the_acceptance_needs_out_where_it_leaves_its_report() -> None:
 def test_a_control_whose_command_doesnt_split_is_refused_at_load_naming_it() -> None:
     """ADR-0008, point 1: an unclosed quote is a configuration error, not a crash in a run."""
     with pytest.raises(ValidationError, match=r"run del control 'unit'.*No closing quotation"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {"id": "unit", "level": "L2", "run": "cmd 'tests --xml {out}", "report": "junit"}
         )
 
@@ -959,7 +959,7 @@ def test_python_uv_unit_control_runs_only_where_its_tests_exist() -> None:
 @pytest.mark.parametrize("path", ["", "/abs/tests", "../fuera", "tests/../../fuera"])
 def test_control_when_exists_must_stay_inside_the_project(path: str) -> None:
     with pytest.raises(ValidationError, match="when_exists"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code", "when_exists": path}
         )
 
@@ -1008,7 +1008,7 @@ def test_python_uv_unit_control_declares_the_empty_run_code() -> None:
 
 
 def test_control_without_empty_exit_codes_declares_none() -> None:
-    control = ControlConfig.model_validate(
+    control = CommandControlConfig.model_validate(
         {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code"}
     )
     assert control.empty_exit_codes == []
@@ -1034,7 +1034,7 @@ def test_a_lictor_json_with_allow_empty_says_what_to_write_instead(tmp_path: Pat
 
 def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
     with pytest.raises(ValidationError, match="'u' usa 'allow_empty', que ya no existe"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {"id": "u", "level": "L2", "run": "c", "report": "exit-code", "allow_empty": True}
         )
 
@@ -1042,7 +1042,9 @@ def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
 @pytest.mark.parametrize("report", ["junit", "mutation"])
 def test_a_control_that_reads_a_report_needs_its_path(report: str) -> None:
     with pytest.raises(ValidationError, match=f"report='{report}' debe incluir"):
-        ControlConfig.model_validate({"id": "m", "level": "L5", "run": "cmd", "report": report})
+        CommandControlConfig.model_validate(
+            {"id": "m", "level": "L5", "run": "cmd", "report": report}
+        )
 
 
 @pytest.mark.parametrize(("chars", "valid"), [(499, False), (500, True), (4000, True)])
@@ -1057,16 +1059,18 @@ def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> N
 def test_min_score_belongs_to_a_control_with_a_score() -> None:
     mutation = {"id": "m", "level": "L5", "run": "x {out}", "report": "mutation"}
     coverage = {"id": "c", "level": "L2", "run": "x {out}", "report": "coverage"}
-    assert ControlConfig(**mutation, min_score=95).min_score == 95
-    assert ControlConfig(**coverage, min_score=80).min_score == 80
+    assert CommandControlConfig(**mutation, min_score=95).min_score == 95
+    assert CommandControlConfig(**coverage, min_score=80).min_score == 80
     with pytest.raises(ValidationError, match="solo vale con report='mutation' o 'coverage'"):
-        ControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
+        CommandControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
 
 
 @pytest.mark.parametrize("minimum", [-1, 100.5])
 def test_min_score_is_a_percentage(minimum: float) -> None:
     with pytest.raises(ValidationError):
-        ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)
+        CommandControlConfig(
+            id="m", level="L5", run="x {out}", report="mutation", min_score=minimum
+        )
 
 
 def test_init_does_not_copy_the_driver_hints(tmp_path: Path) -> None:

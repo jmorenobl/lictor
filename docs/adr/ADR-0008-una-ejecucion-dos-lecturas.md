@@ -39,7 +39,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
   - En el control resuelto no se distingue un campo escrito de uno por defecto.
   - Un cambio con `enabled: false` se mezcla antes de quitarlo.
   - `exclude_unset` conserva un `null` escrito (`loader.py:282`).
-  - Las validaciones de conjunto que existen, como la unicidad de `id`, son `field_validator` del tipo (`models.py:384-387`, `:423-426`). Valen también para un `LictorConfig` construido sin `load_config`, como hacen `bootstrap_runtime(config=...)` (`bootstrap.py:140-144`) y los tests, y `ProfileConfig` tiene la suya.
+  - Las validaciones de conjunto que existen, como la unicidad de `id`, son `field_validator` del tipo (`models.py:384-387`, `:423-426`). Valen también para un `LictorConfig` construido sin `load_config`, como hacen `bootstrap_runtime(config=...)` (`bootstrap.py:140-144`) y los tests, y `Profile` tiene la suya.
 - **El perfil.** `python-uv@0.1`, y el cargador solo admite la versión que existe: pedir otra sale con un error (`loader.py:98-106`).
 
 ### Comprobado con `pytest-cov` 7.1.0 y `coverage` 7.17.0 (2026-11-16), las versiones que fija `uv.lock`
@@ -121,7 +121,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
    - **Con `enabled: false`, el cambio no se mezcla:** quita el control, y cualquier otro campo escrito a su lado es un error, porque no se aplicaría.
    - **Cada error sale con 10 y su propio mensaje,** que nombra el control, lo escrito y lo que lo arregla. Como la forma está resuelta antes de pydantic, nunca llega al usuario el error de las dos ramas de una unión.
 
-   **Las reglas de conjunto son de los tipos `LictorConfig` y `ProfileConfig`,** en un `model_validator` que llama a `domain_controls` y a una función del dominio. Así valen para un `LictorConfig` construido a mano, como la unicidad de `id`, y un perfil roto no carga. Fallan si:
+   **Las reglas de conjunto son de los tipos `LictorConfig` y `Profile`,** en un `model_validator` que llama a `domain_controls` y a una función del dominio. Así valen para un `LictorConfig` construido a mano, como la unicidad de `id`, y un perfil roto no carga. Fallan si:
    - `reads` no nombra un control activo;
    - el control leído es lector, o no tiene `report: "junit"`;
    - un control tiene dos lectores;
@@ -138,7 +138,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
      - La regla de hoy (si no se puede saber, se ejecuta) era una rama que solo ejercían los tests.
      - En un lector, esa regla significaría añadir `--cov` a ciegas: sin el plugin, `unit` se rompería con «unrecognized arguments», y el fallo de una dependencia de cobertura caería sobre los tests.
    - **Dónde se exige.** Lo exigen dos sitios, para que no haya un camino que se lo salte:
-     - un validador de `ProfileConfig`, que tiene los controles del perfil y su `verification.plugins_command`;
+     - un validador de `Profile`, que tiene los controles del perfil y su `verification.plugins_command`;
      - `resolve_defences`, por donde pasa todo arranque (`bootstrap.py:145`), para los controles que añade el proyecto.
    - **`installed_plugins` deja de ser opcional.** `VerificationEnvironment.installed_plugins` es una tupla: lo que listó `plugins_command`, o ninguno si el perfil no lo declara, y entonces ningún control puede depender de un plugin. Por lo mismo:
      - `CheckProjectRequest.installed_plugins` es una tupla;
@@ -276,7 +276,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
     - un control sin `run` ni `reads`;
     - un comando que no trocea con `shlex`, en `run`, `adds` y `acceptance.run`;
     - un `LictorConfig` construido a mano con una pareja inválida;
-    - un `ProfileConfig` con un lector huérfano, y otro con `when_plugin` sin `plugins_command`;
+    - un `Profile` con un lector huérfano, y otro con `when_plugin` sin `plugins_command`;
     - un control del proyecto con `when_plugin` en un perfil sin `plugins_command`, en `resolve_defences`;
     - un lector de `id` nuevo escrito antes que su control leído;
     - `allow_empty` escrito en `coverage`;
