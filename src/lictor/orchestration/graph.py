@@ -37,6 +37,7 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -45,6 +46,7 @@ from lictor.domain.errors import (
     SpecError,
 )
 from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
+from lictor.domain.results import VERIFY_FINISHED, acceptance_record, verification_duration
 from lictor.domain.routing import (
     route_build_driver,
     route_commit,
@@ -153,10 +155,9 @@ class GraphContext:
     max_driver_attempts: int
     error_max_chars: int
     acceptance_run: str
-    acceptance_report: str
     acceptance_timeout_s: int
     # Only the `attempt` controls: the `check` ones never run in a run (ADR-0007).
-    controls: Sequence[Any]
+    controls: tuple[CommandControl, ...]
     prepare_driver: PrepareDriver
     check_red: CheckRed
     implement_scenario: ImplementScenario
@@ -182,7 +183,7 @@ class GraphContext:
     map_link: MapLink = "name"
     impostors: Impostors | None = None
     # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
-    check_controls: Sequence[Any] = ()
+    check_controls: tuple[CommandControl, ...] = ()
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -423,7 +424,6 @@ class _GraphNodes:
                     max_driver_attempts=self.ctx.max_driver_attempts,
                     driver_paths=self.ctx.paths_driver,
                     all_scenario_ids=all_sids,
-                    acceptance_report=self.ctx.acceptance_report,
                     acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                     error_max_chars=self.ctx.error_max_chars,
                     acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
@@ -572,15 +572,15 @@ class _GraphNodes:
         self.ctx.event_log.append(
             new_event(
                 self.ctx.clock,
-                "lictor.verify.finished.v1",
+                VERIFY_FINISHED,
                 state["run_id"],
                 scenario_id=state.get("current"),
                 data={
                     "attempt": attempt,
                     "ok": False,
                     "failed_at": failed_at,
-                    "control_durations": {},
                     "controls": {},
+                    "acceptance": None,
                     "reverted_files": [],
                     "error": error,
                     "error_path": None,
@@ -617,7 +617,6 @@ class _GraphNodes:
                 suppressions=self.ctx.suppressions,
                 controls=self.ctx.controls,
                 acceptance_run=self.ctx.acceptance_run,
-                acceptance_report=self.ctx.acceptance_report,
                 acceptance_timeout_s=self.ctx.acceptance_timeout_s,
                 green_scenario_ids=green_ids,
                 pending_scenario_ids=pending_ids,
@@ -633,19 +632,18 @@ class _GraphNodes:
             )
         )
 
-        verify_duration = sum(cr.duration_ms for cr in res.control_results.values())
-        control_durations = {k: v.duration_ms for k, v in res.control_results.items()}
+        verify_duration = verification_duration(res.controls, res.acceptance)
         event = new_event(
             self.ctx.clock,
-            "lictor.verify.finished.v1",
+            VERIFY_FINISHED,
             state["run_id"],
             scenario_id=current_id,
             data={
                 "attempt": state.get("attempt", 0),
                 "ok": res.ok,
                 "failed_at": res.failed_at,
-                "control_durations": control_durations,
                 "controls": control_summaries(res),
+                "acceptance": acceptance_record(res.acceptance),
                 "reverted_files": list(res.reverted_files),
                 "error": res.condensed_error,
                 "error_path": res.error_path,

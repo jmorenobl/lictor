@@ -54,7 +54,7 @@ def test_new_step_dir_never_reuses_a_directory(tmp_path: Path) -> None:
 
 def test_save_output_keeps_exit_code_and_both_streams(tmp_path: Path) -> None:
     path = tmp_path / "control.log"
-    save_output(path, CommandOutput(returncode=7, stdout="fuera", stderr="dentro"))
+    save_output(path, ["x"], CommandOutput(returncode=7, stdout="fuera", stderr="dentro"))
     text = path.read_text(encoding="utf-8")
     assert "Código de salida: 7" in text
     assert "fuera" in text
@@ -63,8 +63,17 @@ def test_save_output_keeps_exit_code_and_both_streams(tmp_path: Path) -> None:
 
 def test_save_output_survives_undecodable_text(tmp_path: Path) -> None:
     path = tmp_path / "control.log"
-    save_output(path, CommandOutput(returncode=0, stdout="\udcff", stderr=""))
+    save_output(path, ["x"], CommandOutput(returncode=0, stdout="\udcff", stderr=""))
     assert path.is_file()
+
+
+def test_save_output_starts_with_the_command_that_ran(tmp_path: Path) -> None:
+    """ADR-0009: the evidence says what ran, quoted as a shell would need it."""
+    path = tmp_path / "control.log"
+    save_output(path, ["pytest", "tests/unit", "-k", "a b"], CommandOutput(0, "", ""))
+    first, second = path.read_text(encoding="utf-8").splitlines()[:2]
+    assert first == "Comando: pytest tests/unit -k 'a b'"
+    assert second == "Código de salida: 0"
 
 
 def test_relative_to_project_uses_posix_paths(tmp_path: Path) -> None:

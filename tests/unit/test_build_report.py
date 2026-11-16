@@ -88,7 +88,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
         ),
         Event(
             id="4",
-            type="lictor.verify.finished.v1",
+            type="lictor.verify.finished.v2",
             source="lictor/0.1.0",
             time="2026-10-30T10:00:15Z",
             runid="run-1",
@@ -97,7 +97,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
                 "attempt": 1,
                 "ok": True,
                 "failed_at": None,
-                "control_durations": {"unit": 200},
+                "controls": {"unit": _executed(duration_ms=200)},
                 "reverted_files": [],
             },
         ),
@@ -131,7 +131,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
         ),
         Event(
             id="7",
-            type="lictor.verify.finished.v1",
+            type="lictor.verify.finished.v2",
             source="lictor/0.1.0",
             time="2026-10-30T10:00:30Z",
             runid="run-1",
@@ -140,7 +140,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
                 "attempt": 1,
                 "ok": False,
                 "failed_at": "L1",
-                "control_durations": {"lint": 50},
+                "controls": {"lint": _executed(passed=False, duration_ms=50)},
                 "reverted_files": [],
             },
         ),
@@ -231,9 +231,32 @@ def test_report_gives_the_reason_of_a_stopped_run(tmp_path: Path) -> None:
     assert "**Motivo**: Cuota agotada" in report
 
 
+_EXECUTED: dict[str, object] = {
+    "outcome": "executed",
+    "mode": "block",
+    "exit_code": 0,
+    "duration_ms": 0,
+    "timed_out": False,
+    "output_path": "r/x.log",
+    "judgement": "judged",
+    "passed": True,
+    "reason": None,
+    "score": None,
+    "cases": {},
+}
+
+
+def _executed(
+    *, passed: bool = True, output: str = "r/x.log", **fields: object
+) -> dict[str, object]:
+    """A control that ran and was judged, as `verify.finished.v2` records it."""
+    failed = {} if passed else {"reason": "falló"}
+    return {**_EXECUTED, "passed": passed, "output_path": output, **failed, **fields}
+
+
 def _verify_event(controls: dict[str, object], **data: object) -> Event:
     return _event(
-        "lictor.verify.finished.v1",
+        "lictor.verify.finished.v2",
         {"attempt": 1, "ok": True, "controls": controls, **data},
         "IVA-001",
     )
@@ -241,9 +264,9 @@ def _verify_event(controls: dict[str, object], **data: object) -> Event:
 
 def test_report_lists_measure_controls_with_result_and_output(tmp_path: Path) -> None:
     controls: dict[str, object] = {
-        "mut": {"ok": False, "mode": "measure", "exit_code": 7, "output": "r/mut.log"},
-        "cov": {"ok": True, "mode": "measure", "exit_code": 0, "output": "r/cov.log"},
-        "lint": {"ok": True, "mode": "block", "exit_code": 0, "output": "r/lint.log"},
+        "mut": _executed(passed=False, mode="measure", exit_code=7, output="r/mut.log"),
+        "cov": _executed(mode="measure", output="r/cov.log"),
+        "lint": _executed(output="r/lint.log"),
     }
 
     report = _report(tmp_path, [_verify_event(controls)])
@@ -265,23 +288,12 @@ def test_report_shows_the_mutation_score_beside_the_result(tmp_path: Path) -> No
         "skipped": 0,
         "total": 980,
         "percent": 100 * 923 / 980,
+        "kind": "mutation",
     }
     controls: dict[str, object] = {
-        "mutation": {
-            "ok": True,
-            "mode": "measure",
-            "exit_code": 0,
-            "output": "r/m.log",
-            "score": score,
-        },
-        "odd": {"ok": True, "mode": "measure", "exit_code": 0, "output": "r/o.log", "score": {}},
-        "bad": {
-            "ok": True,
-            "mode": "measure",
-            "exit_code": 0,
-            "output": "r/b.log",
-            "score": {"x": 1},
-        },
+        "mutation": _executed(mode="measure", output="r/m.log", score=score),
+        "odd": _executed(mode="measure", output="r/o.log", score={}),
+        "bad": _executed(mode="measure", output="r/b.log", score={"x": 1}),
     }
 
     report = _report(tmp_path, [_verify_event(controls)])
@@ -291,15 +303,16 @@ def test_report_shows_the_mutation_score_beside_the_result(tmp_path: Path) -> No
         "**mutation** (IVA-001, intento 1): correcto, 94,1 % (923 de 980 muertos; 57 vivos, "
         "0 por tiempo), código 0, salida en `r/m.log`"
     ) in section
-    assert "**odd** (IVA-001, intento 1): correcto, código 0" in section
-    assert "**bad** (IVA-001, intento 1): correcto, código 0" in section
+    # A record whose score can't be read doesn't follow the schema: it isn't shown as if it did.
+    assert "odd" not in section
+    assert "bad" not in section
 
 
 def test_report_shows_the_score_of_a_blocking_control(tmp_path: Path) -> None:
-    score = {"killed": 3, "survived": 1, "total": 4, "percent": 75.0}
+    score = {"killed": 3, "survived": 1, "total": 4, "percent": 75.0, "kind": "mutation"}
     controls: dict[str, object] = {
-        "mutation": {"ok": False, "mode": "block", "exit_code": 0, "score": score},
-        "lint": {"ok": True, "mode": "block", "exit_code": 0},
+        "mutation": _executed(passed=False, score=score),
+        "lint": _executed(),
     }
 
     report = _report(tmp_path, [_verify_event(controls)])
@@ -319,9 +332,7 @@ def test_report_shows_the_coverage_score(tmp_path: Path) -> None:
         "num_branches": 2,
         "percent": 100 * 10 / 12,
     }
-    controls: dict[str, object] = {
-        "coverage": {"ok": True, "mode": "measure", "exit_code": 0, "score": score},
-    }
+    controls: dict[str, object] = {"coverage": _executed(mode="measure", score=score)}
 
     report = _report(tmp_path, [_verify_event(controls)])
 
@@ -385,11 +396,11 @@ def test_a_journal_without_check_controls_lists_none(
 
 def test_report_lists_every_attempt_with_its_error(tmp_path: Path) -> None:
     failed = _event(
-        "lictor.verify.finished.v1",
+        "lictor.verify.finished.v2",
         {"attempt": 1, "ok": False, "failed_at": "acceptance", "error_path": "r/error.txt"},
         "IVA-001",
     )
-    passed = _event("lictor.verify.finished.v1", {"attempt": 2, "ok": True}, "IVA-001")
+    passed = _event("lictor.verify.finished.v2", {"attempt": 2, "ok": True}, "IVA-001")
 
     report = _report(tmp_path, [failed, passed])
 
@@ -417,7 +428,7 @@ def test_report_says_when_no_driver_was_rejected(tmp_path: Path) -> None:
 def _verified(path: str, digest: str) -> Event:
     return Event(
         id="v",
-        type="lictor.verify.finished.v1",
+        type="lictor.verify.finished.v2",
         source="lictor/0.1.0",
         time="2026-10-30T10:00:00Z",
         runid="run-1",
@@ -509,8 +520,8 @@ def test_report_counts_discarded_lines_by_kind(tmp_path: Path) -> None:
 
 def test_report_lists_skipped_controls_with_the_reason(tmp_path: Path) -> None:
     controls: dict[str, object] = {
-        "unit": {"ok": True, "mode": "block", "skipped": "no existe tests/unit"},
-        "lint": {"ok": True, "mode": "block", "skipped": None},
+        "unit": {"outcome": "skipped", "mode": "block", "reason": "no existe tests/unit"},
+        "lint": _executed(),
     }
 
     report = _report(tmp_path, [_verify_event(controls)])
@@ -518,6 +529,33 @@ def test_report_lists_skipped_controls_with_the_reason(tmp_path: Path) -> None:
     section = report.split("## Controles omitidos")[1].split("##")[0]
     assert "- **unit** (IVA-001, intento 1): no existe tests/unit" in section
     assert "lint" not in section
+
+
+def test_report_tells_a_control_that_tampered_from_one_that_failed(tmp_path: Path) -> None:
+    """ADR-0009: a result with no verdict is no failure of the control."""
+    tampered = {**_executed(mode="measure"), "judgement": "unjudged", "changes": ["seal.json"]}
+    for key in ("passed", "reason", "score", "cases"):
+        tampered.pop(key)
+    removed = {"outcome": "not_executed", "mode": "measure", "reason": "borró tests/unit"}
+
+    report = _report(tmp_path, [_verify_event({"mut": tampered, "unit": removed})])
+
+    section = report.split("## Controles en medición")[1].split("##")[0]
+    assert "**mut** (IVA-001, intento 1): manipuló el estado; sin veredicto, código 0" in section
+    assert "**unit** (IVA-001, intento 1): fallo, no se ejecutó: borró tests/unit" in section
+
+
+def test_a_verification_of_an_earlier_version_is_counted_and_not_read(tmp_path: Path) -> None:
+    older = _event(
+        "lictor.verify.finished.v1",
+        {"attempt": 1, "ok": False, "failed_at": "L1", "control_durations": {"lint": 9}},
+        "IVA-001",
+    )
+
+    report = _report(tmp_path, [older])
+
+    assert "De una versión anterior, sin interpretar: 1" in report
+    assert "| IVA-001 | 1 |" not in report
 
 
 def test_report_says_when_no_control_was_skipped(tmp_path: Path) -> None:
@@ -580,7 +618,7 @@ def test_collateral_greens_are_listed_by_id_not_by_commit(tmp_path: Path) -> Non
 
 def _verification(path: str, ok: bool, failed_at: str | None = None) -> Event:
     return _event(
-        "lictor.verify.finished.v1",
+        "lictor.verify.finished.v2",
         {"attempt": 1, "ok": ok, "failed_at": failed_at, "evidence": {"path": path, "hash": "h"}},
         "IVA-001",
     )
@@ -751,8 +789,8 @@ def _summary_run() -> list[Event]:
         _event("lictor.driver.sealed.v1", {"commit": "d" * 40}),
         _call("IVA-001", 1, 0.05, tokens),
         _event(
-            "lictor.verify.finished.v1",
-            {"attempt": 1, "ok": True, "control_durations": {"unit": 4000}},
+            "lictor.verify.finished.v2",
+            {"attempt": 1, "ok": True, "controls": {"unit": _executed(duration_ms=4000)}},
             "IVA-001",
         ),
         _event("lictor.scenario.green.v1", {"commit": "a" * 40, "attempt": 1}, "IVA-001"),

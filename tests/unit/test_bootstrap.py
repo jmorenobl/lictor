@@ -33,8 +33,7 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
     "protected": ["features/", "lictor.json"]
   },
   "acceptance": {
-    "run": "echo test {out}",
-    "report": "junit"
+    "run": "echo test {out}"
   },
   "controls": [
     {"id": "c1", "level": "L1", "run": "echo c1", "report": "exit-code"}
@@ -69,7 +68,7 @@ def test_bootstrap_hands_the_acceptance_failure_codes_to_the_graph(tmp_path: Pat
         "profile": "python-uv@0.1",
         "backend": {"kind": "fake", "model": "claude-sonnet-4-5-20250929"},
         "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
-        "acceptance": {"run": "suite {out}", "report": "junit", "failure_exit_codes": [1, 2]},
+        "acceptance": {"run": "suite {out}", "failure_exit_codes": [1, 2]},
         "controls": [],
         "agent_tools": [],
         "hints": "",

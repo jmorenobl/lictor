@@ -23,6 +23,7 @@ from lictor.adapters.config.models import (
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.rules import Impostors, MapLink
 
@@ -421,6 +422,29 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
             if (imp := profile.oracle.impostors) is not None
             else None
         ),
+    )
+
+
+def domain_controls(config: LictorConfig) -> tuple[CommandControl, ...]:
+    """The resolved controls as the domain sees them, in the order they were declared.
+
+    This is the only conversion: the run and `lictor check` get what it returns (ADR-0009).
+    """
+    return tuple(
+        CommandControl(
+            id=control.id,
+            level=control.level,
+            run=control.run,
+            report=control.report,
+            mode=control.mode,
+            stage=control.stage,
+            empty_exit_codes=tuple(control.empty_exit_codes),
+            timeout_s=control.timeout_s,
+            when_exists=control.when_exists,
+            when_plugin=control.when_plugin,
+            min_score=control.min_score,
+        )
+        for control in config.controls
     )
 
 

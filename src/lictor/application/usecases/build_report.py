@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -11,7 +11,20 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
-from lictor.domain.rules import describe_score, minimum_text, score_from_record
+from lictor.domain.results import (
+    OLDER_EVENTS,
+    VERIFY_FINISHED,
+    RecordedControl,
+    RecordedExecuted,
+    RecordedJudged,
+    RecordedNotExecuted,
+    RecordedSkipped,
+    RecordedUnjudged,
+    acceptance_from_record,
+    recorded_controls,
+    recorded_duration,
+)
+from lictor.domain.rules import describe_score, minimum_text
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -91,12 +104,6 @@ def _new_owner() -> dict[str, Any]:
     }
 
 
-def _score_text(raw: object) -> str:
-    """The score a control recorded, if it recorded one the journal can still read."""
-    score = score_from_record(raw)
-    return f", {describe_score(score)}" if score is not None else ""
-
-
 @dataclass(frozen=True)
 class BuildReportRequest:
     """Request payload for BuildReport use case."""
@@ -131,6 +138,7 @@ def _journal_lines(damage: JournalDamage) -> list[str]:
         f"- **Líneas descartadas**: {damage.total}",
         f"  - Corruptas, que no son JSON (escritura cortada o edición): {damage.corrupt}",
         f"  - Ajenas, JSON que no es un evento de Lictor (forjadas): {damage.foreign}",
+        f"  - De una versión anterior, sin interpretar: {damage.older}",
         "- Una línea forjada con la forma exacta de un evento no se distingue y no cuenta aquí.",
     ]
 
@@ -316,7 +324,8 @@ class BuildReport:
         retired = _retired_runs(self.event_log.events())
         data["altered_evidence"] = _altered_evidence(events, project_root, retired)
         data["retired_evidence"] = _retirement_notes(events, retired)
-        data["journal_damage"] = self.event_log.damage()
+        older = sum(1 for ev in events if ev.type in OLDER_EVENTS)
+        data["journal_damage"] = replace(self.event_log.damage(), older=older)
         return self._format_markdown(data)
 
     def _aggregate_metrics(self, events: list[Event]) -> dict[str, Any]:
@@ -360,7 +369,7 @@ class BuildReport:
             "lictor.spec.loaded.v1": self._on_spec_loaded,
             "lictor.agent.finished.v1": self._process_agent_finished,
             "lictor.agent.denied.v1": self._on_agent_denied,
-            "lictor.verify.finished.v1": self._process_verify_finished,
+            VERIFY_FINISHED: self._process_verify_finished,
             "lictor.scenario.green.v1": self._on_scenario_green,
             "lictor.scenario.quarantined.v1": self._on_scenario_quarantined,
             "lictor.run.finished.v1": self._on_run_finished,
@@ -533,13 +542,10 @@ class BuildReport:
 
     def _process_verify_finished(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
+        controls = recorded_controls(ev.data.get("controls"))
+        acceptance = acceptance_from_record(ev.data.get("acceptance"))
         if sid and sid in info["scenarios"]:
-            scen = info["scenarios"][sid]
-            durations = ev.data.get("control_durations")
-            if isinstance(durations, dict):
-                scen["verify_ms"] += sum(
-                    int(v) for v in durations.values() if isinstance(v, (int, float, str))
-                )
+            info["scenarios"][sid]["verify_ms"] += recorded_duration(controls, acceptance)
 
         if not ev.data.get("ok"):
             failed_at = ev.data.get("failed_at")
@@ -552,26 +558,31 @@ class BuildReport:
         error_cell = f"`{error_path}`" if error_path else "-"
         info["attempts"].append(f"| {sid} | {attempt} | {outcome} | {error_cell} |")
 
-        controls = ev.data.get("controls")
-        for control_id, control in controls.items() if isinstance(controls, dict) else ():
-            if not isinstance(control, dict):
-                continue
-            if control.get("skipped"):
-                info["skipped_controls"].append(
-                    f"- **{control_id}** ({sid}, intento {attempt}): {control['skipped']}"
-                )
-                continue
-            result = "correcto" if control.get("ok") else "fallo"
-            score = _score_text(control.get("score"))
-            if score:
-                info["scores"].append(
-                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}"
-                )
-            if control.get("mode") == "measure":
-                info["measures"].append(
-                    f"- **{control_id}** ({sid}, intento {attempt}): {result}{score}, "
-                    f"código {control.get('exit_code')}, salida en `{control.get('output')}`"
-                )
+        for control_id, recorded in controls.items():
+            self._process_control(info, f"**{control_id}** ({sid}, intento {attempt})", recorded)
+
+    @staticmethod
+    def _process_control(info: dict[str, Any], where: str, recorded: RecordedControl) -> None:
+        """Show each result by what happened to it: skipped, not run, tampered or judged."""
+        match recorded:
+            case RecordedSkipped(reason=reason):
+                info["skipped_controls"].append(f"- {where}: {reason}")
+                return
+            case RecordedNotExecuted(reason=reason):
+                result, score = f"fallo, no se ejecutó: {reason}", ""
+            case RecordedExecuted(judgement=RecordedUnjudged()):
+                result, score = "manipuló el estado; sin veredicto", ""
+            case RecordedExecuted(judgement=RecordedJudged() as judged):
+                result = "correcto" if judged.passed else "fallo"
+                score = f", {describe_score(judged.score)}" if judged.score else ""
+                if score:
+                    info["scores"].append(f"- {where}: {result}{score}")
+            case _:
+                return
+        if recorded.mode == "measure":
+            ran = recorded.ran if isinstance(recorded, RecordedExecuted) else None
+            how = f", código {ran.exit_code}, salida en `{ran.output_path}`" if ran else ""
+            info["measures"].append(f"- {where}: {result}{score}{how}")
 
     def _format_markdown(self, info: dict[str, Any]) -> str:
         greens = sum(1 for s in info["scenarios"].values() if s["status"] == "green")

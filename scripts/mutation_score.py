@@ -7,9 +7,18 @@ exits non-zero, so an old score can't pass for this one. Beside the report it le
 `mutation-survivors.txt`, what `mutmut results` lists as not killed: the score alone doesn't say
 which mutants differ between two passes or two platforms.
 
+The pass is bounded in memory, whatever the machine: at most `MAX_CHILDREN` mutants run at once,
+and each process of the pass may hold at most `WORKER_MEMORY` of data. A mutant that grows past it
+gets a `MemoryError`, so its tests fail and it counts as killed instead of filling the machine:
+one that made `hash_tree` list the working directory under every directory walked forever and
+reached 13,8 GB (2026-11-16). The
+tests of the pass use about 80 MB. Only Linux gets the memory limit, because only Linux enforces
+`RLIMIT_DATA`; on macOS the worker limit still holds.
+
 Usage: uv run python scripts/mutation_score.py <report.json>
 """
 
+import resource
 import shutil
 import subprocess
 import sys
@@ -20,6 +29,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 STATS = Path("mutants") / "mutmut-cicd-stats.json"
 SURVIVORS = "mutation-survivors.txt"
 MUTMUT = (sys.executable, "-m", "mutmut")
+MAX_CHILDREN = 4
+WORKER_MEMORY = 1024**3  # bytes of data per process of the pass: over ten times what tests use
+
+
+def limit_memory() -> None:
+    """Cap the data of this process and of every process it starts, which inherit the limit.
+
+    Only on Linux, which enforces it. macOS doesn't, and refuses to lower it below what a process
+    has already mapped, so there it would only break the pass.
+    """
+    if sys.platform == "linux":
+        resource.setrlimit(resource.RLIMIT_DATA, (WORKER_MEMORY, WORKER_MEMORY))
 
 
 def main(argv: Sequence[str], mutmut: Sequence[str] = MUTMUT, root: Path = REPO_ROOT) -> int:
@@ -29,7 +50,12 @@ def main(argv: Sequence[str], mutmut: Sequence[str] = MUTMUT, root: Path = REPO_
     report = Path(argv[0])
     report.unlink(missing_ok=True)
     (root / STATS).unlink(missing_ok=True)
-    passed = subprocess.run([*mutmut, "run"], cwd=root, check=False).returncode
+    passed = subprocess.run(
+        [*mutmut, "run", "--max-children", str(MAX_CHILDREN)],
+        cwd=root,
+        check=False,
+        preexec_fn=limit_memory,
+    ).returncode
     exported = subprocess.run([*mutmut, "export-cicd-stats"], cwd=root, check=False).returncode
     if exported != 0 or not (root / STATS).is_file():
         print(f"No se pudo exportar la puntuación (código {exported})", file=sys.stderr)

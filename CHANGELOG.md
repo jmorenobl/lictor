@@ -27,8 +27,38 @@ en su significado se anota en «Cambiado».
   - Si `lictor check` falla después de un run, los escenarios siguen en verde: el arreglo es de la
     persona.
 
+- **Todo log empieza por el comando que se ejecutó** (ADR-0009), citado como lo necesitaría una
+  shell: los de los controles, la aceptación, el rojo, los impostores y el `prepare` del entorno.
+
 ### Cambiado
 
+- **Los informes se leen como hechos y los veredictos los da el dominio** (ADR-0009). Un informe
+  que no se puede leer ya no hace fallar a Lictor con una excepción: es un informe no válido, con
+  su motivo. Lo que se juzga es lo mismo que antes, salvo estos cambios, que corrigen defectos:
+  1. Un JUnit ausente, vacío, en un directorio o en un enlace roto ya no pasa como «sin casos»: con
+     0 tests, pytest escribe un JUnit sin casos, así que su ausencia es que la suite murió antes.
+  2. La codificación de un JUnit sigue las reglas de XML en todos los sitios: uno con BOM o con
+     una codificación declarada se lee, y uno cuyos bytes no se pueden decodificar no es válido.
+  3. El informe de la aceptación solo sale de `{out}`: el rojo y los impostores ya no leen la
+     salida estándar ni una ruta escrita dentro del informe.
+  4. La aceptación de `lictor check` juzga como la del run si se puede fiar de su informe; pasa y
+     falla en los mismos casos que antes, con un motivo más preciso.
+  5. Los motivos de una suite caída dicen lo que pasó (sin informe, con uno no válido, sin casos)
+     sin repetir el error del lector. Llegan al agente.
+  6. Un informe de cobertura que no mide nada (0 sentencias y 0 ramas) ya no puntúa un 100 %: no
+     tiene puntuación, y con `min_score` falla.
+  7. Un informe con recuentos imposibles (más líneas cubiertas que sentencias, más mutantes que el
+     total, `{"totals": {}}`) no es válido. Antes daba porcentajes por encima del 100 %.
+  8. Una mutación sin mutantes probados (todos omitidos) falla sin puntuación.
+  9. Un informe de cobertura o de mutación que no es UTF-8 no es válido.
+  10. Un comando cortado por su tiempo límite lo dice («Se cortó a los N s»), en vez de «código -9».
+- **`acceptance.report` desaparece**: la aceptación siempre lee un informe JUnit. Un `lictor.json`
+  que lo escriba sale con 10 y dice que lo quites; las copias enteras que escribía la 0.2.0 lo
+  llevan.
+- **El journal escribe `lictor.verify.finished.v2`**: cada control con lo que le pasó (`outcome`:
+  omitido, no ejecutado o ejecutado, con veredicto o sin él si manipuló el estado), la aceptación
+  aparte y sin `control_durations`. `report.md` cuenta los eventos `v1` como de una versión
+  anterior y no los interpreta, y distingue un control que manipuló el estado de uno que falló.
 - `stage` entra en la huella de la configuración, así que una ejecución a medias de la 0.3.0 no se
   reanuda con esta versión (exit 10): termínala antes o empieza otra con `--new`.
 - Al terminar un run en un worktree enlazado, el motivo final nombra también la ruta del worktree,

@@ -1,29 +1,16 @@
 """JUnit XML result reader using defusedxml."""
 
 import xml.etree.ElementTree as ET
-from collections.abc import Collection
 from pathlib import Path
 from typing import Literal
 
 import defusedxml.ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 
-from lictor.application.ports import ResultReader
-from lictor.domain.model import ControlResult, TestCaseResult
-
-
-def _load_raw_xml(output: str) -> str:
-    cleaned = output.strip()
-    if cleaned and not cleaned.startswith("<"):
-        try:
-            path = Path(cleaned)
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
-            if path.suffix == ".xml" or "/" in cleaned or "\\" in cleaned:
-                return ""
-        except OSError:
-            pass
-    return output
+from lictor.adapters.readers.files import report_bytes
+from lictor.application.ports import ReportReader
+from lictor.domain.model import TestCaseResult
+from lictor.domain.reports import InvalidReport, JUnitReport, ReportOf
 
 
 def _parse_test_case(tc_elem: ET.Element) -> TestCaseResult:
@@ -70,68 +57,21 @@ def _properties(tc_elem: ET.Element) -> dict[str, str]:
     }
 
 
-class JUnitReader(ResultReader):
-    """Safely parses JUnit XML test reports."""
+class JUnitReader(ReportReader[JUnitReport]):
+    """Safely parses JUnit XML reports from their bytes, as XML says to decode them.
 
-    def read(
-        self,
-        output: str,
-        exit_code: int,
-        duration_ms: int,
-        empty_exit_codes: Collection[int] = (),
-    ) -> ControlResult:
-        """Parse JUnit XML from string or file path."""
-        raw_xml = _load_raw_xml(output)
+    A BOM or a declared encoding is honoured; bytes that don't decode as declared, an entity or
+    anything that isn't XML make an invalid report. Whether its cases are enough is the domain's.
+    """
 
-        if not raw_xml.strip():
-            return self._handle_empty(exit_code, duration_ms, empty_exit_codes)
-
+    def read(self, path: Path) -> ReportOf[JUnitReport]:
+        raw = report_bytes(path)
+        if not isinstance(raw, bytes):
+            return raw
+        if not raw.strip():
+            return InvalidReport("está vacío")
         try:
-            root = DefusedET.fromstring(raw_xml)
+            root = DefusedET.fromstring(raw)
         except (DefusedXmlException, ET.ParseError, ValueError) as exc:
-            return ControlResult(
-                ok=False,
-                duration_ms=duration_ms,
-                error=f"No se pudo leer el informe JUnit: {exc}",
-                test_cases=(),
-            )
-
-        test_cases = tuple(_parse_test_case(elem) for elem in root.iter("testcase"))
-        if not test_cases:
-            return self._handle_empty(exit_code, duration_ms, empty_exit_codes)
-
-        return self._evaluate_results(test_cases, exit_code, duration_ms)
-
-    @staticmethod
-    def _handle_empty(
-        exit_code: int, duration_ms: int, empty_exit_codes: Collection[int]
-    ) -> ControlResult:
-        if exit_code in empty_exit_codes:
-            return ControlResult(ok=True, duration_ms=duration_ms, test_cases=())
-        return ControlResult(
-            ok=False,
-            duration_ms=duration_ms,
-            error=f"No hay casos de test (código de salida {exit_code})",
-            test_cases=(),
-        )
-
-    @staticmethod
-    def _evaluate_results(
-        test_cases: tuple[TestCaseResult, ...],
-        exit_code: int,
-        duration_ms: int,
-    ) -> ControlResult:
-        failed = [tc for tc in test_cases if tc.status in ("failure", "error")]
-        ok = len(failed) == 0 and exit_code == 0
-        error_msg = None
-        if not ok:
-            if failed:
-                error_msg = f"Fallaron {len(failed)} casos de test"
-            else:
-                error_msg = f"La suite falló con el código {exit_code}"
-        return ControlResult(
-            ok=ok,
-            duration_ms=duration_ms,
-            error=error_msg,
-            test_cases=test_cases,
-        )
+            return InvalidReport(str(exc) or type(exc).__name__)
+        return JUnitReport(tuple(_parse_test_case(elem) for elem in root.iter("testcase")))

@@ -9,22 +9,23 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import AuditSink, Clock, EventLog
-from lictor.application.usecases.check_project import CheckControlSpec
 from lictor.application.usecases.check_working_tree import (
     CheckWorkingTree,
     CheckWorkingTreeRequest,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
+from tests import results
+from tests.readers import all_readers
 
 GIT = shutil.which("git") or "git"
-LINT = CheckControlSpec("lint", "L1", "lint src")
-UNIT = CheckControlSpec("unit", "L2", "unit", when_exists="tests/unit")
+LINT = CommandControl("lint", "L1", "lint src", report="exit-code")
+UNIT = CommandControl("unit", "L2", "unit", when_exists="tests/unit", report="exit-code")
 
 
 def _git(root: Path, *args: str) -> str:
@@ -74,7 +75,7 @@ def _use_case(project: Path, runner: FakeRunner) -> CheckWorkingTree:
     audit = AuditSink(MagicMock(spec=EventLog), clock)
     vcs = GitCli(project)
     environment = VerificationEnvironment(vcs, runner, audit, project, VerificationEnvSpec())
-    readers = {"exit-code": ExitCodeReader()}
+    readers = all_readers()
     return CheckWorkingTree(vcs, environment, readers, project, project / ".lictor" / "check")
 
 
@@ -137,7 +138,7 @@ def test_what_isnt_committed_is_verified_as_a_commit_outside_the_branch(project:
     assert (seen["src/a.py"], seen["src/b.py"]) == ("a = 2\n", "b = 1\n")
     assert "ignorado.log" not in seen
     # The unit tests were removed, so their control can't pass by being skipped.
-    assert result.check.control_results["unit"].ok is False
+    assert results.seen(result.check, "unit").ok is False
     assert _git(project, "rev-parse", "HEAD") == head
     assert _git(project, "status", "--short") != ""
 

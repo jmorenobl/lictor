@@ -256,7 +256,7 @@ class VerificationEnvironment:
 
         log_dir = self.place.log_dir or self.project_root / ".lictor" / "runs" / run_id / "env"
         log = unused_path(log_dir / "build.log")
-        save_output(log, output)
+        save_output(log, tokens, output)
         if output.returncode != 0:
             tail = "\n".join(output.stderr.strip().splitlines()[-_MAX_ERROR_LINES:])
             self._fail(

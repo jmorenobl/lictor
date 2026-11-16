@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from lictor.domain.model import Event
+from lictor.domain.results import (
+    VERIFY_FINISHED,
+    acceptance_from_record,
+    recorded_controls,
+    recorded_duration,
+)
 
 DRIVER_OWNER: Final[str] = "driver"
 
@@ -140,7 +146,7 @@ class RunProgress:
             "lictor.spec.loaded.v1": self._spec_loaded,
             "lictor.agent.started.v1": self._agent_started,
             "lictor.agent.finished.v1": self._agent_finished,
-            "lictor.verify.finished.v1": self._verify_finished,
+            VERIFY_FINISHED: self._verify_finished,
             "lictor.driver.rejected.v1": self._driver_rejected,
             "lictor.driver.sealed.v1": self._driver_sealed,
             "lictor.driver.checked.v1": lambda _: [
@@ -196,9 +202,9 @@ class RunProgress:
         return lines
 
     def _verify_finished(self, event: Event) -> list[str]:
-        durations = event.data.get("control_durations")
-        if isinstance(durations, dict):
-            self._owner(event).verify_ms += int(sum(_number(v) for v in durations.values()))
+        controls = recorded_controls(event.data.get("controls"))
+        acceptance = acceptance_from_record(event.data.get("acceptance"))
+        self._owner(event).verify_ms += recorded_duration(controls, acceptance)
         if event.data.get("ok"):
             return []
         failed_at = event.data.get("failed_at")

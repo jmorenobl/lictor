@@ -305,35 +305,22 @@ class TestCaseResult:
 
 
 @dataclass(frozen=True)
-class ControlResult:
-    """Result of running a single verification control."""
-
-    ok: bool
-    duration_ms: int = 0
-    error: str | None = None
-    test_cases: tuple[TestCaseResult, ...] = field(default_factory=tuple)
-    exit_code: int | None = None
-    mode: str = "block"
-    output_path: str | None = None
-    skipped: str | None = None  # why the control didn't run, when it didn't
-    score: Score | None = None  # only a mutation or a coverage report has one
-
-
-@dataclass(frozen=True)
 class JournalDamage:
     """Lines of the journal that were skipped when reading it.
 
     `corrupt` lines aren't JSON: a write cut short, or an edit. `foreign` lines are JSON that no
-    Lictor event looks like, which only someone else can have written. A forged line with the exact
-    shape of an event can't be told apart here, and is in neither count.
+    Lictor event looks like, which only someone else can have written. `older` are events of a
+    shape this version no longer reads, left by an earlier one. A forged line with the exact shape
+    of an event can't be told apart here, and is in no count.
     """
 
     corrupt: int = 0
     foreign: int = 0
+    older: int = 0
 
     @property
     def total(self) -> int:
-        return self.corrupt + self.foreign
+        return self.corrupt + self.foreign + self.older
 
 
 @dataclass(frozen=True)
@@ -374,23 +361,6 @@ class TreeChange:
     def is_deleted(self) -> bool:
         """Tell a path the tree no longer has."""
         return self.mode == _DELETED_MODE
-
-
-@dataclass(frozen=True)
-class VerifyResult:
-    """Aggregated result of all verification steps for an attempt."""
-
-    ok: bool
-    failed_at: str | None = None
-    condensed_error: str | None = None
-    control_results: dict[str, ControlResult] = field(default_factory=dict)
-    scenario_results: dict[str, str] = field(default_factory=dict)
-    reverted_files: tuple[str, ...] = field(default_factory=tuple)
-    error_path: str | None = None
-    candidate: Candidate | None = None
-    evidence: dict[str, str] = field(default_factory=dict)
-    collateral: tuple[str, ...] = ()  # pending scenarios the candidate also turns green
-    failure: tuple[str, str] | None = None  # kind and origin of the scenario's failed test
 
 
 @dataclass(frozen=True)

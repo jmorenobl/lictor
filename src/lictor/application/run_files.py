@@ -14,14 +14,14 @@ import shlex
 import shutil
 import stat
 import tempfile
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Collection, Iterator, Sequence
 from pathlib import Path
 from typing import NoReturn
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
-from lictor.domain.model import CommandOutput, ControlResult
+from lictor.domain.model import CommandOutput
 from lictor.domain.rules import runs_to_prune
 
 DRIVER_OWNER = "driver"
@@ -244,26 +244,19 @@ def format_output(output: CommandOutput) -> str:
     return f"{output.stdout}\n{output.stderr}".strip()
 
 
-def reader_input(report: str, run: str, out_file: Path, output: CommandOutput) -> str:
-    """What a reader gets: the report the command wrote, or what it printed if it wrote none."""
-    if report == "exit-code":
-        return format_output(output)
-    return str(out_file) if "{out}" in run else output.stdout
-
-
-def save_output(path: Path, output: CommandOutput) -> None:
-    """Keep the exit code and both streams of a command."""
+def save_output(path: Path, command: Sequence[str], output: CommandOutput) -> None:
+    """Keep what ran, as its tokens were given, with its exit code and both streams (ADR-0009)."""
     write_text(
         path,
+        f"Comando: {shlex.join(command)}\n"
         f"Código de salida: {output.returncode}\n\n"
         f"--- stdout ---\n{output.stdout}\n--- stderr ---\n{output.stderr}\n",
     )
 
 
-def describe_crash(crash: str, control: ControlResult, output: str) -> str:
-    """Put what the report itself says on the first line: it survives any condensing."""
-    first_line = crash if control.test_cases or not control.error else f"{crash}: {control.error}"
-    return f"{first_line}\n{output}".strip()
+def describe_crash(crash: str, output: str) -> str:
+    """Put the reason on the first line, where it survives any condensing, and the output after."""
+    return f"{crash}\n{output}".strip()
 
 
 def save_prompt(raw_path: Path, prompt: str, project_root: Path) -> dict[str, str]:

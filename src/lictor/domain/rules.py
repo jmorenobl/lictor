@@ -4,7 +4,7 @@ import fnmatch
 import re
 import shlex
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
@@ -12,7 +12,6 @@ from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
-    ControlResult,
     CoverageScore,
     MutationScore,
     PreconditionProblem,
@@ -403,27 +402,6 @@ def acceptance_failure(
             if case is not None:
                 cases.append(case)
     return ("\n".join(reasons), tuple(cases)) if reasons else None
-
-
-def suite_crash_reason(
-    exit_code: int,
-    failure_exit_codes: Sequence[int],
-    test_cases: Sequence[TestCaseResult],
-) -> str | None:
-    """Tell a suite that crashed from one that ran, whose report can then be trusted.
-
-    A non-zero exit is normal while scenarios are pending, but only with a code that means
-    "tests failed" and a report that shows it.
-    """
-    if not test_cases:
-        return f"La suite terminó con código {exit_code} sin casos de test en su informe"
-    if exit_code == 0:
-        return None
-    if exit_code not in failure_exit_codes:
-        return f"La suite se interrumpió con código {exit_code}: su informe no es fiable"
-    if not any(tc.status in _FAILED_STATUSES for tc in test_cases):
-        return f"La suite terminó con código {exit_code} pero ningún test falló en su informe"
-    return None
 
 
 def _clip(text: str, limit: int) -> str:
@@ -864,12 +842,12 @@ def describe_score(score: Score) -> str:
 def score_from_record(raw: object) -> Score | None:
     """Read back a score the journal recorded, or None if it can't be read.
 
-    0.2.0 only had mutation scores and wrote no `kind`, so a record without one is a mutation's.
+    A record without `kind` isn't one: no compatibility is kept with what 0.2.0 wrote (ADR-0009).
     """
     if not isinstance(raw, dict) or not raw:
         return None
     fields = {key: value for key, value in raw.items() if key != "kind"}
-    kind = raw.get("kind", "mutation")
+    kind = raw.get("kind")
     try:
         if kind == "coverage":
             return CoverageScore(**fields)
@@ -1013,24 +991,3 @@ def registration_problems(
 def minimum_text(minimum: float) -> str:
     """A declared minimum score as a person wrote it, with a decimal comma: «95», «92,5»."""
     return f"{minimum:g}".replace(".", ",")
-
-
-def enforce_min_score(result: ControlResult, minimum: float | None) -> ControlResult:
-    """Fail a control whose score is below the minimum it declares.
-
-    A result that already failed is left as it is: a run that crashed says so itself. One that
-    passed with no score measured nothing (a coverage run with no tests), which no minimum meets.
-    """
-    if minimum is None or not result.ok:
-        return result
-    floor = minimum_text(minimum)
-    if result.score is None:
-        error = f"El control no midió nada y declara un mínimo de {floor} %"
-        return replace(result, ok=False, error=error)
-    if score_meets(result.score, minimum):
-        return result
-    what = (
-        "La cobertura" if isinstance(result.score, CoverageScore) else "La puntuación de mutación"
-    )
-    error = f"{what}, {describe_score(result.score)}, no llega al mínimo de {floor} %"
-    return replace(result, ok=False, error=error)

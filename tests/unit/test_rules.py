@@ -8,7 +8,6 @@ from lictor.domain.errors import DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
-    ControlResult,
     MutationScore,
     PreconditionProblem,
     ScenarioId,
@@ -36,7 +35,6 @@ from lictor.domain.rules import (
     count_agent_failures,
     describe_score,
     describe_suppressions,
-    enforce_min_score,
     error_for_agent,
     forbidden_paths,
     impostor_problem,
@@ -62,11 +60,11 @@ from lictor.domain.rules import (
     run_outcome,
     runs_to_prune,
     score_meets,
-    suite_crash_reason,
     suppression_matches,
     suspicious_driver,
     unmapped_cases,
 )
+from lictor.domain.verdicts import Failed, Passed, enforce_min_score
 
 
 def test_map_missing_case_says_what_the_test_must_be_called() -> None:
@@ -466,43 +464,6 @@ def test_acceptance_failure_without_results_for_the_ids() -> None:
 FAILED_CASE = TestCaseResult("t", status="failure")
 ERROR_CASE = TestCaseResult("t", status="error")
 PASSED_CASE = TestCaseResult("t")
-
-
-@pytest.mark.parametrize(
-    ("exit_code", "cases"),
-    [(0, (PASSED_CASE,)), (0, (FAILED_CASE,)), (1, (FAILED_CASE,)), (1, (ERROR_CASE,))],
-)
-def test_suite_ran_when_exit_code_matches_the_report(
-    exit_code: int, cases: tuple[TestCaseResult, ...]
-) -> None:
-    assert suite_crash_reason(exit_code, (1,), cases) is None
-
-
-def test_suite_crashed_without_a_report() -> None:
-    reason = suite_crash_reason(3, (1,), ())
-    assert reason is not None
-    assert "código 3" in reason
-    assert "sin" in reason
-
-
-def test_suite_without_cases_counts_as_crashed_even_on_exit_zero() -> None:
-    assert suite_crash_reason(0, (1,), ()) is not None
-
-
-def test_suite_crashed_with_a_code_that_does_not_mean_failed_tests() -> None:
-    reason = suite_crash_reason(3, (1,), (FAILED_CASE,))
-    assert reason is not None
-    assert "código 3" in reason
-
-
-def test_suite_failure_codes_come_from_the_caller() -> None:
-    assert suite_crash_reason(2, (1, 2), (FAILED_CASE,)) is None
-
-
-def test_suite_crashed_when_it_failed_but_no_test_did() -> None:
-    reason = suite_crash_reason(1, (1,), (PASSED_CASE,))
-    assert reason is not None
-    assert "ningún test" in reason
 
 
 def test_run_outcome_spec_conflict_wins() -> None:
@@ -1499,30 +1460,24 @@ SCORE_94 = mutation_score({"killed": 94, "survived": 6, "total": 100})
 
 
 def test_a_score_below_the_minimum_fails_the_control_and_says_both() -> None:
-    result = enforce_min_score(ControlResult(ok=True, score=SCORE_94), 95.5)
-
-    assert result.ok is False
-    assert result.error == (
+    assert enforce_min_score(Passed(), SCORE_94, 95.5) == Failed(
         "La puntuación de mutación, 94,0 % (94 de 100 muertos; 6 vivos, 0 por tiempo), "
         "no llega al mínimo de 95,5 %"
     )
-    assert result.score == SCORE_94
 
 
-@pytest.mark.parametrize(
-    "result",
-    [
-        ControlResult(ok=True, score=SCORE_94),
-        ControlResult(ok=False, error="la pasada cayó", score=SCORE_94),
-    ],
-)
-def test_a_minimum_leaves_alone_what_it_doesnt_apply_to(result: ControlResult) -> None:
-    minimum = None if result.ok and result.score else 99.0
-    assert enforce_min_score(result, minimum) == result
+def test_a_minimum_leaves_alone_a_verdict_that_already_failed() -> None:
+    failed = Failed("la pasada cayó")
+    assert enforce_min_score(failed, SCORE_94, 99.0) == failed
+    assert enforce_min_score(failed, None, 99.0) == failed
+
+
+def test_without_a_minimum_a_pass_stays_a_pass() -> None:
+    assert enforce_min_score(Passed(), SCORE_94, None) == Passed()
 
 
 def test_a_score_at_the_minimum_passes() -> None:
-    assert enforce_min_score(ControlResult(ok=True, score=SCORE_94), 94).ok is True
+    assert enforce_min_score(Passed(), SCORE_94, 94) == Passed()
 
 
 def test_error_for_agent_hides_the_state_files_the_agent_never_sees() -> None:

@@ -10,8 +10,6 @@ import pytest
 from typer.testing import CliRunner
 
 from lictor.adapters.config.loader import load_config
-from lictor.adapters.readers.exit_code import ExitCodeReader
-from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
@@ -37,6 +35,7 @@ from tests.integration.repro.harness import (
     run_lictor,
     write,
 )
+from tests.readers import all_readers
 
 MEASURE_CONTROL = {
     "id": "mutacion",
@@ -131,7 +130,7 @@ def test_d24_stale_report_does_not_hide_a_crashed_suite(
         "acceptance.xml",
         '<testsuite><testcase name="test_iva_001" classname="t"/></testsuite>',
     )
-    readers = {"junit": JUnitReader(), "exit-code": ExitCodeReader()}
+    readers = all_readers()
     verify = VerifyAttempt(GitCli(root), SubprocessRunner(), readers, root)
     monkeypatch.setattr(verify, "_check_seal", lambda _req: SimpleNamespace(ok=True))
 
@@ -234,12 +233,12 @@ def test_d30_failed_measure_control_is_recorded(make_project: ProjectFactory) ->
     require(len(finished) == 3, f"se esperaban 3 verificaciones: {len(finished)}")
     for event in finished:
         record = event["data"]["controls"]["mutacion"]
-        assert record["ok"] is False
+        assert record["passed"] is False
         assert record["exit_code"] == 7
         assert record["mode"] == "measure"
-        output = (root / record["output"]).read_text(encoding="utf-8")
+        output = (root / record["output_path"]).read_text(encoding="utf-8")
         assert "salida-de-la-medida" in output
-    outputs = {event["data"]["controls"]["mutacion"]["output"] for event in finished}
+    outputs = {event["data"]["controls"]["mutacion"]["output_path"] for event in finished}
     assert len(outputs) == 3, "una verificación machacó la salida de otra"
 
 
@@ -251,8 +250,8 @@ def test_d30_passing_measure_control_is_recorded_too(make_project: ProjectFactor
 
     require(outcome == Outcome(0), f"measure no debe bloquear: {outcome}")
     record = events_of(root, "verify.finished")[0]["data"]["controls"]["mutacion"]
-    assert record["ok"] is True
-    assert "todo-bien" in (root / record["output"]).read_text(encoding="utf-8")
+    assert record["passed"] is True
+    assert "todo-bien" in (root / record["output_path"]).read_text(encoding="utf-8")
     assert "mutacion" in (root / ".lictor" / "report.md").read_text(encoding="utf-8")
 
 

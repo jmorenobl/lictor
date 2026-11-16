@@ -11,13 +11,13 @@ from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
     config_fingerprint,
+    domain_controls,
     load_config,
     profile_skill_sections,
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig
 from lictor.adapters.readers.coverage import CoverageReader
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
@@ -32,7 +32,7 @@ from lictor.application.ports import (
     CommandRunner,
     EventLog,
     Executor,
-    ResultReader,
+    ReportReaders,
     SpecSource,
     Vcs,
 )
@@ -51,10 +51,11 @@ from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl, controls_of_stage
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle, control_label
-from lictor.domain.stages import ATTEMPT, CHECK, controls_of_stage
+from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
 
 
@@ -64,11 +65,13 @@ class BootstrapResult:
 
     config: LictorConfig
     config_hash: str
+    # Every control, in the order the configuration declares them: the only conversion.
+    controls: tuple[CommandControl, ...]
     clock: Clock
     event_log: EventLog
     vcs: Vcs
     runner: CommandRunner
-    readers: dict[str, ResultReader]
+    readers: ReportReaders
     spec_source: SpecSource
     executor: Executor
     init_project: InitProject
@@ -151,12 +154,9 @@ def bootstrap_runtime(
 
     vcs = GitCli(resolved_root)
     runner = SubprocessRunner()
-    readers: dict[str, ResultReader] = {
-        "exit-code": ExitCodeReader(),
-        "junit": JUnitReader(),
-        "mutation": MutationReader(),
-        "coverage": CoverageReader(),
-    }
+    readers = ReportReaders(
+        junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader()
+    )
     spec_source = GherkinSource()
 
     if executor is None:
@@ -195,11 +195,10 @@ def bootstrap_runtime(
         spec=defences.verification,
     )
 
-    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
     spec_history = SpecHistory(vcs, spec_source)
     check_red_uc = CheckRed(
         environment=environment,
-        reader=acceptance_reader,
+        reader=readers.junit,
         vcs=vcs,
         history=spec_history,
         audit=audit_sink,
@@ -245,8 +244,9 @@ def bootstrap_runtime(
     )
 
     # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.
-    attempt_controls = controls_of_stage(active_config.controls, ATTEMPT)
-    check_controls = controls_of_stage(active_config.controls, CHECK)
+    controls = domain_controls(active_config)
+    attempt_controls = controls_of_stage(controls, ATTEMPT)
+    check_controls = controls_of_stage(controls, CHECK)
     commands = {control_label(c.id): c.run for c in attempt_controls}
     commands["de la aceptación"] = active_config.acceptance.run
     doctor_audit = AuditSink(
@@ -282,7 +282,6 @@ def bootstrap_runtime(
         max_driver_attempts=active_config.limits.max_driver_attempts,
         error_max_chars=active_config.limits.error_max_chars,
         acceptance_run=active_config.acceptance.run,
-        acceptance_report=active_config.acceptance.report,
         acceptance_timeout_s=active_config.acceptance.timeout_s,
         controls=attempt_controls,
         check_controls=check_controls,
@@ -318,6 +317,7 @@ def bootstrap_runtime(
     return BootstrapResult(
         config=active_config,
         config_hash=config_fingerprint(active_config, defences),
+        controls=controls,
         clock=active_clock,
         event_log=active_event_log,
         vcs=vcs,

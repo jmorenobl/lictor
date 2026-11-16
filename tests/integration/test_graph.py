@@ -29,16 +29,17 @@ from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
-from lictor.application.usecases.verify_attempt import VerificationControl, VerifyAttempt
+from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.controls import CommandControl
 from lictor.domain.model import (
     AgentStatus,
     AgentTask,
     CommandOutput,
     Health,
     Scenario,
-    VerifyResult,
 )
+from lictor.domain.results import VerifyResult
 from lictor.orchestration.graph import (
     DURABILITY,
     GraphContext,
@@ -48,6 +49,7 @@ from lictor.orchestration.graph import (
     create_graph,
     get_sqlite_saver,
 )
+from tests.readers import all_readers
 
 DRIVER_TEST_CODE = "def test_iva_001(): pass\ndef test_iva_002(): pass\n"
 
@@ -207,7 +209,7 @@ Característica: IVA de facturas
     verify_attempt = VerifyAttempt(
         vcs=vcs,
         runner=runner,
-        readers={"junit": reader},
+        readers=all_readers(),
         project_root=tmp_path,
     )
     commit_green = CommitGreen(vcs=vcs, event_log=event_log, clock=clock)
@@ -230,10 +232,9 @@ Característica: IVA de facturas
         max_driver_attempts=2,
         error_max_chars=4000,
         acceptance_run="acceptance-runner --junitxml {out}",
-        acceptance_report="junit",
         acceptance_timeout_s=600,
         controls=[
-            VerificationControl(
+            CommandControl(
                 id="unit",
                 level="L2",
                 run="unit-runner {out}",

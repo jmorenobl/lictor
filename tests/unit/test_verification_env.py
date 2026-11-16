@@ -466,6 +466,7 @@ def test_failed_prepare_is_an_environment_failure(tmp_path: Path) -> None:
     assert not environment.manifest.exists()
     log = tmp_path / ".lictor" / "runs" / "R" / "env" / "build.log"
     assert "sin red" in log.read_text(encoding="utf-8")
+    assert log.read_text(encoding="utf-8").startswith("Comando: ")
 
 
 def test_failed_rebuild_leaves_no_hash_to_trust(tmp_path: Path) -> None:

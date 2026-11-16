@@ -10,22 +10,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lictor.adapters.readers.exit_code import ExitCodeReader
-from lictor.adapters.readers.junit import JUnitReader
-from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
 from lictor.application.usecases.verify_attempt import (
     IntegritySnapshot,
-    VerificationControl,
     VerifyAttempt,
     VerifyAttemptRequest,
     control_summaries,
 )
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
+from tests.readers import ReportingRunner, all_readers
+from tests.results import ids, seen
 
 _SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
 
@@ -150,7 +149,7 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py", "forbidden/exploit.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -174,7 +173,7 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path, sealed=True, seal_tampered=True)
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -200,7 +199,7 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
 
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -228,7 +227,7 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
 
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -252,7 +251,7 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"], added=[" x = 1  # noqa: F401"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -280,7 +279,7 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
         "ruff check",
         CommandOutput(returncode=1, stdout="lint error", stderr="", duration_ms=20),
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -290,12 +289,10 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="lint", level="L1", run="ruff check", report="exit-code", mode="block"
             ),
-            VerificationControl(
-                id="types", level="L1", run="mypy", report="exit-code", mode="block"
-            ),
+            CommandControl(id="types", level="L1", run="mypy", report="exit-code", mode="block"),
         ),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
@@ -305,14 +302,14 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
     result = verifier.execute(req)
     assert result.ok is False
     assert result.failed_at == "lint"
-    assert "lint" in result.control_results
-    assert "types" not in result.control_results  # Blocked before types
+    assert "lint" in ids(result)
+    assert "types" not in ids(result)  # Blocked before types
 
 
 def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     # 'mutmut' in mode measure fails
     runner.set_response(
         "mutmut",
@@ -320,11 +317,8 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     )
     # acceptance passes
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.set_response(
-        "pytest",
-        CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=100),
-    )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -334,7 +328,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="mutation",
                 level="L5",
                 run="mutmut",
@@ -342,7 +336,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
                 mode="measure",
             ),
         ),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -350,23 +344,20 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
 
     result = verifier.execute(req)
     assert result.ok is True
-    assert result.control_results["mutation"].ok is False
+    assert seen(result, "mutation").ok is False
 
 
 def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     # Acceptance has IVA-001 passed, but green IVA-002 failed!
     xml = """<testsuite>
       <testcase name="test_iva_001" status="passed" />
       <testcase name="test_iva_002" status="failure"><failure>broke</failure></testcase>
     </testsuite>"""
-    runner.set_response(
-        "pytest",
-        CommandOutput(returncode=1, stdout=xml, stderr="", duration_ms=100),
-    )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=1, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -375,7 +366,7 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         green_scenario_ids=("IVA-002",),
         all_scenario_ids=("IVA-001", "IVA-002"),
         paths_driver=("tests/acceptance/",),
@@ -399,7 +390,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 
     runner = MaliciousRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -408,9 +399,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        controls=(
-            VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
-        ),
+        controls=(CommandControl(id="check", level="L1", run="echo test", report="exit-code"),),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -436,7 +425,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 
     runner = MaliciousRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -445,9 +434,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        controls=(
-            VerificationControl(id="check", level="L1", run="echo test", report="exit-code"),
-        ),
+        controls=(CommandControl(id="check", level="L1", run="echo test", report="exit-code"),),
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -460,15 +447,16 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
 
 
 def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> None:
+    """With no tests, pytest exits 5 and still writes a JUnit with no case: that passes."""
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
-    # Pytest returns 5 when no tests are collected
-    runner.set_response(
-        "pytest",
+    runner = ReportingRunner()
+    runner.set_report(
+        "pytest tests/unit",
         CommandOutput(returncode=5, stdout="", stderr="no tests ran", duration_ms=15),
+        "<testsuites><testsuite tests='0'/></testsuites>",
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -478,7 +466,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
         role="implement",
         paths_writable=("src/",),
         controls=(
-            VerificationControl(
+            CommandControl(
                 id="unit",
                 level="L2",
                 run="pytest tests/unit --junitxml {out}",
@@ -487,7 +475,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
                 empty_exit_codes=(5,),
             ),
         ),
-        acceptance_run="echo passed",
+        acceptance_run="echo passed {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -495,14 +483,11 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
 
     # Acceptance xml passed
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.set_response(
-        "echo passed",
-        CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10),
-    )
+    runner.set_report("echo passed", CommandOutput(returncode=0, stdout="", stderr=""), xml)
 
     result = verifier.execute(req)
     assert result.ok is True
-    assert result.control_results["unit"].ok is True
+    assert seen(result, "unit").ok is True
 
 
 def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
@@ -515,10 +500,10 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
     code_file.write_text("x = 1  # noqa\ny = 2\n", encoding="utf-8")
 
     vcs = FakeVcs(changed_files=["src/code.py"], added=["y = 2"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.default_response = CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10)
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -528,7 +513,7 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
         role="implement",
         paths_writable=("src/",),
         suppressions=("# noqa",),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
     )
@@ -577,7 +562,7 @@ def _verify(
 ) -> tuple[VerifyAttempt, VerifyAttemptRequest]:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(), "mutation": MutationReader()}
+    readers = all_readers()
     fields: dict[str, Any] = {
         "scenario_id": "IVA-001",
         "run_id": run_id,
@@ -612,7 +597,7 @@ def test_verify_report_left_by_a_previous_step_does_not_hide_a_crash(tmp_path: P
             (step / "acceptance.xml").write_text(_GREEN_REPORT, encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Planter(), controls=(control,))
 
     result = verifier.execute(req)
@@ -659,7 +644,7 @@ def test_verify_unreadable_report_reason_survives_a_long_output(tmp_path: Path) 
 
     verifier, req = _verify(tmp_path, Noisy({"suite": ("<roto", 1)}))
 
-    assert "No se pudo leer el informe JUnit" in (verifier.execute(req).condensed_error or "")
+    assert "con un informe JUnit no válido" in (verifier.execute(req).condensed_error or "")
 
 
 def test_verify_gates_need_the_step_dir_from_execute(tmp_path: Path) -> None:
@@ -697,7 +682,7 @@ def test_verify_unparsable_report_explains_why(tmp_path: Path) -> None:
     result = verifier.execute(req)
 
     assert result.ok is False
-    assert "No se pudo leer el informe JUnit" in (result.condensed_error or "")
+    assert "con un informe JUnit no válido" in (result.condensed_error or "")
 
 
 def test_verify_condensed_error_omits_pending_but_the_full_error_keeps_them(
@@ -796,8 +781,8 @@ def test_verify_green_attempt_writes_no_error(tmp_path: Path) -> None:
 
 def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> None:
     controls = (
-        VerificationControl(id="lint", level="L1", run="lint", report="exit-code"),
-        VerificationControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure"),
+        CommandControl(id="lint", level="L1", run="lint", report="exit-code"),
+        CommandControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure"),
     )
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
     verifier, req = _verify(tmp_path, runner, controls=controls)
@@ -806,27 +791,25 @@ def test_verify_records_result_and_output_of_every_control(tmp_path: Path) -> No
 
     assert result.ok is True
     assert result.condensed_error is None
-    measured = result.control_results["mut"]
+    measured = seen(result, "mut")
     assert (measured.ok, measured.exit_code, measured.mode) == (False, 7, "measure")
     assert measured.output_path is not None
     log = (tmp_path / measured.output_path).read_text(encoding="utf-8")
     assert "salida de mut" in log
     assert "stderr crudo" in log
     assert "7" in log
-    passed = result.control_results["lint"]
+    passed = seen(result, "lint")
     assert (passed.ok, passed.exit_code, passed.mode) == (True, 0, "block")
     assert passed.output_path is not None
     assert "salida de lint" in (tmp_path / passed.output_path).read_text(encoding="utf-8")
-    accepted = result.control_results["acceptance"]
+    accepted = seen(result, "acceptance")
     assert accepted.exit_code == 0
     assert accepted.output_path is not None
     assert "salida de suite" in (tmp_path / accepted.output_path).read_text(encoding="utf-8")
 
 
 def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="unit", level="L2", run="unit --junitxml {out}", report="junit"
-    )
+    control = CommandControl(id="unit", level="L2", run="unit --junitxml {out}", report="junit")
     runner = _PlantingRunner({"unit": ("", 4)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -834,7 +817,7 @@ def test_verify_blocking_junit_control_without_report_shows_its_output(tmp_path:
 
     assert result.failed_at == "unit"
     assert "salida de unit" in (result.condensed_error or "")
-    assert result.control_results["unit"].ok is False
+    assert seen(result, "unit").ok is False
 
 
 def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Path) -> None:
@@ -851,15 +834,15 @@ def test_verify_tampering_during_a_control_keeps_what_was_recorded(tmp_path: Pat
             return CommandOutput(returncode=0, stdout="", stderr="")
 
     controls = (
-        VerificationControl(id="first", level="L1", run="first", report="exit-code"),
-        VerificationControl(id="second", level="L1", run="second", report="exit-code"),
+        CommandControl(id="first", level="L1", run="first", report="exit-code"),
+        CommandControl(id="second", level="L1", run="second", report="exit-code"),
     )
     verifier, req = _verify(tmp_path, Tamperer(), controls=controls)
 
     result = verifier.execute(req)
 
     assert result.failed_at == "L0-estado"
-    assert result.control_results["first"].ok is True
+    assert seen(result, "first").ok is True
     assert result.error_path is not None
 
 
@@ -880,7 +863,7 @@ def test_verify_repository_moved_during_a_command_fails_the_attempt(
                 verifier.vcs.moved = ["HEAD"]
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Mover(), controls=(control,))
 
     result = verifier.execute(req)
@@ -902,35 +885,39 @@ def test_verify_tampering_during_acceptance_keeps_the_controls(tmp_path: Path) -
                 (tmp_path / ".lictor" / "seal.json").write_text("{}", encoding="utf-8")
             return CommandOutput(returncode=0, stdout="", stderr="")
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     verifier, req = _verify(tmp_path, Tamperer(), controls=(control,))
 
     result = verifier.execute(req)
 
     assert result.failed_at == "L0-estado"
-    assert "lint" in result.control_results
+    assert "lint" in ids(result)
 
 
 def test_control_summaries_serialize_for_the_journal(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="mut", level="L5", run="mut", report="exit-code", mode="measure"
-    )
+    control = CommandControl(id="mut", level="L5", run="mut", report="exit-code", mode="measure")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": ("", 7)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
     summaries = control_summaries(verifier.execute(req))
 
-    assert summaries["mut"]["ok"] is False
+    assert summaries["mut"]["outcome"] == "executed"
+    assert summaries["mut"]["judgement"] == "judged"
+    assert summaries["mut"]["passed"] is False
     assert summaries["mut"]["exit_code"] == 7
     assert summaries["mut"]["mode"] == "measure"
-    assert summaries["mut"]["output"] == (
+    assert summaries["mut"]["output_path"] == (
         f".lictor/runs/{req.run_id}/IVA-001/002-verify/control_mut.log"
     )
     json.dumps(summaries)
+    logs = sorted((verifier.project_root / ".lictor" / "runs" / req.run_id).rglob("*.log"))
+    assert {log.name for log in logs} >= {"control_mut.log", "acceptance.log"}
+    for log in logs:
+        assert log.read_text(encoding="utf-8").startswith("Comando: "), log
 
 
 def test_verify_runs_every_command_in_the_tree_of_the_candidate(tmp_path: Path) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -1029,7 +1016,7 @@ def test_verify_environment_tampered_during_the_commands_fails(tmp_path: Path) -
     assert result.ok is False
     assert result.failed_at == "L0-entorno"
     assert result.candidate is None
-    assert "acceptance" in result.control_results
+    assert "acceptance" in ids(result)
 
 
 def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
@@ -1037,7 +1024,7 @@ def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, runner)
     verifier.environment = _spied_environment([None, None], runner)
 
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     req = replace(req, controls=(control,))
 
     assert verifier.execute(req).ok is True
@@ -1181,7 +1168,7 @@ def test_every_verification_records_its_evidence(tmp_path: Path) -> None:
     assert result.evidence["hash"] == hash_tree(tmp_path / result.evidence["path"])
 
 
-_UNIT_WHEN_EXISTS = VerificationControl(
+_UNIT_WHEN_EXISTS = CommandControl(
     id="unit",
     level="L2",
     run="unit --junitxml {out}",
@@ -1198,11 +1185,15 @@ def test_verify_skips_a_control_whose_path_neither_tree_has(tmp_path: Path) -> N
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["suite"]
-    skipped = result.control_results["unit"]
+    skipped = seen(result, "unit")
     assert skipped.ok is True
     assert skipped.skipped is not None
     assert "tests/unit" in skipped.skipped
-    assert control_summaries(result)["unit"]["skipped"] == skipped.skipped
+    assert control_summaries(result)["unit"] == {
+        "outcome": "skipped",
+        "mode": "block",
+        "reason": skipped.skipped,
+    }
 
 
 def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> None:
@@ -1215,8 +1206,8 @@ def test_verify_runs_a_control_whose_path_the_candidate_has(tmp_path: Path) -> N
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["unit", "suite"]
-    assert result.control_results["unit"].skipped is None
-    assert control_summaries(result)["unit"]["skipped"] is None
+    assert seen(result, "unit").skipped is None
+    assert control_summaries(result)["unit"]["outcome"] == "executed"
 
 
 def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -> None:
@@ -1234,10 +1225,10 @@ def test_verify_fails_a_control_whose_path_the_attempt_removes(tmp_path: Path) -
     assert result.failed_at == "unit"
     assert "elimina tests/unit" in (result.condensed_error or "")
     assert runner.calls == []
-    assert result.control_results["unit"].skipped is None
+    assert seen(result, "unit").skipped is None
 
 
-_COVERAGE = VerificationControl(
+_COVERAGE = CommandControl(
     id="coverage",
     level="L2",
     run="coverage",
@@ -1258,7 +1249,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
 
     assert result.ok is True
     assert [call["cmd"][0] for call in runner.calls] == ["suite"]
-    skipped = result.control_results["coverage"]
+    skipped = seen(result, "coverage")
     assert (skipped.ok, skipped.mode) == (True, "measure")
     assert "pytest_cov.plugin" in (skipped.skipped or "")
 
@@ -1272,13 +1263,13 @@ def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) 
     result = verifier.execute(req)
 
     assert [call["cmd"][0] for call in runner.calls] == ["coverage", "suite"]
-    assert result.control_results["coverage"].skipped is None
+    assert seen(result, "coverage").skipped is None
 
 
 def test_verify_an_attempt_that_changes_nothing_fails_before_running_anything(
     tmp_path: Path,
 ) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
     assert isinstance(verifier.vcs, FakeVcs)
@@ -1425,7 +1416,7 @@ def test_verify_rejects_a_test_that_executes_its_scenario_from_another_file(
 
 
 def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
-    control = VerificationControl(
+    control = CommandControl(
         id="mut", level="L5", run="mut {out}", report="mutation", mode="measure"
     )
     stats = '{"killed": 9, "survived": 1, "timeout": 0, "total": 10}'
@@ -1436,7 +1427,7 @@ def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
     summaries = control_summaries(result)
 
     assert result.ok is True
-    assert summaries["mut"]["ok"] is True
+    assert summaries["mut"]["passed"] is True
     assert summaries["mut"]["score"] == {
         "killed": 9,
         "survived": 1,
@@ -1453,7 +1444,7 @@ def test_control_summaries_carry_the_mutation_score(tmp_path: Path) -> None:
 
 
 def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
-    control = VerificationControl(id="lint", level="L1", run="lint", report="exit-code")
+    control = CommandControl(id="lint", level="L1", run="lint", report="exit-code")
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))
 
@@ -1461,9 +1452,7 @@ def test_control_summaries_without_a_score_say_so(tmp_path: Path) -> None:
 
 
 def test_a_blocking_mutation_control_below_its_minimum_fails_the_attempt(tmp_path: Path) -> None:
-    control = VerificationControl(
-        id="mut", level="L5", run="mut {out}", report="mutation", min_score=95
-    )
+    control = CommandControl(id="mut", level="L5", run="mut {out}", report="mutation", min_score=95)
     stats = '{"killed": 9, "survived": 1, "total": 10}'
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "mut": (stats, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(control,))

@@ -192,22 +192,18 @@ def test_junit_report_requires_out_placeholder_in_control() -> None:
     assert "{out}" in valid.run
 
 
-def test_junit_report_requires_out_placeholder_in_acceptance() -> None:
+def test_the_acceptance_needs_out_where_it_leaves_its_report() -> None:
     with pytest.raises(ValidationError, match=r"\{out\}"):
-        AcceptanceConfig.model_validate(
-            {
-                "run": "cmd acceptance",
-                "report": "junit",
-            }
-        )
+        AcceptanceConfig.model_validate({"run": "cmd acceptance"})
 
-    valid_exit = AcceptanceConfig.model_validate(
-        {
-            "run": "cmd acceptance",
-            "report": "exit-code",
-        }
-    )
-    assert valid_exit.report == "exit-code"
+    assert AcceptanceConfig.model_validate({"run": "cmd {out}"}).run == "cmd {out}"
+
+
+@pytest.mark.parametrize("report", ["junit", "exit-code"])
+def test_the_acceptance_report_is_refused_and_says_why(report: str) -> None:
+    """ADR-0009: the acceptance always reads JUnit, so the field decided nothing."""
+    with pytest.raises(ValidationError, match=r"quita acceptance\.report"):
+        AcceptanceConfig.model_validate({"run": "cmd {out}", "report": report})
 
 
 def test_paths_allows_driver_inside_protected() -> None:
@@ -382,7 +378,7 @@ def test_project_acceptance_inherits_the_failure_codes_of_its_profile(tmp_path: 
         json.dumps(
             {
                 "profile": "python-uv@0.1",
-                "acceptance": {"run": "otra {out}", "report": "junit"},
+                "acceptance": {"run": "otra {out}"},
             }
         ),
         encoding="utf-8",

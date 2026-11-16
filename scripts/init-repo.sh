@@ -230,7 +230,6 @@ cat >src/lictor/adapters/config/profiles/python-uv.json <<'EOF'
   },
   "acceptance": {
     "run": "uv run pytest tests/acceptance -q --junitxml {out}",
-    "report": "junit",
     "driver_hints": "Usa pytest-bdd. Un test por escenario, enlazado con @scenario y llamado test_<id> (por ejemplo test_iva_001). Crea en src/ la interfaz pública mínima que necesiten los pasos, con funciones que lancen NotImplementedError."
   },
   "controls": [
@@ -260,7 +259,7 @@ cat >lictor.json <<'EOF'
     {"id": "secrets",         "level": "L4", "run": "gitleaks detect --no-banner",        "report": "exit-code", "mode": "block"},
     {"id": "mutation",        "level": "L5", "run": "uv run mutmut run",                  "report": "exit-code", "mode": "measure"}
   ],
-  "acceptance": {"run": "uv run pytest tests/integration -q --junitxml {out}", "report": "junit"}
+  "acceptance": {"run": "uv run pytest tests/integration -q --junitxml {out}"}
 }
 EOF
 

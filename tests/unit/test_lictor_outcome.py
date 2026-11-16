@@ -12,6 +12,7 @@ from lictor.adapters.config.loader import DEFAULT_PROFILES_DIR
 from lictor.adapters.config.profiles.python_uv import lictor_outcome
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.domain.model import TestCaseResult
+from lictor.domain.reports import JUnitReport
 
 TESTS = """
 import pytest
@@ -99,8 +100,9 @@ def cases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, TestCaseResult]
         check=False,
         timeout=120,
     )
-    result = JUnitReader().read(str(report), exit_code=1, duration_ms=0)
-    return {case.name: case for case in result.test_cases}
+    result = JUnitReader().read(report)
+    assert isinstance(result, JUnitReport), result
+    return {case.name: case for case in result.cases}
 
 
 @pytest.mark.parametrize(

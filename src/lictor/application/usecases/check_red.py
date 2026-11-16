@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.events import new_event
-from lictor.application.ports import AuditSink, ResultReader, SpecSource, Vcs
+from lictor.application.ports import AuditSink, ReportReader, SpecSource, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
     attempt_prefix,
@@ -25,6 +25,7 @@ from lictor.application.usecases.verify_attempt import IntegritySnapshot, descri
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
 from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseResult
+from lictor.domain.reports import JUnitReport
 from lictor.domain.rules import (
     Impostors,
     MapLink,
@@ -39,10 +40,10 @@ from lictor.domain.rules import (
     map_test_cases_to_scenarios,
     registration_subject,
     render_full_error,
-    suite_crash_reason,
     suppression_matches,
     unmapped_cases,
 )
+from lictor.domain.verdicts import Crashed, Execution, report_cases, trust
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
@@ -80,7 +81,6 @@ class CheckRedRequest:
     max_driver_attempts: int
     driver_paths: Sequence[str]
     all_scenario_ids: Sequence[ScenarioId | str]
-    acceptance_report: str = "junit"
     acceptance_timeout_s: int = 600
     error_max_chars: int = 4000
     acceptance_failure_exit_codes: Sequence[int] = (1,)
@@ -139,7 +139,7 @@ class CheckRed:
     def __init__(
         self,
         environment: VerificationEnvironment,
-        reader: ResultReader,
+        reader: ReportReader[JUnitReport],
         vcs: Vcs,
         history: SpecHistory,
         audit: AuditSink,
@@ -248,8 +248,8 @@ class CheckRed:
         tree: Path,
     ) -> tuple[CheckRedResult, _Registration | None]:
         out_file = step_dir / "acceptance.xml"
-        output, tampered = self._run_acceptance_suite(request, out_file, tree)
-        save_output(step_dir / "acceptance.log", output)
+        command, output, tampered = self._run_acceptance_suite(request, out_file, tree)
+        save_output(step_dir / "acceptance.log", command, output)
         if tampered:
             reason = describe_tampering(tampered)
             if not request.driver_fresh:
@@ -257,39 +257,28 @@ class CheckRed:
                 raise DriverError(f"{reason} Ocurrió durante la aceptación.")
             return self._reject(request, step_dir, _Rejection("L0-estado", reason)), None
 
-        content = ""
-        if request.acceptance_report == "junit" and out_file.is_file():
-            content = out_file.read_text(encoding="utf-8", errors="replace")
-
-        control_res = self.reader.read(
-            output=content if content else output.stdout,
-            exit_code=output.returncode,
-            duration_ms=output.duration_ms,
-        )
-
+        junit = self.reader.read(out_file)
         raw_output = format_output(output)
-        crash = suite_crash_reason(
-            output.returncode, request.acceptance_failure_exit_codes, control_res.test_cases
-        )
-        if crash is not None:
+        execution = Execution.of(output, request.acceptance_timeout_s)
+        trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
+        if isinstance(trusted, Crashed):
             rejection = _Rejection(
                 "suite_caida",
-                describe_crash(crash, control_res, raw_output),
-                control_res.test_cases,
+                describe_crash(trusted.reason, raw_output),
+                report_cases(junit),
                 output=raw_output,
             )
             return self._reject_or_raise(request, step_dir, rejection), None
+        cases = trusted.cases
 
         ids = [_scenario_str(sid) for sid in request.all_scenario_ids]
         try:
-            mapped = map_test_cases_to_scenarios(
-                control_res.test_cases, ids, request.link, request.scenario_files
-            )
+            mapped = map_test_cases_to_scenarios(cases, ids, request.link, request.scenario_files)
         except DriverError as exc:
-            rejection = _Rejection("mapeo", str(exc), control_res.test_cases, output=raw_output)
+            rejection = _Rejection("mapeo", str(exc), cases, output=raw_output)
             return self._reject_or_raise(request, step_dir, rejection), None
 
-        extra = unmapped_cases(control_res.test_cases, mapped)
+        extra = unmapped_cases(cases, mapped)
         if request.driver_fresh and extra:
             names = ", ".join(case.name for case in extra)
             reason = f"El driver tiene tests que no son de ningún escenario: {names}"
@@ -306,7 +295,7 @@ class CheckRed:
                 request, step_dir, _Rejection("especificacion_cambiada", reason), final=True
             )
             raise DriverError(reason)
-        judged = _verdict_rejection(request, verdict, mapped, control_res.test_cases, raw_output)
+        judged = _verdict_rejection(request, verdict, mapped, cases, raw_output)
         if judged is not None:
             return self._reject_or_raise(request, step_dir, judged), None
         registration = _Registration(
@@ -336,10 +325,10 @@ class CheckRed:
             run_dir.mkdir()
             with verification_tree(self.vcs, rev, request.project_root) as clone:
                 self._impersonate(clone, request.oracle, impostors.pattern, replacement)
-                output, tampered = self._run_acceptance_suite(
+                command, output, tampered = self._run_acceptance_suite(
                     request, run_dir / "acceptance.xml", clone
                 )
-            save_output(run_dir / "acceptance.log", output)
+            save_output(run_dir / "acceptance.log", command, output)
             if tampered:
                 return _Rejection("L0-estado", describe_tampering(tampered))
             env_problem = self.environment.ensure(request.run_id)
@@ -378,14 +367,11 @@ class CheckRed:
     def _impostor_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
     ) -> tuple[dict[str, str], str | None]:
-        report = run_dir / "acceptance.xml"
-        content = report.read_text(encoding="utf-8", errors="replace") if report.is_file() else ""
-        cases = self.reader.read(
-            output=content or output.stdout,
-            exit_code=output.returncode,
-            duration_ms=output.duration_ms,
-        ).test_cases
-        crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
+        junit = self.reader.read(run_dir / "acceptance.xml")
+        cases = report_cases(junit)
+        execution = Execution.of(output, request.acceptance_timeout_s)
+        trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
+        crash = trusted.reason if isinstance(trusted, Crashed) else None
         try:
             mapped = map_test_cases_to_scenarios(
                 cases,
@@ -403,14 +389,14 @@ class CheckRed:
         request: CheckRedRequest,
         out_file: Path,
         tree: Path,
-    ) -> tuple[CommandOutput, list[str]]:
+    ) -> tuple[list[str], CommandOutput, list[str]]:
         cmd_args = fill_report_path(request.acceptance_run, out_file)
 
         lictor_dir = request.project_root / ".lictor"
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
         output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s)
         snapshot.verify_and_restore()
-        return output, snapshot.changes
+        return cmd_args, output, snapshot.changes
 
     def _reject_or_raise(
         self,
