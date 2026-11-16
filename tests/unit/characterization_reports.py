@@ -1,19 +1,18 @@
-"""What reading a report and judging it does today, as each site of the code does it (ADR-0009).
+"""What reading a report and judging it does, as each site of the code does it (ADR-0009).
 
-The tables in `test_characterization_reports.py` pin, row by row, the behaviour of the readers and
-of the acceptance before ADR-0009 moves every verdict into the domain. Each function below calls
-the readers exactly as one site does:
+The tables in `characterization_reports.jsonl` were measured against master (`50af6a5`), before
+ADR-0009 moved every verdict into the domain; `test_characterization_reports.py` checks them. Each
+function below does what one site does:
 
-- a control of a run or of `check` (`reader_input`: the path of `{out}`, or the output for
-  `exit-code`);
-- the acceptance of a run (`VerifyAttempt._run_acceptance`: the path, no `empty_exit_codes`, then
-  `suite_crash_reason` and `describe_crash`);
-- the acceptance of `check` (`CheckProject`: only the reader's `ok`);
-- the red and the impostors (`CheckRed`: the file read with `errors="replace"`, or the stdout when
-  there is no file).
+- a control of a run or of `check`: read `{out}` with the reader of its format and judge it, or
+  judge the output for `exit-code` (`read_and_judge`);
+- the acceptance of a run (`VerifyAttempt._run_acceptance`): the same, with no empty exit codes,
+  then `suite_crash_reason` and `describe_crash`;
+- the acceptance of `check` (`CheckProject`): the JUnit verdict, with no empty exit codes;
+- the red and the impostors (`CheckRed`): the JUnit reader on `{out}`, never the stdout.
 
-A row that ADR-0009 changes on purpose keeps today's value here: changing it is the diff that
-implements that change.
+A row changes only with a deliberate change of ADR-0009, in the commit that makes it: the diff of
+the `.jsonl` is the list of what changed.
 """
 
 from __future__ import annotations
@@ -24,12 +23,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lictor.adapters.readers.coverage import CoverageReader
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
-from lictor.application.run_files import describe_crash, format_output, reader_input
+from lictor.application.control_reports import read_and_judge
+from lictor.application.ports import ReportReaders
+from lictor.application.run_files import describe_crash
 from lictor.domain.model import CommandOutput, ControlResult, CoverageScore, MutationScore
 from lictor.domain.rules import enforce_min_score, suite_crash_reason
+from lictor.domain.verdicts import judged_result, junit_verdict
+
+READERS = ReportReaders(junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader())
 
 RAISES = "raises"
 
@@ -139,9 +142,8 @@ def leave_report(where: Path, how: bytes | str) -> Path:
 
 
 def junit_as_control(report: Path, code: int, empty: tuple[int, ...]) -> Seen:
-    """A JUnit control of a run or of `check`: the reader gets the path of `{out}`."""
-    given = reader_input("junit", "cmd --junitxml {out}", report, _output(code))
-    return _seen(lambda: JUnitReader().read(given, code, 0, empty))
+    """A JUnit control of a run or of `check`: read `{out}`, then its verdict."""
+    return _seen(lambda: read_and_judge(READERS, "junit", report, _output(code), empty))
 
 
 @dataclass(frozen=True)
@@ -156,7 +158,7 @@ class SeenAcceptance:
 def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
     """`VerifyAttempt._run_acceptance`, with `failure_exit_codes` [1] as the profile declares."""
     try:
-        result = JUnitReader().read(str(report), code, 0)
+        result = read_and_judge(READERS, "junit", report, _output(code), ())
     except Exception as exc:
         return SeenAcceptance(Seen(RAISES, type(exc).__name__))
     crash = suite_crash_reason(code, (1,), result.test_cases)
@@ -166,7 +168,7 @@ def acceptance_of_a_run(report: Path, code: int) -> SeenAcceptance:
 
 def acceptance_of_check(report: Path, code: int) -> Seen:
     """`CheckProject`: the acceptance is judged by the reader's `ok`, with no empty exit codes."""
-    return _seen(lambda: JUnitReader().read(str(report), code, 0, ()))
+    return _seen(lambda: read_and_judge(READERS, "junit", report, _output(code), ()))
 
 
 RED_STDOUTS: dict[str, str] = {
@@ -178,10 +180,11 @@ RED_STDOUTS: dict[str, str] = {
 
 
 def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenAcceptance:
-    """`CheckRed`, red and impostors: the file read with replace, or the stdout if there is none."""
-    content = report.read_text(encoding="utf-8", errors="replace") if report.is_file() else ""
+    """`CheckRed`, red and impostors: `{out}` read by the JUnit reader; the stdout is never read."""
+    del stdout  # ADR-0009, change 3: the stdout is no source of a report
     try:
-        result = JUnitReader().read(content or stdout, code, 0)
+        junit = READERS.junit.read(report)
+        result = judged_result(junit_verdict(junit, code, ()), junit, 0)
     except Exception as exc:
         return SeenAcceptance(Seen(RAISES, type(exc).__name__))
     crash = suite_crash_reason(code, (1,), result.test_cases)
@@ -205,11 +208,9 @@ EXIT_OUTPUTS: dict[str, tuple[str, str]] = {
 
 
 def exit_code_control(stdout: str, stderr: str, code: int, empty: tuple[int, ...]) -> Seen:
-    """An `exit-code` control: the reader gets stdout and stderr joined, as `reader_input` does."""
+    """An `exit-code` control: its verdict reads stdout and stderr joined, with no report."""
     output = _output(code, stdout, stderr)
-    given = reader_input("exit-code", "cmd", Path("no-se-usa"), output)
-    assert given == format_output(output)
-    return _seen(lambda: ExitCodeReader().read(given, code, 0, empty))
+    return _seen(lambda: read_and_judge(READERS, "exit-code", Path("no-se-usa"), output, empty))
 
 
 def _coverage(totals: dict[str, object]) -> bytes:
@@ -236,15 +237,14 @@ COVERAGE_REPORTS: dict[str, bytes | str] = {
     "0 de 2 líneas": _coverage({"covered_lines": 0, "num_statements": 2}),
     "0 sentencias y 0 ramas": _coverage({"covered_lines": 0, "num_statements": 0}),
     "0 sentencias y 1 de 2 ramas": _coverage(
-        {"num_statements": 0, "num_branches": 2, "covered_branches": 1}
+        {"covered_lines": 0, "num_statements": 0, "num_branches": 2, "covered_branches": 1}
     ),
     "más líneas cubiertas que sentencias": _coverage({"covered_lines": 9, "num_statements": 2}),
 }
 
 
 def coverage_control(report: Path, code: int, empty: tuple[int, ...]) -> Seen:
-    given = reader_input("coverage", "cmd --cov-report=json:{out}", report, _output(code))
-    return _seen(lambda: CoverageReader().read(given, code, 0, empty))
+    return _seen(lambda: read_and_judge(READERS, "coverage", report, _output(code), empty))
 
 
 MUTATION_REPORTS: dict[str, bytes | str] = {
@@ -268,8 +268,7 @@ MUTATION_REPORTS: dict[str, bytes | str] = {
 
 
 def mutation_control(report: Path, code: int) -> Seen:
-    given = reader_input("mutation", "cmd {out}", report, _output(code))
-    return _seen(lambda: MutationReader().read(given, code, 0, ()))
+    return _seen(lambda: read_and_judge(READERS, "mutation", report, _output(code), ()))
 
 
 def _coverage_result(ok: bool, percent: float | None) -> ControlResult:

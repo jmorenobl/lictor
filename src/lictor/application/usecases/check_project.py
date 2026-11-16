@@ -1,21 +1,22 @@
 """CheckProject use case for verifying project controls and acceptance."""
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from lictor.application.ports import CommandRunner, ResultReader
+from lictor.application.control_reports import read_and_judge
+from lictor.application.ports import CommandRunner, ReportReaders
 from lictor.application.run_files import (
     CHECK_DIR,
     aside_dir,
     fill_report_path,
-    reader_input,
     relative_to_project,
     save_output,
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import ControlResult
+from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import (
     condense_error,
     control_path_status,
@@ -34,7 +35,7 @@ class CheckControlSpec:
     id: str
     level: str
     run: str
-    report: str = "exit-code"
+    report: ReportFormat = "exit-code"
     mode: str = "block"
     empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
@@ -48,7 +49,7 @@ class CheckAcceptanceSpec:
     """Specification for acceptance tests."""
 
     run: str
-    report: str = "junit"
+    report: ReportFormat = "junit"
     timeout_s: int = 600
 
 
@@ -92,7 +93,7 @@ class _RunStepParams:
     evidence_dir: Path
     project_root: Path
     command_template: str
-    report_format: str
+    report_format: ReportFormat
     timeout_s: int
     empty_exit_codes: Sequence[int]
     step_id: str
@@ -106,7 +107,7 @@ class CheckProject:
     def __init__(
         self,
         runner: CommandRunner,
-        readers: Mapping[str, ResultReader],
+        readers: ReportReaders,
     ) -> None:
         self.runner = runner
         self.readers = readers
@@ -198,7 +199,7 @@ class CheckProject:
         req: CheckProjectRequest,
         step_id: str,
         run: str,
-        report: str,
+        report: ReportFormat,
         spec: CheckControlSpec | CheckAcceptanceSpec,
     ) -> _RunStepParams:
         control = spec if isinstance(spec, CheckControlSpec) else None
@@ -225,19 +226,8 @@ class CheckProject:
         cmd_out = self.runner.run(cmd=cmd_args, cwd=params.tree, timeout_s=params.timeout_s)
         save_output(log_file, cmd_out)
 
-        reader = self.readers.get(params.report_format)
-        if reader is None:
-            return ControlResult(
-                ok=False, error=f"No hay lector para el formato: {params.report_format}"
-            )
-
-        content = reader_input(params.report_format, params.command_template, out_file, cmd_out)
-
-        result = reader.read(
-            output=content,
-            exit_code=cmd_out.returncode,
-            duration_ms=cmd_out.duration_ms,
-            empty_exit_codes=params.empty_exit_codes,
+        result = read_and_judge(
+            self.readers, params.report_format, out_file, cmd_out, params.empty_exit_codes
         )
         return replace(
             enforce_min_score(result, params.min_score),

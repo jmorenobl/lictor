@@ -17,7 +17,6 @@ from lictor.adapters.config.loader import (
 )
 from lictor.adapters.config.models import LictorConfig
 from lictor.adapters.readers.coverage import CoverageReader
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
@@ -32,7 +31,7 @@ from lictor.application.ports import (
     CommandRunner,
     EventLog,
     Executor,
-    ResultReader,
+    ReportReaders,
     SpecSource,
     Vcs,
 )
@@ -68,7 +67,7 @@ class BootstrapResult:
     event_log: EventLog
     vcs: Vcs
     runner: CommandRunner
-    readers: dict[str, ResultReader]
+    readers: ReportReaders
     spec_source: SpecSource
     executor: Executor
     init_project: InitProject
@@ -151,12 +150,9 @@ def bootstrap_runtime(
 
     vcs = GitCli(resolved_root)
     runner = SubprocessRunner()
-    readers: dict[str, ResultReader] = {
-        "exit-code": ExitCodeReader(),
-        "junit": JUnitReader(),
-        "mutation": MutationReader(),
-        "coverage": CoverageReader(),
-    }
+    readers = ReportReaders(
+        junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader()
+    )
     spec_source = GherkinSource()
 
     if executor is None:
@@ -195,11 +191,10 @@ def bootstrap_runtime(
         spec=defences.verification,
     )
 
-    acceptance_reader = readers.get(active_config.acceptance.report, readers["junit"])
     spec_history = SpecHistory(vcs, spec_source)
     check_red_uc = CheckRed(
         environment=environment,
-        reader=acceptance_reader,
+        reader=readers.junit,
         vcs=vcs,
         history=spec_history,
         audit=audit_sink,

@@ -13,7 +13,6 @@ from lictor.application.ports import (
     Clock,
     CommandRunner,
     EventLog,
-    ResultReader,
     SpecSource,
     Vcs,
 )
@@ -29,11 +28,11 @@ from lictor.domain.errors import DriverError
 from lictor.domain.model import (
     Candidate,
     CommandOutput,
-    ControlResult,
     Event,
     ScenarioId,
     TestCaseResult,
 )
+from lictor.domain.reports import JUnitReport
 from lictor.domain.rules import Impostors, RedOracle
 
 
@@ -60,11 +59,11 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
         returncode=1, stdout="tests output", stderr="", duration_ms=500
     )
 
-    reader = MagicMock(spec=ResultReader)
+    reader = MagicMock(spec=JUnitReader)
     # 2 scenarios: IVA-001 (already green, passes), IVA-002 (pending, fails)
     tc1 = TestCaseResult(name="test_iva_001", status="passed")
     tc2 = TestCaseResult(name="test_iva_002", status="failure", message="assert 1 == 2")
-    reader.read.return_value = ControlResult(ok=False, test_cases=(tc1, tc2), duration_ms=500)
+    reader.read.return_value = JUnitReport((tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -131,11 +130,11 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
     runner = MagicMock(spec=CommandRunner)
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
-    reader = MagicMock(spec=ResultReader)
+    reader = MagicMock(spec=JUnitReader)
     # Both pass: IVA-002 is new and should have failed, so its test proves nothing yet.
     tc1 = TestCaseResult(name="test_iva_001", status="passed")
     tc2 = TestCaseResult(name="test_iva_002", status="passed")
-    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
+    reader.read.return_value = JUnitReport((tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -176,10 +175,10 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
     runner = MagicMock(spec=CommandRunner)
     runner.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
 
-    reader = MagicMock(spec=ResultReader)
+    reader = MagicMock(spec=JUnitReader)
     tc1 = TestCaseResult(name="test_iva_001", status="passed")
     tc2 = TestCaseResult(name="test_iva_002", status="passed")
-    reader.read.return_value = ControlResult(ok=True, test_cases=(tc1, tc2))
+    reader.read.return_value = JUnitReport((tc1, tc2))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = ["IVA-001"]
@@ -216,9 +215,9 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
     runner = MagicMock(spec=CommandRunner)
     runner.run.return_value = CommandOutput(returncode=1, stdout="out", stderr="")
 
-    reader = MagicMock(spec=ResultReader)
+    reader = MagicMock(spec=JUnitReader)
     tc = TestCaseResult(name="test_iva_001", status="failure")
-    reader.read.return_value = ControlResult(ok=False, test_cases=(tc,))
+    reader.read.return_value = JUnitReport((tc,))
 
     vcs = MagicMock(spec=Vcs)
 
@@ -279,9 +278,9 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
 
     runner.run.side_effect = sabotage
 
-    reader = MagicMock(spec=ResultReader)
+    reader = MagicMock(spec=JUnitReader)
     tc = TestCaseResult(name="test_iva_001", status="failure")
-    reader.read.return_value = ControlResult(ok=False, test_cases=(tc,))
+    reader.read.return_value = JUnitReport((tc,))
 
     vcs = MagicMock(spec=Vcs)
     vcs.get_trailers.return_value = []

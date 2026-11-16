@@ -10,9 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lictor.adapters.readers.exit_code import ExitCodeReader
-from lictor.adapters.readers.junit import JUnitReader
-from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_tree
@@ -26,6 +23,7 @@ from lictor.application.usecases.verify_attempt import (
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
+from tests.readers import ReportingRunner, all_readers
 
 _SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
 
@@ -150,7 +148,7 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py", "forbidden/exploit.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -174,7 +172,7 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path, sealed=True, seal_tampered=True)
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -200,7 +198,7 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
 
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -228,7 +226,7 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
 
     vcs = FakeVcs(changed_files=["src/code.py"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -252,7 +250,7 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"], added=[" x = 1  # noqa: F401"])
     runner = FakeRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -280,7 +278,7 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
         "ruff check",
         CommandOutput(returncode=1, stdout="lint error", stderr="", duration_ms=20),
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -312,7 +310,7 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
 def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     # 'mutmut' in mode measure fails
     runner.set_response(
         "mutmut",
@@ -320,11 +318,8 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     )
     # acceptance passes
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.set_response(
-        "pytest",
-        CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=100),
-    )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -342,7 +337,7 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
                 mode="measure",
             ),
         ),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -356,17 +351,14 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
 def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     # Acceptance has IVA-001 passed, but green IVA-002 failed!
     xml = """<testsuite>
       <testcase name="test_iva_001" status="passed" />
       <testcase name="test_iva_002" status="failure"><failure>broke</failure></testcase>
     </testsuite>"""
-    runner.set_response(
-        "pytest",
-        CommandOutput(returncode=1, stdout=xml, stderr="", duration_ms=100),
-    )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=1, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -375,7 +367,7 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
         run_id=run_id,
         role="implement",
         paths_writable=("src/",),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         green_scenario_ids=("IVA-002",),
         all_scenario_ids=("IVA-001", "IVA-002"),
         paths_driver=("tests/acceptance/",),
@@ -399,7 +391,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 
     runner = MaliciousRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -436,7 +428,7 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
             return CommandOutput(returncode=0, stdout="", stderr="", duration_ms=10)
 
     runner = MaliciousRunner()
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -460,15 +452,16 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
 
 
 def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> None:
+    """With no tests, pytest exits 5 and still writes a JUnit with no case: that passes."""
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    runner = FakeRunner()
-    # Pytest returns 5 when no tests are collected
-    runner.set_response(
-        "pytest",
+    runner = ReportingRunner()
+    runner.set_report(
+        "pytest tests/unit",
         CommandOutput(returncode=5, stdout="", stderr="no tests ran", duration_ms=15),
+        "<testsuites><testsuite tests='0'/></testsuites>",
     )
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -487,7 +480,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
                 empty_exit_codes=(5,),
             ),
         ),
-        acceptance_run="echo passed",
+        acceptance_run="echo passed {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,
@@ -495,10 +488,7 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
 
     # Acceptance xml passed
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.set_response(
-        "echo passed",
-        CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10),
-    )
+    runner.set_report("echo passed", CommandOutput(returncode=0, stdout="", stderr=""), xml)
 
     result = verifier.execute(req)
     assert result.ok is True
@@ -515,10 +505,10 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
     code_file.write_text("x = 1  # noqa\ny = 2\n", encoding="utf-8")
 
     vcs = FakeVcs(changed_files=["src/code.py"], added=["y = 2"])
-    runner = FakeRunner()
+    runner = ReportingRunner()
     xml = """<testsuite><testcase name="test_iva_001" status="passed" /></testsuite>"""
-    runner.default_response = CommandOutput(returncode=0, stdout=xml, stderr="", duration_ms=10)
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader()}
+    runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
+    readers = all_readers()
 
     verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
     req = VerifyAttemptRequest(
@@ -528,7 +518,7 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
         role="implement",
         paths_writable=("src/",),
         suppressions=("# noqa",),
-        acceptance_run="pytest",
+        acceptance_run="pytest {out}",
         all_scenario_ids=("IVA-001",),
         paths_driver=("tests/acceptance/",),
     )
@@ -577,7 +567,7 @@ def _verify(
 ) -> tuple[VerifyAttempt, VerifyAttemptRequest]:
     project_root, run_id = _setup_project(tmp_path)
     vcs = FakeVcs(changed_files=["src/code.py"])
-    readers = {"exit-code": ExitCodeReader(), "junit": JUnitReader(), "mutation": MutationReader()}
+    readers = all_readers()
     fields: dict[str, Any] = {
         "scenario_id": "IVA-001",
         "run_id": run_id,

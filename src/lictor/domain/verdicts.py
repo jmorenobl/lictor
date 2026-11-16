@@ -1,0 +1,139 @@
+"""Whether a control passes, from the facts its report gives and how its command ended (ADR-0009).
+
+Each verdict is a rule over facts: a reader only reads. The messages are the contract of
+`tests/unit/characterization_reports.jsonl`; a change to one is a change of that contract.
+"""
+
+from collections.abc import Collection
+from dataclasses import dataclass
+from typing import assert_never
+
+from lictor.domain.model import ControlResult, Score, TestCaseResult
+from lictor.domain.reports import (
+    CoverageReport,
+    InvalidReport,
+    JUnitReport,
+    MissingReport,
+    MutationReport,
+    Report,
+    ReportOf,
+)
+
+_FAILED = ("failure", "error")
+_TAIL_LINES = 40
+
+
+@dataclass(frozen=True)
+class Passed:
+    """The control passes."""
+
+
+@dataclass(frozen=True)
+class Failed:
+    """The control fails, and says why: a failure with no reason explains nothing."""
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError("Un fallo necesita un motivo")
+
+
+type Verdict = Passed | Failed
+
+
+def exit_code_verdict(output: str, exit_code: int, empty_exit_codes: Collection[int]) -> Verdict:
+    """0, or a code the profile declares as an empty run, passes; else the end of the output."""
+    if exit_code == 0 or exit_code in empty_exit_codes:
+        return Passed()
+    tail = "\n".join(output.splitlines()[-_TAIL_LINES:]).strip()
+    return Failed(tail or f"El comando falló con el código {exit_code}")
+
+
+def junit_verdict(
+    report: ReportOf[JUnitReport], exit_code: int, empty_exit_codes: Collection[int]
+) -> Verdict:
+    """A JUnit control: no failed case and a 0, or no case at all with an empty-run code."""
+    match report:
+        case MissingReport():
+            return Failed(f"La suite no dejó informe JUnit (código de salida {exit_code})")
+        case InvalidReport(reason=reason):
+            return Failed(f"No se pudo leer el informe JUnit: {reason}")
+        case JUnitReport(cases=cases):
+            return _cases_verdict(cases, exit_code, empty_exit_codes)
+        case _:
+            assert_never(report)
+
+
+def _cases_verdict(
+    cases: tuple[TestCaseResult, ...], exit_code: int, empty_exit_codes: Collection[int]
+) -> Verdict:
+    if not cases:
+        if exit_code in empty_exit_codes:
+            return Passed()
+        return Failed(f"No hay casos de test (código de salida {exit_code})")
+    failed = [case for case in cases if case.status in _FAILED]
+    if failed:
+        return Failed(f"Fallaron {len(failed)} casos de test")
+    if exit_code != 0:
+        return Failed(f"La suite falló con el código {exit_code}")
+    return Passed()
+
+
+def coverage_verdict(
+    report: ReportOf[CoverageReport], exit_code: int, empty_exit_codes: Collection[int]
+) -> Verdict:
+    """A coverage control that ran its own tests: a report, and tests that ended well."""
+    match report:
+        case MissingReport():
+            if exit_code in empty_exit_codes:
+                return Passed()
+            return Failed("Sin informe de cobertura")
+        case InvalidReport(reason=reason):
+            return Failed(f"El informe de cobertura no es válido: {reason}")
+        case CoverageReport():
+            if exit_code != 0 and exit_code not in empty_exit_codes:
+                return Failed(f"Los tests de la cobertura fallaron con el código {exit_code}")
+            return Passed()
+        case _:
+            assert_never(report)
+
+
+def mutation_verdict(report: ReportOf[MutationReport], exit_code: int) -> Verdict:
+    """A mutation pass: a report, a pass that ended well, and mutants in it."""
+    match report:
+        case MissingReport():
+            return Failed("Sin informe de mutación")
+        case InvalidReport(reason=reason):
+            return Failed(f"El informe de mutación no es válido: {reason}")
+        case MutationReport():
+            if exit_code != 0:
+                return Failed(f"La pasada de mutación falló con el código {exit_code}")
+            if report.score.total == 0:
+                return Failed("El informe de mutación no tiene mutantes")
+            return Passed()
+        case _:
+            assert_never(report)
+
+
+def report_cases(report: Report | None) -> tuple[TestCaseResult, ...]:
+    """The test cases a report lists; only a JUnit report lists any."""
+    return report.cases if isinstance(report, JUnitReport) else ()
+
+
+def report_score(report: Report | None) -> Score | None:
+    """The score a report gives; only a coverage or a mutation report has one."""
+    if isinstance(report, CoverageReport | MutationReport):
+        return report.score
+    return None
+
+
+def judged_result(verdict: Verdict, report: Report | None, duration_ms: int) -> ControlResult:
+    """What a control that ran ends up with, before its minimum score is enforced."""
+    return ControlResult(
+        ok=isinstance(verdict, Passed),
+        duration_ms=duration_ms,
+        error=verdict.reason if isinstance(verdict, Failed) else None,
+        test_cases=report_cases(report),
+        score=report_score(report),
+    )

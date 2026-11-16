@@ -6,11 +6,11 @@ would record. The environment is built for that same commit, apart from any run'
 """
 
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lictor.application.ports import ResultReader, Vcs
+from lictor.application.ports import ReportReaders, Vcs
 from lictor.application.run_files import verification_tree
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -63,7 +63,7 @@ class CheckWorkingTree:
         self,
         vcs: Vcs,
         environment: VerificationEnvironment,
-        readers: Mapping[str, ResultReader],
+        readers: ReportReaders,
         project_root: Path,
         evidence_dir: Path,
     ) -> None:

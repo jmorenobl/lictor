@@ -1,4 +1,4 @@
-"""Unit tests for ResultReader implementations: ExitCodeReader and JUnitReader."""
+"""The report readers read facts and decide nothing (ADR-0009); verdicts are in test_verdicts."""
 
 import json
 from pathlib import Path
@@ -6,54 +6,34 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.readers.coverage import CoverageReader
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
-from lictor.domain.model import ControlResult, CoverageScore, MutationScore
+from lictor.domain.model import CoverageScore, MutationScore
+from lictor.domain.reports import (
+    CoverageReport,
+    InvalidReport,
+    JUnitReport,
+    MissingReport,
+    MutationReport,
+)
 
 
-def test_exit_code_reader_success() -> None:
-    reader = ExitCodeReader()
-    res = reader.read(output="all good", exit_code=0, duration_ms=10)
-    assert res.ok is True
-    assert res.error is None
-    assert res.duration_ms == 10
-    assert res.test_cases == ()
+def _write(tmp_path: Path, name: str, content: str | bytes) -> Path:
+    path = tmp_path / name
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    else:
+        path.write_text(content, encoding="utf-8")
+    return path
 
 
-def test_exit_code_reader_failure_extracts_last_40_lines() -> None:
-    reader = ExitCodeReader()
-    lines = [f"line {i}" for i in range(100)]
-    output = "\n".join(lines)
-    res = reader.read(output=output, exit_code=1, duration_ms=25)
-
-    assert res.ok is False
-    assert res.error is not None
-    assert "line 99" in res.error
-    assert "line 60" in res.error
-    assert "line 59" not in res.error
+def _junit(tmp_path: Path, xml: str | bytes) -> JUnitReport:
+    report = JUnitReader().read(_write(tmp_path, "report.xml", xml))
+    assert isinstance(report, JUnitReport)
+    return report
 
 
-def test_junit_reader_passed_cases() -> None:
-    xml = """<?xml version="1.0" encoding="utf-8"?>
-    <testsuites>
-      <testsuite name="acceptance" tests="2" failures="0" errors="0">
-        <testcase name="test_iva_001" classname="tests.acceptance.test_iva" />
-        <testcase name="test_iva_002" classname="tests.acceptance.test_iva" />
-      </testsuite>
-    </testsuites>
-    """
-    reader = JUnitReader()
-    res = reader.read(output=xml, exit_code=0, duration_ms=50)
-
-    assert res.ok is True
-    assert len(res.test_cases) == 2
-    assert res.test_cases[0].name == "test_iva_001"
-    assert res.test_cases[0].status == "passed"
-    assert res.test_cases[1].status == "passed"
-
-
-def test_junit_reader_failure_and_error_cases() -> None:
+def test_junit_reads_every_case_with_its_status(tmp_path: Path) -> None:
     xml = """<?xml version="1.0" encoding="utf-8"?>
     <testsuite name="unit">
       <testcase name="test_one" classname="pkg.test">
@@ -62,95 +42,33 @@ def test_junit_reader_failure_and_error_cases() -> None:
       <testcase name="test_two" classname="pkg.test">
         <error message="Crash">Stack trace</error>
       </testcase>
-      <testcase name="test_three" classname="pkg.test">
-        <skipped message="Not ready" />
-      </testcase>
+      <testcase name="test_three" classname="pkg.test"><skipped message="Not ready" /></testcase>
+      <testcase name="test_four" classname="pkg.test" />
     </testsuite>
     """
-    reader = JUnitReader()
-    res = reader.read(output=xml, exit_code=1, duration_ms=30)
+    one, two, three, four = _junit(tmp_path, xml).cases
 
-    assert res.ok is False
-    assert len(res.test_cases) == 3
-    assert res.test_cases[0].status == "failure"
-    assert res.test_cases[0].message == "Assert failed"
-    assert res.test_cases[0].details == "Details trace"
-
-    assert res.test_cases[1].status == "error"
-    assert res.test_cases[1].message == "Crash"
-    assert res.test_cases[1].details == "Stack trace"
-
-    assert res.test_cases[2].status == "skipped"
+    assert (one.name, one.classname, one.status) == ("test_one", "pkg.test", "failure")
+    assert (one.message, one.details) == ("Assert failed", "Details trace")
+    assert (two.status, two.message, two.details) == ("error", "Crash", "Stack trace")
+    assert (three.status, three.message) == ("skipped", "Not ready")
+    assert (four.status, four.message, four.details) == ("passed", None, None)
 
 
-def test_junit_reader_from_file_path(tmp_path: Path) -> None:
-    xml_file = tmp_path / "report.xml"
-    xml_file.write_text(
-        """<testsuite><testcase name="test_file" status="passed" /></testsuite>""",
-        encoding="utf-8",
+def test_junit_reads_the_cases_of_every_suite(tmp_path: Path) -> None:
+    xml = (
+        "<testsuites><testsuite><testcase name='a'/></testsuite>"
+        "<testsuite><testcase name='b'/></testsuite></testsuites>"
     )
-    reader = JUnitReader()
-    res = reader.read(output=str(xml_file), exit_code=0, duration_ms=15)
-    assert res.ok is True
-    assert len(res.test_cases) == 1
-    assert res.test_cases[0].name == "test_file"
+    assert [case.name for case in _junit(tmp_path, xml).cases] == ["a", "b"]
 
 
-def test_junit_reader_empty_passes_with_a_declared_empty_code() -> None:
-    res = JUnitReader().read(output="", exit_code=5, duration_ms=5, empty_exit_codes=[5])
-    assert res.ok is True
-    assert res.test_cases == ()
+def test_junit_with_no_case_is_a_run_with_no_tests(tmp_path: Path) -> None:
+    """What pytest writes with 0 tests: a report, not a missing one."""
+    assert _junit(tmp_path, "<testsuites><testsuite tests='0'/></testsuites>") == JUnitReport()
 
 
-def test_junit_reader_empty_without_empty_codes_fails() -> None:
-    res = JUnitReader().read(output="", exit_code=5, duration_ms=5)
-    assert res.ok is False
-    assert res.error == "No hay casos de test (código de salida 5)"
-
-
-@pytest.mark.parametrize(("codes", "ok"), [([5], False), ([0, 5], True), ([], False)])
-def test_junit_reader_empty_with_exit_0_needs_0_declared(codes: list[int], ok: bool) -> None:
-    report = "<testsuite></testsuite>"
-    res = JUnitReader().read(output=report, exit_code=0, duration_ms=5, empty_exit_codes=codes)
-    assert res.ok is ok
-
-
-@pytest.mark.parametrize(("code", "ok"), [(0, True), (5, True), (4, False), (1, False)])
-def test_exit_code_reader_passes_a_declared_empty_code(code: int, ok: bool) -> None:
-    res = ExitCodeReader().read(output="", exit_code=code, duration_ms=1, empty_exit_codes=(5,))
-    assert res.ok is ok
-
-
-def test_exit_code_reader_without_output_names_the_code() -> None:
-    res = ExitCodeReader().read(output="", exit_code=3, duration_ms=1)
-    assert res.error == "El comando falló con el código 3"
-
-
-def test_junit_reader_messages_are_in_spanish() -> None:
-    failed = '<testsuite><testcase name="t"><failure message="m"/></testcase></testsuite>'
-    assert JUnitReader().read(failed, 1, 1).error == "Fallaron 1 casos de test"
-    passed = '<testsuite><testcase name="t"/></testsuite>'
-    assert JUnitReader().read(passed, 2, 1).error == "La suite falló con el código 2"
-    broken = JUnitReader().read("<testsuite>", 1, 1).error or ""
-    assert broken.startswith("No se pudo leer el informe JUnit: ")
-
-
-def test_junit_reader_rejects_malicious_xml() -> None:
-    # Entity expansion (billion laughs / quadratic blowup)
-    malicious_xml = """<?xml version="1.0"?>
-    <!DOCTYPE lolz [
-      <!ENTITY lol "lol">
-      <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
-    ]>
-    <testsuite name="&lol2;"></testsuite>
-    """
-    reader = JUnitReader()
-    res = reader.read(output=malicious_xml, exit_code=0, duration_ms=10)
-    assert res.ok is False
-    assert res.error is not None
-
-
-def test_junit_reads_the_properties_of_each_case() -> None:
+def test_junit_reads_the_properties_of_each_case(tmp_path: Path) -> None:
     xml = (
         "<testsuite>"
         '<testcase name="a"><properties>'
@@ -162,7 +80,7 @@ def test_junit_reads_the_properties_of_each_case() -> None:
         "</testsuite>"
     )
 
-    first, second = JUnitReader().read(xml, exit_code=1, duration_ms=0).test_cases
+    first, second = _junit(tmp_path, xml).cases
 
     assert first.properties == {
         "lictor.failure": "assertion",
@@ -172,74 +90,80 @@ def test_junit_reads_the_properties_of_each_case() -> None:
     assert second.properties == {}
 
 
-def _mutation(tmp_path: Path, content: str | None, exit_code: int = 0) -> ControlResult:
-    report = tmp_path / "score.json"
-    if content is not None:
-        report.write_text(content, encoding="utf-8")
-    return MutationReader().read(output=str(report), exit_code=exit_code, duration_ms=3)
-
-
-def test_mutation_reader_scores_the_exported_counts(tmp_path: Path) -> None:
-    counts = '{"killed": 8, "survived": 1, "timeout": 1, "skipped": 2, "total": 12, "x": "y"}'
-
-    res = _mutation(tmp_path, counts)
-
-    assert (res.ok, res.error, res.duration_ms) == (True, None, 3)
-    assert res.score == MutationScore(
-        killed=8, survived=1, timeout=1, skipped=2, total=12, percent=80.0
-    )
-
-
-def test_mutation_reader_keeps_the_score_of_a_failed_pass(tmp_path: Path) -> None:
-    res = _mutation(tmp_path, '{"killed": 1, "total": 2}', exit_code=4)
-
-    assert res.ok is False
-    assert res.error == "La pasada de mutación falló con el código 4"
-    assert res.score is not None
-    assert res.score.percent == 50.0
-
-
-def test_mutation_reader_without_a_report_fails(tmp_path: Path) -> None:
-    res = _mutation(tmp_path, None)
-    assert (res.ok, res.error, res.score) == (False, "Sin informe de mutación", None)
-    empty = MutationReader().read(output="", exit_code=0, duration_ms=1)
-    assert (empty.ok, empty.error) == (False, "Sin informe de mutación")
-
-
-def test_mutation_reader_with_no_mutants_fails(tmp_path: Path) -> None:
-    res = _mutation(tmp_path, '{"total": 0}')
-    assert (res.ok, res.error) == (False, "El informe de mutación no tiene mutantes")
+_UTF16 = "<?xml version='1.0' encoding='utf-16'?><testsuite><testcase name='café'/></testsuite>"
 
 
 @pytest.mark.parametrize(
-    ("content", "why"),
+    "raw",
     [
-        ("no", "no es JSON"),
-        ("[1]", "no es un objeto JSON"),
-        ('{"killed": "3"}', "'killed' no es un número de mutantes: '3'"),
-        ('{"total": -1}', "'total' no es un número de mutantes: -1"),
-        ('{"survived": true}', "'survived' no es un número de mutantes: True"),
+        b"\xef\xbb\xbf<testsuite><testcase name='caf\xc3\xa9'/></testsuite>",
+        b"<?xml version='1.0' encoding='iso-8859-1'?><testsuite><testcase name='caf\xe9'/>"
+        b"</testsuite>",
+        _UTF16.encode("utf-16"),
     ],
+    ids=["BOM", "iso-8859-1 declarado", "UTF-16"],
 )
-def test_mutation_reader_refuses_a_report_it_cannot_trust(
-    tmp_path: Path, content: str, why: str
+def test_junit_decodes_as_xml_says(tmp_path: Path, raw: bytes) -> None:
+    assert [case.name for case in _junit(tmp_path, raw).cases] == ["café"]
+
+
+def test_junit_reads_only_its_path_never_a_path_written_in_it(tmp_path: Path) -> None:
+    other = _write(tmp_path, "other.xml", "<testsuite><testcase name='a'/></testsuite>")
+    report = JUnitReader().read(_write(tmp_path, "report.xml", str(other)))
+    assert isinstance(report, InvalidReport)
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        (b"", "está vacío"),
+        (b"  \n", "está vacío"),
+        (b"<testsuite>", "no element found"),
+        (b"<testsuite><testcase name='\xff'/></testsuite>", "not well-formed"),
+        (
+            b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e "boom">]><testsuite name="&e;"/>',
+            "EntitiesForbidden",
+        ),
+    ],
+    ids=["vacío", "espacios", "sin cerrar", "no UTF-8", "entidad"],
+)
+def test_junit_that_cannot_be_read_is_invalid(tmp_path: Path, raw: bytes, reason: str) -> None:
+    report = JUnitReader().read(_write(tmp_path, "report.xml", raw))
+    assert isinstance(report, InvalidReport)
+    assert reason in report.reason
+
+
+@pytest.mark.parametrize("reader", [JUnitReader(), CoverageReader(), MutationReader()])
+def test_nothing_at_the_path_is_a_missing_report(
+    tmp_path: Path, reader: JUnitReader | CoverageReader | MutationReader
 ) -> None:
-    res = _mutation(tmp_path, content)
-
-    assert res.ok is False
-    assert res.error is not None
-    assert res.error.startswith(f"El informe de mutación no es válido: {why}")
+    assert reader.read(tmp_path / "nada") == MissingReport()
 
 
-def _coverage(
-    tmp_path: Path, content: str | None, exit_code: int = 0, empty: tuple[int, ...] = ()
-) -> ControlResult:
-    report = tmp_path / "coverage.json"
-    if content is not None:
-        report.write_text(content, encoding="utf-8")
-    return CoverageReader().read(
-        output=str(report), exit_code=exit_code, duration_ms=3, empty_exit_codes=empty
-    )
+@pytest.mark.parametrize("reader", [JUnitReader(), CoverageReader(), MutationReader()])
+def test_what_is_there_and_isnt_a_file_is_invalid(
+    tmp_path: Path, reader: JUnitReader | CoverageReader | MutationReader
+) -> None:
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    broken = tmp_path / "broken"
+    broken.symlink_to(tmp_path / "no-existe")
+
+    assert reader.read(directory) == InvalidReport("es un directorio")
+    assert reader.read(broken) == InvalidReport("es un enlace que no lleva a ningún fichero")
+
+
+def test_a_report_that_cannot_be_opened_is_invalid(tmp_path: Path) -> None:
+    report = _write(tmp_path, "report.xml", "<testsuite/>")
+    report.chmod(0)
+    try:
+        result = JUnitReader().read(report)
+    finally:
+        report.chmod(0o600)
+    if result == JUnitReport():
+        pytest.skip("quien ejecuta puede leer un fichero sin permisos (root)")
+    assert isinstance(result, InvalidReport)
+    assert result.reason.startswith("no se puede abrir: ")
 
 
 _COVERAGE_JSON = json.dumps(
@@ -257,11 +181,12 @@ _COVERAGE_JSON = json.dumps(
 )
 
 
-def test_coverage_reader_scores_the_totals_of_coverage_py(tmp_path: Path) -> None:
-    res = _coverage(tmp_path, _COVERAGE_JSON)
+def test_coverage_reads_the_totals_of_coverage_py(tmp_path: Path) -> None:
+    report = CoverageReader().read(_write(tmp_path, "coverage.json", _COVERAGE_JSON))
 
-    assert (res.ok, res.error, res.duration_ms) == (True, None, 3)
-    assert res.score == CoverageScore(
+    assert report == CoverageReport(9, 10, 1, 2)
+    assert isinstance(report, CoverageReport)
+    assert report.score == CoverageScore(
         covered_lines=9,
         num_statements=10,
         covered_branches=1,
@@ -270,37 +195,39 @@ def test_coverage_reader_scores_the_totals_of_coverage_py(tmp_path: Path) -> Non
     )
 
 
-def test_coverage_reader_keeps_the_score_when_the_tests_fail(tmp_path: Path) -> None:
-    res = _coverage(tmp_path, _COVERAGE_JSON, exit_code=1)
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        (b"{", "no es JSON"),
+        (b"\xef\xbb\xbf{}", "no es JSON: Unexpected UTF-8 BOM"),
+        ('{"totals": {}}'.encode("utf-16"), "no es UTF-8"),
+        (b'{"totals": {"covered_lines": 1, "num_statements": 2}, "x": "\xff"}', "no es UTF-8"),
+    ],
+    ids=["sin cerrar", "BOM", "UTF-16", "no UTF-8"],
+)
+def test_coverage_that_cannot_be_read_is_invalid(tmp_path: Path, raw: bytes, reason: str) -> None:
+    report = CoverageReader().read(_write(tmp_path, "coverage.json", raw))
+    assert isinstance(report, InvalidReport)
+    assert report.reason.startswith(reason)
 
-    assert res.ok is False
-    assert res.error == "Los tests de la cobertura fallaron con el código 1"
-    assert res.score is not None
 
+def test_mutation_reads_the_exported_counts(tmp_path: Path) -> None:
+    counts = '{"killed": 8, "survived": 1, "timeout": 1, "skipped": 2, "total": 12, "x": "y"}'
 
-def test_coverage_reader_without_tests_to_run_passes_with_no_score(tmp_path: Path) -> None:
-    res = _coverage(tmp_path, None, exit_code=5, empty=(5,))
+    report = MutationReader().read(_write(tmp_path, "score.json", counts))
 
-    assert (res.ok, res.error, res.score) == (True, None, None)
+    assert isinstance(report, MutationReport)
+    assert report.score == MutationScore(
+        killed=8, survived=1, timeout=1, skipped=2, total=12, percent=80.0
+    )
 
 
 @pytest.mark.parametrize(
-    ("content", "reason"),
-    [
-        (None, "Sin informe de cobertura"),
-        ("{", "no es JSON"),
-        ("[]", "no tiene 'totals'"),
-        ('{"totals": {"covered_lines": "9", "num_statements": 10}}', "'covered_lines'"),
-        ('{"totals": {"covered_lines": -1, "num_statements": 10}}', "'covered_lines'"),
-        ('{"totals": {"covered_lines": true, "num_statements": 10}}', "'covered_lines'"),
-    ],
+    ("raw", "reason"),
+    [(b"no", "no es JSON"), (b'{"total": 1, "x": "\xff"}', "no es UTF-8")],
+    ids=["no JSON", "no UTF-8"],
 )
-def test_coverage_reader_without_a_valid_report_fails(
-    tmp_path: Path, content: str | None, reason: str
-) -> None:
-    res = _coverage(tmp_path, content)
-
-    assert res.ok is False
-    assert res.error is not None
-    assert reason in res.error
-    assert res.score is None
+def test_mutation_that_cannot_be_read_is_invalid(tmp_path: Path, raw: bytes, reason: str) -> None:
+    report = MutationReader().read(_write(tmp_path, "score.json", raw))
+    assert isinstance(report, InvalidReport)
+    assert report.reason.startswith(reason)

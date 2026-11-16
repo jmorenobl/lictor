@@ -612,7 +612,7 @@ flowchart TB
 │   │   ├── agents/             # Ejecutores de agente (ClaudeCLI, FakeExecutor)
 │   │   ├── vcs/                # Control de versiones (GitCli)
 │   │   ├── runner/             # Ejecución de subprocesos (SubprocessRunner, FakeRunner)
-│   │   ├── readers/            # Parsers de reportes (ExitCodeReader, JUnitReader con defusedxml)
+│   │   ├── readers/            # Lectores de informes: JUnit (defusedxml), cobertura y mutación, solo hechos
 │   │   ├── spec/               # Parser oficial de Gherkin (GherkinSource)
 │   │   ├── store/              # Bitácora CloudEvents JSONL y reloj del sistema
 │   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.1)

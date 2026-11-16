@@ -10,14 +10,14 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol
 
-from lictor.application.ports import CommandRunner, ResultReader, Vcs
+from lictor.application.control_reports import read_and_judge
+from lictor.application.ports import CommandRunner, ReportReaders, Vcs
 from lictor.application.run_files import (
     attempt_prefix,
     describe_crash,
     fill_report_path,
     format_output,
     new_step_dir,
-    reader_input,
     relative_to_project,
     save_output,
     step_evidence,
@@ -37,6 +37,7 @@ from lictor.domain.model import (
     TestCaseResult,
     VerifyResult,
 )
+from lictor.domain.reports import ReportFormat
 from lictor.domain.rules import (
     MapLink,
     acceptance_failure,
@@ -75,7 +76,7 @@ class VerificationControlProtocol(Protocol):
     def run(self) -> str: ...
 
     @property
-    def report(self) -> str: ...
+    def report(self) -> ReportFormat: ...
 
     @property
     def mode(self) -> str: ...
@@ -103,7 +104,7 @@ class VerificationControl:
     id: str
     level: str
     run: str
-    report: str
+    report: ReportFormat
     mode: str = "block"
     empty_exit_codes: Sequence[int] = ()
     timeout_s: int = 600
@@ -282,7 +283,7 @@ class VerifyAttempt:
         self,
         vcs: Vcs,
         runner: CommandRunner,
-        readers: Mapping[str, ResultReader],
+        readers: ReportReaders,
         project_root: Path,
         environment: VerificationEnvironment | None = None,
     ) -> None:
@@ -595,19 +596,7 @@ class VerifyAttempt:
             changes = tuple(snapshot.changes)
             return _ControlRun(recorded(ControlResult(ok=False)), tampered=changes)
 
-        reader = self.readers.get(ctrl.report)
-        if reader is None:
-            err_msg = f"No hay lector para el formato: {ctrl.report}"
-            return _ControlRun(recorded(ControlResult(ok=False, error=err_msg)), output=cmd_out)
-
-        output_content = reader_input(ctrl.report, ctrl.run, out_file, cmd_out)
-        c_res = reader.read(
-            output=output_content,
-            exit_code=cmd_out.returncode,
-            duration_ms=cmd_out.duration_ms,
-            empty_exit_codes=ctrl.empty_exit_codes,
-        )
-
+        c_res = read_and_judge(self.readers, ctrl.report, out_file, cmd_out, ctrl.empty_exit_codes)
         return _ControlRun(recorded(enforce_min_score(c_res, ctrl.min_score)), output=cmd_out)
 
     def _run_acceptance(
@@ -635,21 +624,8 @@ class VerifyAttempt:
             )
 
         output = format_output(cmd_out)
-        reader = self.readers.get(req.acceptance_report)
-        if reader is None:
-            err = f"No reader available for format: {req.acceptance_report}"
-            return self._fail(
-                req,
-                _Failure("acceptance", err, output=output, control_results=control_results),
-            )
-
-        output_content = str(out_file) if "{out}" in req.acceptance_run else cmd_out.stdout
         acc_res = replace(
-            reader.read(
-                output=output_content,
-                exit_code=cmd_out.returncode,
-                duration_ms=cmd_out.duration_ms,
-            ),
+            read_and_judge(self.readers, "junit", out_file, cmd_out, ()),
             exit_code=cmd_out.returncode,
             output_path=relative_to_project(log_file, self.project_root),
         )

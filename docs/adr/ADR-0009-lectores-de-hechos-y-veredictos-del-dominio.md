@@ -82,7 +82,7 @@ Las filas del contrato confirman lo anterior y fijan estos defectos. Cada uno es
      - **Un contenido que no es XML,** también el texto antes del XML, es un `InvalidReport` con el error del analizador, como hoy en los controles.
      - **Un XML sin `<testcase>` es un `JUnitReport` sin casos,** que es lo que escribe pytest con 0 tests.
    - **Cobertura y mutación.**
-     - **Se decodifican como UTF-8 estricto y después se analizan.** Un JSON con bytes que no son UTF-8 es «no es UTF-8». Un BOM o UTF-16 son «no es JSON», como hoy, que `json.loads` sobre texto los rechaza.
+     - **Se decodifican como UTF-8 estricto y después se analizan.** Un JSON con bytes que no son UTF-8, también uno en UTF-16, es «no es UTF-8» (cambio 9). Un BOM es «no es JSON», como hoy: `json.loads` sobre texto lo rechaza.
      - **Un fichero vacío no se trata aparte:** da «no es JSON», como hoy.
    - **Un informe de cobertura es válido solo si sus recuentos son posibles.** Si no, es «El informe de cobertura no es válido: <motivo>»:
      - `covered_lines` y `num_statements` están presentes;

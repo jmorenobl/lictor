@@ -1,6 +1,6 @@
 """Ports (Protocols) of the application layer in hexagonal architecture."""
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +11,6 @@ from lictor.domain.model import (
     AgentTask,
     Candidate,
     CommandOutput,
-    ControlResult,
     Event,
     Health,
     JournalDamage,
@@ -19,6 +18,7 @@ from lictor.domain.model import (
     Scenario,
     TreeChange,
 )
+from lictor.domain.reports import CoverageReport, JUnitReport, MutationReport, ReportOf
 from lictor.domain.spec_rules import SpecProblem
 
 
@@ -220,22 +220,23 @@ class CommandRunner(Protocol):
         ...
 
 
-@runtime_checkable
-class ResultReader(Protocol):
-    """Abstraction for translating command output into a ControlResult."""
+class ReportReader[R](Protocol):
+    """Reads what a command left at its report path, as facts; it never judges (ADR-0009).
 
-    def read(
-        self,
-        output: str,
-        exit_code: int,
-        duration_ms: int,
-        empty_exit_codes: Collection[int] = (),
-    ) -> ControlResult:
-        """Parse raw output or report files into a ControlResult.
+    Nothing at the path is a `MissingReport`; anything there that can't be read as this kind of
+    report is an `InvalidReport` with its reason. It never raises because of what the file holds.
+    """
 
-        A run with no test cases passes only when its exit code is one of `empty_exit_codes`.
-        """
-        ...
+    def read(self, path: Path) -> ReportOf[R]: ...
+
+
+@dataclass(frozen=True)
+class ReportReaders:
+    """One reader per format that leaves a report; `exit-code` leaves none and needs no reader."""
+
+    junit: ReportReader[JUnitReport]
+    coverage: ReportReader[CoverageReport]
+    mutation: ReportReader[MutationReport]
 
 
 @runtime_checkable

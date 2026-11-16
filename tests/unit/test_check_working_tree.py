@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lictor.adapters.readers.exit_code import ExitCodeReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.ports import AuditSink, Clock, EventLog
@@ -21,6 +20,7 @@ from lictor.application.usecases.check_working_tree import (
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
+from tests.readers import all_readers
 
 GIT = shutil.which("git") or "git"
 LINT = CheckControlSpec("lint", "L1", "lint src")
@@ -74,7 +74,7 @@ def _use_case(project: Path, runner: FakeRunner) -> CheckWorkingTree:
     audit = AuditSink(MagicMock(spec=EventLog), clock)
     vcs = GitCli(project)
     environment = VerificationEnvironment(vcs, runner, audit, project, VerificationEnvSpec())
-    readers = {"exit-code": ExitCodeReader()}
+    readers = all_readers()
     return CheckWorkingTree(vcs, environment, readers, project, project / ".lictor" / "check")
 
 

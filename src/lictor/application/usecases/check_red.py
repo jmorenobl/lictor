@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.events import new_event
-from lictor.application.ports import AuditSink, ResultReader, SpecSource, Vcs
+from lictor.application.ports import AuditSink, ReportReader, SpecSource, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
     attempt_prefix,
@@ -25,6 +25,7 @@ from lictor.application.usecases.verify_attempt import IntegritySnapshot, descri
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import DriverError
 from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseResult
+from lictor.domain.reports import JUnitReport
 from lictor.domain.rules import (
     Impostors,
     MapLink,
@@ -43,6 +44,7 @@ from lictor.domain.rules import (
     suppression_matches,
     unmapped_cases,
 )
+from lictor.domain.verdicts import judged_result, junit_verdict, report_cases
 
 DRIVER_COMMIT_MESSAGE = "chore(lictor): driver de aceptación"
 
@@ -139,7 +141,7 @@ class CheckRed:
     def __init__(
         self,
         environment: VerificationEnvironment,
-        reader: ResultReader,
+        reader: ReportReader[JUnitReport],
         vcs: Vcs,
         history: SpecHistory,
         audit: AuditSink,
@@ -257,14 +259,9 @@ class CheckRed:
                 raise DriverError(f"{reason} Ocurrió durante la aceptación.")
             return self._reject(request, step_dir, _Rejection("L0-estado", reason)), None
 
-        content = ""
-        if request.acceptance_report == "junit" and out_file.is_file():
-            content = out_file.read_text(encoding="utf-8", errors="replace")
-
-        control_res = self.reader.read(
-            output=content if content else output.stdout,
-            exit_code=output.returncode,
-            duration_ms=output.duration_ms,
+        junit = self.reader.read(out_file)
+        control_res = judged_result(
+            junit_verdict(junit, output.returncode, ()), junit, output.duration_ms
         )
 
         raw_output = format_output(output)
@@ -378,13 +375,7 @@ class CheckRed:
     def _impostor_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
     ) -> tuple[dict[str, str], str | None]:
-        report = run_dir / "acceptance.xml"
-        content = report.read_text(encoding="utf-8", errors="replace") if report.is_file() else ""
-        cases = self.reader.read(
-            output=content or output.stdout,
-            exit_code=output.returncode,
-            duration_ms=output.duration_ms,
-        ).test_cases
+        cases = report_cases(self.reader.read(run_dir / "acceptance.xml"))
         crash = suite_crash_reason(output.returncode, request.acceptance_failure_exit_codes, cases)
         try:
             mapped = map_test_cases_to_scenarios(
