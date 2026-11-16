@@ -7,9 +7,7 @@ description: >-
   lictor.json, de features/*.feature con escenarios @XXX-NNN, de .lictor/report.md, de una
   cuarentena, de un driver rechazado o de un código de salida de Lictor (10, 11, 30, 40, 50).
   Cómo funciona Lictor lo dice la skill al cargarse: si no se carga, dilo y no improvises.
-allowed-tools:
-  - Bash(lictor skill --show)
-  - Bash(lictor skill --show *)
+allowed-tools: Bash(lictor skill --show *)
 ---
 
 # Lictor

@@ -45,6 +45,9 @@ Lo que deja de funcionar, y qué hacer en cada caso:
   que le pasó (`outcome`: omitido, no ejecutado o ejecutado, con veredicto o sin él si manipuló el
   estado) y la aceptación aparte. `report.md` cuenta los eventos `v1` como de una versión anterior
   y no los interpreta. Si algo tuyo lee el journal, tiene que leer el formato nuevo.
+- **`lictor doctor` avisa (⚠) de que el esbozo de la skill no es el de esta versión.** El esbozo
+  escribe ahora `allowed-tools` como una cadena separada por espacios, como pide el estándar Agent
+  Skills, y no como una lista YAML. Ejecuta `lictor skill` en el proyecto para actualizarlo.
 
 ### Cambiado
 

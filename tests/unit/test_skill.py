@@ -21,7 +21,9 @@ def test_the_stub_loads_the_content_of_the_installed_version() -> None:
     assert "description:" in stub.split("---", 2)[1]
     # Claude Code runs the command before the skill reaches the model, and it may not fail.
     assert "\n!`lictor skill --show 2>&1 || true`\n" in stub
-    assert "allowed-tools:\n  - Bash(lictor skill --show)\n" in stub
+    # The Agent Skills standard writes `allowed-tools` as one space-separated string, not a
+    # YAML list; the rule ending in ` *` also covers the command with no arguments.
+    assert "\nallowed-tools: Bash(lictor skill --show *)\n" in stub
     # What to do when the installed Lictor can't print it.
     assert "0.2.0" in stub
     assert "no sigas" in stub
