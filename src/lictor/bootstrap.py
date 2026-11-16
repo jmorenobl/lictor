@@ -51,7 +51,7 @@ from lictor.application.usecases.quarantine import Quarantine
 from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
-from lictor.domain.controls import CommandControl, controls_of_stage
+from lictor.domain.controls import Control, command_controls, controls_of_stage
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle, control_label
@@ -66,7 +66,7 @@ class BootstrapResult:
     config: LictorConfig
     config_hash: str
     # Every control, in the order the configuration declares them: the only conversion.
-    controls: tuple[CommandControl, ...]
+    controls: tuple[Control, ...]
     clock: Clock
     event_log: EventLog
     vcs: Vcs
@@ -246,7 +246,8 @@ def bootstrap_runtime(
     controls = domain_controls(active_config)
     attempt_controls = controls_of_stage(controls, ATTEMPT)
     check_controls = controls_of_stage(controls, CHECK)
-    commands = {control_label(c.id): c.run for c in attempt_controls}
+    # A reader runs nothing: only the controls with a command of their own need its program.
+    commands = {control_label(c.id): c.run for c in command_controls(attempt_controls)}
     commands["de la aceptación"] = active_config.acceptance.run
     doctor_audit = AuditSink(
         JsonlEventLog(aside_dir(resolved_root, DOCTOR_DIR) / "journal.jsonl"), active_clock
@@ -257,7 +258,7 @@ def bootstrap_runtime(
         environment=environment,
         project_root=resolved_root,
         commands=commands,
-        check_stage_commands={c.id: c.run for c in check_controls},
+        check_stage_commands={c.id: c.run for c in command_controls(check_controls)},
         aside=VerificationEnvironment(
             vcs, runner, doctor_audit, resolved_root, defences.verification
         ),

@@ -425,11 +425,14 @@ def check(
             )
 
         typer.echo(f"Verificado: {res.subject}")
+        for added in res.check.added:
+            typer.echo(f"{added.sentence}.")
         # A failure after a run reads as what it is: something the run left for later (ADR-0007).
         only_here = {c.id for c in runtime.graph_context.check_controls}
         for entry in res.check.controls:
             name = entry.control.id
             stage = " (solo en check)" if name in only_here else ""
+            stage += res.check.lent.get(name, "")
             for line in _check_lines(name, stage, entry, res.check.controls):
                 typer.echo(line)
         if res.check.acceptance is not None:

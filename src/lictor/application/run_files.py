@@ -228,10 +228,17 @@ def agent_workspace(vcs: Vcs, project_root: Path) -> Iterator[Path]:
         yield workspace
 
 
-def fill_report_path(command: str, report: Path) -> list[str]:
-    """Split a command and drop any report already at its `{out}`, which proves nothing."""
-    report.unlink(missing_ok=True)
-    return [token.replace("{out}", str(report)) for token in shlex.split(command)]
+def fill_report_paths(parts: Sequence[tuple[str, Path]]) -> list[str]:
+    """Compose a command of its parts, by tokens, each `{out}` with the report of its own part.
+
+    Every report goes first: one already there proves nothing. Parts are split one by one, never
+    joined as text, so neither can change how the other splits (ADR-0008, point 4).
+    """
+    tokens: list[str] = []
+    for command, report in parts:
+        report.unlink(missing_ok=True)
+        tokens.extend(token.replace("{out}", str(report)) for token in shlex.split(command))
+    return tokens
 
 
 def write_text(path: Path, text: str) -> None:

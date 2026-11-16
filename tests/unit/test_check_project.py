@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,11 +9,15 @@ from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
     CheckProject,
     CheckProjectRequest,
+    CheckProjectResult,
 )
-from lictor.domain.controls import CommandControl
+from lictor.domain.controls import CommandControl, Control, ReaderControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import CommandOutput
-from tests.readers import ReportingRunner, all_readers
+from lictor.domain.reports import CoverageReport
+from lictor.domain.results import Read, from_failed_run
+from lictor.domain.stages import CHECK
+from tests.readers import FlagRunner, Leaves, ReportingRunner, all_readers, coverage_json
 from tests.results import ids, seen
 
 
@@ -398,3 +403,115 @@ def test_a_mutation_control_passes_only_from_its_minimum(
     assert res.ok is ok
     error = seen(res, "mut").error or ""
     assert ("no llega al mínimo de 95 %" in error) is not ok
+
+
+# --- ADR-0008: a reader in `lictor check` ---
+
+_UNIT = CommandControl("unit", "L2", "pytest tests/unit --junitxml {out}", "junit")
+_READER = ReaderControl(
+    "coverage", "L2", "unit", "--cov-report=json:{out}", mode="measure", when_plugin="cov.p"
+)
+_LINT = CommandControl("lint", "L1", "lint", "exit-code")
+_GREEN = '<testsuite><testcase name="test_a"/></testsuite>'
+_RED = '<testsuite><testcase name="test_a"><failure message="m">t</failure></testcase></testsuite>'
+
+
+def _check(
+    tmp_path: Path,
+    leaves: Leaves,
+    controls: Sequence[Control] = (_LINT, _UNIT, _READER),
+    installed: Sequence[str] = ("cov.p",),
+    **fields: object,
+) -> tuple[CheckProjectResult, FlagRunner]:
+    runner = FlagRunner({"pytest": leaves})
+    request = CheckProjectRequest(
+        tmp_path, controls, installed_plugins=installed, evidence_dir=tmp_path / "check"
+    )
+    result = CheckProject(runner, all_readers()).execute(replace(request, **fields))
+    return result, runner
+
+
+def _unit_command(runner: FlagRunner) -> list[str]:
+    return [str(t) for t in next(c["cmd"] for c in runner.calls if c["cmd"][0] == "pytest")]
+
+
+def test_check_control_coverage_also_runs_unit_and_says_why(tmp_path: Path) -> None:
+    result, _ = _check(
+        tmp_path, Leaves(junit=_GREEN, coverage=coverage_json(1, 2)), control_ids=["coverage"]
+    )
+
+    assert ids(result) == ["unit", "coverage"]
+    (added,) = result.added
+    assert added.sentence == "Se ejecuta también unit, cuya ejecución lee coverage"
+    assert seen(result, "coverage").score == CoverageReport(1, 2).score
+
+
+def test_check_an_added_unit_that_fails_fails_the_check(tmp_path: Path) -> None:
+    result, _ = _check(
+        tmp_path, Leaves(junit=_RED, returncode=1), control_ids=["coverage"], keep_going=True
+    )
+
+    assert (result.ok, result.failed_at) == (False, "unit")
+    assert "unit se ejecutó como" in (result.condensed_error or "")
+
+
+def test_check_a_level_that_splits_the_pair_brings_unit(tmp_path: Path) -> None:
+    reader = replace(_READER, level="L4")
+    result, _ = _check(
+        tmp_path, Leaves(junit=_GREEN), controls=(_LINT, _UNIT, reader), levels=["L4"]
+    )
+
+    assert ids(result) == ["unit", "coverage"]
+
+
+def test_check_doesnt_add_unit_for_a_reader_without_its_plugin(tmp_path: Path) -> None:
+    result, runner = _check(tmp_path, Leaves(junit=_GREEN), installed=(), control_ids=["coverage"])
+
+    assert ids(result) == ["coverage"]
+    assert runner.calls == []
+    assert "cov.p" in (seen(result, "coverage").skipped or "")
+    assert result.added == ()
+
+
+def test_check_control_unit_runs_the_same_unit_as_the_whole_check(tmp_path: Path) -> None:
+    """ADR-0008, point 4: a failure reproduces the same, whatever was selected."""
+    leaves = Leaves(junit=_GREEN, coverage=coverage_json(1, 2))
+    alone, alone_runner = _check(tmp_path / "a", leaves, control_ids=["unit"])
+    whole, whole_runner = _check(tmp_path / "b", leaves)
+
+    def shape(runner: FlagRunner, root: Path) -> list[str]:
+        return [t.replace(str(root), "<root>") for t in _unit_command(runner)]
+
+    assert shape(alone_runner, tmp_path / "a") == shape(whole_runner, tmp_path / "b")
+    # Alone, its coverage report is written and nobody reads it.
+    assert ids(alone) == ["unit"]
+    assert (tmp_path / "a" / "check" / "coverage.xml").is_file()
+    assert seen(whole, "coverage").score == CoverageReport(1, 2).score
+
+
+def test_check_keeps_going_past_a_red_unit_and_scores_it(tmp_path: Path) -> None:
+    unit = replace(_UNIT, mode="block")
+    result, _ = _check(
+        tmp_path,
+        Leaves(junit=_RED, coverage=coverage_json(1, 2), returncode=1),
+        controls=(unit, _READER),
+        keep_going=True,
+    )
+
+    assert (result.ok, result.failed_at) == (False, "unit")
+    read = next(e.outcome for e in result.controls if e.control.id == "coverage")
+    assert isinstance(read, Read)
+    assert from_failed_run(read, result.controls) is True
+
+
+def test_check_marks_a_unit_that_got_the_arguments_of_a_check_reader(tmp_path: Path) -> None:
+    late = replace(_READER, stage=CHECK)
+    result, _ = _check(tmp_path, Leaves(junit=_GREEN), controls=(_UNIT, late))
+
+    assert result.lent == {"unit": " (con los argumentos de coverage, que solo corre en check)"}
+
+
+def test_check_doesnt_mark_a_unit_whose_reader_runs_in_every_attempt(tmp_path: Path) -> None:
+    result, _ = _check(tmp_path, Leaves(junit=_GREEN))
+
+    assert result.lent == {}

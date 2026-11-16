@@ -11,7 +11,7 @@ from lictor.application.run_files import (
     DRIVER_OWNER,
     attempt_prefix,
     describe_crash,
-    fill_report_path,
+    fill_report_paths,
     format_output,
     new_step_dir,
     relative_to_project,
@@ -390,7 +390,7 @@ class CheckRed:
         out_file: Path,
         tree: Path,
     ) -> tuple[list[str], CommandOutput, list[str]]:
-        cmd_args = fill_report_path(request.acceptance_run, out_file)
+        cmd_args = fill_report_paths([(request.acceptance_run, out_file)])
 
         lictor_dir = request.project_root / ".lictor"
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
