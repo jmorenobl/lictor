@@ -172,7 +172,7 @@ Las filas del contrato confirman lo anterior y fijan estos defectos. Cada uno es
          - `report` es el hecho leído (punto 2), o ninguno para `exit-code`, que no tiene informe.
          - `verdict` es el del punto 3, con `min_score` aplicado.
          - **Los casos de test y la puntuación son propiedades derivadas de `report`,** no campos: no pueden contradecir al informe ni estar donde el formato no los tiene.
-       - **`Unjudged(changes)`:** el comando manipuló el estado. No se leyó su informe y no hay veredicto, porque decir «falló» sería inventar un veredicto que nadie dio. En `check` no se puede dar, porque `check` no usa `IntegritySnapshot` (Contexto), y nadie escribe esa rama.
+       - **`Unjudged(changes)`:** el comando manipuló el estado. No se leyó su informe y no hay veredicto, porque decir «falló» sería inventar un veredicto que nadie dio. En `check` no se puede dar, porque `check` no usa `IntegritySnapshot` (Contexto). Como `consequence` devuelve una unión, `CheckProject` trata un `StateTampered` como un fallo más, en vez de dejar una rama sin decidir.
 
    **La unión no tiene `ok`.** Lo que hace una verificación con un resultado lo decide una función del dominio, `consequence(control, result)`, que devuelve una de tres:
    - **`Proceed`:** sigue. Es lo que da un `Skipped`, un `Judged` que pasa, o cualquier resultado de un control `measure` que no sea `Unjudged`.
@@ -195,8 +195,8 @@ Las filas del contrato confirman lo anterior y fijan estos defectos. Cada uno es
    - **En `check`,** `CheckProjectResult` lleva el `AcceptanceRun` y su veredicto (punto 3).
    - **El rojo y los impostores** (`CheckRed`) construyen también un `AcceptanceRun`. Su `Unjudged` es el tampering que hoy rechazan con `L0-estado` (`check_red.py:252-258`, `:327-328`).
 7. **El journal.** `verify.finished` cambia de forma, así que cambia de versión, y lo escribe y lo lee un solo códec.
-   - **El tipo pasa a `lictor.verify.finished.v2`.** Un `v1` es de una versión anterior y no se interpreta. `BuildReport`, `RunProgress` y `lictor status` siguen una misma regla: lo saltan entero y lo cuentan, por evento, en un campo nuevo de `JournalDamage`, `older`, que `report.md` muestra junto a las líneas corruptas y ajenas («N eventos de una versión anterior, sin interpretar»). Así nunca se muestra un evento viejo como si fuera de la forma nueva, y un `v1` vacío, como el de `_reject_attempt` (`graph.py:573-591`), sigue la misma regla.
-   - **Un solo códec, en el dominio.** `control_record(control, result)` escribe y `control_result_from_record(raw)` lee; igual para la aceptación. Los usan `control_summaries`, `BuildReport` y `RunProgress`. Un registro que no sigue el esquema es no válido: se salta y se cuenta como ajeno. Hoy escribe la aplicación y leen la aplicación y el dominio, cada uno con sus claves.
+   - **El tipo pasa a `lictor.verify.finished.v2`.** Un `v1` es de una versión anterior y no se interpreta. Nadie lo interpreta. `BuildReport` lo cuenta, por evento, en un campo nuevo de `JournalDamage`, `older`, que `report.md` muestra junto a las líneas corruptas y ajenas («De una versión anterior, sin interpretar: N»). `RunProgress` y `lictor status`, que no muestran daños del journal, simplemente no lo leen. Así nunca se muestra un evento viejo como si fuera de la forma nueva, y un `v1` vacío, como el de `_reject_attempt` (`graph.py:573-591`), sigue la misma regla.
+   - **Un solo códec, en el dominio.** `control_record(entry)` escribe y `control_from_record(raw)` lee, en tipos propios de lo que el journal guarda (`RecordedSkipped`, `RecordedNotExecuted`, `RecordedExecuted`), que no son el resultado entero porque el journal no guarda el informe; igual para la aceptación (`acceptance_record`, `acceptance_from_record`). Los usan `control_summaries`, `BuildReport` y `RunProgress`. Un registro que no sigue el esquema se salta: no se muestra como si lo siguiera. No se cuenta en `JournalDamage`, que cuenta líneas y eventos, no partes de un evento. Hoy escribe la aplicación y leen la aplicación y el dominio, cada uno con sus claves.
    - **El esquema de `verify.finished.v2`:**
 
      | Clave | Contenido |
@@ -220,7 +220,7 @@ Las filas del contrato confirman lo anterior y fijan estos defectos. Cada uno es
      - un `Skipped`, con su motivo, en «Controles omitidos», como hoy;
      - un `NotExecuted`, como fallo con su motivo;
      - un `Unjudged`, como «manipuló el estado; sin veredicto», no como un fallo del control;
-     - la aceptación, en su propia línea.
+     - la aceptación, que ya no aparece como un control: su resultado es el del intento, en la tabla de verificaciones.
    - **La salida de `lictor check`** imprime la duración y el log solo de lo que se ejecutó (`cli.py:420-429`).
    - **`RunProgress`** pliega el journal con el mismo códec.
 9. **El tipo de un control nace aquí, en el dominio.** `CommandControl`, en `domain/controls.py`, lleva todo lo que hoy llevan los tres tipos de la aplicación, con `report: ReportFormat` (punto 2). ADR-0008 le añade `ReaderControl` y la unión `Control`.
