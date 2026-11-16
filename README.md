@@ -173,13 +173,13 @@ uv add --dev pytest pytest-bdd ruff mypy      # las herramientas que usan los co
 ### 1️⃣ Inicializa el proyecto
 
 ```bash
-# Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
+# Detecta automáticamente el perfil (ej. python-uv@0.2) y crea lictor.json
 lictor init
 ```
 
 ```text
 Configuración inicializada en 'lictor.json':
-  Perfil: python-uv@0.1
+  Perfil: python-uv@0.2
   Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
   hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
     Lo lee el agente en cada llamada: ajústalo a tu proyecto.
@@ -234,7 +234,7 @@ lictor doctor
 ```
 
 ```text
-✓ Configuración válida: perfil 'python-uv@0.1'
+✓ Configuración válida: perfil 'python-uv@0.2'
 ✓ Repositorio con commits
 ✓ Árbol git limpio
 ✓ Escenarios
@@ -451,7 +451,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 ```json
 {
   "version": "0.1",
-  "profile": "python-uv@0.1",
+  "profile": "python-uv@0.2",
   "backend": {"model": "claude-sonnet-5-5"},
   "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/."
 }
@@ -461,7 +461,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 ```json
 {
-  "profile": "python-uv@0.1",
+  "profile": "python-uv@0.2",
   "controls": [
     {"id": "unit", "timeout_s": 900},
     {"id": "types", "enabled": false},
@@ -615,7 +615,7 @@ flowchart TB
 │   │   ├── readers/            # Lectores de informes: JUnit (defusedxml), cobertura y mutación, solo hechos
 │   │   ├── spec/               # Parser oficial de Gherkin (GherkinSource)
 │   │   ├── store/              # Bitácora CloudEvents JSONL y reloj del sistema
-│   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.1)
+│   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.2)
 │   ├── orchestration/          # Grafo de estados LangGraph y SqliteSaver
 │   ├── prompts/                # Plantillas de prompts del sistema (driver.md, implement.md)
 │   ├── bootstrap.py            # Raíz de composición e inyección de dependencias

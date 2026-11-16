@@ -105,6 +105,11 @@ def load_profile(name: str, profiles_dir: Path | None = None) -> Profile:
     base_name, _, requested_version = name.partition("@")
     for profile in list_profiles(profiles_dir):
         if profile.name == base_name:
+            if requested_version in profile.retired_versions:
+                current = f"{profile.name}@{profile.version}"
+                why = profile.retired_versions[requested_version]
+                msg = f"El perfil {name} ya no existe: usa {current}, que {why} (ver el CHANGELOG)"
+                raise ConfigError(msg)
             if requested_version and profile.version != requested_version:
                 msg = (
                     f"La versión solicitada para el perfil '{base_name}' "

@@ -93,7 +93,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
      - un test en rojo deja de bloquear a través de `coverage`;
      - `when_plugin` exige `plugins_command`.
 
-     Un `lictor.json` que pide `python-uv@0.1` pidió esas reglas, y darle otras con el mismo nombre sería cambiarlas sin que lo sepa. El cargador sigue admitiendo una sola versión de cada perfil, así que `@0.1` sale con 10, con un mensaje que dice qué cambia y que remite al CHANGELOG: «El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la ejecución de unit (ver el CHANGELOG)». `lictor init` escribe `@0.2`.
+     Un `lictor.json` que pide `python-uv@0.1` pidió esas reglas, y darle otras con el mismo nombre sería cambiarlas sin que lo sepa. El cargador sigue admitiendo una sola versión de cada perfil, así que `@0.1` sale con 10, con un mensaje que dice qué cambia y que remite al CHANGELOG. Lo que cambia es del perfil, y el cargador no sabe nada de pytest, así que el perfil lo declara en `retired_versions` (`{"0.1": "mide la cobertura en la ejecución de unit"}`) y el cargador compone el mensaje: «El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la ejecución de unit (ver el CHANGELOG)». `lictor init` escribe `@0.2`.
 2. **Cómo se aplica un cambio por `id`, y dónde se valida.**
 
    **«Escrito» es estar en `model_fields_set`,** valga lo que valga, también un `null` en un campo que lo admite (`when_exists`, `when_plugin`). Así `{"id": "coverage", "when_exists": null}` sobre un lector es un campo de ejecución escrito, y es un error.
@@ -317,7 +317,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
     - las construcciones directas de `VerificationControl`, `CheckControlSpec` y `ControlConfig`: `tests/unit/test_verify_attempt.py`, `test_check_project.py`, `test_check_working_tree.py:27`, `test_config.py:1015` y `tests/integration/test_graph.py:237` y `:313`;
     - `light_config` (`tests/integration/repro/harness.py:119-123`) y su test (`tests/integration/test_repro_layers.py:99-106`). Pasan a tratar la pareja junta: quitan los dos, o conservan los dos si el caso nombra cualquiera, para que un caso ligero no salga con 10;
     - las 39 menciones de `python-uv@0.1`, en los tests, los ejemplos, `scripts/init-repo.sh`, `lictor.json`, README.md y AGENTS.md;
-    - el test de la 0.2.0 (`test_a_lictor_json_of_0_2_0_keeps_its_fingerprint`), que pasa a comprobar que esa copia, con `@0.1`, se rechaza con su mensaje.
+    - el test de la 0.2.0 (`test_a_lictor_json_of_0_2_0_is_refused_and_says_what_to_remove`, desde ADR-0009), que comprueba además que esa copia, sin `acceptance.report`, se rechaza por `@0.1` con su mensaje.
   - **Esquema:** `schema/lictor.schema.json` se regenera con `reads` y `adds` en `ControlChange`, sin `null` en `run`, `reads` ni `adds`, y con la descripción de `adds` (punto 2).
 - **Documentación que cambia:**
   - **`README.md`:**

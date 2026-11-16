@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from lictor.adapters.config.loader import load_config
+from lictor.adapters.config.models import CommandControlConfig, ReaderControlConfig
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.application.usecases.commit_green import CommitGreen
 from tests.integration.repro.conftest import ProjectFactory
@@ -99,9 +100,13 @@ def test_d15b_crash_after_green_commit_resumes_without_duplicates(
 def test_repro_projects_use_the_real_profile(make_project: ProjectFactory) -> None:
     root: Path = make_project(sync=False)
     config = load_config(root)
-    runs = [control.run for control in config.controls]
+    runs = [control.run for control in config.controls if isinstance(control, CommandControlConfig)]
     assert "uv run ruff check src" in runs
     assert "uv run mypy src" in runs
+    reads = [
+        control.reads for control in config.controls if isinstance(control, ReaderControlConfig)
+    ]
+    assert reads == ["unit"]
     assert config.acceptance.run.startswith("uv run pytest tests/acceptance")
 
 

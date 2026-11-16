@@ -18,7 +18,7 @@ from lictor.adapters.config.loader import (
     load_profile,
     resolve_defences,
 )
-from lictor.adapters.config.models import DEFAULT_MODEL
+from lictor.adapters.config.models import DEFAULT_MODEL, CommandControlConfig
 from lictor.domain.errors import ConfigError, ExitCode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +37,7 @@ def _python_project(root: Path) -> Path:
 
 def _with_controls(tmp_path: Path, controls: list[dict[str, object]]) -> Path:
     path = tmp_path / "lictor.json"
-    path.write_text(json.dumps({"profile": "python-uv@0.1", "controls": controls}), "utf-8")
+    path.write_text(json.dumps({"profile": "python-uv@0.2", "controls": controls}), "utf-8")
     return path
 
 
@@ -72,6 +72,13 @@ def test_a_lictor_json_of_0_2_0_is_refused_and_says_what_to_remove(tmp_path: Pat
     with pytest.raises(ConfigError, match=r"quita acceptance\.report"):
         load_config(copied)
 
+    # Without it, the profile it asks for no longer exists (ADR-0008, point 11).
+    data = json.loads(copied.read_text(encoding="utf-8"))
+    del data["acceptance"]["report"]
+    copied.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"python-uv@0\.1 ya no existe: usa python-uv@0\.2"):
+        load_config(copied)
+
 
 def test_without_controls_the_project_gets_the_profiles(tmp_path: Path) -> None:
     root = _python_project(tmp_path)
@@ -81,15 +88,17 @@ def test_without_controls_the_project_gets_the_profiles(tmp_path: Path) -> None:
 
 
 def test_a_control_of_the_profile_changes_only_the_fields_written(tmp_path: Path) -> None:
-    path = _with_controls(tmp_path, [{"id": "coverage", "mode": "block", "timeout_s": 99}])
+    path = _with_controls(tmp_path, [{"id": "unit", "mode": "measure", "timeout_s": 99}])
 
-    coverage = next(c for c in load_config(path).controls if c.id == "coverage")
+    unit = next(c for c in load_config(path).controls if c.id == "unit")
 
-    profile_coverage = next(c for c in load_profile("python-uv").controls if c.id == "coverage")
-    assert coverage.mode == "block"
-    assert coverage.timeout_s == 99
-    assert coverage.run == profile_coverage.run
-    assert coverage.when_plugin == profile_coverage.when_plugin
+    profile_unit = next(c for c in load_profile("python-uv").controls if c.id == "unit")
+    assert isinstance(unit, CommandControlConfig)
+    assert isinstance(profile_unit, CommandControlConfig)
+    assert unit.mode == "measure"
+    assert unit.timeout_s == 99
+    assert unit.run == profile_unit.run
+    assert unit.when_exists == profile_unit.when_exists
     assert _ids(path) == PROFILE_IDS
 
 
@@ -101,16 +110,36 @@ def test_every_control_of_the_profile_runs_in_each_attempt(tmp_path: Path) -> No
 
 
 def test_the_stage_of_a_profile_control_is_written_by_id(tmp_path: Path) -> None:
-    path = _with_controls(tmp_path, [{"id": "unit", "stage": "check"}])
+    path = _with_controls(tmp_path, [{"id": "types", "stage": "check"}])
 
     controls = {c.id: c for c in load_config(path).controls}
 
-    profile_unit = next(c for c in load_profile("python-uv").controls if c.id == "unit")
-    assert controls["unit"].stage == "check"
-    assert controls["unit"].mode == profile_unit.mode
-    assert controls["unit"].run == profile_unit.run
+    profile_types = next(c for c in load_profile("python-uv").controls if c.id == "types")
+    assert controls["types"].stage == "check"
+    assert controls["types"].mode == profile_types.mode
+    assert controls["types"].model_dump(exclude={"stage"}) == profile_types.model_dump(
+        exclude={"stage"}
+    )
     assert controls["lint"].stage == "attempt"
     assert _ids(path) == PROFILE_IDS
+
+
+def test_unit_alone_in_check_leaves_coverage_without_a_run_to_read(tmp_path: Path) -> None:
+    """ADR-0008, point 6: the reader can't run where its read control doesn't."""
+    path = _with_controls(tmp_path, [{"id": "unit", "stage": "check"}])
+
+    with pytest.raises(ConfigError, match=r"pon 'coverage' también en check.*run propio"):
+        load_config(path)
+
+
+def test_unit_and_coverage_in_check_measure_coverage_only_there(tmp_path: Path) -> None:
+    path = _with_controls(
+        tmp_path, [{"id": "unit", "stage": "check"}, {"id": "coverage", "stage": "check"}]
+    )
+
+    stages = {c.id: c.stage for c in load_config(path).controls}
+
+    assert (stages["unit"], stages["coverage"]) == ("check", "check")
 
 
 def test_an_added_control_may_declare_its_stage(tmp_path: Path) -> None:
@@ -139,8 +168,8 @@ def test_a_stage_that_doesnt_exist_is_refused(tmp_path: Path) -> None:
 def test_the_stage_of_a_control_enters_the_fingerprint(tmp_path: Path) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "c").mkdir()
-    attempt = _with_controls(tmp_path / "a", [{"id": "unit"}])
-    check = _with_controls(tmp_path / "c", [{"id": "unit", "stage": "check"}])
+    attempt = _with_controls(tmp_path / "a", [{"id": "types"}])
+    check = _with_controls(tmp_path / "c", [{"id": "types", "stage": "check"}])
 
     assert _fingerprint(attempt) != _fingerprint(check)
 

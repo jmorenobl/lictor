@@ -109,6 +109,8 @@ smoke = pytest.mark.smoke
 all_controls = pytest.mark.all_controls
 """The defence is about a control the light project drops: without it the case proves nothing."""
 LIGHT_DISABLED = ("lint", "types", "unit", "coverage")
+# `coverage` reads the run of `unit` (ADR-0008): dropping one alone would leave the other refused.
+LIGHT_PAIRS = (frozenset({"unit", "coverage"}),)
 
 
 def uses_all_controls(marks: set[str]) -> bool:
@@ -116,9 +118,15 @@ def uses_all_controls(marks: set[str]) -> bool:
 
 
 def light_config(written: dict[str, Any]) -> dict[str, Any]:
-    """`written` without the controls of `LIGHT_DISABLED`, unless it changes one itself."""
+    """`written` without the controls of `LIGHT_DISABLED`, unless it changes one itself.
+
+    A case that names either of a pair keeps both: a reader needs the control it reads.
+    """
     changes = list(written.get("controls", []))
     named = {change["id"] for change in changes}
+    for pair in LIGHT_PAIRS:
+        if named & pair:
+            named |= pair
     dropped = [{"id": id_, "enabled": False} for id_ in LIGHT_DISABLED if id_ not in named]
     return {**written, "controls": dropped + changes}
 

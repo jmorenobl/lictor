@@ -39,7 +39,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
             data={
                 "lictor_version": "0.1.0",
                 "cli_version": "claude-code 1.0.0",
-                "profile": "python-uv@0.1",
+                "profile": "python-uv@0.2",
                 "config_hash": "cfg123",
             },
         ),

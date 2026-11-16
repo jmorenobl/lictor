@@ -37,6 +37,7 @@ from lictor.adapters.config.models import (
     Profile,
     ProfileVerification,
     ProjectVerification,
+    ReaderControlConfig,
     RetentionConfig,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
@@ -52,7 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_load_python_uv_profile() -> None:
     profile = load_profile("python-uv")
     assert profile.name == "python-uv"
-    assert profile.version == "0.1"
+    assert profile.version == "0.2"
     assert profile.status == "stable"
     assert profile.detect == ["pyproject.toml"]
     assert "tests/acceptance/" in profile.paths.driver
@@ -91,9 +92,9 @@ def test_the_driver_is_told_not_to_touch_the_import_path() -> None:
 
 
 def test_load_profile_with_version_suffix() -> None:
-    profile = load_profile("python-uv@0.1")
+    profile = load_profile("python-uv@0.2")
     assert profile.name == "python-uv"
-    assert profile.version == "0.1"
+    assert profile.version == "0.2"
 
 
 def test_load_profile_unknown_or_wrong_version_raises_config_error() -> None:
@@ -324,12 +325,12 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
     config_path = tmp_path / "lictor.json"
     assert config_path.is_file()
     assert cfg.version == "0.1"
-    assert cfg.profile == "python-uv@0.1"
+    assert cfg.profile == "python-uv@0.2"
 
     raw_disk = json.loads(config_path.read_text(encoding="utf-8"))
     assert "detect" not in raw_disk
     assert "status" not in raw_disk
-    assert raw_disk["profile"] == "python-uv@0.1"
+    assert raw_disk["profile"] == "python-uv@0.2"
 
     loaded = load_config(tmp_path)
     assert loaded == cfg
@@ -348,7 +349,7 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
 
 def test_load_config_from_repo_root_lictor_json() -> None:
     cfg = load_config(REPO_ROOT / "lictor.json")
-    assert cfg.profile == "python-uv@0.1"
+    assert cfg.profile == "python-uv@0.2"
     assert cfg.paths.writable == ["src/", "tests/unit/"]
     assert any(c.id == "architecture" for c in cfg.controls)
 
@@ -375,7 +376,7 @@ def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:
         load_config(bad_json)
 
     invalid_cfg = tmp_path / "invalid.json"
-    invalid_cfg.write_text(json.dumps({"profile": "python-uv@0.1", "backend": {"model": "opus"}}))
+    invalid_cfg.write_text(json.dumps({"profile": "python-uv@0.2", "backend": {"model": "opus"}}))
     with pytest.raises(ConfigError):
         load_config(invalid_cfg)
 
@@ -404,7 +405,7 @@ def test_project_acceptance_inherits_the_failure_codes_of_its_profile(tmp_path: 
     config.write_text(
         json.dumps(
             {
-                "profile": "python-uv@0.1",
+                "profile": "python-uv@0.2",
                 "acceptance": {"run": "otra {out}"},
             }
         ),
@@ -603,7 +604,7 @@ def test_invalid_banned_pattern_is_rejected() -> None:
 
 def _project(tmp_path: Path, **fields: object) -> Path:
     path = tmp_path / "lictor.json"
-    path.write_text(json.dumps({"profile": "python-uv@0.1", **fields}), encoding="utf-8")
+    path.write_text(json.dumps({"profile": "python-uv@0.2", **fields}), encoding="utf-8")
     return path
 
 
@@ -1158,7 +1159,7 @@ def test_hints_left_to_the_profile_also_name_the_project_s_python(tmp_path: Path
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x"\nrequires-python = ">=3.13"\n', encoding="utf-8"
     )
-    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.2"}', encoding="utf-8")
 
     assert load_config(tmp_path).hints.startswith("Python >=3.13,")
 
@@ -1167,20 +1168,39 @@ def test_the_profile_measures_coverage_only_where_the_plugin_is_installed() -> N
     """It needs a dependency the agent can't add: without it, the control is skipped (F18)."""
     [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
 
+    assert isinstance(coverage, ReaderControlConfig)
     assert coverage.mode == "measure"
     assert coverage.when_plugin == "pytest_cov.plugin"
-    assert coverage.when_exists == "tests/unit"
-    assert "--cov" in coverage.run
 
 
-def test_the_profile_keeps_the_coverage_as_a_score() -> None:
-    """F29: the percentage was only in the log; now it is the control's score."""
+def test_the_profile_keeps_the_coverage_as_a_score_of_the_run_of_unit() -> None:
+    """F29 made the percentage a score; ADR-0008 reads it from the one run of unit."""
     [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
 
-    assert coverage.report == "coverage"
-    assert "--cov-report=json:{out}" in coverage.run
-    assert "--cov-branch" in coverage.run
+    assert isinstance(coverage, ReaderControlConfig)
+    assert (coverage.report, coverage.reads) == ("coverage", "unit")
+    assert "--cov-report=json:{out}" in coverage.adds
+    assert "--cov-branch" in coverage.adds
+    # The project's own threshold would fail unit with no test in red: a minimum is min_score.
+    assert "--cov-fail-under=0" in coverage.adds
+    # A table in unit's log would reach the prompt just when the suite doesn't start.
+    assert "--cov-report=term" not in coverage.adds
     assert coverage.min_score is None
+
+
+def test_a_lictor_json_that_asks_for_the_retired_profile_is_told_what_changed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+
+    with pytest.raises(ConfigError) as refused:
+        load_config(tmp_path)
+
+    assert refused.value.exit_code == ExitCode.PRECONDITION
+    assert str(refused.value) == (
+        "El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la "
+        "ejecución de unit (ver el CHANGELOG)"
+    )
 
 
 def test_a_project_asks_for_a_minimum_coverage_by_id(tmp_path: Path) -> None:

@@ -564,6 +564,9 @@ class Profile(BaseModel):
 
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
+    # Versions that no longer exist, and what this one changes: a file that asks for one asked
+    # for its rules, and getting others under the same name would change them unawares.
+    retired_versions: dict[str, str] = Field(default_factory=dict)
     status: ProfileStatus = "stable"
     detect: list[str] = Field(min_length=1)
     paths: PathsConfig

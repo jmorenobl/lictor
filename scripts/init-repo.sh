@@ -246,7 +246,7 @@ EOF
 
 cat >lictor.json <<'EOF'
 {
-  "profile": "python-uv@0.1",
+  "profile": "python-uv@0.2",
   "controls": [
     {"id": "lint",            "level": "L1", "run": "uv run ruff check .",                "report": "exit-code", "mode": "block"},
     {"id": "format",          "level": "L1", "run": "uv run ruff format --check .",       "report": "exit-code", "mode": "block"},

@@ -15,9 +15,9 @@ from lictor.domain.errors import ConfigError
 class FakeConfigInitializer(ConfigInitializer):
     def __init__(
         self,
-        profile_name: str = "python-uv@0.1",
+        profile_name: str = "python-uv@0.2",
         gitignore_entries: Sequence[str] = ("__pycache__/", ".venv/"),
-        config_json: str = '{"profile": "python-uv@0.1"}',
+        config_json: str = '{"profile": "python-uv@0.2"}',
     ) -> None:
         self.model = "claude-sonnet-5-5"
         self.hints = "Python >=3.14, gestor uv."
@@ -49,7 +49,7 @@ def test_init_project_creates_files_and_gitignore(tmp_path: Path) -> None:
     assert res.config_path == tmp_path / "lictor.json"
     assert (tmp_path / "lictor.json").read_text(
         encoding="utf-8"
-    ).strip() == '{"profile": "python-uv@0.1"}'
+    ).strip() == '{"profile": "python-uv@0.2"}'
     assert (tmp_path / ".lictor").is_dir()
 
     gitignore_content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
@@ -114,7 +114,7 @@ def test_init_project_says_what_it_decided(tmp_path: Path) -> None:
 
     res = InitProject(FakeConfigInitializer()).execute(InitProjectRequest(tmp_path))
 
-    assert res.profile_name == "python-uv@0.1"
+    assert res.profile_name == "python-uv@0.2"
     assert res.model == "claude-sonnet-5-5"
     assert res.hints == "Python >=3.14, gestor uv."
     assert res.gitignore_added == (".lictor/", "__pycache__/")
