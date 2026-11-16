@@ -132,7 +132,10 @@ jobs:
       # run in parts, and the `coverage` control runs everything else. The acceptance runs no test
       # the `coverage` control runs. A control declared at L3 in lictor.json would be skipped here
       # too: Lictor declares none.
+      # Its own cut, below the job's: if it hangs, only this step stops, and the next one still
+      # keeps `.lictor/check/`. A cancelled job runs no step after it, so it would leave no log.
       - run: uv run lictor check --keep-going --level L1,L2,L4,L5
+        timeout-minutes: 12
       # Logs, reports and the mutation survivors: what tells two passes or two platforms apart.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
