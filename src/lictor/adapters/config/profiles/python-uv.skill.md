@@ -31,3 +31,13 @@ unitarios, en modo `measure`: no bloquea nada, y su porcentaje sale en «Puntuac
 `report.md` y en `lictor check`. Solo corre si el proyecto tiene `pytest-cov`. Sin él, cada run lo
 muestra como omitido, no como fallido. Si la persona quiere medir cobertura, o un mínimo, que lo
 añada antes del run con `uv add --dev pytest-cov`.
+
+**Cuándo corre cada control:** los cuatro del perfil (`lint`, `types`, `unit` y `coverage`) van
+en cada intento. Si la persona añade una mutación (por ejemplo, con `mutmut`) o una auditoría de
+dependencias (`pip-audit`), propón `"stage": "check"`: la mutación es demasiado lenta para cada
+intento, y el agente no puede cambiar las dependencias que se auditan. Por ejemplo, con
+`pip-audit` añadido antes del run con `uv add --dev pip-audit`:
+`{"id": "audit", "level": "L4", "run": "uv run pip-audit", "report": "exit-code", "stage": "check"}`.
+Si un control que añadió ya está en `lictor.json`, basta con añadirle `"stage": "check"`.
+Un control de secretos (`gitleaks`) va en cada intento: el agente puede escribir un secreto en
+`src/`, y es rápido.

@@ -73,14 +73,17 @@ def test_check_passes_and_filters_by_level_and_id(make_project: ProjectFactory) 
 def test_check_keeps_going_and_shows_where_each_failure_left_its_output(
     make_project: ProjectFactory,
 ) -> None:
+    # A run leaves `medida` to `check` (ADR-0007): its failure says so, and blocks all the same.
     failing = {"id": "medida", "level": "L5", "run": "false", "report": "exit-code"}
-    root = make_project(extra_controls=[failing, {**LOCAL_VENV, "level": "L5"}])
+    root = make_project(
+        extra_controls=[{**failing, "stage": "check"}, {**LOCAL_VENV, "level": "L5"}]
+    )
 
     code, output = _check(root, "--level", "L5", "--keep-going")
 
     assert code == 10
-    assert "✗ medida" in output
-    assert "✗ venv-local" in output
+    assert "✗ medida (solo en check) (" in output
+    assert "✗ venv-local (" in output
     assert "salida: .lictor/check/medida.log" in output
 
 

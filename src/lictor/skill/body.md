@@ -104,13 +104,24 @@ ejecutar, y el run lo salta.
      agente recibe el fallo en el siguiente intento. En `measure` el porcentaje solo sale en el
      informe: el agente no ve lo que no bloquea, y medir sin umbral no cambia lo que hace. El
      número lo decide la persona.
+   - **Cuándo corre cada control** (`stage`). Por defecto, `"attempt"`: en cada intento de un
+     run, y el agente recibe su fallo. Con `"stage": "check"` el run no lo ejecuta y solo corre en
+     `lictor check`. Propón `check` cuando el agente no necesita ver el fallo para corregir su
+     trabajo: porque el control es demasiado lento para cada intento, o porque el agente no
+     puede cambiar lo que comprueba (las dependencias, por ejemplo). Lo que el agente tiene que
+     ver va en cada intento. Al proponer `check`, dile dos cosas a la persona:
+     - hay que añadir `lictor check` a la CI del proyecto: si no, nadie ejecuta ese control, y
+       `lictor doctor` lo recuerda con un ⚠;
+     - si `lictor check` falla después de un run, los escenarios siguen en verde y el arreglo es
+       suyo, como una CI que falla después de fusionar.
 2. Pide a la persona que haga el commit: el run parte del último commit, y lo que no esté
    confirmado no entra. Conviene commitear también `.claude/skills/lictor/`: el esbozo lo comparte
    el equipo y el agente de Lictor no lo carga.
 3. `lictor doctor` comprueba la configuración, el repositorio, la identidad git, el ejecutor, los
    comandos, el entorno de verificación y los escenarios. Antes del commit marca con ✗ el
    repositorio y el árbol, y no construye el entorno, pero los escenarios sí los valida.
-   `lictor check` ejecuta los controles en un clon limpio, como haría un run.
+   `lictor check` ejecuta los controles en un clon limpio, como haría un run, y además los que
+   un run deja para `check`, marcados «(solo en check)».
 4. Si ya hay código que cumple escenarios: `lictor register <ID>…`, antes del primer run y
    lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
 5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.

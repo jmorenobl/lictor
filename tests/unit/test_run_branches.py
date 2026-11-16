@@ -56,10 +56,10 @@ def test_a_branch_given_resumes_only_that_one() -> None:
     assert resume_choice([], "lictor/c") == (None, None)
 
 
-def test_the_hint_names_the_branch_and_how_to_integrate_it() -> None:
-    hint = integration_hint("lictor/iva")
+def test_the_hint_names_the_branch_its_worktree_and_how_to_integrate_it() -> None:
+    hint = integration_hint("lictor/iva", "/w/iva")
 
-    assert "rama lictor/iva" in hint
+    assert "rama lictor/iva, en `/w/iva`" in hint
     assert "`git merge lictor/iva`" in hint
     assert "pull request" in hint
 

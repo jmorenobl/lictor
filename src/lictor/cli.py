@@ -344,6 +344,7 @@ def doctor(
                 skill=True,
                 uncommitted_warns=not checkout_repository(resolved_cwd).is_linked_worktree(),
                 config_problem=config_problem,
+                check_stage=True,
             )
             report = preconditions.execute(request)
         return _echo_checks(report)
@@ -387,7 +388,8 @@ def check(
 ) -> None:
     """Verifica el proyecto como `lictor run`: en un clon limpio y en el entorno de verificación.
 
-    Lo que está sin confirmar se verifica como el commit que resultaría de confirmarlo.
+    Ejecuta también los controles con `"stage": "check"`, que un run deja para aquí. Lo que está
+    sin confirmar se verifica como el commit que resultaría de confirmarlo.
     """
 
     def _execute() -> int:
@@ -413,13 +415,16 @@ def check(
             )
 
         typer.echo(f"Verificado: {res.subject}")
+        # A failure after a run reads as what it is: something the run left for later (ADR-0007).
+        only_here = {c.id for c in runtime.graph_context.check_controls}
         for name, cr in res.check.control_results.items():
+            stage = " (solo en check)" if name in only_here else ""
             if cr.skipped:
-                typer.echo(f"- {name} omitido: {cr.skipped}")
+                typer.echo(f"- {name}{stage} omitido: {cr.skipped}")
                 continue
             status_char = "✓" if cr.ok else "✗"
             score = f": {describe_score(cr.score)}" if cr.score else ""
-            typer.echo(f"{status_char} {name} ({cr.duration_ms}ms){score}")
+            typer.echo(f"{status_char} {name}{stage} ({cr.duration_ms}ms){score}")
             if not cr.ok and cr.output_path:
                 typer.echo(f"  salida: {cr.output_path}")
 

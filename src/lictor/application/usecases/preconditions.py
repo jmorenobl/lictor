@@ -7,7 +7,7 @@ code from the kind of each problem: the project's (10) or the machine's (40).
 import os
 import posixpath
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -18,8 +18,14 @@ from lictor.application.skill import skill_stub_warning
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
-from lictor.domain.rules import NO_COMMITS, missing_executables
+from lictor.domain.rules import (
+    CHECK_STAGE_ONLY,
+    NO_COMMITS,
+    control_label,
+    missing_executables,
+)
 from lictor.domain.run_branches import uncommitted_left_out
+from lictor.domain.stages import check_controls_warning
 
 EnvironmentCheck = Literal["run", "throwaway", "none"]
 UNCONFIGURED = "no comprobado: la configuración no carga"
@@ -57,6 +63,9 @@ class PreconditionsRequest:
     skill: bool = False
     # Why the configuration didn't load, for `doctor` to tell it beside everything else (F30).
     config_problem: str | None = None
+    # `doctor` answers for `lictor check` too: it also looks for the `check` controls' programs,
+    # and warns that a run doesn't run them. A run and a resume only need the `attempt` ones.
+    check_stage: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,7 +84,9 @@ class PreconditionsReport:
 class CheckPreconditions:
     """Check the repository, git, the agent, the temporary directory and the commands.
 
-    `commands` maps a label that completes "el comando …" to each command verification runs.
+    `commands` maps a label that completes "el comando …" to each command a run verifies with;
+    `check_stage_commands` maps the id of each control only `lictor check` runs to its command
+    (ADR-0007).
     `aside` is the environment a throwaway is made from, so that its events stay out of the runs'
     journal; without it, the run's own is used. `spec_source` checks the features when asked.
     Without a configuration there is neither an executor nor an environment to build: what needs
@@ -87,6 +98,7 @@ class CheckPreconditions:
     environment: VerificationEnvironment | None
     project_root: Path
     commands: Mapping[str, str] = field(default_factory=dict)
+    check_stage_commands: Mapping[str, str] = field(default_factory=dict)
     aside: VerificationEnvironment | None = None
     spec_source: SpecSource | None = None
 
@@ -103,6 +115,8 @@ class CheckPreconditions:
             checks.append(self._features())
         if req.skill and (warning := skill_stub_warning(self.project_root)):
             checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
+        if req.check_stage and self.check_stage_commands:
+            checks.append(self._check_stage())
         checks.append(self._identity())
         executor, cli_version = self._executor()
         checks.append(executor)
@@ -114,15 +128,7 @@ class CheckPreconditions:
             checks.append(PreconditionCheck("Entorno de verificación", skipped=UNCONFIGURED))
             return PreconditionsReport(tuple(checks), cli_version)
         checks.append(
-            PreconditionCheck(
-                "Comandos de verificación",
-                tuple(
-                    missing_executables(
-                        self.commands,
-                        lambda program: self._found(environment, program, has_commits),
-                    )
-                ),
-            )
+            self._commands(req, lambda program: self._found(environment, program, has_commits))
         )
         checks.append(
             self._environment(
@@ -161,6 +167,35 @@ class CheckPreconditions:
             "Escenarios",
             tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking),
             warnings=tuple(str(p) for p in problems if not p.blocking),
+        )
+
+    def _check_stage(self) -> PreconditionCheck:
+        """Warn, without stopping anything, that a run leaves some controls to `lictor check`."""
+        return PreconditionCheck(
+            "Momento de los controles",
+            warnings=(check_controls_warning(list(self.check_stage_commands)),),
+        )
+
+    def _commands(
+        self, req: PreconditionsRequest, found: Callable[[str], bool]
+    ) -> PreconditionCheck:
+        """Whether the program of each command a run verifies with can be found.
+
+        `doctor` also looks for the `check` controls' (ADR-0007), but a missing one is a warning:
+        a run starts without it, and only `lictor check` would fail. An empty command is still the
+        project's mistake, whichever stage it belongs to.
+        """
+        problems = missing_executables(self.commands, found)
+        if not req.check_stage:
+            return PreconditionCheck("Comandos de verificación", tuple(problems))
+        later = missing_executables(
+            {control_label(cid): run for cid, run in self.check_stage_commands.items()}, found
+        )
+        problems += [p for p in later if p.kind == "config"]
+        return PreconditionCheck(
+            "Comandos de verificación",
+            tuple(problems),
+            warnings=tuple(f"{p.message} {CHECK_STAGE_ONLY}" for p in later if p.kind != "config"),
         )
 
     def _identity(self) -> PreconditionCheck:

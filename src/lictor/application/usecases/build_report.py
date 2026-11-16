@@ -11,7 +11,7 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
-from lictor.domain.rules import describe_score, score_from_record
+from lictor.domain.rules import describe_score, minimum_text, score_from_record
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -111,6 +111,17 @@ class BuildReportResult:
 
     report_path: Path
     content: str
+
+
+def _check_control_line(control: Mapping[str, Any]) -> str:
+    """A control the run left to `lictor check`, as `run.started` listed it."""
+    mode = "mide" if control.get("mode") == "measure" else "bloquea"
+    minimum = control.get("min_score")
+    # The journal is read as data: a `true` there is no minimum, though Python counts it an int.
+    floor = ""
+    if isinstance(minimum, int | float) and not isinstance(minimum, bool):
+        floor = f", mínimo {minimum_text(minimum)} %"
+    return f"- **{control.get('id', '')}** ({control.get('level', '')}, {mode}{floor})"
 
 
 def _journal_lines(damage: JournalDamage) -> list[str]:
@@ -322,6 +333,7 @@ class BuildReport:
             "quarantines": {},
             "failed_by_level": defaultdict(int),
             "attempts": [],
+            "check_controls": [],
             "measures": [],
             "scores": [],
             "skipped_controls": [],
@@ -368,6 +380,13 @@ class BuildReport:
         info["lictor_version"] = ev.data.get("lictor_version", "0.1.0")
         info["cli_version"] = ev.data.get("cli_version", info["cli_version"])
         info["profile"] = ev.data.get("profile", info["profile"])
+        # A journal without the field, from before ADR-0007, had no `check` controls.
+        listed = ev.data.get("check_controls", [])
+        info["check_controls"] = [
+            _check_control_line(c)
+            for c in (listed if isinstance(listed, list) else [])
+            if isinstance(c, dict)
+        ]
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
         scens = ev.data.get("scenarios", [])
@@ -607,6 +626,11 @@ class BuildReport:
             lines.extend(["", "## Verificaciones", "| Escenario | Intento | Resultado | Error |"])
             lines.append("|---|---|---|---|")
             lines.extend(info["attempts"])
+
+        lines.extend(["", "## Controles solo en `lictor check`"])
+        lines.extend(
+            info["check_controls"] or ["- *Ninguno: todos los controles corren en cada intento.*"]
+        )
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])
