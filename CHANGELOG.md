@@ -7,6 +7,68 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.4.0] - 2026-11-16
+
+Cada control dice cuándo corre: en cada intento de un run o solo en `lictor check`. Los tests
+unitarios corren una vez por intento, y `coverage` puntúa esa misma ejecución. Los informes se leen
+como hechos y los veredictos los da el dominio, lo que corrige varios casos en que un informe roto
+pasaba por bueno.
+
+### Al actualizar desde la 0.3.0
+
+Lo que deja de funcionar, y qué hacer en cada caso:
+
+- **`"profile": "python-uv@0.1"` sale con 10.** Cámbialo por `"python-uv@0.2"` en `lictor.json`.
+  Es lo único que necesita un `lictor.json` escrito por `lictor init` de la 0.3.0, salvo que
+  cambie `coverage` o `unit` como en el punto siguiente.
+- **Dos cambios por `id` que valían en la 0.3.0 salen con 10**, porque `coverage` ya no ejecuta
+  nada: lee la ejecución de `unit`. El mensaje dice cómo salir:
+  - `timeout_s`, `empty_exit_codes` o `when_exists` en `coverage`: escríbelos en `unit`.
+  - `{"id": "unit", "enabled": false}` sin quitar `coverage`: quítalo también
+    (`{"id": "coverage", "enabled": false}`) o dale a `coverage` un `run` propio.
+- **El `fail_under` de `[tool.coverage.report]` deja de aplicarse en la verificación, y nada lo
+  avisa.** El perfil pasa `--cov-fail-under=0`, porque si no haría fallar `unit` sin ningún test en
+  rojo. Si tu proyecto bloqueaba con él, escribe el umbral como `min_score`:
+  `{"id": "coverage", "mode": "block", "min_score": 80}`.
+- **Una ejecución a medias de la 0.3.0 no se reanuda** (exit 10): la huella de la configuración
+  cambia con el perfil y con `stage`. Termínala con la 0.3.0 antes de actualizar, o empieza otra
+  con `lictor run --new`.
+- **`acceptance.report` sale con 10**: la aceptación siempre lee un informe JUnit. Quítalo de
+  `lictor.json`.
+- **`when_plugin` exige un perfil con `plugins_command`**, también en un control que añade el
+  proyecto: antes, sin él, el control se ejecutaba a ciegas. `python-uv` lo tiene, así que con este
+  perfil no cambia nada.
+- **Algunos informes que pasaban ahora fallan**, porque que pasaran era un defecto: un JUnit
+  ausente o vacío, un informe de cobertura que no mide nada con `min_score`, una mutación sin
+  mutantes probados y uno con recuentos imposibles. Están en «Corregido».
+- **El journal escribe `lictor.verify.finished.v2`**, sin `control_durations`: cada control con lo
+  que le pasó (`outcome`: omitido, no ejecutado o ejecutado, con veredicto o sin él si manipuló el
+  estado) y la aceptación aparte. `report.md` cuenta los eventos `v1` como de una versión anterior
+  y no los interpreta. Si algo tuyo lee el journal, tiene que leer el formato nuevo.
+
+### Cambiado
+
+- **`coverage` puntúa la ejecución de `unit`** (ADR-0008, perfil `python-uv@0.2`). Los tests
+  unitarios corren una vez por intento: `coverage` es un control lector, con `reads: "unit"` y
+  `adds`, los argumentos que `unit` recibe al final de su comando, y no ejecuta nada. Sin
+  `pytest-cov` en el proyecto, `unit` corre tal cual y `coverage` sale omitido, como antes. Lo que
+  cambia al juzgar:
+  - **Un test que solo falla bajo cobertura bloquea**, porque rompe `unit`. El error que recibe el
+    agente nombra el comando con que se ejecutó `unit`.
+  - **Un test en rojo ya no bloquea a través de `coverage`.** Con `unit` en `measure` y `coverage`
+    en `block`, `coverage` puntúa, marca la puntuación «(de un unit fallido)» y bloquea solo si no
+    llega a su mínimo. Para que un test en rojo bloquee, `unit` va en `block`, como en el perfil.
+  - **Una pasada sin tests, con código en `src`, puntúa un 0 %.**
+  - `lictor check --control coverage` ejecuta también `unit` y lo dice; `--control unit` ejecuta
+    el mismo `unit` que el run.
+- **Todo comando se trocea al cargar.** Un `run`, un `adds` o un `acceptance.run` con comillas sin
+  cerrar es un error de configuración que nombra el control (exit 10), no una excepción al
+  ejecutarse.
+- Al terminar un run en un worktree enlazado, el motivo final nombra también la ruta del worktree,
+  además de la rama y de cómo integrarla.
+- El hash del entorno de verificación y del sello recorre el árbol con `os.scandir`: da el mismo
+  hash en la mitad de tiempo (de 0,4 s a 0,2 s en un entorno de 6499 ficheros).
+
 ### Añadido
 
 - **Cada control dice cuándo corre: `"stage": "attempt"` o `"check"`** (ADR-0007). Con
@@ -22,43 +84,21 @@ en su significado se anota en «Cambiado».
     sus programas y avisa (⚠) de que un run no los ejecuta, sin cambiar su código de salida; si
     falta el programa de uno, también es un aviso, porque un run empezaría igual. El
     `preflight` y la reanudación de un run solo buscan los programas de los controles `attempt`.
-  - Ningún control del perfil `python-uv` cambia: todos van en cada intento. La skill explica
-    cuándo proponer `check`.
+  - Con `{"id": "coverage", "stage": "check"}` la cobertura se mide solo en `check`, y la línea de
+    `unit` lo marca: allí `unit` corre con los argumentos de cobertura.
+  - Ningún control del perfil `python-uv` cambia de momento: todos van en cada intento. La skill
+    explica cuándo proponer `check` y que entonces la CI del proyecto tiene que ejecutar
+    `lictor check`.
   - Si `lictor check` falla después de un run, los escenarios siguen en verde: el arreglo es de la
     persona.
-
 - **Todo log empieza por el comando que se ejecutó** (ADR-0009), citado como lo necesitaría una
   shell: los de los controles, la aceptación, el rojo, los impostores y el `prepare` del entorno.
 
-### Cambiado
-
-- **El perfil pasa a `python-uv@0.2`: `coverage` puntúa la ejecución de `unit`** (ADR-0008). Los
-  tests unitarios corren una vez por intento: `coverage` es un control lector (`reads: "unit"` y
-  `adds`, los argumentos que `unit` recibe al final de su comando) y no ejecuta nada. Lo que cambia:
-  - **Un `lictor.json` con `python-uv@0.1` sale con 10**, con un mensaje que lo dice: las copias
-    enteras de la 0.2.0 ya no cargan. La huella cambia, así que un run a medias no se reanuda.
-  - **El `fail_under` de `[tool.coverage.report]` deja de aplicarse en la verificación**
-    (`--cov-fail-under=0`): sin eso haría fallar `unit` sin ningún test en rojo. El umbral se
-    escribe como `min_score` de `coverage`.
-  - **Un test que solo falla bajo cobertura pasa a bloquear**, porque rompe `unit`. El error que
-    recibe el agente nombra el comando con que se ejecutó `unit`.
-  - **Un test en rojo ya no bloquea a través de `coverage`.** Con `unit` en `measure` y `coverage`
-    en `block`, `coverage` puntúa, marca la puntuación «(de un unit fallido)» y bloquea solo si no
-    llega a su mínimo. Para que un test en rojo bloquee, `unit` va en `block`, como en el perfil.
-  - **Una pasada sin tests, con código en `src`, puntúa un 0 %.**
-  - `lictor check --control coverage` ejecuta también `unit` y lo dice; `--control unit` ejecuta
-    el mismo `unit` que el run. Con `{"id": "coverage", "stage": "check"}` la cobertura se mide
-    solo en `check`, y la línea de `unit` lo marca.
-  - El `coverage` del `lictor.json` de Lictor escribe su propio `run`, como antes.
-- **`when_plugin` exige un perfil con `plugins_command`.** Sin él, un control con `when_plugin`
-  es un error de carga, también en uno que añade el proyecto: antes se ejecutaba a ciegas.
-- **Todo comando se trocea al cargar.** Un `run`, un `adds` o un `acceptance.run` con comillas sin
-  cerrar es un error de configuración que nombra el control (exit 10), no una excepción al
-  ejecutarse.
+### Corregido
 
 - **Los informes se leen como hechos y los veredictos los da el dominio** (ADR-0009). Un informe
   que no se puede leer ya no hace fallar a Lictor con una excepción: es un informe no válido, con
-  su motivo. Lo que se juzga es lo mismo que antes, salvo estos cambios, que corrigen defectos:
+  su motivo. Lo que se juzga es lo mismo que antes, salvo estos defectos:
   1. Un JUnit ausente, vacío, en un directorio o en un enlace roto ya no pasa como «sin casos»: con
      0 tests, pytest escribe un JUnit sin casos, así que su ausencia es que la suite murió antes.
   2. La codificación de un JUnit sigue las reglas de XML en todos los sitios: uno con BOM o con
@@ -76,17 +116,6 @@ en su significado se anota en «Cambiado».
   8. Una mutación sin mutantes probados (todos omitidos) falla sin puntuación.
   9. Un informe de cobertura o de mutación que no es UTF-8 no es válido.
   10. Un comando cortado por su tiempo límite lo dice («Se cortó a los N s»), en vez de «código -9».
-- **`acceptance.report` desaparece**: la aceptación siempre lee un informe JUnit. Un `lictor.json`
-  que lo escriba sale con 10 y dice que lo quites; las copias enteras que escribía la 0.2.0 lo
-  llevan.
-- **El journal escribe `lictor.verify.finished.v2`**: cada control con lo que le pasó (`outcome`:
-  omitido, no ejecutado o ejecutado, con veredicto o sin él si manipuló el estado), la aceptación
-  aparte y sin `control_durations`. `report.md` cuenta los eventos `v1` como de una versión
-  anterior y no los interpreta, y distingue un control que manipuló el estado de uno que falló.
-- `stage` entra en la huella de la configuración, así que una ejecución a medias de la 0.3.0 no se
-  reanuda con esta versión (exit 10): termínala antes o empieza otra con `--new`.
-- Al terminar un run en un worktree enlazado, el motivo final nombra también la ruta del worktree,
-  además de la rama y de cómo integrarla.
 
 ## [0.3.0] - 2026-11-11
 
@@ -405,7 +434,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.3.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jmorenobl/lictor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jmorenobl/lictor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jmorenobl/lictor/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jmorenobl/lictor/compare/v0.1.0...v0.1.1
