@@ -550,12 +550,13 @@ def test_the_plugins_the_commands_load_are_known_once_built(tmp_path: Path) -> N
     assert environment.installed_plugins == ("propio", "plugin_a", "plugin_b")
 
 
-def test_without_a_plugin_command_nobody_can_say_what_is_installed(tmp_path: Path) -> None:
+def test_without_a_plugin_command_only_the_profiles_plugins_are_loaded(tmp_path: Path) -> None:
+    """ADR-0008, point 3: the list is always known; a control can't need a plugin then."""
     environment, _ = _environment(tmp_path, _Builder(), replace(WITH_PLUGINS, plugins_command=""))
 
     environment.ensure("R")
 
-    assert environment.installed_plugins is None
+    assert environment.installed_plugins == ("propio",)
 
 
 def test_plugins_are_asked_after_prepare_and_inside_the_environment(tmp_path: Path) -> None:

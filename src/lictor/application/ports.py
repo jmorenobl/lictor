@@ -220,6 +220,25 @@ class CommandRunner(Protocol):
         ...
 
 
+class VerificationCommands(Protocol):
+    """Where a run's verification commands run: an environment of their own, guarded by a hash.
+
+    `installed_plugins` is what the commands load: the profile's and what its `plugins_command`
+    found, none if it declares no command. A control can only need a plugin when it does.
+    """
+
+    @property
+    def installed_plugins(self) -> tuple[str, ...]: ...
+
+    def ensure(self, run_id: str) -> str | None:
+        """Build it if needed; say what changed under the last commands, if anything."""
+        ...
+
+    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
+        """Run a verification command inside the environment."""
+        ...
+
+
 class ReportReader[R](Protocol):
     """Reads what a command left at its report path, as facts; it never judges (ADR-0009).
 

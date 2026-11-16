@@ -98,12 +98,19 @@ ejecutar, y el run lo salta.
    - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
      con el de un control del perfil cambian solo los campos escritos (`{"id": "unit",
      "timeout_s": 900}`), `"enabled": false` lo quita y otro `id` añade un control, con `level`,
-     `run` y `report`.
+     `report` y `run`.
+   - Un control puede leer la ejecución de otro en vez de ejecutar un comando propio: tiene
+     `reads` (el control cuya ejecución lee) y `adds` (los argumentos que ese control recibe), y
+     no tiene `run`. Así una misma suite corre una vez y dos controles la juzgan: uno, si los
+     tests pasan, y el otro, su puntuación. Quitar el control leído, o dejarlo solo en `check`
+     con su lector en cada intento, es un error que dice cómo salir; la skill del perfil dice
+     cuáles son.
    - Si a la persona le importan los tests unitarios, ofrécele un mínimo de cobertura. Con
      `{"id": "coverage", "mode": "block", "min_score": 80}` el control bloquea por debajo, y el
      agente recibe el fallo en el siguiente intento. En `measure` el porcentaje solo sale en el
      informe: el agente no ve lo que no bloquea, y medir sin umbral no cambia lo que hace. El
-     número lo decide la persona.
+     número lo decide la persona, y se escribe siempre como `min_score`: un umbral que la
+     herramienta lea de la configuración del proyecto no se aplica en la verificación.
    - **Cuándo corre cada control** (`stage`). Por defecto, `"attempt"`: en cada intento de un
      run, y el agente recibe su fallo. Con `"stage": "check"` el run no lo ejecuta y solo corre en
      `lictor check`. Propón `check` cuando el agente no necesita ver el fallo para corregir su

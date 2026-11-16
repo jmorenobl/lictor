@@ -31,7 +31,7 @@ FEATURE = (
 )
 
 CONFIG = {
-    "profile": "python-uv@0.1",
+    "profile": "python-uv@0.2",
     "backend": {"kind": "fake", "model": "fake-model-1"},
     "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
     "acceptance": {"run": "echo test {out}"},

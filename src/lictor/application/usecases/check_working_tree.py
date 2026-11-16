@@ -19,7 +19,7 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
-from lictor.domain.controls import CommandControl
+from lictor.domain.controls import Control
 from lictor.domain.errors import PreconditionError
 from lictor.domain.rules import NO_COMMITS
 
@@ -31,7 +31,7 @@ class CheckWorkingTreeRequest:
     """What to check; `rev` verifies that commit instead of the working tree."""
 
     run_id: str
-    controls: Sequence[CommandControl]
+    controls: Sequence[Control]
     acceptance: CheckAcceptanceSpec | None = None
     levels: Sequence[str] | None = None
     control_ids: Sequence[str] | None = None

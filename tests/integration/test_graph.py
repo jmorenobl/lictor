@@ -13,7 +13,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from lictor.adapters.agents.fake import FakeExecutor
-from lictor.adapters.config.models import ControlConfig
+from lictor.adapters.config.models import CommandControlConfig
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.spec.gherkin_source import GherkinSource
@@ -49,6 +49,7 @@ from lictor.orchestration.graph import (
     create_graph,
     get_sqlite_saver,
 )
+from tests.environments import PlainEnvironment
 from tests.readers import all_readers
 
 DRIVER_TEST_CODE = "def test_iva_001(): pass\ndef test_iva_002(): pass\n"
@@ -208,7 +209,7 @@ Característica: IVA de facturas
     )
     verify_attempt = VerifyAttempt(
         vcs=vcs,
-        runner=runner,
+        environment=PlainEnvironment(runner),
         readers=all_readers(),
         project_root=tmp_path,
     )
@@ -303,7 +304,7 @@ def test_graph_mode_good(tmp_path: Path) -> None:
 
 
 CHECK_CONTROLS = [
-    ControlConfig(
+    CommandControlConfig(
         id="mutation",
         level="L5",
         run="mutar {out}",
@@ -311,7 +312,7 @@ CHECK_CONTROLS = [
         stage="check",
         min_score=95,
     ),
-    ControlConfig(id="audit", level="L4", run="auditar", report="exit-code", stage="check"),
+    CommandControlConfig(id="audit", level="L4", run="auditar", report="exit-code", stage="check"),
 ]
 GOOD_FILES = {
     "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},

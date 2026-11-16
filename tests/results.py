@@ -8,6 +8,7 @@ from lictor.domain.results import (
     AcceptanceRun,
     Executed,
     NotExecuted,
+    Read,
     Skipped,
     Unjudged,
     VerifyResult,
@@ -29,6 +30,7 @@ class Seen:
     output_path: str | None = None
     score: Score | None = None
     tampered: bool = False
+    reads: str | None = None  # the control whose run a reader read
 
 
 def ids(result: VerifyResult | CheckProjectResult) -> list[str]:
@@ -59,6 +61,14 @@ def seen(result: VerifyResult | CheckProjectResult, control_id: str) -> Seen:
                 mode=mode,
                 output_path=log,
                 score=judgement.score,
+            )
+        case Read(reads=reads, verdict=verdict) as read:
+            return Seen(
+                isinstance(verdict, Passed),
+                error=verdict.reason if isinstance(verdict, Failed) else None,
+                mode=mode,
+                score=read.score,
+                reads=reads,
             )
     raise AssertionError(entry.outcome)
 

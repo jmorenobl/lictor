@@ -59,7 +59,7 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     lictor_json = {
-        "profile": "python-uv@0.1",
+        "profile": "python-uv@0.2",
         "backend": {"kind": "fake", "model": "fake-model-1"},
         "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
         "acceptance": {"run": "echo test {out}"},
@@ -88,7 +88,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     assert runner.invoke(app, ["init", "--cwd", str(tmp_path)]).exit_code == 0
     config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
     config["backend"]["kind"] = "fake"
-    config["controls"] = [{"id": "unit", "stage": "check"}]
+    config["controls"] = [{"id": "unit", "stage": "check"}, {"id": "coverage", "stage": "check"}]
     (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
     (tmp_path / "features").mkdir()
     (tmp_path / "features" / "x.feature").write_text(
@@ -108,7 +108,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
     assert "⚠ Skill de Lictor:" in result.output
     assert "ejecuta `lictor skill`" in result.output
     assert (
-        "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit."
+        "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit y coverage."
         in result.output
     )
 
@@ -195,7 +195,7 @@ def test_cli_init_summarizes_what_it_wrote_and_says_the_next_step(tmp_path: Path
 
     assert result.exit_code == 0, result.output
     out = result.output
-    assert "Perfil: python-uv@0.1" in out
+    assert "Perfil: python-uv@0.2" in out
     assert "Modelo: claude-sonnet-5-5" in out
     assert "Python >=3.14" in out
     assert ".gitignore: añadidas .lictor/" in out

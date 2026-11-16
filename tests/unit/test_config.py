@@ -30,13 +30,14 @@ from lictor.adapters.config.models import (
     DEFAULT_MODEL,
     AcceptanceConfig,
     BackendConfig,
-    ControlConfig,
+    CommandControlConfig,
     LictorConfig,
     LimitsConfig,
     PathsConfig,
     Profile,
     ProfileVerification,
     ProjectVerification,
+    ReaderControlConfig,
     RetentionConfig,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
@@ -52,7 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_load_python_uv_profile() -> None:
     profile = load_profile("python-uv")
     assert profile.name == "python-uv"
-    assert profile.version == "0.1"
+    assert profile.version == "0.2"
     assert profile.status == "stable"
     assert profile.detect == ["pyproject.toml"]
     assert "tests/acceptance/" in profile.paths.driver
@@ -91,9 +92,9 @@ def test_the_driver_is_told_not_to_touch_the_import_path() -> None:
 
 
 def test_load_profile_with_version_suffix() -> None:
-    profile = load_profile("python-uv@0.1")
+    profile = load_profile("python-uv@0.2")
     assert profile.name == "python-uv"
-    assert profile.version == "0.1"
+    assert profile.version == "0.2"
 
 
 def test_load_profile_unknown_or_wrong_version_raises_config_error() -> None:
@@ -142,7 +143,7 @@ def test_controls_must_have_unique_ids() -> None:
 
 @pytest.mark.parametrize("level", ["L1", "L2", "L4", "L5"])
 def test_control_allowed_levels(level: str) -> None:
-    ctrl = ControlConfig.model_validate(
+    ctrl = CommandControlConfig.model_validate(
         {
             "id": "chk",
             "level": level,
@@ -157,7 +158,7 @@ def test_control_allowed_levels(level: str) -> None:
 @pytest.mark.parametrize("invalid_level", ["L0", "L3", "L6", "invalid"])
 def test_control_rejects_disallowed_levels(invalid_level: str) -> None:
     with pytest.raises(ValidationError):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {
                 "id": "chk",
                 "level": invalid_level,
@@ -170,7 +171,7 @@ def test_control_rejects_disallowed_levels(invalid_level: str) -> None:
 
 def test_junit_report_requires_out_placeholder_in_control() -> None:
     with pytest.raises(ValidationError, match=r"\{out\}"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {
                 "id": "unit",
                 "level": "L2",
@@ -180,7 +181,7 @@ def test_junit_report_requires_out_placeholder_in_control() -> None:
             }
         )
 
-    valid = ControlConfig.model_validate(
+    valid = CommandControlConfig.model_validate(
         {
             "id": "unit",
             "level": "L2",
@@ -197,6 +198,33 @@ def test_the_acceptance_needs_out_where_it_leaves_its_report() -> None:
         AcceptanceConfig.model_validate({"run": "cmd acceptance"})
 
     assert AcceptanceConfig.model_validate({"run": "cmd {out}"}).run == "cmd {out}"
+
+
+def test_a_control_whose_command_doesnt_split_is_refused_at_load_naming_it() -> None:
+    """ADR-0008, point 1: an unclosed quote is a configuration error, not a crash in a run."""
+    with pytest.raises(ValidationError, match=r"run del control 'unit'.*No closing quotation"):
+        CommandControlConfig.model_validate(
+            {"id": "unit", "level": "L2", "run": "cmd 'tests --xml {out}", "report": "junit"}
+        )
+
+
+def test_an_acceptance_whose_command_doesnt_split_is_refused_at_load() -> None:
+    with pytest.raises(ValidationError, match=r"acceptance.*No closing quotation"):
+        AcceptanceConfig.model_validate({"run": 'cmd "{out}'})
+
+
+def test_a_project_control_that_doesnt_split_stops_the_load(tmp_path: Path) -> None:
+    (tmp_path / "lictor.json").write_text(
+        json.dumps(
+            {
+                "profile": "python-uv",
+                "controls": [{"id": "lint", "run": "uv run ruff check 'src"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"run del control 'lint'"):
+        load_config(tmp_path)
 
 
 @pytest.mark.parametrize("report", ["junit", "exit-code"])
@@ -297,12 +325,12 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
     config_path = tmp_path / "lictor.json"
     assert config_path.is_file()
     assert cfg.version == "0.1"
-    assert cfg.profile == "python-uv@0.1"
+    assert cfg.profile == "python-uv@0.2"
 
     raw_disk = json.loads(config_path.read_text(encoding="utf-8"))
     assert "detect" not in raw_disk
     assert "status" not in raw_disk
-    assert raw_disk["profile"] == "python-uv@0.1"
+    assert raw_disk["profile"] == "python-uv@0.2"
 
     loaded = load_config(tmp_path)
     assert loaded == cfg
@@ -321,7 +349,7 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
 
 def test_load_config_from_repo_root_lictor_json() -> None:
     cfg = load_config(REPO_ROOT / "lictor.json")
-    assert cfg.profile == "python-uv@0.1"
+    assert cfg.profile == "python-uv@0.2"
     assert cfg.paths.writable == ["src/", "tests/unit/"]
     assert any(c.id == "architecture" for c in cfg.controls)
 
@@ -348,7 +376,7 @@ def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:
         load_config(bad_json)
 
     invalid_cfg = tmp_path / "invalid.json"
-    invalid_cfg.write_text(json.dumps({"profile": "python-uv@0.1", "backend": {"model": "opus"}}))
+    invalid_cfg.write_text(json.dumps({"profile": "python-uv@0.2", "backend": {"model": "opus"}}))
     with pytest.raises(ConfigError):
         load_config(invalid_cfg)
 
@@ -377,7 +405,7 @@ def test_project_acceptance_inherits_the_failure_codes_of_its_profile(tmp_path: 
     config.write_text(
         json.dumps(
             {
-                "profile": "python-uv@0.1",
+                "profile": "python-uv@0.2",
                 "acceptance": {"run": "otra {out}"},
             }
         ),
@@ -460,6 +488,31 @@ def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path)
     config = load_config(_project(tmp_path), profiles_dir=profiles)
 
     with pytest.raises(ConfigError, match=r"lictor_project_path\.py"):
+        resolve_defences(config, profiles)
+
+
+def test_a_profile_control_can_only_need_a_plugin_if_the_profile_lists_them() -> None:
+    """ADR-0008, point 3: without a list, "skip without the plugin" can't be decided."""
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["verification"]["plugins_command"] = ""
+
+    with pytest.raises(ValidationError, match=r"'coverage'.*plugins_command"):
+        Profile.model_validate(data)
+
+
+def test_a_project_control_can_only_need_a_plugin_if_its_profile_lists_them(
+    tmp_path: Path,
+) -> None:
+    profiles = _profiles_copy(tmp_path / "profiles")
+    profile_file = profiles / "python-uv.json"
+    data = json.loads(profile_file.read_text(encoding="utf-8"))
+    data["verification"]["plugins_command"] = ""
+    data["controls"] = [c for c in data["controls"] if "when_plugin" not in c]
+    profile_file.write_text(json.dumps(data), encoding="utf-8")
+    extra = {"id": "extra", "level": "L2", "run": "x", "report": "exit-code", "when_plugin": "p"}
+    config = load_config(_project(tmp_path, controls=[extra]), profiles_dir=profiles)
+
+    with pytest.raises(ConfigError, match=r"'extra'.*plugins_command"):
         resolve_defences(config, profiles)
 
 
@@ -551,7 +604,7 @@ def test_invalid_banned_pattern_is_rejected() -> None:
 
 def _project(tmp_path: Path, **fields: object) -> Path:
     path = tmp_path / "lictor.json"
-    path.write_text(json.dumps({"profile": "python-uv@0.1", **fields}), encoding="utf-8")
+    path.write_text(json.dumps({"profile": "python-uv@0.2", **fields}), encoding="utf-8")
     return path
 
 
@@ -907,7 +960,7 @@ def test_python_uv_unit_control_runs_only_where_its_tests_exist() -> None:
 @pytest.mark.parametrize("path", ["", "/abs/tests", "../fuera", "tests/../../fuera"])
 def test_control_when_exists_must_stay_inside_the_project(path: str) -> None:
     with pytest.raises(ValidationError, match="when_exists"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code", "when_exists": path}
         )
 
@@ -956,7 +1009,7 @@ def test_python_uv_unit_control_declares_the_empty_run_code() -> None:
 
 
 def test_control_without_empty_exit_codes_declares_none() -> None:
-    control = ControlConfig.model_validate(
+    control = CommandControlConfig.model_validate(
         {"id": "u", "level": "L2", "run": "cmd", "report": "exit-code"}
     )
     assert control.empty_exit_codes == []
@@ -982,7 +1035,7 @@ def test_a_lictor_json_with_allow_empty_says_what_to_write_instead(tmp_path: Pat
 
 def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
     with pytest.raises(ValidationError, match="'u' usa 'allow_empty', que ya no existe"):
-        ControlConfig.model_validate(
+        CommandControlConfig.model_validate(
             {"id": "u", "level": "L2", "run": "c", "report": "exit-code", "allow_empty": True}
         )
 
@@ -990,7 +1043,9 @@ def test_a_control_with_allow_empty_is_refused_even_without_a_profile() -> None:
 @pytest.mark.parametrize("report", ["junit", "mutation"])
 def test_a_control_that_reads_a_report_needs_its_path(report: str) -> None:
     with pytest.raises(ValidationError, match=f"report='{report}' debe incluir"):
-        ControlConfig.model_validate({"id": "m", "level": "L5", "run": "cmd", "report": report})
+        CommandControlConfig.model_validate(
+            {"id": "m", "level": "L5", "run": "cmd", "report": report}
+        )
 
 
 @pytest.mark.parametrize(("chars", "valid"), [(499, False), (500, True), (4000, True)])
@@ -1005,16 +1060,18 @@ def test_error_max_chars_keeps_room_for_the_reason(chars: int, valid: bool) -> N
 def test_min_score_belongs_to_a_control_with_a_score() -> None:
     mutation = {"id": "m", "level": "L5", "run": "x {out}", "report": "mutation"}
     coverage = {"id": "c", "level": "L2", "run": "x {out}", "report": "coverage"}
-    assert ControlConfig(**mutation, min_score=95).min_score == 95
-    assert ControlConfig(**coverage, min_score=80).min_score == 80
+    assert CommandControlConfig(**mutation, min_score=95).min_score == 95
+    assert CommandControlConfig(**coverage, min_score=80).min_score == 80
     with pytest.raises(ValidationError, match="solo vale con report='mutation' o 'coverage'"):
-        ControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
+        CommandControlConfig(id="l", level="L1", run="lint", report="exit-code", min_score=95)
 
 
 @pytest.mark.parametrize("minimum", [-1, 100.5])
 def test_min_score_is_a_percentage(minimum: float) -> None:
     with pytest.raises(ValidationError):
-        ControlConfig(id="m", level="L5", run="x {out}", report="mutation", min_score=minimum)
+        CommandControlConfig(
+            id="m", level="L5", run="x {out}", report="mutation", min_score=minimum
+        )
 
 
 def test_init_does_not_copy_the_driver_hints(tmp_path: Path) -> None:
@@ -1102,7 +1159,7 @@ def test_hints_left_to_the_profile_also_name_the_project_s_python(tmp_path: Path
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x"\nrequires-python = ">=3.13"\n', encoding="utf-8"
     )
-    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.2"}', encoding="utf-8")
 
     assert load_config(tmp_path).hints.startswith("Python >=3.13,")
 
@@ -1111,20 +1168,39 @@ def test_the_profile_measures_coverage_only_where_the_plugin_is_installed() -> N
     """It needs a dependency the agent can't add: without it, the control is skipped (F18)."""
     [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
 
+    assert isinstance(coverage, ReaderControlConfig)
     assert coverage.mode == "measure"
     assert coverage.when_plugin == "pytest_cov.plugin"
-    assert coverage.when_exists == "tests/unit"
-    assert "--cov" in coverage.run
 
 
-def test_the_profile_keeps_the_coverage_as_a_score() -> None:
-    """F29: the percentage was only in the log; now it is the control's score."""
+def test_the_profile_keeps_the_coverage_as_a_score_of_the_run_of_unit() -> None:
+    """F29 made the percentage a score; ADR-0008 reads it from the one run of unit."""
     [coverage] = [c for c in load_profile("python-uv").controls if c.id == "coverage"]
 
-    assert coverage.report == "coverage"
-    assert "--cov-report=json:{out}" in coverage.run
-    assert "--cov-branch" in coverage.run
+    assert isinstance(coverage, ReaderControlConfig)
+    assert (coverage.report, coverage.reads) == ("coverage", "unit")
+    assert "--cov-report=json:{out}" in coverage.adds
+    assert "--cov-branch" in coverage.adds
+    # The project's own threshold would fail unit with no test in red: a minimum is min_score.
+    assert "--cov-fail-under=0" in coverage.adds
+    # A table in unit's log would reach the prompt just when the suite doesn't start.
+    assert "--cov-report=term" not in coverage.adds
     assert coverage.min_score is None
+
+
+def test_a_lictor_json_that_asks_for_the_retired_profile_is_told_what_changed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+
+    with pytest.raises(ConfigError) as refused:
+        load_config(tmp_path)
+
+    assert refused.value.exit_code == ExitCode.PRECONDITION
+    assert str(refused.value) == (
+        "El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la "
+        "ejecución de unit (ver el CHANGELOG)"
+    )
 
 
 def test_a_project_asks_for_a_minimum_coverage_by_id(tmp_path: Path) -> None:

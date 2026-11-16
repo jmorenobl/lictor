@@ -15,9 +15,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Literal, assert_never
 
-from lictor.domain.controls import CommandControl, ControlMode
+from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.model import Candidate, Score, TestCaseResult
-from lictor.domain.reports import InvalidReport, JUnitReport, MissingReport, Report
+from lictor.domain.reports import (
+    CoverageReport,
+    InvalidReport,
+    JUnitReport,
+    MissingReport,
+    Report,
+    ReportOf,
+)
 from lictor.domain.rules import score_from_record
 from lictor.domain.verdicts import (
     Crashed,
@@ -26,6 +33,8 @@ from lictor.domain.verdicts import (
     Passed,
     Reported,
     Verdict,
+    coverage_read_verdict,
+    enforce_min_score,
     report_cases,
     report_score,
 )
@@ -89,15 +98,89 @@ class Executed:
     judgement: Judged | Unjudged
 
 
-type Outcome = Skipped | NotExecuted | Executed
+@dataclass(frozen=True)
+class Read:
+    """A reader's verdict over the coverage its read control's run left (ADR-0008, point 6).
+
+    It ran nothing, so it has no exit code, duration or log: those are its read control's.
+    """
+
+    reads: str
+    report: ReportOf[CoverageReport]
+    verdict: Verdict
+
+    @property
+    def score(self) -> Score | None:
+        return report_score(self.report)
+
+
+type CommandOutcome = Skipped | NotExecuted | Executed
+type ReaderOutcome = Skipped | NotExecuted | Read
+type Outcome = CommandOutcome | ReaderOutcome
 
 
 @dataclass(frozen=True)
-class ControlEntry:
-    """A control and what it ended up with: the mode is the control's, not the result's."""
+class CommandEntry:
+    """A control that runs a command, and what it ended up with: never a `Read`."""
 
     control: CommandControl
-    outcome: Outcome
+    outcome: CommandOutcome
+
+
+@dataclass(frozen=True)
+class ReaderEntry:
+    """A reader, and what it ended up with: never an `Executed`, because it runs nothing."""
+
+    control: ReaderControl
+    outcome: ReaderOutcome
+
+
+# The mode is the control's, not the result's.
+type ControlEntry = CommandEntry | ReaderEntry
+
+
+@dataclass(frozen=True)
+class ReadFact:
+    """What a reader reads: the verdict its read control got, and the coverage that run left."""
+
+    judged: "Judged"
+    coverage: ReportOf[CoverageReport]
+
+
+# What a reader finds at its turn. An unjudged read control ended the verification before it.
+type ReadSource = Skipped | NotExecuted | ReadFact
+
+
+def reader_outcome(reader: ReaderControl, source: ReadSource) -> ReaderOutcome:
+    """What a reader ends up with, from what its read control ended up with (ADR-0008, point 6).
+
+    A skipped read control skips it with the same reason; one that couldn't run leaves it
+    without a run to read. Otherwise it scores whatever report there is, whatever the verdict
+    of its read control, and its own `min_score` applies.
+    """
+    match source:
+        case Skipped(reason=reason):
+            return Skipped(reason)
+        case NotExecuted(reason=reason):
+            return NotExecuted(f"{reader.reads} no se ejecutó: {reason}")
+        case ReadFact(judged=judged, coverage=coverage):
+            verdict = coverage_read_verdict(coverage, ran_no_case=_ran_no_case(judged))
+            return Read(
+                reader.reads,
+                coverage,
+                enforce_min_score(verdict, report_score(coverage), reader.min_score),
+            )
+        case _:
+            assert_never(source)
+
+
+def _ran_no_case(judged: "Judged") -> bool:
+    """Whether a JUnit control passed with no case: how it counts a run with no tests."""
+    return (
+        isinstance(judged.verdict, Passed)
+        and isinstance(judged.report, JUnitReport)
+        and not judged.report.cases
+    )
 
 
 @dataclass(frozen=True)
@@ -165,6 +248,8 @@ def passed(outcome: Outcome) -> bool:
             return False
         case Executed(judgement=judgement):
             return isinstance(judgement, Judged) and isinstance(judgement.verdict, Passed)
+        case Read(verdict=verdict):
+            return isinstance(verdict, Passed)
         case _:
             assert_never(outcome)
 
@@ -174,11 +259,14 @@ def failure_of(outcome: Outcome, output: str = "") -> Block | None:
 
     The output joins the reason when only it can explain the failure: the command left no report,
     an unreadable one, or a JUnit report with no case. An unjudged result has no failure: its
-    reason is `L0-estado`'s.
+    reason is `L0-estado`'s. A reader's failure is its reason alone: it printed nothing, and the
+    output of the run it read belongs to its read control.
     """
     match outcome:
         case NotExecuted(reason=reason):
             return Block(reason)
+        case Read(verdict=verdict):
+            return Block(verdict.reason) if isinstance(verdict, Failed) else None
         case Executed(judgement=judgement):
             if not isinstance(judgement, Judged) or not isinstance(judgement.verdict, Failed):
                 return None
@@ -203,12 +291,31 @@ def consequence(entry: ControlEntry, output: str = "") -> Consequence:
 
     A control that tampered ends it whatever its mode: a `measure` control can't let that pass.
     """
-    if isinstance(entry.outcome, Executed) and isinstance(entry.outcome.judgement, Unjudged):
-        return StateTampered(entry.outcome.judgement.changes)
-    failure = failure_of(entry.outcome, output)
+    outcome = entry.outcome
+    if isinstance(outcome, Executed) and isinstance(outcome.judgement, Unjudged):
+        return StateTampered(outcome.judgement.changes)
+    failure = failure_of(outcome, output)
     if failure is None or entry.control.mode == "measure":
         return Proceed()
     return failure
+
+
+def failed_run_mark(reads: str) -> str:
+    """What a score read from a run whose own verdict failed carries (ADR-0008, point 8)."""
+    return f" (de un {reads} fallido)"
+
+
+def from_failed_run(read: Read, entries: Sequence[ControlEntry]) -> bool:
+    """Whether a reader read a run whose control failed, from both results of one verification.
+
+    It is one fact, kept once: in the read control's result, never copied into the reader's.
+    """
+    source = next((e.outcome for e in entries if e.control.id == read.reads), None)
+    return (
+        isinstance(source, Executed)
+        and isinstance(source.judgement, Judged)
+        and isinstance(source.judgement.verdict, Failed)
+    )
 
 
 def acceptance_cases(acceptance: AcceptanceRun) -> tuple[TestCaseResult, ...]:
@@ -277,7 +384,18 @@ class RecordedExecuted:
     judgement: RecordedJudged | RecordedUnjudged
 
 
-type RecordedControl = RecordedSkipped | RecordedNotExecuted | RecordedExecuted
+@dataclass(frozen=True)
+class RecordedRead:
+    """A reader's verdict, and the control whose run it read: no exit code, duration or log."""
+
+    mode: ControlMode
+    reads: str
+    passed: bool
+    reason: str | None
+    score: Score | None
+
+
+type RecordedControl = RecordedSkipped | RecordedNotExecuted | RecordedExecuted | RecordedRead
 
 
 @dataclass(frozen=True)
@@ -322,6 +440,15 @@ def control_record(entry: ControlEntry) -> dict[str, object]:
                 "reason": verdict.reason if isinstance(verdict, Failed) else None,
                 "score": asdict(judged.score) if judged.score else None,
                 "cases": _case_counts(judged.cases),
+            }
+        case Read(reads=reads, verdict=verdict) as read:
+            return {
+                "outcome": "read",
+                "mode": mode,
+                "reads": reads,
+                "passed": isinstance(verdict, Passed),
+                "reason": verdict.reason if isinstance(verdict, Failed) else None,
+                "score": asdict(read.score) if read.score else None,
             }
         case _:
             assert_never(entry.outcome)
@@ -390,20 +517,31 @@ def control_from_record(raw: object) -> RecordedControl | None:
     """A control's record read back, or None if it doesn't follow the schema of this version."""
     if not isinstance(raw, dict) or (mode := _mode(raw)) is None:
         return None
-    match raw.get("outcome"):
-        case "skipped":
+    match outcome := raw.get("outcome"):
+        case "skipped" | "not_executed":
             reason = _text(raw, "reason")
-            return None if reason is None else RecordedSkipped(mode, reason)
-        case "not_executed":
-            reason = _text(raw, "reason")
-            return None if reason is None else RecordedNotExecuted(mode, reason)
+            kind = RecordedSkipped if outcome == "skipped" else RecordedNotExecuted
+            return None if reason is None else kind(mode, reason)
         case "executed":
             ran, judgement = _ran_from(raw), _judgement_from(raw)
-            if ran is None or judgement is None:
-                return None
-            return RecordedExecuted(mode, ran, judgement)
+            return (
+                None if ran is None or judgement is None else RecordedExecuted(mode, ran, judgement)
+            )
+        case "read":
+            return _read_from(mode, raw)
         case _:
             return None
+
+
+def _read_from(mode: ControlMode, raw: Mapping[str, object]) -> RecordedRead | None:
+    reads, was_passed = _text(raw, "reads"), raw.get("passed")
+    if reads is None or not isinstance(was_passed, bool):
+        return None
+    score_raw = raw.get("score")
+    score = score_from_record(score_raw) if score_raw is not None else None
+    if score_raw is not None and score is None:
+        return None
+    return RecordedRead(mode, reads, was_passed, _text(raw, "reason"), score)
 
 
 def _judgement_from(raw: Mapping[str, object]) -> RecordedJudged | RecordedUnjudged | None:
@@ -420,6 +558,16 @@ def _judgement_from(raw: Mapping[str, object]) -> RecordedJudged | RecordedUnjud
     if score_raw is not None and score is None:
         return None
     return RecordedJudged(was_passed, _text(raw, "reason"), score, cases)
+
+
+def recorded_from_failed_run(read: RecordedRead, recorded: Mapping[str, RecordedControl]) -> bool:
+    """`from_failed_run` over what the journal kept of one verification."""
+    source = recorded.get(read.reads)
+    return (
+        isinstance(source, RecordedExecuted)
+        and isinstance(source.judgement, RecordedJudged)
+        and not source.judgement.passed
+    )
 
 
 def recorded_controls(raw: object) -> dict[str, RecordedControl]:

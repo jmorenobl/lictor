@@ -1,10 +1,11 @@
 """Results as variants, what a verification does with each, and the journal's codec (ADR-0009)."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
-from lictor.domain.controls import CommandControl, ControlMode
+from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.model import TestCaseResult
 from lictor.domain.reports import (
     CoverageReport,
@@ -18,6 +19,8 @@ from lictor.domain.results import (
     VERIFY_FINISHED,
     AcceptanceRun,
     Block,
+    CommandEntry,
+    CommandOutcome,
     ControlEntry,
     Executed,
     Judged,
@@ -25,10 +28,16 @@ from lictor.domain.results import (
     Outcome,
     Proceed,
     Ran,
+    Read,
+    ReaderEntry,
+    ReaderOutcome,
+    ReadFact,
+    ReadSource,
     RecordedAcceptance,
     RecordedExecuted,
     RecordedJudged,
     RecordedNotExecuted,
+    RecordedRead,
     RecordedRun,
     RecordedSkipped,
     RecordedUnjudged,
@@ -43,20 +52,23 @@ from lictor.domain.results import (
     control_from_record,
     control_record,
     failure_of,
+    from_failed_run,
     passed,
+    reader_outcome,
     recorded_controls,
     recorded_duration,
+    recorded_from_failed_run,
     verification_duration,
 )
-from lictor.domain.verdicts import Crashed, Execution, Failed, Passed, Reported
+from lictor.domain.verdicts import NOTHING_MEASURED, Crashed, Execution, Failed, Passed, Reported
 
 _FAILURE = TestCaseResult(name="f", status="failure")
 _PASS = TestCaseResult(name="p")
 _RAN = Ran(("cmd", "{out}"), Execution(1, 60, duration_ms=30), "r/control_x.log")
 
 
-def _entry(outcome: Outcome, mode: ControlMode = "block") -> ControlEntry:
-    return ControlEntry(CommandControl("x", "L1", "cmd", "junit", mode=mode), outcome)
+def _entry(outcome: CommandOutcome, mode: ControlMode = "block") -> ControlEntry:
+    return CommandEntry(CommandControl("x", "L1", "cmd", "junit", mode=mode), outcome)
 
 
 def _judged(report: Report | None, verdict: Passed | Failed) -> Executed:
@@ -141,7 +153,7 @@ def test_a_control_that_tampered_ends_the_verification_whatever_its_mode(mode: C
     ],
 )
 def test_what_a_verification_does_with_a_result(
-    outcome: Outcome, mode: ControlMode, expected: object
+    outcome: CommandOutcome, mode: ControlMode, expected: object
 ) -> None:
     assert consequence(_entry(outcome, mode)) == expected
 
@@ -210,7 +222,7 @@ _RECORDED_RUN = RecordedRun(1, 30, False, "r/control_x.log")
     ids=["skipped", "not_executed", "unjudged", "failed", "scored"],
 )
 def test_a_control_record_reads_back_as_what_it_kept(
-    outcome: Outcome, mode: ControlMode, recorded: object
+    outcome: CommandOutcome, mode: ControlMode, recorded: object
 ) -> None:
     record = control_record(_entry(outcome, mode))
 
@@ -334,3 +346,202 @@ def test_the_event_names_its_version() -> None:
     assert VERIFY_FINISHED == "lictor.verify.finished.v2"
     assert "lictor.verify.finished.v1" in OLDER_EVENTS
     assert VERIFY_FINISHED not in OLDER_EVENTS
+
+
+# --- ADR-0008: a reader's result, from its read control's ---
+
+_READER = ReaderControl("coverage", "L2", "unit", "--cov {out}")
+_MEASURED = CoverageReport(3, 4)
+_EMPTY = CoverageReport(0, 0)
+_NO_CASE = Judged(JUnitReport(()), Passed())
+_GREEN = Judged(JUnitReport((_PASS,)), Passed())
+_RED = Judged(JUnitReport((_FAILURE,)), Failed("Fallaron 1 casos de test"))
+_CUT = Judged(MissingReport(), Failed("Se cortó a los 60 s, su tiempo límite"))
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(Skipped("sin tests/unit"), Skipped("sin tests/unit"), id="skipped"),
+        pytest.param(
+            NotExecuted("el intento elimina tests/unit"),
+            NotExecuted("unit no se ejecutó: el intento elimina tests/unit"),
+            id="not-executed",
+        ),
+        pytest.param(
+            ReadFact(_NO_CASE, MissingReport()),
+            Read("unit", MissingReport(), Passed()),
+            id="no-case-no-report",
+        ),
+        pytest.param(
+            ReadFact(_NO_CASE, _EMPTY), Read("unit", _EMPTY, Passed()), id="no-case-nothing"
+        ),
+        pytest.param(
+            ReadFact(_GREEN, MissingReport()),
+            Read("unit", MissingReport(), Failed("Sin informe de cobertura")),
+            id="no-report",
+        ),
+        pytest.param(
+            ReadFact(_CUT, MissingReport()),
+            Read("unit", MissingReport(), Failed("Sin informe de cobertura")),
+            id="cut-without-report",
+        ),
+        pytest.param(
+            ReadFact(_GREEN, _EMPTY),
+            Read("unit", _EMPTY, Failed(NOTHING_MEASURED)),
+            id="nothing-measured",
+        ),
+        pytest.param(
+            ReadFact(_NO_CASE, InvalidReport("a medias")),
+            Read(
+                "unit",
+                InvalidReport("a medias"),
+                Failed("El informe de cobertura no es válido: a medias"),
+            ),
+            id="invalid-even-with-no-case",
+        ),
+        pytest.param(
+            ReadFact(_RED, _MEASURED), Read("unit", _MEASURED, Passed()), id="scores-a-red-run"
+        ),
+        pytest.param(
+            ReadFact(_NO_CASE, _MEASURED), Read("unit", _MEASURED, Passed()), id="zero-is-a-score"
+        ),
+    ],
+)
+def test_what_a_reader_ends_up_with(source: ReadSource, expected: ReaderOutcome) -> None:
+    """Each row of the table of ADR-0008, point 6; an unjudged unit never reaches the reader."""
+    assert reader_outcome(_READER, source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        pytest.param(
+            ReadFact(_NO_CASE, MissingReport()),
+            "El control no midió nada y declara un mínimo de 80 %",
+            id="nothing-to-score",
+        ),
+        pytest.param(
+            ReadFact(_GREEN, _MEASURED),
+            "La cobertura, 75,0 % (3 de 4 líneas), no llega al mínimo de 80 %",
+            id="below",
+        ),
+    ],
+)
+def test_a_reader_fails_below_its_minimum(source: ReadSource, reason: str) -> None:
+    outcome = reader_outcome(replace(_READER, min_score=80), source)
+
+    assert isinstance(outcome, Read)
+    assert outcome.verdict == Failed(reason)
+
+
+def test_a_read_scores_only_what_measured() -> None:
+    assert Read("unit", _MEASURED, Passed()).score == _MEASURED.score
+    assert Read("unit", _EMPTY, Passed()).score is None
+    assert Read("unit", MissingReport(), Passed()).score is None
+
+
+def _read_entry(outcome: ReaderOutcome, mode: ControlMode = "block") -> ReaderEntry:
+    return ReaderEntry(replace(_READER, mode=mode), outcome)
+
+
+@pytest.mark.parametrize(
+    ("read", "mode", "expected"),
+    [
+        (Read("unit", _MEASURED, Passed()), "block", Proceed()),
+        (Read("unit", MissingReport(), Failed("Sin informe de cobertura")), "measure", Proceed()),
+        (
+            Read("unit", MissingReport(), Failed("Sin informe de cobertura")),
+            "block",
+            Block("Sin informe de cobertura"),
+        ),
+    ],
+)
+def test_what_a_verification_does_with_a_read(
+    read: Read, mode: ControlMode, expected: object
+) -> None:
+    """A failed read blocks with its reason alone: no cases, and no output it never printed."""
+    assert consequence(_read_entry(read, mode), "salida de otro") == expected
+
+
+def test_a_read_passes_or_fails_by_its_verdict() -> None:
+    assert passed(Read("unit", _MEASURED, Passed())) is True
+    assert passed(Read("unit", _EMPTY, Failed(NOTHING_MEASURED))) is False
+    assert failure_of(Read("unit", _MEASURED, Passed())) is None
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [
+        pytest.param(Executed(_RAN, _RED), True, id="red"),
+        pytest.param(Executed(_RAN, _GREEN), False, id="green"),
+        pytest.param(Skipped("x"), False, id="skipped"),
+    ],
+)
+def test_a_score_read_from_a_failed_run_is_told_from_both_results(
+    unit: CommandOutcome, expected: bool
+) -> None:
+    read = Read("unit", _MEASURED, Passed())
+    entries = [
+        CommandEntry(CommandControl("unit", "L2", "pytest {out}", "junit", mode="measure"), unit),
+        _read_entry(read),
+    ]
+
+    assert from_failed_run(read, entries) is expected
+
+
+@pytest.mark.parametrize(
+    ("read", "mode", "recorded"),
+    [
+        pytest.param(
+            Read("unit", _MEASURED, Passed()),
+            "measure",
+            RecordedRead("measure", "unit", True, None, _MEASURED.score),
+            id="scored",
+        ),
+        pytest.param(
+            Read("unit", MissingReport(), Failed("Sin informe de cobertura")),
+            "block",
+            RecordedRead("block", "unit", False, "Sin informe de cobertura", None),
+            id="failed",
+        ),
+    ],
+)
+def test_a_read_record_reads_back_as_what_it_kept(
+    read: Read, mode: ControlMode, recorded: RecordedRead
+) -> None:
+    record = control_record(_read_entry(read, mode))
+
+    assert record["outcome"] == "read"
+    assert "exit_code" not in record
+    assert "duration_ms" not in record
+    assert "output_path" not in record
+    assert control_from_record(json.loads(json.dumps(record))) == recorded
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"reads": 1}, {"passed": "sí"}, {"score": "x"}, {"reads": None}],
+)
+def test_a_read_record_out_of_its_shape_isnt_read(changes: dict[str, object]) -> None:
+    record = {"outcome": "read", "mode": "measure", "reads": "unit", "passed": True, "score": None}
+
+    assert control_from_record({**record, **changes}) is None
+
+
+def test_a_recorded_score_from_a_failed_run_is_told_from_the_record_of_its_read_control() -> None:
+    read = RecordedRead("measure", "unit", True, None, _MEASURED.score)
+    red = RecordedExecuted(
+        "measure", RecordedRun(1, 3, False, "x.log"), RecordedJudged(False, "r", None, {})
+    )
+    green = replace(red, judgement=RecordedJudged(True, None, None, {}))
+
+    assert recorded_from_failed_run(read, {"unit": red, "coverage": read}) is True
+    assert recorded_from_failed_run(read, {"unit": green}) is False
+    assert recorded_from_failed_run(read, {}) is False
+
+
+def test_a_read_takes_no_time_of_its_own() -> None:
+    entries = [_read_entry(Read("unit", _MEASURED, Passed()))]
+
+    assert verification_duration(entries, None) == 0

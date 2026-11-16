@@ -39,7 +39,7 @@ def test_build_report_generates_markdown_with_metrics(tmp_path: Path) -> None:
             data={
                 "lictor_version": "0.1.0",
                 "cli_version": "claude-code 1.0.0",
-                "profile": "python-uv@0.1",
+                "profile": "python-uv@0.2",
                 "config_hash": "cfg123",
             },
         ),
@@ -339,6 +339,71 @@ def test_report_shows_the_coverage_score(tmp_path: Path) -> None:
     section = report.split("## Puntuaciones")[1].split("##")[0]
     assert "**coverage** (IVA-001, intento 1): correcto, 83,3 % (9 de 10 líneas, 1 de 2 ramas)" in (
         section
+    )
+
+
+_COVERAGE_SCORE = {
+    "kind": "coverage",
+    "covered_lines": 3,
+    "num_statements": 4,
+    "covered_branches": 0,
+    "num_branches": 0,
+    "percent": 75.0,
+}
+
+
+def _read(*, passed: bool = True, **fields: object) -> dict[str, object]:
+    """A reader's verdict, as `verify.finished.v2` records it: no exit code, duration or log."""
+    failed = {} if passed else {"reason": "Sin informe de cobertura"}
+    return {
+        "outcome": "read",
+        "mode": "measure",
+        "reads": "unit",
+        "passed": passed,
+        **failed,
+        "score": None,
+        **fields,
+    }
+
+
+def test_report_shows_a_reader_as_reading_its_control(tmp_path: Path) -> None:
+    """ADR-0008, point 8: «lee unit», with its verdict and its score."""
+    controls: dict[str, object] = {
+        "unit": _executed(output="r/unit.log"),
+        "coverage": _read(score=_COVERAGE_SCORE),
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    scores = report.split("## Puntuaciones")[1].split("##")[0]
+    assert "- **coverage** (IVA-001, intento 1): lee unit, correcto, 75,0 % (3 de 4 líneas)\n" in (
+        scores
+    )
+    measures = report.split("## Controles en medición")[1].split("##")[0]
+    assert "**coverage** (IVA-001, intento 1): lee unit, correcto, 75,0 %" in measures
+    assert "código" not in measures
+
+
+def test_report_marks_a_score_read_from_a_failed_run(tmp_path: Path) -> None:
+    controls: dict[str, object] = {
+        "unit": _executed(passed=False, mode="measure", exit_code=1),
+        "coverage": _read(score=_COVERAGE_SCORE),
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    scores = report.split("## Puntuaciones")[1].split("##")[0]
+    assert "lee unit, correcto, 75,0 % (3 de 4 líneas) (de un unit fallido)" in scores
+
+
+def test_report_shows_why_a_reader_failed(tmp_path: Path) -> None:
+    controls: dict[str, object] = {"unit": _executed(), "coverage": _read(passed=False)}
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    measures = report.split("## Controles en medición")[1].split("##")[0]
+    assert "**coverage** (IVA-001, intento 1): lee unit, fallo: Sin informe de cobertura" in (
+        measures
     )
 
 

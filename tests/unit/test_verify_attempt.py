@@ -12,6 +12,7 @@ import pytest
 
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.application.ports import Vcs
+from lictor.application.run_files import fill_report_paths
 from lictor.application.seal import hash_tree
 from lictor.application.usecases.verify_attempt import (
     IntegritySnapshot,
@@ -20,10 +21,12 @@ from lictor.application.usecases.verify_attempt import (
     control_summaries,
 )
 from lictor.application.verification_env import VerificationEnvironment
-from lictor.domain.controls import CommandControl
+from lictor.domain.controls import CommandControl, Control, ReaderControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
-from tests.readers import ReportingRunner, all_readers
+from lictor.domain.reports import CoverageReport
+from tests.environments import PlainEnvironment
+from tests.readers import FlagRunner, Leaves, ReportingRunner, all_readers, coverage_json
 from tests.results import ids, seen
 
 _SUPPRESSIONS = ("# noqa", "# type: ignore", "# pragma: no cover")
@@ -151,7 +154,9 @@ def test_verify_attempt_l0_routes_reverts_and_fails(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -175,7 +180,9 @@ def test_verify_attempt_l0_seal_tampered(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -201,7 +208,9 @@ def test_verify_attempt_l0_seal_detects_unsealed_file_in_driver_paths(tmp_path: 
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -229,7 +238,9 @@ def test_verify_attempt_l0_seal_detects_symlink_outside_repo(tmp_path: Path) -> 
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -253,7 +264,9 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     runner = FakeRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -281,7 +294,9 @@ def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
     )
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -320,7 +335,9 @@ def test_verify_attempt_control_measure_does_not_block(tmp_path: Path) -> None:
     runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -359,7 +376,9 @@ def test_verify_attempt_acceptance_regression_fails(tmp_path: Path) -> None:
     runner.set_report("pytest", CommandOutput(returncode=1, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -392,7 +411,9 @@ def test_verify_attempt_adr0001_integrity_snapshot_restores_and_fails(tmp_path: 
     runner = MaliciousRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -427,7 +448,9 @@ def test_verify_attempt_adr0001_integrity_snapshot_monitors_root_lictor_json(
     runner = MaliciousRunner()
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -458,7 +481,9 @@ def test_verify_attempt_control_with_empty_exit_codes_junit(tmp_path: Path) -> N
     )
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -505,7 +530,9 @@ def test_verify_attempt_preexisting_suppressions_in_tracked_file_ignored(
     runner.set_report("pytest", CommandOutput(returncode=0, stdout="", stderr=""), xml)
     readers = all_readers()
 
-    verifier = VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root)
+    verifier = VerifyAttempt(
+        vcs=vcs, environment=PlainEnvironment(runner), readers=readers, project_root=project_root
+    )
     req = VerifyAttemptRequest(
         tree="agent-tree",
         scenario_id="IVA-001",
@@ -575,7 +602,12 @@ def _verify(
         "tree": "agent-tree",
     }
     return (
-        VerifyAttempt(vcs=vcs, runner=runner, readers=readers, project_root=project_root),
+        VerifyAttempt(
+            vcs=vcs,
+            environment=PlainEnvironment(runner),
+            readers=readers,
+            project_root=project_root,
+        ),
         VerifyAttemptRequest(**{**fields, **overrides}),
     )
 
@@ -750,7 +782,7 @@ def test_verify_full_error_of_each_gate_lands_in_runs(tmp_path: Path) -> None:
     project_root, run_id = _setup_project(tmp_path)
     verifier = VerifyAttempt(
         vcs=FakeVcs(changed_files=["pyproject.toml"]),
-        runner=FakeRunner(),
+        environment=PlainEnvironment(FakeRunner()),
         readers={},
         project_root=project_root,
     )
@@ -1242,8 +1274,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
     """A dependency only a person can add mustn't show as a failure in every run (F18)."""
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0)})
     verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
-    verifier.environment = _spied_environment([None, None], runner)
-    verifier.environment.installed_plugins = ("xdist.plugin",)
+    verifier.environment = PlainEnvironment(runner, ("xdist.plugin",))
 
     result = verifier.execute(req)
 
@@ -1257,8 +1288,7 @@ def test_verify_skips_a_control_whose_plugin_the_environment_lacks(tmp_path: Pat
 def test_verify_runs_a_control_whose_plugin_the_environment_has(tmp_path: Path) -> None:
     runner = _PlantingRunner({"suite": (_GREEN_REPORT, 0), "coverage": ("", 0)})
     verifier, req = _verify(tmp_path, runner, controls=(_COVERAGE,))
-    verifier.environment = _spied_environment([None, None], runner)
-    verifier.environment.installed_plugins = ("pytest_cov.plugin",)
+    verifier.environment = PlainEnvironment(runner, ("pytest_cov.plugin",))
 
     result = verifier.execute(req)
 
@@ -1461,3 +1491,238 @@ def test_a_blocking_mutation_control_below_its_minimum_fails_the_attempt(tmp_pat
 
     assert (result.ok, result.failed_at) == (False, "mut")
     assert "no llega al mínimo de 95 %" in (result.condensed_error or "")
+
+
+# --- ADR-0008: coverage scores the run of unit ---
+
+_UNIT = CommandControl(
+    "unit", "L2", "pytest tests/unit --junitxml {out}", "junit", empty_exit_codes=(5,)
+)
+_READER = ReaderControl(
+    "coverage",
+    "L2",
+    "unit",
+    "--cov=src --cov-report=json:{out}",
+    mode="measure",
+    when_plugin="pytest_cov.plugin",
+)
+_UNIT_GREEN = '<testsuite><testcase name="test_a"/></testsuite>'
+_UNIT_RED = (
+    '<testsuite><testcase name="test_a"><failure message="m">t</failure></testcase></testsuite>'
+)
+_COV = ("pytest_cov.plugin",)
+
+
+def _reading(
+    tmp_path: Path,
+    leaves: dict[str, Leaves],
+    controls: Sequence[Control] = (_UNIT, _READER),
+    installed: Sequence[str] = _COV,
+) -> tuple[VerifyAttempt, VerifyAttemptRequest, FlagRunner]:
+    runner = FlagRunner({"suite": Leaves(junit=_GREEN_REPORT), **leaves})
+    verifier, req = _verify(tmp_path, runner, controls=tuple(controls))
+    verifier.environment = PlainEnvironment(runner, installed)
+    return verifier, req, runner
+
+
+def _unit_call(runner: FlagRunner) -> Sequence[str]:
+    return next(call["cmd"] for call in runner.calls if call["cmd"][0] == "pytest")
+
+
+def test_verify_runs_unit_once_with_the_readers_arguments(tmp_path: Path) -> None:
+    leaves = {"pytest": Leaves(junit=_UNIT_GREEN, coverage=coverage_json(3, 4))}
+    verifier, req, runner = _reading(tmp_path, leaves)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert [call["cmd"][0] for call in runner.calls] == ["pytest", "suite"]
+    command = _unit_call(runner)
+    junit, coverage = (Path(p) for p in (command[3], command[5].split(":", 1)[1]))
+    # Composed by tokens, each `{out}` with its own control's report.
+    assert command[:3] == ["pytest", "tests/unit", "--junitxml"]
+    assert command[4] == "--cov=src"
+    assert (junit.name, coverage.name) == ("control_unit.xml", "control_coverage.xml")
+    read = seen(result, "coverage")
+    assert (read.ok, read.reads, read.score) == (True, "unit", CoverageReport(3, 4).score)
+    assert ids(result) == ["unit", "coverage", "acceptance"]
+
+
+def test_verify_runs_unit_as_it_is_when_the_reader_lacks_its_plugin(tmp_path: Path) -> None:
+    verifier, req, runner = _reading(tmp_path, {"pytest": Leaves(junit=_UNIT_GREEN)}, installed=())
+
+    result = verifier.execute(req)
+
+    assert _unit_call(runner) == [
+        "pytest",
+        "tests/unit",
+        "--junitxml",
+        runner.reports[0].as_posix(),
+    ]
+    assert "pytest_cov.plugin" in (seen(result, "coverage").skipped or "")
+
+
+def test_verify_runs_unit_as_it_is_when_no_reader_runs_in_the_attempt(tmp_path: Path) -> None:
+    """A reader in `check` isn't among the controls of a run: unit gets nothing."""
+    verifier, req, runner = _reading(
+        tmp_path, {"pytest": Leaves(junit=_UNIT_GREEN)}, controls=(_UNIT,)
+    )
+
+    verifier.execute(req)
+
+    assert not any("--cov" in token for token in _unit_call(runner))
+
+
+def test_verify_keeps_each_part_of_the_command_whole(tmp_path: Path) -> None:
+    reader = replace(_READER, adds="'--cov=mi src' --cov-report=json:{out}")
+    verifier, req, runner = _reading(
+        tmp_path, {"pytest": Leaves(junit=_UNIT_GREEN)}, controls=(_UNIT, reader)
+    )
+
+    verifier.execute(req)
+
+    assert _unit_call(runner)[4] == "--cov=mi src"
+
+
+def test_verify_reads_the_coverage_when_unit_ends_whatever_comes_after(tmp_path: Path) -> None:
+    """A control in between runs project code: it gets no chance to change what was read."""
+
+    class Rewriter(FlagRunner):
+        def run(
+            self,
+            cmd: Sequence[str],
+            cwd: Path,
+            timeout_s: int | None = None,
+            env: Mapping[str, str] | None = None,
+        ) -> CommandOutput:
+            if cmd[0] == "between":
+                (self.reports[1]).write_text(coverage_json(4, 4), encoding="utf-8")
+            return super().run(cmd, cwd, timeout_s, env)
+
+    between = CommandControl("between", "L2", "between", "exit-code")
+    runner = Rewriter(
+        {
+            "suite": Leaves(junit=_GREEN_REPORT),
+            "pytest": Leaves(junit=_UNIT_GREEN, coverage=coverage_json(1, 4)),
+        }
+    )
+    verifier, req = _verify(tmp_path, runner, controls=(_UNIT, between, _READER))
+    verifier.environment = PlainEnvironment(runner, _COV)
+
+    result = verifier.execute(req)
+
+    assert ids(result) == ["unit", "between", "coverage", "acceptance"]
+    assert seen(result, "coverage").score == CoverageReport(1, 4).score
+
+
+def test_verify_a_unit_that_leaves_no_coverage_report_fails_the_reader(tmp_path: Path) -> None:
+    verifier, req, runner = _reading(tmp_path, {"pytest": Leaves(junit=_UNIT_GREEN)})
+
+    result = verifier.execute(req)
+
+    read = seen(result, "coverage")
+    assert (read.ok, read.error, read.score) == (False, "Sin informe de cobertura", None)
+    # A measuring reader doesn't stop the verification.
+    assert result.ok is True
+    assert runner.reports[1].name == "control_coverage.xml"
+
+
+def test_fill_report_paths_drops_every_report_before_running(tmp_path: Path) -> None:
+    junit, coverage = tmp_path / "u.xml", tmp_path / "c.xml"
+    junit.write_text("viejo", encoding="utf-8")
+    coverage.write_text("viejo", encoding="utf-8")
+
+    tokens = fill_report_paths([("a --x {out}", junit), ("--y={out}", coverage)])
+
+    assert tokens == ["a", "--x", str(junit), f"--y={coverage}"]
+    assert not junit.exists()
+    assert not coverage.exists()
+
+
+def test_verify_doesnt_read_a_tampering_unit_and_the_reader_never_shows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    leaves = {"pytest": Leaves(junit=_UNIT_GREEN, coverage=coverage_json(3, 4))}
+    verifier, req, runner = _reading(tmp_path, leaves)
+    seal = verifier.project_root / ".lictor" / "seal.json"
+
+    def tampering(cmd: Sequence[str], req: VerifyAttemptRequest, timeout_s: int) -> CommandOutput:
+        output = runner.run(cmd, cwd=tmp_path, timeout_s=timeout_s)
+        if cmd[0] == "pytest":
+            seal.write_text("{}", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(verifier, "_run_project_command", tampering)
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-estado"
+    assert ids(result) == ["unit"]
+    assert seen(result, "unit").tampered is True
+
+
+def test_verify_reads_what_a_unit_cut_by_its_timeout_left(tmp_path: Path) -> None:
+    leaves = {"pytest": Leaves(junit=_UNIT_GREEN, coverage='{"totals": {', timed_out=True)}
+    verifier, req, _ = _reading(
+        tmp_path, leaves, controls=(replace(_UNIT, mode="measure"), _READER)
+    )
+
+    result = verifier.execute(req)
+
+    assert seen(result, "unit").error == "Se cortó a los 600 s, su tiempo límite"
+    read = seen(result, "coverage")
+    assert read.ok is False
+    assert (read.error or "").startswith("El informe de cobertura no es válido")
+
+
+def test_verify_names_the_command_a_failed_unit_ran_with(tmp_path: Path) -> None:
+    """The agent's own commands don't measure coverage: it must see how unit really ran."""
+    leaves = {"pytest": Leaves(junit=_UNIT_RED, coverage=coverage_json(3, 4), returncode=1)}
+    verifier, req, _ = _reading(tmp_path, leaves)
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "unit"
+    expected = (
+        "unit se ejecutó como: pytest tests/unit --junitxml {out} --cov=src --cov-report=json:{out}"
+    )
+    assert expected in (result.condensed_error or "")
+    # The verification stops at unit: the reader's turn never comes.
+    assert ids(result) == ["unit"]
+
+
+def test_verify_doesnt_name_the_command_of_a_unit_that_ran_its_own(tmp_path: Path) -> None:
+    leaves = {"pytest": Leaves(junit=_UNIT_RED, returncode=1)}
+    verifier, req, _ = _reading(tmp_path, leaves, installed=())
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "unit"
+    assert "se ejecutó como" not in (result.condensed_error or "")
+
+
+def test_verify_a_blocking_reader_fails_with_its_reason_alone(tmp_path: Path) -> None:
+    leaves = {"pytest": Leaves(junit=_UNIT_GREEN)}
+    reader = replace(_READER, mode="block")
+    verifier, req, _ = _reading(tmp_path, leaves, controls=(_UNIT, reader))
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "coverage"
+    assert "Sin informe de cobertura" in (result.condensed_error or "")
+    assert "salida de" not in (result.condensed_error or "")
+    assert ids(result) == ["unit", "coverage"]
+
+
+def test_verify_names_no_command_for_a_unit_the_attempt_removed(tmp_path: Path) -> None:
+    unit = replace(_UNIT, when_exists="tests/unit")
+    verifier, req, runner = _reading(tmp_path, {}, controls=(unit, _READER))
+    req = replace(req, paths_writable=("src/", "tests/unit/"))
+    assert isinstance(verifier.vcs, FakeVcs)
+    verifier.vcs.deleted = ["tests/unit/test_a.py"]
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "unit"
+    assert "se ejecutó como" not in (result.condensed_error or "")
+    assert [call["cmd"][0] for call in runner.calls] == []

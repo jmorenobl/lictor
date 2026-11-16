@@ -1,9 +1,22 @@
 import re
+import shlex
+from collections.abc import Sequence
 from pathlib import PurePosixPath
-from typing import Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    field_validator,
+    model_validator,
+)
+from pydantic.config import JsonDict
 
+from lictor.domain.controls import CommandControl, Control, ReaderControl, reader_problems
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
@@ -52,6 +65,25 @@ def _validate_regexes(patterns: list[str]) -> list[str]:
             msg = f"banned_patterns contiene una expresión inválida '{pattern}': {exc}"
             raise ValueError(msg) from exc
     return patterns
+
+
+def split_command(command: str, owner: str) -> str:
+    """Refuse a command `shlex` can't split, naming whose it is: run, it would only raise then."""
+    try:
+        shlex.split(command)
+    except ValueError as exc:
+        msg = f"El comando de {owner} no se puede trocear como en una shell ({exc}): {command}"
+        raise ValueError(msg) from exc
+    return command
+
+
+def plugin_without_list_message(control_id: str) -> str:
+    """Why a control can't need a plugin in a profile that can't list what the environment loads."""
+    return (
+        f"El control '{control_id}' declara when_plugin, pero su perfil no tiene "
+        "verification.plugins_command: sin él nadie sabe qué plugins carga el entorno, y el "
+        "control no puede depender de uno. Quita when_plugin."
+    )
 
 
 def _validate_unique_control_ids(controls: list["ControlConfig"]) -> list["ControlConfig"]:
@@ -139,6 +171,7 @@ class AcceptanceConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
+        split_command(self.run, "acceptance")
         if "{out}" not in self.run:
             msg = "La sección acceptance debe incluir '{out}' en run: ahí deja su informe JUnit"
             raise ValueError(msg)
@@ -224,13 +257,23 @@ def acceptance_report_message() -> str:
     )
 
 
-def allow_empty_message(control_id: str, profile_codes: list[int] | None) -> str:
-    """Say what replaces `allow_empty`, with the profile's own codes when they are known."""
-    where = (
-        f"; el control '{control_id}' del perfil declara {profile_codes}"
-        if profile_codes is not None
-        else ""
-    )
+def allow_empty_message(
+    control_id: str, profile_codes: list[int] | None, reads: str | None = None
+) -> str:
+    """Say what replaces `allow_empty`, with the profile's own codes when they are known.
+
+    A reader has no codes of its own: the codes of the control whose run it reads apply.
+    """
+    if reads is not None:
+        where = (
+            f". El control '{control_id}' del perfil lee la ejecución de '{reads}' y no tiene "
+            f"empty_exit_codes: valen los de '{reads}'"
+            + (f", que declara {profile_codes}" if profile_codes is not None else "")
+        )
+    elif profile_codes is not None:
+        where = f"; el control '{control_id}' del perfil declara {profile_codes}"
+    else:
+        where = ""
     return (
         f"El control '{control_id}' usa 'allow_empty', que ya no existe: declara los códigos de "
         f"salida de una ejecución sin casos en 'empty_exit_codes'{where}. Una ejecución a medias "
@@ -238,8 +281,23 @@ def allow_empty_message(control_id: str, profile_codes: list[int] | None) -> str
     )
 
 
-class ControlConfig(BaseModel):
-    """Control determinista de verificación."""
+def _reject_allow_empty_field(data: object) -> object:
+    if isinstance(data, dict) and "allow_empty" in data:
+        raise ValueError(allow_empty_message(str(data.get("id", "")), None))
+    return data
+
+
+def _check_min_score(control_id: str, report: str, min_score: float | None) -> None:
+    if min_score is not None and report not in ("mutation", "coverage"):
+        msg = (
+            f"El control '{control_id}' declara min_score, que solo vale con report='mutation' "
+            "o 'coverage'"
+        )
+        raise ValueError(msg)
+
+
+class CommandControlConfig(BaseModel):
+    """Un control que ejecuta su propio comando (`run`) y se juzga por lo que deja."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -260,21 +318,15 @@ class ControlConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _reject_allow_empty(cls, data: object) -> object:
-        if isinstance(data, dict) and "allow_empty" in data:
-            raise ValueError(allow_empty_message(str(data.get("id", "")), None))
-        return data
+        return _reject_allow_empty_field(data)
 
     @model_validator(mode="after")
     def _validate_junit_out(self) -> Self:
+        split_command(self.run, f"run del control '{self.id}'")
         if self.report != "exit-code" and "{out}" not in self.run:
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)
-        if self.min_score is not None and self.report not in ("mutation", "coverage"):
-            msg = (
-                f"El control '{self.id}' declara min_score, que solo vale con report='mutation' "
-                "o 'coverage'"
-            )
-            raise ValueError(msg)
+        _check_min_score(self.id, self.report, self.min_score)
         return self
 
     @field_validator("when_exists")
@@ -289,24 +341,166 @@ class ControlConfig(BaseModel):
         return path.as_posix()
 
 
+class ReaderControlConfig(BaseModel):
+    """Un control que no ejecuta nada: puntúa la cobertura de la ejecución de otro (ADR-0008).
+
+    `reads` nombra el control que ejecuta, con report "junit", cuya ejecución lee; `adds` son
+    los argumentos que ese control recibe al final de su comando, con el `{out}` de este.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1)
+    level: ControlLevel
+    reads: str = Field(min_length=1)
+    adds: str = Field(min_length=1)
+    report: Literal["coverage"]
+    mode: ControlMode = "block"
+    stage: Stage = ATTEMPT
+    when_plugin: str | None = Field(default=None, min_length=1)
+    min_score: float | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_allow_empty(cls, data: object) -> object:
+        return _reject_allow_empty_field(data)
+
+    @model_validator(mode="after")
+    def _validate_adds_out(self) -> Self:
+        split_command(self.adds, f"adds del control '{self.id}'")
+        if "{out}" not in self.adds:
+            msg = (
+                f"El control '{self.id}' debe incluir '{{out}}' en adds: ahí deja la ejecución "
+                f"de '{self.reads}' su informe de cobertura"
+            )
+            raise ValueError(msg)
+        return self
+
+
+def no_shape_message(control_id: str) -> str:
+    """What a control that says neither what it runs nor what it reads is told."""
+    return f"El control '{control_id}' no dice qué ejecuta: escribe run, o reads y adds"
+
+
+def two_shapes_message(control_id: str) -> str:
+    """What a control that both runs a command and reads another's run is told."""
+    return (
+        f"El control '{control_id}' escribe run y también reads o adds: un control ejecuta su "
+        "comando (run) o lee la ejecución de otro (reads y adds), no las dos cosas. Quita uno."
+    )
+
+
+def _control_shape(data: object) -> str | None:
+    if isinstance(data, dict):
+        if "reads" in data or "adds" in data:
+            return "reads"
+        return "run" if "run" in data else None
+    if isinstance(data, ReaderControlConfig):
+        return "reads"
+    return "run" if isinstance(data, CommandControlConfig) else None
+
+
+def _require_one_shape(data: object) -> object:
+    """Name the control when its shape can't be told: never the error of both branches."""
+    if isinstance(data, dict):
+        has_run, reads = "run" in data, "reads" in data or "adds" in data
+        if has_run and reads:
+            raise ValueError(two_shapes_message(str(data.get("id", ""))))
+        if not has_run and not reads:
+            raise ValueError(no_shape_message(str(data.get("id", ""))))
+    return data
+
+
+# A control runs a command or reads the run of another; the type makes them impossible to mix.
+type ControlConfig = Annotated[
+    Annotated[CommandControlConfig, Tag("run")] | Annotated[ReaderControlConfig, Tag("reads")],
+    Discriminator(_control_shape),
+    BeforeValidator(_require_one_shape),
+]
+
+
+def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Control:
+    """A resolved control as the domain sees it."""
+    if isinstance(control, ReaderControlConfig):
+        return ReaderControl(
+            id=control.id,
+            level=control.level,
+            reads=control.reads,
+            adds=control.adds,
+            report=control.report,
+            mode=control.mode,
+            stage=control.stage,
+            when_plugin=control.when_plugin,
+            min_score=control.min_score,
+        )
+    return CommandControl(
+        id=control.id,
+        level=control.level,
+        run=control.run,
+        report=control.report,
+        mode=control.mode,
+        stage=control.stage,
+        empty_exit_codes=tuple(control.empty_exit_codes),
+        timeout_s=control.timeout_s,
+        when_exists=control.when_exists,
+        when_plugin=control.when_plugin,
+        min_score=control.min_score,
+    )
+
+
+def _check_readers(controls: Sequence[CommandControlConfig | ReaderControlConfig]) -> None:
+    """The rules of the pairing, for whoever builds a configuration or a profile (ADR-0008)."""
+    problems = reader_problems([domain_control(control) for control in controls])
+    if problems:
+        raise ValueError("\n".join(problems))
+
+
+def _no_default(schema: JsonDict) -> None:
+    schema.pop("default", None)
+
+
+def _unwritten(**constraints: Any) -> Any:
+    """A field that is optional to write but never null: its unwritten value is never read.
+
+    Pydantic doesn't validate a default, so the schema shows none, and the type has no None.
+    """
+    return Field(default=None, json_schema_extra=_no_default, **constraints)
+
+
+ADDS_DESCRIPTION = (
+    "Los argumentos que el control que nombra reads recibe al final de su comando, con el {out} "
+    "de este control. Se escribe entero: lo que no escribas no se añade, así que conserva lo que "
+    "el perfil pone (por ejemplo, el argumento que anula el umbral propio de la herramienta)."
+)
+
+
 class ControlChange(BaseModel):
     """Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.
 
     Con el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo
-    quita. Con otro `id`, añade un control, y entonces `level`, `run` y `report` hacen falta.
+    quita. Con otro `id`, añade un control: uno que ejecuta necesita `level`, `report` y `run`, y
+    uno que lee la ejecución de otro, `level`, `report: "coverage"`, `reads` y `adds`. `run`,
+    `reads` y `adds` se escriben o no, pero nunca con null.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(min_length=1)
     enabled: bool = True
-    level: ControlLevel | None = None
-    run: str | None = Field(default=None, min_length=1)
-    report: ReportFormat | None = None
-    mode: ControlMode | None = None
-    stage: Stage | None = None
-    empty_exit_codes: list[int] | None = None
-    timeout_s: int | None = Field(default=None, gt=0)
+    # Written is in `model_fields_set`: the unwritten value of these is never read, and none
+    # takes null, which would mean nothing. Only the last three take it, to clear a value.
+    level: ControlLevel = _unwritten()
+    run: str = _unwritten(min_length=1)
+    reads: str = _unwritten(
+        min_length=1,
+        description="El id del control, con report junit, cuya ejecución lee este control.",
+    )
+    adds: str = _unwritten(min_length=1, description=ADDS_DESCRIPTION)
+    report: ReportFormat = _unwritten()
+    mode: ControlMode = _unwritten()
+    stage: Stage = _unwritten()
+    empty_exit_codes: list[int] = _unwritten()
+    timeout_s: int = _unwritten(gt=0)
     when_exists: str | None = None
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
@@ -314,9 +508,7 @@ class ControlChange(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _reject_allow_empty(cls, data: object) -> object:
-        if isinstance(data, dict) and "allow_empty" in data:
-            raise ValueError(allow_empty_message(str(data.get("id", "")), None))
-        return data
+        return _reject_allow_empty_field(data)
 
 
 class BackendConfig(BaseModel):
@@ -378,6 +570,9 @@ class Profile(BaseModel):
 
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
+    # Versions that no longer exist, and what this one changes: a file that asks for one asked
+    # for its rules, and getting others under the same name would change them unawares.
+    retired_versions: dict[str, str] = Field(default_factory=dict)
     status: ProfileStatus = "stable"
     detect: list[str] = Field(min_length=1)
     paths: PathsConfig
@@ -405,6 +600,26 @@ class Profile(BaseModel):
     @classmethod
     def _check_regexes(cls, patterns: list[str]) -> list[str]:
         return _validate_regexes(patterns)
+
+    @model_validator(mode="after")
+    def _validate_retired_versions(self) -> Self:
+        if self.version in self.retired_versions:
+            msg = f"El perfil {self.name} retira su propia versión, {self.version}"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_plugins_can_be_listed(self) -> Self:
+        if not self.verification.plugins_command:
+            for control in self.controls:
+                if control.when_plugin is not None:
+                    raise ValueError(plugin_without_list_message(control.id))
+        return self
+
+    @model_validator(mode="after")
+    def _validate_readers(self) -> Self:
+        _check_readers(self.controls)
+        return self
 
 
 class RetentionConfig(BaseModel):
@@ -439,6 +654,19 @@ class LictorConfig(BaseModel):
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
+
+    @model_validator(mode="after")
+    def _validate_readers(self) -> Self:
+        _check_readers(self.controls)
+        return self
+
+
+def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
+    """The resolved controls as the domain sees them, in the order they were declared.
+
+    This is the only conversion: the run and `lictor check` get what it returns (ADR-0009).
+    """
+    return tuple(domain_control(control) for control in config.controls)
 
 
 class LictorFile(BaseModel):

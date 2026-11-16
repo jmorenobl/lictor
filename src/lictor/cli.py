@@ -3,7 +3,7 @@
 import json
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from contextlib import closing
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
@@ -62,7 +62,16 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
-from lictor.domain.results import ControlEntry, Executed, NotExecuted, Skipped, Unjudged
+from lictor.domain.results import (
+    ControlEntry,
+    Executed,
+    NotExecuted,
+    Read,
+    Skipped,
+    Unjudged,
+    failed_run_mark,
+    from_failed_run,
+)
 from lictor.domain.rules import (
     anchor_from_older_version,
     anchor_problems,
@@ -416,15 +425,9 @@ def check(
             )
 
         typer.echo(f"Verificado: {res.subject}")
-        # A failure after a run reads as what it is: something the run left for later (ADR-0007).
         only_here = {c.id for c in runtime.graph_context.check_controls}
-        for entry in res.check.controls:
-            name = entry.control.id
-            for line in _check_lines(name, " (solo en check)" if name in only_here else "", entry):
-                typer.echo(line)
-        if res.check.acceptance is not None:
-            for line in _acceptance_lines(res.check):
-                typer.echo(line)
+        for line in _check_output(res.check, only_here):
+            typer.echo(line)
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
@@ -438,24 +441,65 @@ def check(
     _safe_run(_execute)
 
 
-def _check_lines(name: str, stage: str, entry: ControlEntry) -> list[str]:
-    """How `lictor check` shows a control: by what happened to it, not by a flag."""
+def _check_output(check: CheckProjectResult, only_here: Collection[str]) -> list[str]:
+    """What `lictor check` prints of what it verified, after naming what it verified.
+
+    A failure after a run reads as what it is: something the run left for later (ADR-0007), or a
+    read control that ran with the arguments of a reader the run never runs (ADR-0008).
+    """
+    lines = [f"{added.sentence}." for added in check.added]
+    for entry in check.controls:
+        name = entry.control.id
+        stage = " (solo en check)" if name in only_here else ""
+        stage += check.lent.get(name, "")
+        lines += _check_lines(name, stage, entry, check.controls)
+    if check.acceptance is not None:
+        lines += _acceptance_lines(check)
+    return lines
+
+
+def _check_lines(
+    name: str, stage: str, entry: ControlEntry, entries: Sequence[ControlEntry]
+) -> list[str]:
+    """How `lictor check` shows a control: by what happened to it, not by a flag.
+
+    A reader ran nothing: its log is its read control's.
+    """
     match entry.outcome:
         case Skipped(reason=reason):
             return [f"- {name}{stage} omitido: {reason}"]
         case NotExecuted(reason=reason):
             return [f"✗ {name}{stage}: {reason}"]
-        case Executed(ran=ran, judgement=judgement):
-            took = f"({ran.execution.duration_ms}ms)"
-            if isinstance(judgement, Unjudged):
-                verdict_line = f"✗ {name}{stage} {took}: manipuló el estado; sin veredicto"
-                return [verdict_line, f"  salida: {ran.log}"]
-            score = f": {describe_score(judgement.score)}" if judgement.score else ""
-            if isinstance(judgement.verdict, Passed):
-                return [f"✓ {name}{stage} {took}{score}"]
-            return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]
+        case Executed() as executed:
+            return _executed_lines(name, stage, executed)
+        case Read() as read:
+            return _read_lines(name, stage, read, entries)
         case _:
             assert_never(entry.outcome)
+
+
+def _executed_lines(name: str, stage: str, executed: Executed) -> list[str]:
+    ran, judgement = executed.ran, executed.judgement
+    took = f"({ran.execution.duration_ms}ms)"
+    if isinstance(judgement, Unjudged):
+        verdict_line = f"✗ {name}{stage} {took}: manipuló el estado; sin veredicto"
+        return [verdict_line, f"  salida: {ran.log}"]
+    score = f": {describe_score(judgement.score)}" if judgement.score else ""
+    if isinstance(judgement.verdict, Passed):
+        return [f"✓ {name}{stage} {took}{score}"]
+    return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]
+
+
+def _read_lines(name: str, stage: str, read: Read, entries: Sequence[ControlEntry]) -> list[str]:
+    """A reader reads the run of another control: its score, and that control's log."""
+    score = f": {describe_score(read.score)}" if read.score else ""
+    if score and from_failed_run(read, entries):
+        score += failed_run_mark(read.reads)
+    if isinstance(read.verdict, Passed):
+        return [f"✓ {name}{stage} lee {read.reads}{score}"]
+    lines = [f"✗ {name}{stage} lee {read.reads}{score}: {read.verdict.reason}"]
+    source = next((e.outcome for e in entries if e.control.id == read.reads), None)
+    return [*lines, f"  salida: {source.ran.log}"] if isinstance(source, Executed) else lines
 
 
 def _acceptance_lines(check: CheckProjectResult) -> list[str]:

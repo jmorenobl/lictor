@@ -86,6 +86,9 @@ def _profile_without_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             "env": {"PYTHONDONTWRITEBYTECODE": "1"},
         },
     }
+    # Without a command that lists the plugins, no control can depend on one (ADR-0008).
+    for control in profile["controls"]:
+        control.pop("when_plugin", None)
     (profiles / "sin-entorno.json").write_text(json.dumps(profile), encoding="utf-8")
     monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
 
@@ -117,7 +120,7 @@ def _setup_demo_iva_repo(tmp_path: Path, fake_config: dict[str, object] | None =
 
     # Initialize lictor.json with fake backend
     lictor_json = {
-        "profile": "sin-entorno@0.1",
+        "profile": "sin-entorno@0.2",
         "backend": {
             "kind": "fake",
             "model": "claude-3-5-sonnet-20241022",

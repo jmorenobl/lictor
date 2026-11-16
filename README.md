@@ -173,13 +173,13 @@ uv add --dev pytest pytest-bdd ruff mypy      # las herramientas que usan los co
 ### 1️⃣ Inicializa el proyecto
 
 ```bash
-# Detecta automáticamente el perfil (ej. python-uv@0.1) y crea lictor.json
+# Detecta automáticamente el perfil (ej. python-uv@0.2) y crea lictor.json
 lictor init
 ```
 
 ```text
 Configuración inicializada en 'lictor.json':
-  Perfil: python-uv@0.1
+  Perfil: python-uv@0.2
   Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
   hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
     Lo lee el agente en cada llamada: ajústalo a tu proyecto.
@@ -234,7 +234,7 @@ lictor doctor
 ```
 
 ```text
-✓ Configuración válida: perfil 'python-uv@0.1'
+✓ Configuración válida: perfil 'python-uv@0.2'
 ✓ Repositorio con commits
 ✓ Árbol git limpio
 ✓ Escenarios
@@ -451,17 +451,17 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 ```json
 {
   "version": "0.1",
-  "profile": "python-uv@0.1",
+  "profile": "python-uv@0.2",
   "backend": {"model": "claude-sonnet-5-5"},
   "hints": "Python 3.12, gestor uv, tests con pytest. El código va en src/<paquete>/."
 }
 ```
 
-**Los controles se cambian por `id`.** En `controls` solo van los cambios sobre los del perfil. Con el `id` de un control del perfil se cambian solo los campos escritos, y `"enabled": false` lo quita. Con otro `id` se añade un control, y entonces hacen falta `level`, `run` y `report`; va detrás del que tenga delante en la lista, o al final si es el primero:
+**Los controles se cambian por `id`.** En `controls` solo van los cambios sobre los del perfil. Con el `id` de un control del perfil se cambian solo los campos escritos, y `"enabled": false` lo quita. Con otro `id` se añade un control, y entonces hacen falta `level` y `report`, y además `run`, o `reads` y `adds` si lee la ejecución de otro (ver «La cobertura lee la ejecución de `unit`»); va detrás del que tenga delante en la lista, o al final si es el primero:
 
 ```json
 {
-  "profile": "python-uv@0.1",
+  "profile": "python-uv@0.2",
   "controls": [
     {"id": "unit", "timeout_s": 900},
     {"id": "types", "enabled": false},
@@ -470,7 +470,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 }
 ```
 
-Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, sigue valiendo. Una lista vacía ya no quita los controles: cada uno se quita con `"enabled": false`.
+Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, ya no vale: pide `python-uv@0.1`, que ya no existe. Una lista vacía no quita los controles: cada uno se quita con `"enabled": false`, que no admite otros campos a su lado.
 
 **Cada control dice cuándo corre** (`stage`, [ADR-0007](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0007-momento-de-cada-control.md)). Por defecto es `"attempt"`: corre en cada intento de un run, y el agente recibe su fallo. Con `"stage": "check"` el run no lo ejecuta, y solo corre en `lictor check`. Va en `check` lo que el agente no necesita ver para corregir su trabajo: lo que no cabe en el tiempo de un intento, como la mutación, o lo que el intento no puede cambiar, como la auditoría de las dependencias. Se escribe por `id`, como `mode`, y vale con los dos modos y con `min_score`:
 
@@ -499,7 +499,15 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 **Un control puede depender de una ruta.** Con `when_exists`, el control solo se omite si esa ruta no existe ni en HEAD ni en el intento, y queda `omitido`, con el motivo, en `verify.finished` y en `report.md`. Si existía y el intento la elimina, el control falla. `lictor check` aplica la misma regla a lo que verifica. Así un proyecto sin `tests/unit` no bloquea al agente.
 
-**Un control puede depender de un plugin.** Con `when_plugin`, el control se omite, con el motivo, si el entorno de verificación no carga ese plugin. La lista sale de lo que Lictor pregunta al entorno al construirlo (`plugins_command`). Si el perfil no puede preguntarlo, el control se ejecuta. Así funciona el control `coverage` de `python-uv`: mide la cobertura de `src` con los tests unitarios en modo `measure`, sin bloquear, y solo si el proyecto tiene `pytest-cov`, que tiene que añadir una persona (`uv add --dev pytest-cov`) porque el agente no puede tocar `uv.lock`. Sin él, cada ejecución lo muestra como omitido, no como fallido.
+**Un control puede depender de un plugin.** Con `when_plugin`, el control se omite, con el motivo, si el entorno de verificación no carga ese plugin. La lista sale de lo que Lictor pregunta al entorno al construirlo (`plugins_command`), así que `when_plugin` solo vale en un perfil que lo declara: en otro, es un error de carga. El control `coverage` de `python-uv` lo usa: mide la cobertura de `src` en modo `measure`, sin bloquear, y solo si el proyecto tiene `pytest-cov`, que tiene que añadir una persona (`uv add --dev pytest-cov`) porque el agente no puede tocar `uv.lock`. Sin él, cada ejecución lo muestra como omitido, no como fallido.
+
+**La cobertura lee la ejecución de `unit`** ([ADR-0008](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0008-una-ejecucion-dos-lecturas.md)). Los tests unitarios corren una vez por intento: `coverage` no ejecuta nada y puntúa el informe que deja `unit`. Es un control lector: en vez de `run`, tiene `reads` (el `id` del control que ejecuta, con `report: "junit"`, cuya ejecución lee) y `adds` (los argumentos que ese control recibe al final de su comando, con el `{out}` del lector), y no tiene `timeout_s`, `empty_exit_codes` ni `when_exists`, que son de la ejecución. Cada control decide una cosa: `unit`, si los tests pasan, y `coverage`, la puntuación, con su `mode` y su `min_score`.
+
+- `unit` recibe los argumentos cuando `coverage` corre donde se verifica (en el run, si es `attempt`; en `lictor check`, siempre) y su plugin está instalado, elija lo que elija `--control` o `--level`: `lictor check --control unit` ejecuta el mismo `unit` que el run. `lictor check --control coverage` ejecuta también `unit`, y lo dice.
+- Un test que solo falla bajo cobertura bloquea, porque rompe `unit`, y el error que recibe el agente nombra el comando con que se ejecutó.
+- Un `fail_under` de `[tool.coverage.report]` no se aplica: el perfil pasa `--cov-fail-under=0`, porque si no, haría fallar `unit` sin ningún test en rojo. El umbral se escribe como `min_score` de `coverage`.
+- Con `{"id": "coverage", "stage": "check"}` la cobertura se mide solo en `lictor check`: el run ejecuta `unit` tal cual, y `check` con los argumentos, así que ahí `check` no verifica exactamente lo que verificó el run. Su línea lo dice: «unit (con los argumentos de coverage, que solo corre en check)».
+- Para medir otra cosa, `adds` se escribe entero, conservando lo demás: `{"id": "coverage", "adds": "--cov=lib --cov-branch --cov-fail-under=0 --cov-report=json:{out}"}`. Para darle a `coverage` un comando propio, se le escribe `run`, con todo lo que esa ejecución necesita.
 
 **La cobertura es una puntuación.** El control `coverage` de `python-uv` lee el JSON que exporta coverage.py (`--cov-report=json:{out}`, lector `coverage`) y guarda el porcentaje de líneas y ramas juntas, el mismo que da `--cov-fail-under`. Se ve junto al resultado en `lictor check`, en `verify.finished` y en «Puntuaciones» de `report.md`, como la de mutación: «87,5 % (412 de 450 líneas, 90 de 110 ramas)». Los porcentajes se cortan a un decimal, sin redondear, para que un 89,96 no se lea como un 90 que no alcanza. Un mínimo lo decide el proyecto, cambiando el control por `id`:
 
@@ -507,7 +515,7 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 {"controls": [{"id": "coverage", "min_score": 80}]}
 ```
 
-En `measure`, por debajo del mínimo el control sale como fallido sin bloquear; con `"mode": "block"` también bloquea. Una pasada sin tests (código 5) no tiene puntuación, y con un mínimo falla: lo que no se midió no llega a ninguno.
+En `measure`, por debajo del mínimo el control sale como fallido sin bloquear; con `"mode": "block"` también bloquea. Una pasada sin tests, con código en `src`, puntúa un 0 %, que es una medida cierta. Solo cuando lo medido no tiene código no hay puntuación, y entonces un mínimo falla: lo que no se midió no llega a ninguno. Si `unit` falló (en `measure`, o con `lictor check --keep-going`), la puntuación sale marcada «(de un unit fallido)».
 
 ### El oráculo y el ciclo de escenarios
 
@@ -615,7 +623,7 @@ flowchart TB
 │   │   ├── readers/            # Lectores de informes: JUnit (defusedxml), cobertura y mutación, solo hechos
 │   │   ├── spec/               # Parser oficial de Gherkin (GherkinSource)
 │   │   ├── store/              # Bitácora CloudEvents JSONL y reloj del sistema
-│   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.1)
+│   │   └── config/             # Modelos Pydantic, cargador y perfiles (python-uv@0.2)
 │   ├── orchestration/          # Grafo de estados LangGraph y SqliteSaver
 │   ├── prompts/                # Plantillas de prompts del sistema (driver.md, implement.md)
 │   ├── bootstrap.py            # Raíz de composición e inyección de dependencias

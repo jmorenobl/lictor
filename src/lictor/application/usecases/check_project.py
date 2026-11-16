@@ -1,23 +1,39 @@
 """CheckProject use case for verifying project controls and acceptance."""
 
 import os
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import assert_never
 
-from lictor.application.control_reports import ControlEvidence, ControlRun, run_control
+from lictor.application.control_reports import (
+    ControlEvidence,
+    ControlRun,
+    Readings,
+    failure_reason,
+    lent_note,
+    not_run,
+    run_control,
+    take_turn,
+)
 from lictor.application.ports import CommandRunner, ReportReaders
 from lictor.application.run_files import (
     CHECK_DIR,
     aside_dir,
-    fill_report_path,
+    fill_report_paths,
     relative_to_project,
     save_output,
 )
 from lictor.application.usecases.verify_attempt import describe_tampering
-from lictor.domain.controls import CommandControl
-from lictor.domain.errors import ConfigError
+from lictor.domain.controls import (
+    ACCEPTANCE_ID,
+    Added,
+    Control,
+    RunStep,
+    check_selection,
+    verification_steps,
+)
 from lictor.domain.model import CommandOutput
 from lictor.domain.results import (
     AcceptanceRun,
@@ -36,7 +52,6 @@ from lictor.domain.results import (
 from lictor.domain.rules import (
     condense_error,
     control_path_status,
-    missing_plugin,
     plugin_skip_reason,
 )
 from lictor.domain.verdicts import (
@@ -46,8 +61,6 @@ from lictor.domain.verdicts import (
     acceptance_check_verdict,
     trust,
 )
-
-ACCEPTANCE_ID = "acceptance"
 
 
 @dataclass(frozen=True)
@@ -66,12 +79,12 @@ class CheckProjectRequest:
     The commands run in `tree`, the project unless said otherwise, and leave their reports and
     logs in `evidence_dir`. `deleted` are the paths the checked tree removed from HEAD: a control
     whose `when_exists` path is among them fails instead of being skipped. `installed_plugins`
-    are what the environment has, or None if nobody can say: a control whose `when_plugin`
-    isn't among them is skipped.
+    are what the environment loads: a control whose `when_plugin` isn't among them is skipped.
     """
 
     project_root: Path
-    controls: Sequence[CommandControl]
+    controls: Sequence[Control]  # all of them, of both stages, in their order
+    installed_plugins: Sequence[str] = field(kw_only=True)
     acceptance: CheckAcceptanceSpec | None = None
     levels: Sequence[str] | None = None
     error_max_chars: int = 4000
@@ -80,7 +93,6 @@ class CheckProjectRequest:
     keep_going: bool = False
     control_ids: Sequence[str] | None = None
     deleted: Sequence[str] = ()
-    installed_plugins: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,10 @@ class CheckProjectResult:
     controls: tuple[ControlEntry, ...] = ()
     acceptance: AcceptanceRun | None = None  # None when it wasn't selected or wasn't reached
     condensed_error: str | None = None
+    # What ran although it wasn't selected, because a selected reader reads it (ADR-0008).
+    added: tuple[Added, ...] = ()
+    # The note of each control that ran with the arguments of a reader that only runs in check.
+    lent: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def acceptance_verdict(self) -> Verdict | None:
@@ -113,30 +129,53 @@ class CheckProject:
         self.readers = readers
 
     def execute(self, req: CheckProjectRequest) -> CheckProjectResult:
-        """Run the selected controls, then acceptance; stop at the first blocking failure."""
-        controls, acceptance = self._selected(req)
+        """Run the selected controls, then acceptance; stop at the first blocking failure.
+
+        `check` runs the controls of both stages, so every reader runs where it is verified: the
+        command of its read control is the same whatever was selected (ADR-0008, point 4).
+        """
+        installed = req.installed_plugins
+        selection = check_selection(req.controls, req.levels, req.control_ids, installed)
+        steps = verification_steps(selection.controls, req.controls, installed)
         entries: list[ControlEntry] = []
+        readings = Readings()
+        lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
 
-        for ctrl in controls:
-            ctrl_run = self._control(req, ctrl)
+        for step in steps:
+            ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
             entries.append(ctrl_run.entry)
+            if note := lent_note(step, ctrl_run.entry):
+                lent[step.control.id] = note
             failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
             if failure is not None:
-                first_failure = first_failure or (ctrl.id, failure)
+                reason = failure_reason(step, ctrl_run.entry, failure.reason)
+                failure = replace(failure, reason=reason)
+                first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
 
         accepted: AcceptanceRun | None = None
-        if acceptance is not None and (first_failure is None or req.keep_going):
-            accepted = self._run_acceptance(req, acceptance)
+        if (
+            req.acceptance is not None
+            and selection.acceptance
+            and (first_failure is None or req.keep_going)
+        ):
+            accepted = self._run_acceptance(req, req.acceptance)
             verdict = CheckProjectResult(ok=True, acceptance=accepted).acceptance_verdict
             if isinstance(verdict, Failed):
                 failure = Block(verdict.reason, acceptance_cases(accepted))
                 first_failure = first_failure or (ACCEPTANCE_ID, failure)
 
+        done = CheckProjectResult(
+            ok=True,
+            controls=tuple(entries),
+            acceptance=accepted,
+            added=selection.added,
+            lent=lent,
+        )
         if first_failure is None:
-            return CheckProjectResult(ok=True, controls=tuple(entries), acceptance=accepted)
+            return done
         failed_at, failed = first_failure
         condensed = condense_error(
             failed_at=failed_at,
@@ -144,57 +183,26 @@ class CheckProject:
             test_cases=failed.cases,
             max_chars=req.error_max_chars,
         )
-        return CheckProjectResult(
-            ok=False,
-            failed_at=failed_at,
-            controls=tuple(entries),
-            acceptance=accepted,
-            condensed_error=condensed,
-        )
+        return replace(done, ok=False, failed_at=failed_at, condensed_error=condensed)
 
-    def _selected(
-        self, req: CheckProjectRequest
-    ) -> tuple[list[CommandControl], CheckAcceptanceSpec | None]:
-        """Apply `levels` and `control_ids` together; an id that names nothing is refused."""
-        levels = {lvl.strip().upper() for lvl in req.levels} if req.levels is not None else None
-        ids = set(req.control_ids) if req.control_ids is not None else None
-        if ids is not None:
-            known = {c.id for c in req.controls} | {ACCEPTANCE_ID}
-            unknown = sorted(ids - known)
-            if unknown:
-                raise ConfigError(
-                    f"No hay ningún control {', '.join(unknown)}. "
-                    f"Los controles son: {', '.join(sorted(known))}."
-                )
-        controls = [
-            c
-            for c in req.controls
-            if (levels is None or c.level.strip().upper() in levels)
-            and (ids is None or c.id in ids)
-        ]
-        wants_acceptance = (levels is None or {"L3", "ACCEPTANCE"} & levels) and (
-            ids is None or ACCEPTANCE_ID in ids
-        )
-        return controls, req.acceptance if wants_acceptance else None
-
-    def _control(self, req: CheckProjectRequest, ctrl: CommandControl) -> ControlRun:
+    def _control(self, req: CheckProjectRequest, step: RunStep, readings: Readings) -> ControlRun:
         """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
+        ctrl = step.control
         tree = req.tree or req.project_root
-        if plugin := missing_plugin(ctrl.when_plugin, req.installed_plugins):
-            return ControlRun(ControlEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
+        if step.missing is not None:
+            return not_run(step, Skipped(plugin_skip_reason(step.missing)), readings)
         if ctrl.when_exists:
             in_tree = os.path.lexists(tree / ctrl.when_exists)
             status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=req.deleted)
             if status == "absent":
                 reason = f"No existe {ctrl.when_exists} en lo verificado"
-                return ControlRun(ControlEntry(ctrl, Skipped(reason)))
+                return not_run(step, Skipped(reason), readings)
             if status == "removed":
                 reason = (
                     f"Lo verificado elimina {ctrl.when_exists}, que existía en HEAD: "
                     f"el control {ctrl.id} ya no puede ejecutarse"
                 )
-                return ControlRun(ControlEntry(ctrl, NotExecuted(reason)))
-        evidence = self._evidence(req, ctrl.id)
+                return not_run(step, NotExecuted(reason), readings)
 
         def execute(
             command: Sequence[str], timeout_s: int
@@ -202,7 +210,7 @@ class CheckProject:
             # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
             return self.runner.run(cmd=command, cwd=tree, timeout_s=timeout_s), ()
 
-        return run_control(ctrl, self.readers, evidence, execute)
+        return run_control(step, self.readers, partial(self._evidence, req), execute, readings)
 
     def _evidence(self, req: CheckProjectRequest, step_id: str) -> ControlEvidence:
         evidence_dir = req.evidence_dir or aside_dir(req.project_root, CHECK_DIR)
@@ -216,7 +224,7 @@ class CheckProject:
     ) -> AcceptanceRun:
         """The acceptance is judged as in a run: a report it can trust, then its cases."""
         evidence = self._evidence(req, ACCEPTANCE_ID)
-        command = fill_report_path(acceptance.run, evidence.report)
+        command = fill_report_paths([(acceptance.run, evidence.report)])
         tree = req.tree or req.project_root
         cmd_out = self.runner.run(cmd=command, cwd=tree, timeout_s=acceptance.timeout_s)
         save_output(evidence.log, command, cmd_out)

@@ -143,6 +143,26 @@ def coverage_verdict(
             assert_never(report)
 
 
+def coverage_read_verdict(report: ReportOf[CoverageReport], *, ran_no_case: bool) -> Verdict:
+    """A reader of coverage over the run of a JUnit control, which already has its verdict.
+
+    It doesn't read that control's exit code again: `ran_no_case` says the control passed with no
+    case, which is how it counts a run with no tests. Then, and only then, nothing to score
+    passes; a report that can't be read never does (ADR-0008, point 6).
+    """
+    match report:
+        case MissingReport():
+            return Passed() if ran_no_case else Failed("Sin informe de cobertura")
+        case InvalidReport(reason=reason):
+            return Failed(f"El informe de cobertura no es válido: {reason}")
+        case CoverageReport(measured=False):
+            return Passed() if ran_no_case else Failed(NOTHING_MEASURED)
+        case CoverageReport():
+            return Passed()
+        case _:
+            assert_never(report)
+
+
 def _nothing_to_score(exit_code: int, empty_exit_codes: Collection[int], reason: str) -> Verdict:
     """No report and a report that measured nothing are one fact: only an empty run explains it."""
     return Passed() if exit_code in empty_exit_codes else Failed(reason)

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from lictor.adapters.config.models import (
     AcceptanceConfig,
     BackendConfig,
+    CommandControlConfig,
     ControlChange,
     LictorConfig,
     LictorFile,
@@ -18,12 +19,14 @@ from lictor.adapters.config.models import (
     Profile,
     ProfileVerification,
     ProjectVerification,
+    ReaderControlConfig,
     allow_empty_message,
     driver_hints_message,
+    plugin_without_list_message,
+    two_shapes_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
-from lictor.domain.controls import CommandControl
 from lictor.domain.errors import ConfigError
 from lictor.domain.rules import Impostors, MapLink
 
@@ -101,6 +104,11 @@ def load_profile(name: str, profiles_dir: Path | None = None) -> Profile:
     base_name, _, requested_version = name.partition("@")
     for profile in list_profiles(profiles_dir):
         if profile.name == base_name:
+            if requested_version in profile.retired_versions:
+                current = f"{profile.name}@{profile.version}"
+                why = profile.retired_versions[requested_version]
+                msg = f"El perfil {name} ya no existe: usa {current}, que {why} (ver el CHANGELOG)"
+                raise ConfigError(msg)
             if requested_version and profile.version != requested_version:
                 msg = (
                     f"La versión solicitada para el perfil '{base_name}' "
@@ -265,7 +273,8 @@ def _merge_profile_defaults(
     return merged
 
 
-_NEEDED_TO_ADD = ("level", "run", "report")
+# The fields of a run of its own, which a reader doesn't have (ADR-0008, point 2).
+RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists")
 
 
 def _resolve_controls(
@@ -274,41 +283,156 @@ def _resolve_controls(
     """Apply the project's changes by `id` over the profile's controls.
 
     A control of the profile keeps its place. One the project adds goes after the control it
-    writes before it, or at the end if it is the first: so a full copy of the profile, with or
-    without controls of its own in between, resolves in the order it was written.
+    writes before it, or at the end if it is the first: so a copy of the profile, with or without
+    controls of its own in between, resolves in the order it was written. `enabled: false` drops
+    a control and merges nothing.
     """
-    resolved = [dict(control) for control in profile_controls]
-    known = ", ".join(str(control["id"]) for control in profile_controls)
-    dropped: set[str] = set()
+    resolved: list[dict[str, object] | None] = [dict(control) for control in profile_controls]
+    ids = [str(control["id"]) for control in profile_controls]
+    known = ", ".join(ids)
     previous: int | None = None
     for change in changes:
-        fields = change.model_dump(mode="json", exclude_unset=True, exclude={"enabled"})
-        place = next((i for i, c in enumerate(resolved) if c["id"] == change.id), None)
-        if place is None:
-            _check_can_add(change, fields, known)
-            place = len(resolved) if previous is None else previous + 1
-            resolved.insert(place, {})
-        resolved[place] = {**resolved[place], **fields}
+        place = ids.index(change.id) if change.id in ids else None
         if not change.enabled:
-            dropped.add(change.id)
+            _check_drop(change, place, known)
+            if place is not None:
+                resolved[place] = None
+            previous = place if place is not None else previous
+            continue
+        base = resolved[place] if place is not None else None
+        control = resolve_shape(base, change, known)
+        if place is None:
+            place = len(resolved) if previous is None else previous + 1
+            resolved.insert(place, control)
+            ids.insert(place, change.id)
+        else:
+            resolved[place] = control
         previous = place
-    return [control for control in resolved if control["id"] not in dropped]
+    return [control for control in resolved if control is not None]
 
 
-def _check_can_add(change: ControlChange, fields: dict[str, object], known: str) -> None:
-    if not change.enabled:
+def _check_drop(change: ControlChange, place: int | None, known: str) -> None:
+    if place is None:
         msg = (
             f"El control '{change.id}' que quitas con enabled: false no está en el perfil, "
             f"que tiene {known}"
         )
         raise ConfigError(msg)
-    missing = [name for name in _NEEDED_TO_ADD if name not in fields]
-    if missing:
+    extra = sorted(change.model_fields_set - {"id", "enabled"})
+    if extra:
         msg = (
-            f"El control '{change.id}' no está en el perfil ({known}), así que lo añade: "
-            f"escribe también {' y '.join(missing)}"
+            f"El control '{change.id}' se quita con enabled: false, así que {_names(extra)} "
+            "no se aplicaría: quítalo."
         )
         raise ConfigError(msg)
+
+
+def _names(fields: Sequence[str]) -> str:
+    return " y ".join(", ".join(fields).rsplit(", ", 1)) if fields else ""
+
+
+def resolve_shape(
+    base: dict[str, object] | None, change: ControlChange, known: str = ""
+) -> dict[str, object]:
+    """What a control is once a change of `lictor.json` applies over its base (ADR-0008).
+
+    The base is the profile's control, or None for a new `id`. Written is what the change has
+    in `model_fields_set`, a null included; what the shape decides is resolved here, before
+    pydantic, so each mistake gets its own message and never the error of a union's branches.
+    """
+    written = change.model_dump(mode="json", include=change.model_fields_set - {"enabled"})
+    has_run = "run" in written
+    reads = [name for name in ("reads", "adds") if name in written]
+    run_fields = [name for name in RUN_FIELDS if name in written]
+    if has_run and reads:
+        raise ConfigError(two_shapes_message(change.id))
+    if base is None:
+        return _new_control(change.id, written, reads, run_fields, known)
+    if "reads" not in base:
+        if has_run or not reads:
+            return {**base, **written}
+        return {**_without(base, ("run", *RUN_FIELDS)), **_as_reader(change.id, base, written)}
+    if has_run:
+        return {**_without(base, ("reads", "adds")), **written}
+    _check_reader_report(change.id, written)
+    if run_fields:
+        raise ConfigError(_run_fields_message(change.id, run_fields, str(base["reads"])))
+    return {**base, **written}
+
+
+def _as_reader(
+    control_id: str, base: dict[str, object], written: dict[str, object]
+) -> dict[str, object]:
+    """A control of the profile that runs, turned into a reader by what was written."""
+    missing = [name for name in ("reads", "adds") if name not in written]
+    if missing:
+        msg = (
+            f"El control '{control_id}' del perfil ejecuta un comando: para que lea la "
+            f"ejecución de otro hacen falta reads y adds, y falta {missing[0]}."
+        )
+        raise ConfigError(msg)
+    _check_reader_report(control_id, {"report": base["report"], **written})
+    run_fields = [name for name in RUN_FIELDS if name in written]
+    if run_fields:
+        raise ConfigError(_run_fields_message(control_id, run_fields, str(written["reads"])))
+    return written
+
+
+def _new_control(
+    control_id: str,
+    written: dict[str, object],
+    reads: Sequence[str],
+    run_fields: Sequence[str],
+    known: str,
+) -> dict[str, object]:
+    adds = f"El control '{control_id}' no está en el perfil ({known}), así que lo añade"
+    if "run" in written:
+        missing = [name for name in ("level", "report") if name not in written]
+        if missing:
+            raise ConfigError(f"{adds}: escribe también {_names(missing)}")
+        return written
+    if not reads:
+        msg = (
+            f"{adds}, pero no dice qué ejecuta. Un control que ejecuta necesita level, report y "
+            'run, y uno que lee la ejecución de otro, level, report: "coverage", reads y adds.'
+        )
+        raise ConfigError(msg)
+    missing = [name for name in ("level", "report", "reads", "adds") if name not in written]
+    if missing:
+        msg = (
+            f"{adds}, y lee la ejecución de otro: escribe también {_names(missing)} "
+            '(report: "coverage")'
+        )
+        raise ConfigError(msg)
+    _check_reader_report(control_id, written)
+    if run_fields:
+        raise ConfigError(_run_fields_message(control_id, run_fields, str(written["reads"])))
+    return written
+
+
+def _check_reader_report(control_id: str, written: dict[str, object]) -> None:
+    report = written.get("report")
+    if report is not None and report != "coverage":
+        msg = (
+            f"El control '{control_id}' lee la ejecución de otro, y un lector solo puede ser de "
+            f'cobertura: su report es "coverage", no "{report}".'
+        )
+        raise ConfigError(msg)
+
+
+def _run_fields_message(control_id: str, run_fields: Sequence[str], reads: str) -> str:
+    if len(run_fields) == 1:
+        what = f"{run_fields[0]} es de una ejecución y no se aplicaría. Quítalo, o escríbelo"
+    else:
+        what = (
+            f"{_names(run_fields)} son de una ejecución y no se aplicarían. Quítalos, o escríbelos"
+        )
+    reader = f"El control '{control_id}' lee la ejecución de '{reads}' y no ejecuta nada"
+    return f"{reader}: {what} en '{reads}'."
+
+
+def _without(control: dict[str, object], names: Sequence[str]) -> dict[str, object]:
+    return {key: value for key, value in control.items() if key not in names}
 
 
 def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorConfig:
@@ -336,14 +460,25 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     try:
         written = LictorFile.model_validate(parsed)
     except ValidationError as exc:
-        msg = f"Configuración inválida en '{config_path}': {exc}"
+        msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
     merged = _merge_profile_defaults(parsed, written, profiles_dir, config_path.parent)
     try:
         return LictorConfig.model_validate(merged)
     except ValidationError as exc:
-        msg = f"Configuración inválida en '{config_path}': {exc}"
+        msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
+
+
+def _validation_text(exc: ValidationError) -> str:
+    """Lictor's own messages alone when every error is one: they say what to fix.
+
+    Pydantic's dump of the merged configuration would bury them; any other error keeps it.
+    """
+    errors = exc.errors()
+    if all(error["type"] == "value_error" for error in errors):
+        return "\n".join(str(error["msg"]).removeprefix("Value error, ") for error in errors)
+    return str(exc)
 
 
 def _reject_allow_empty(raw: dict[str, object], profiles_dir: Path | None) -> None:
@@ -363,9 +498,20 @@ def _reject_allow_empty(raw: dict[str, object], profiles_dir: Path | None) -> No
             except ConfigError:
                 profile = None
             if profile is not None:
-                same = [c.empty_exit_codes for c in profile.controls if c.id == control_id]
-                codes = same[0] if same else None
+                raise ConfigError(_allow_empty_in_profile(profile, control_id))
         raise ConfigError(allow_empty_message(control_id, codes))
+
+
+def _allow_empty_in_profile(profile: Profile, control_id: str) -> str:
+    """Name the codes that apply instead: the control's own, or its read control's."""
+    by_id = {c.id: c for c in profile.controls}
+    control = by_id.get(control_id)
+    if isinstance(control, ReaderControlConfig):
+        read = by_id.get(control.reads)
+        codes = read.empty_exit_codes if isinstance(read, CommandControlConfig) else None
+        return allow_empty_message(control_id, codes, reads=control.reads)
+    codes = control.empty_exit_codes if control is not None else None
+    return allow_empty_message(control_id, codes)
 
 
 def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerification) -> None:
@@ -396,6 +542,10 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
     profile = load_profile(config.profile, profiles_dir)
     project = config.verification
     _reject_reserved_names(project, profile.verification)
+    if not profile.verification.plugins_command:
+        for control in config.controls:
+            if control.when_plugin is not None:
+                raise ConfigError(plugin_without_list_message(control.id))
     return Defences(
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,
@@ -422,29 +572,6 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
             if (imp := profile.oracle.impostors) is not None
             else None
         ),
-    )
-
-
-def domain_controls(config: LictorConfig) -> tuple[CommandControl, ...]:
-    """The resolved controls as the domain sees them, in the order they were declared.
-
-    This is the only conversion: the run and `lictor check` get what it returns (ADR-0009).
-    """
-    return tuple(
-        CommandControl(
-            id=control.id,
-            level=control.level,
-            run=control.run,
-            report=control.report,
-            mode=control.mode,
-            stage=control.stage,
-            empty_exit_codes=tuple(control.empty_exit_codes),
-            timeout_s=control.timeout_s,
-            when_exists=control.when_exists,
-            when_plugin=control.when_plugin,
-            min_score=control.min_score,
-        )
-        for control in config.controls
     )
 
 

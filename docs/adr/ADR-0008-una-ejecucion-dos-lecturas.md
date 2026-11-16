@@ -39,7 +39,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
   - En el control resuelto no se distingue un campo escrito de uno por defecto.
   - Un cambio con `enabled: false` se mezcla antes de quitarlo.
   - `exclude_unset` conserva un `null` escrito (`loader.py:282`).
-  - Las validaciones de conjunto que existen, como la unicidad de `id`, son `field_validator` del tipo (`models.py:384-387`, `:423-426`). Valen también para un `LictorConfig` construido sin `load_config`, como hacen `bootstrap_runtime(config=...)` (`bootstrap.py:140-144`) y los tests, y `ProfileConfig` tiene la suya.
+  - Las validaciones de conjunto que existen, como la unicidad de `id`, son `field_validator` del tipo (`models.py:384-387`, `:423-426`). Valen también para un `LictorConfig` construido sin `load_config`, como hacen `bootstrap_runtime(config=...)` (`bootstrap.py:140-144`) y los tests, y `Profile` tiene la suya.
 - **El perfil.** `python-uv@0.1`, y el cargador solo admite la versión que existe: pedir otra sale con un error (`loader.py:98-106`).
 
 ### Comprobado con `pytest-cov` 7.1.0 y `coverage` 7.17.0 (2026-11-16), las versiones que fija `uv.lock`
@@ -93,7 +93,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
      - un test en rojo deja de bloquear a través de `coverage`;
      - `when_plugin` exige `plugins_command`.
 
-     Un `lictor.json` que pide `python-uv@0.1` pidió esas reglas, y darle otras con el mismo nombre sería cambiarlas sin que lo sepa. El cargador sigue admitiendo una sola versión de cada perfil, así que `@0.1` sale con 10, con un mensaje que dice qué cambia y que remite al CHANGELOG: «El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la ejecución de unit (ver el CHANGELOG)». `lictor init` escribe `@0.2`.
+     Un `lictor.json` que pide `python-uv@0.1` pidió esas reglas, y darle otras con el mismo nombre sería cambiarlas sin que lo sepa. El cargador sigue admitiendo una sola versión de cada perfil, así que `@0.1` sale con 10, con un mensaje que dice qué cambia y que remite al CHANGELOG. Lo que cambia es del perfil, y el cargador no sabe nada de pytest, así que el perfil lo declara en `retired_versions` (`{"0.1": "mide la cobertura en la ejecución de unit"}`) y el cargador compone el mensaje: «El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la ejecución de unit (ver el CHANGELOG)». `lictor init` escribe `@0.2`.
 2. **Cómo se aplica un cambio por `id`, y dónde se valida.**
 
    **«Escrito» es estar en `model_fields_set`,** valga lo que valga, también un `null` en un campo que lo admite (`when_exists`, `when_plugin`). Así `{"id": "coverage", "when_exists": null}` sobre un lector es un campo de ejecución escrito, y es un error.
@@ -121,7 +121,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
    - **Con `enabled: false`, el cambio no se mezcla:** quita el control, y cualquier otro campo escrito a su lado es un error, porque no se aplicaría.
    - **Cada error sale con 10 y su propio mensaje,** que nombra el control, lo escrito y lo que lo arregla. Como la forma está resuelta antes de pydantic, nunca llega al usuario el error de las dos ramas de una unión.
 
-   **Las reglas de conjunto son de los tipos `LictorConfig` y `ProfileConfig`,** en un `model_validator` que llama a `domain_controls` y a una función del dominio. Así valen para un `LictorConfig` construido a mano, como la unicidad de `id`, y un perfil roto no carga. Fallan si:
+   **Las reglas de conjunto son de los tipos `LictorConfig` y `Profile`,** en un `model_validator` que llama a `domain_controls` y a una función del dominio. Así valen para un `LictorConfig` construido a mano, como la unicidad de `id`, y un perfil roto no carga. Fallan si:
    - `reads` no nombra un control activo;
    - el control leído es lector, o no tiene `report: "junit"`;
    - un control tiene dos lectores;
@@ -138,7 +138,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
      - La regla de hoy (si no se puede saber, se ejecuta) era una rama que solo ejercían los tests.
      - En un lector, esa regla significaría añadir `--cov` a ciegas: sin el plugin, `unit` se rompería con «unrecognized arguments», y el fallo de una dependencia de cobertura caería sobre los tests.
    - **Dónde se exige.** Lo exigen dos sitios, para que no haya un camino que se lo salte:
-     - un validador de `ProfileConfig`, que tiene los controles del perfil y su `verification.plugins_command`;
+     - un validador de `Profile`, que tiene los controles del perfil y su `verification.plugins_command`;
      - `resolve_defences`, por donde pasa todo arranque (`bootstrap.py:145`), para los controles que añade el proyecto.
    - **`installed_plugins` deja de ser opcional.** `VerificationEnvironment.installed_plugins` es una tupla: lo que listó `plugins_command`, o ninguno si el perfil no lo declara, y entonces ningún control puede depender de un plugin. Por lo mismo:
      - `CheckProjectRequest.installed_plugins` es una tupla;
@@ -162,6 +162,8 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
      - `fill_report_path` pasa a recibir la lista de partes con su ruta y borra todos esos informes antes de ejecutar, porque un informe viejo no prueba nada.
    - **Si el proyecto escribe su propio `run` en `unit`** (otro directorio, `-n auto`), `adds` se añade igual: `coverage` lee esa ejecución, sea cual sea. Si ese `run` no es de pytest, los argumentos lo rompen. La salida es quitar `coverage` o darle un `run` propio, y la skill del perfil dice que no se ponga `--cov` en `unit`.
    - **El agente ve el comando con que se verificó.** Sus `agent_commands` siguen sin `--cov`, porque el agente no mide cobertura. Pero cuando el comando efectivo de un control que falla no es su `run`, el error condensado que va al prompt lo nombra: «unit se ejecutó como: <comando efectivo>». Así un test que solo falla bajo cobertura se puede reproducir en la copia, en vez de gastar intentos con un comando con el que pasa. La regla («nombrar el comando cuando no es el `run`») es del dominio, junto a la del comando efectivo.
+     - **Solo si se ejecutó.** Un control saltado o que no pudo ejecutarse no ejecutó ningún comando, así que su error no nombra ninguno, y `lictor check` tampoco marca su línea con la nota del punto 7.
+     - **Con `{out}` como está configurado, y una frase que lo explica.** Las rutas reales apuntan a la evidencia, en `.lictor/runs/` del proyecto, y nombrarlas invitaría al agente a escribir en el estado del run. Por eso el comando va como está configurado, cada `{out}` en su sitio, seguido de «Cada {out} es la ruta donde Lictor deja un informe, fuera de tu copia: para reproducirlo, pon en cada uno una ruta distinta fuera del proyecto». Sin esa frase, copiado tal cual, el comando escribiría los dos informes en un fichero `{out}` de la copia, que `L0-rutas` rechazaría.
 5. **El informe del lector se lee en cuanto termina su control leído, y solo si el lector está en la verificación.**
    - **Cuándo se lee:** cuando `unit` acaba, con el mismo momento y las mismas condiciones que su JUnit: después de `verify_and_restore` y de `save_output`. El `CoverageReader` de ADR-0009 lee el `{out}` del lector, y el hecho leído queda en memoria en la verificación en curso, asociado al lector, hasta su turno. En ese turno solo se da el veredicto. Un reintento es otra verificación, con su directorio y su memoria.
    - **Solo se lee si el lector está entre los controles de esta verificación.** Con `lictor check --control unit`, `unit` recibe `adds` (punto 4), el informe queda escrito en `.lictor/check/` y nadie lo lee, porque `coverage` no está en la selección.
@@ -227,12 +229,15 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
    - **`report.md` y la salida de `lictor check`** muestran un `Read` como «lee unit», con su veredicto y su puntuación. Como log, la salida de `check` apunta al del control leído.
    - **La marca del `unit` fallido sale de los dos resultados de la misma verificación, sin otro campo.** «Puntuaciones» de `report.md` y la salida de `lictor check` añaden «(de un unit fallido)» cuando el resultado del control leído es un `Judged` cuyo veredicto falló. Es el mismo hecho, y guardarlo dos veces podría contradecirse.
    - **`IntegritySnapshot` no cambia.** En el run, la ejecución de `unit` va dentro del suyo, y el lector no ejecuta nada. En `check` no hay ninguno, como hoy para todos los controles.
-9. **La regla vive en el dominio,** en funciones puras, sin I/O, en `domain/controls.py`:
-   - la decisión del plugin (punto 3);
-   - el comando efectivo del control leído, y si el error lo nombra (punto 4);
-   - el veredicto del lector (punto 6);
-   - la selección de `check` (punto 7);
-   - las reglas de conjunto (punto 2), que llaman los validadores de `LictorConfig` y `ProfileConfig`.
+9. **La regla vive en el dominio,** en funciones puras, sin I/O:
+   - en `domain/controls.py`, junto a los tipos de control:
+     - la decisión del plugin (punto 3), que se toma una vez para las dos posiciones en `verification_steps`, los pasos que siguen la verificación del run y la de `check`;
+     - el comando efectivo del control leído, y si el error lo nombra (punto 4);
+     - la selección de `check` (punto 7);
+     - las reglas de conjunto (punto 2), que llaman los validadores de `LictorConfig` y `Profile`;
+   - en `domain/results.py` y `domain/verdicts.py`, junto a las demás variantes y veredictos de ADR-0009, el veredicto del lector (punto 6). `results.py` ya importa los tipos de control, así que en `controls.py` sería un ciclo.
+
+   Un resultado guarda el tipo de su control: `CommandEntry` lleva un `CommandControl` y nunca un `Read`, y `ReaderEntry`, un `ReaderControl` y nunca un `Executed`. `ControlEntry` es la unión de los dos.
 
    La tabla de la forma (punto 2) es del adaptador de configuración, porque trabaja con lo que escribe una persona antes de que exista un `Control`. Va en una función propia, probada con cada fila.
 
@@ -273,7 +278,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
     - un control sin `run` ni `reads`;
     - un comando que no trocea con `shlex`, en `run`, `adds` y `acceptance.run`;
     - un `LictorConfig` construido a mano con una pareja inválida;
-    - un `ProfileConfig` con un lector huérfano, y otro con `when_plugin` sin `plugins_command`;
+    - un `Profile` con un lector huérfano, y otro con `when_plugin` sin `plugins_command`;
     - un control del proyecto con `when_plugin` en un perfil sin `plugins_command`, en `resolve_defences`;
     - un lector de `id` nuevo escrito antes que su control leído;
     - `allow_empty` escrito en `coverage`;
@@ -314,7 +319,7 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
     - las construcciones directas de `VerificationControl`, `CheckControlSpec` y `ControlConfig`: `tests/unit/test_verify_attempt.py`, `test_check_project.py`, `test_check_working_tree.py:27`, `test_config.py:1015` y `tests/integration/test_graph.py:237` y `:313`;
     - `light_config` (`tests/integration/repro/harness.py:119-123`) y su test (`tests/integration/test_repro_layers.py:99-106`). Pasan a tratar la pareja junta: quitan los dos, o conservan los dos si el caso nombra cualquiera, para que un caso ligero no salga con 10;
     - las 39 menciones de `python-uv@0.1`, en los tests, los ejemplos, `scripts/init-repo.sh`, `lictor.json`, README.md y AGENTS.md;
-    - el test de la 0.2.0 (`test_a_lictor_json_of_0_2_0_keeps_its_fingerprint`), que pasa a comprobar que esa copia, con `@0.1`, se rechaza con su mensaje.
+    - el test de la 0.2.0 (`test_a_lictor_json_of_0_2_0_is_refused_and_says_what_to_remove`, desde ADR-0009), que comprueba además que esa copia, sin `acceptance.report`, se rechaza por `@0.1` con su mensaje.
   - **Esquema:** `schema/lictor.schema.json` se regenera con `reads` y `adds` en `ControlChange`, sin `null` en `run`, `reads` ni `adds`, y con la descripción de `adds` (punto 2).
 - **Documentación que cambia:**
   - **`README.md`:**
