@@ -22,6 +22,7 @@ from lictor.domain.model import CommandOutput
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
+    CommandEntry,
     Consequence,
     ControlEntry,
     NotExecuted,
@@ -180,19 +181,19 @@ class CheckProject:
         """Skip a control whose path the tree lacks and HEAD never had; fail one it removed."""
         tree = req.tree or req.project_root
         if plugin := missing_plugin(ctrl.when_plugin, req.installed_plugins):
-            return ControlRun(ControlEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
+            return ControlRun(CommandEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
         if ctrl.when_exists:
             in_tree = os.path.lexists(tree / ctrl.when_exists)
             status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=req.deleted)
             if status == "absent":
                 reason = f"No existe {ctrl.when_exists} en lo verificado"
-                return ControlRun(ControlEntry(ctrl, Skipped(reason)))
+                return ControlRun(CommandEntry(ctrl, Skipped(reason)))
             if status == "removed":
                 reason = (
                     f"Lo verificado elimina {ctrl.when_exists}, que existía en HEAD: "
                     f"el control {ctrl.id} ya no puede ejecutarse"
                 )
-                return ControlRun(ControlEntry(ctrl, NotExecuted(reason)))
+                return ControlRun(CommandEntry(ctrl, NotExecuted(reason)))
         evidence = self._evidence(req, ctrl.id)
 
         def execute(

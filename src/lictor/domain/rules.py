@@ -572,7 +572,7 @@ def control_path_status(path: str, *, in_tree: bool, deleted: Sequence[str]) -> 
     return "absent"
 
 
-def missing_plugin(required: str | None, installed: Sequence[str]) -> str | None:
+def missing_plugin(required: str | None, installed: Collection[str]) -> str | None:
     """The plugin a control needs and the environment lacks, or None.
 
     The list is always known: a control can only need a plugin in a profile that lists them.

@@ -38,6 +38,7 @@ from lictor.domain.model import (
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
+    CommandEntry,
     ControlEntry,
     NotExecuted,
     Proceed,
@@ -481,7 +482,7 @@ class VerifyAttempt:
         Skip one whose plugin the environment lacks, too: the dependency is the project's.
         """
         if plugin := missing_plugin(ctrl.when_plugin, self.environment.installed_plugins):
-            return ControlRun(ControlEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
+            return ControlRun(CommandEntry(ctrl, Skipped(plugin_skip_reason(plugin))))
         if ctrl.when_exists is None:
             return self._run_single_control(ctrl, req)
         in_tree = os.path.lexists(self._tree_dir(req) / ctrl.when_exists)
@@ -489,13 +490,13 @@ class VerifyAttempt:
         status = control_path_status(ctrl.when_exists, in_tree=in_tree, deleted=deleted)
         if status == "absent":
             reason = f"No existe {ctrl.when_exists} ni en HEAD ni en el intento"
-            return ControlRun(ControlEntry(ctrl, Skipped(reason)))
+            return ControlRun(CommandEntry(ctrl, Skipped(reason)))
         if status == "removed":
             reason = (
                 f"El intento elimina {ctrl.when_exists}, que existía: "
                 f"el control {ctrl.id} ya no puede ejecutarse"
             )
-            return ControlRun(ControlEntry(ctrl, NotExecuted(reason)))
+            return ControlRun(CommandEntry(ctrl, NotExecuted(reason)))
         return self._run_single_control(ctrl, req)
 
     def _run_single_control(self, ctrl: CommandControl, req: VerifyAttemptRequest) -> ControlRun:

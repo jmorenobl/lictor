@@ -19,7 +19,7 @@ from lictor.application.run_files import (
 )
 from lictor.domain.controls import CommandControl
 from lictor.domain.model import CommandOutput
-from lictor.domain.results import ControlEntry, Executed, Judged, Ran, Unjudged
+from lictor.domain.results import CommandEntry, ControlEntry, Executed, Judged, Ran, Unjudged
 from lictor.domain.verdicts import (
     Execution,
     VerdictRule,
@@ -99,4 +99,4 @@ def run_control(
         judged = read_and_judge(readers, control.verdict_rule, evidence.report, output)
         verdict = enforce_min_score(judged.verdict, judged.score, control.min_score)
         judgement = Judged(judged.report, verdict)
-    return ControlRun(ControlEntry(control, Executed(ran, judgement)), format_output(output))
+    return ControlRun(CommandEntry(control, Executed(ran, judgement)), format_output(output))

@@ -18,11 +18,14 @@ from lictor.domain.results import (
     RecordedExecuted,
     RecordedJudged,
     RecordedNotExecuted,
+    RecordedRead,
     RecordedSkipped,
     RecordedUnjudged,
     acceptance_from_record,
+    failed_run_mark,
     recorded_controls,
     recorded_duration,
+    recorded_from_failed_run,
 )
 from lictor.domain.rules import describe_score, minimum_text
 
@@ -559,11 +562,17 @@ class BuildReport:
         info["attempts"].append(f"| {sid} | {attempt} | {outcome} | {error_cell} |")
 
         for control_id, recorded in controls.items():
-            self._process_control(info, f"**{control_id}** ({sid}, intento {attempt})", recorded)
+            where = f"**{control_id}** ({sid}, intento {attempt})"
+            self._process_control(info, where, recorded, controls)
 
     @staticmethod
-    def _process_control(info: dict[str, Any], where: str, recorded: RecordedControl) -> None:
-        """Show each result by what happened to it: skipped, not run, tampered or judged."""
+    def _process_control(
+        info: dict[str, Any],
+        where: str,
+        recorded: RecordedControl,
+        verification: Mapping[str, RecordedControl],
+    ) -> None:
+        """Show each result by what happened to it: skipped, not run, tampered, judged or read."""
         match recorded:
             case RecordedSkipped(reason=reason):
                 info["skipped_controls"].append(f"- {where}: {reason}")
@@ -575,6 +584,14 @@ class BuildReport:
             case RecordedExecuted(judgement=RecordedJudged() as judged):
                 result = "correcto" if judged.passed else "fallo"
                 score = f", {describe_score(judged.score)}" if judged.score else ""
+                if score:
+                    info["scores"].append(f"- {where}: {result}{score}")
+            case RecordedRead(reads=reads) as read:
+                verdict = "correcto" if read.passed else f"fallo: {read.reason or 'sin motivo'}"
+                result = f"lee {reads}, {verdict}"
+                score = f", {describe_score(read.score)}" if read.score else ""
+                if score and recorded_from_failed_run(read, verification):
+                    score += failed_run_mark(reads)
                 if score:
                     info["scores"].append(f"- {where}: {result}{score}")
             case _:

@@ -227,12 +227,15 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
    - **`report.md` y la salida de `lictor check`** muestran un `Read` como «lee unit», con su veredicto y su puntuación. Como log, la salida de `check` apunta al del control leído.
    - **La marca del `unit` fallido sale de los dos resultados de la misma verificación, sin otro campo.** «Puntuaciones» de `report.md` y la salida de `lictor check` añaden «(de un unit fallido)» cuando el resultado del control leído es un `Judged` cuyo veredicto falló. Es el mismo hecho, y guardarlo dos veces podría contradecirse.
    - **`IntegritySnapshot` no cambia.** En el run, la ejecución de `unit` va dentro del suyo, y el lector no ejecuta nada. En `check` no hay ninguno, como hoy para todos los controles.
-9. **La regla vive en el dominio,** en funciones puras, sin I/O, en `domain/controls.py`:
-   - la decisión del plugin (punto 3);
-   - el comando efectivo del control leído, y si el error lo nombra (punto 4);
-   - el veredicto del lector (punto 6);
-   - la selección de `check` (punto 7);
-   - las reglas de conjunto (punto 2), que llaman los validadores de `LictorConfig` y `ProfileConfig`.
+9. **La regla vive en el dominio,** en funciones puras, sin I/O:
+   - en `domain/controls.py`, junto a los tipos de control:
+     - la decisión del plugin (punto 3), que se toma una vez para las dos posiciones en `verification_steps`, los pasos que siguen la verificación del run y la de `check`;
+     - el comando efectivo del control leído, y si el error lo nombra (punto 4);
+     - la selección de `check` (punto 7);
+     - las reglas de conjunto (punto 2), que llaman los validadores de `LictorConfig` y `Profile`;
+   - en `domain/results.py` y `domain/verdicts.py`, junto a las demás variantes y veredictos de ADR-0009, el veredicto del lector (punto 6). `results.py` ya importa los tipos de control, así que en `controls.py` sería un ciclo.
+
+   Un resultado guarda el tipo de su control: `CommandEntry` lleva un `CommandControl` y nunca un `Read`, y `ReaderEntry`, un `ReaderControl` y nunca un `Executed`. `ControlEntry` es la unión de los dos.
 
    La tabla de la forma (punto 2) es del adaptador de configuración, porque trabaja con lo que escribe una persona antes de que exista un `Control`. Va en una función propia, probada con cada fila.
 
