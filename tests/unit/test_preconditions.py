@@ -268,7 +268,7 @@ def test_doctor_warns_of_a_reader_only_in_check_and_looks_for_no_program_of_it(
 
     assert report.problems == []
     warned = next(c for c in report.checks if c.name == "Momento de los controles")
-    assert "solo corren en `lictor check`: coverage." in warned.warnings[0]
+    assert "solo corre en `lictor check`: coverage." in warned.warnings[0]
     commands = next(c for c in report.checks if c.name == "Comandos de verificación")
     assert commands.warnings == ()
 

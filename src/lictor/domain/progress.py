@@ -379,10 +379,20 @@ def _follows(previous: str, sid: str) -> bool:
     )
 
 
+def _id_order(sid: str) -> tuple[str, int, int]:
+    """By prefix and number, so `A-024` goes before `A-028` wherever the feature puts it."""
+    numbered = _numbered(sid)
+    return (numbered[0], numbered[1], numbered[2]) if numbered else (sid, -1, 0)
+
+
 def id_ranges(ids: Sequence[str]) -> str:
-    """Write the IDs in order, three or more consecutive ones as a range: `A-003 a A-027`."""
+    """Write the IDs in order, three or more consecutive ones as a range: `A-003 a A-027`.
+
+    The order is the IDs', not the feature's: a rule written last with the lowest IDs would
+    otherwise split one range in three (F50).
+    """
     runs: list[list[str]] = []
-    for sid in ids:
+    for sid in sorted(ids, key=_id_order):
         if runs and _follows(runs[-1][-1], sid):
             runs[-1].append(sid)
         else:
