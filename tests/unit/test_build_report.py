@@ -407,6 +407,22 @@ def test_report_shows_why_a_reader_failed(tmp_path: Path) -> None:
     )
 
 
+def test_a_score_below_its_minimum_is_shown_once(tmp_path: Path) -> None:
+    """The reason of a minimum not met carries the score: «Puntuaciones» doesn't repeat it."""
+    reason = "La cobertura, 75,0 % (3 de 4 líneas), no llega al mínimo de 80 %"
+    controls: dict[str, object] = {
+        "unit": _executed(),
+        "coverage": _read(passed=False, mode="block", reason=reason, score=_COVERAGE_SCORE),
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    scores = report.split("## Puntuaciones")[1].split("##")[0]
+    assert scores.strip() == (
+        "- **coverage** (IVA-001, intento 1): lee unit, fallo, 75,0 % (3 de 4 líneas)"
+    )
+
+
 def test_report_says_when_no_control_was_scored(tmp_path: Path) -> None:
     assert "*Ningún control registró puntuación.*" in _report(tmp_path, [_verify_event({})])
 

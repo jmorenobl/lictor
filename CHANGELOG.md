@@ -119,6 +119,9 @@ Lo que deja de funcionar, y qué hacer en cada caso:
   8. Una mutación sin mutantes probados (todos omitidos) falla sin puntuación.
   9. Un informe de cobertura o de mutación que no es UTF-8 no es válido.
   10. Un comando cortado por su tiempo límite lo dice («Se cortó a los N s»), en vez de «código -9».
+- `lictor status` escribe los rangos de IDs en el orden de los IDs, no en el del feature: una regla
+  escrita al final con los IDs más bajos ya no parte un rango en tres
+  (`DNI-001 a DNI-023, DNI-028 a DNI-032, DNI-024 a DNI-027` es ahora `DNI-001 a DNI-032`).
 
 ## [0.3.0] - 2026-11-11
 

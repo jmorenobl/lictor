@@ -593,7 +593,10 @@ class BuildReport:
                 if score and recorded_from_failed_run(read, verification):
                     score += failed_run_mark(reads)
                 if score:
-                    info["scores"].append(f"- {where}: {result}{score}")
+                    # As a command control's: the verdict and the score once. The reason of a
+                    # minimum not met already carries the score; it stays in error.txt.
+                    passed = "correcto" if read.passed else "fallo"
+                    info["scores"].append(f"- {where}: lee {reads}, {passed}{score}")
             case _:
                 return
         if recorded.mode == "measure":

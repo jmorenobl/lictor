@@ -23,6 +23,13 @@ def spoken_list(names: Sequence[str]) -> str:
     return f"{', '.join(names[:-1])} y {names[-1]}"
 
 
+def left_unchecked(check_ids: Sequence[str]) -> str:
+    """«Queda sin comprobar a, que solo corre…», in the number of the controls it names."""
+    if len(check_ids) == 1:
+        return f"Queda sin comprobar {spoken_list(check_ids)}, que solo corre en `lictor check`"
+    return f"Quedan sin comprobar {spoken_list(check_ids)}, que solo corren en `lictor check`"
+
+
 def committed_greens(status: Mapping[str, str], green_at_load: Sequence[str]) -> bool:
     """Whether the run committed a green: implemented, collateral or registered again.
 
@@ -39,24 +46,26 @@ def check_stage_note(check_ids: Sequence[str], branch: str = "", worktree: str =
     `lictor check` anywhere else would verify something else.
     """
     where = f" en `{worktree}`, donde está la rama {branch}," if branch else ""
-    return (
-        f"Quedan sin comprobar {spoken_list(check_ids)}, que solo corren en `lictor check`: "
-        f"ejecútalo{where} antes de integrar."
-    )
+    return f"{left_unchecked(check_ids)}: ejecútalo{where} antes de integrar."
 
 
 def integration_with_check_stage(branch: str, worktree: str, check_ids: Sequence[str]) -> str:
     """`integration_hint` with what is left to check, and where to check it."""
     return (
-        f"El resultado está en la rama {branch}, en `{worktree}`. Quedan sin comprobar "
-        f"{spoken_list(check_ids)}, que solo corren en `lictor check`: ejecútalo en ese "
-        "worktree, o deja que lo haga la CI de la pull request, antes de integrarlo con "
+        f"El resultado está en la rama {branch}, en `{worktree}`. {left_unchecked(check_ids)}: "
+        "ejecútalo en ese worktree, o deja que lo haga la CI de la pull request, antes de "
+        "integrarlo con "
         f"`git merge {branch}` o con una pull request."
     )
 
 
 def check_controls_warning(check_ids: Sequence[str]) -> str:
     """What `doctor` says while any control only runs in `lictor check`."""
+    if len(check_ids) == 1:
+        return (
+            f"Control que solo corre en `lictor check`: {spoken_list(check_ids)}. Un run no lo "
+            "ejecuta: solo protege lo que integras si tu CI ejecuta `lictor check`."
+        )
     return (
         f"Controles que solo corren en `lictor check`: {spoken_list(check_ids)}. Un run no los "
         "ejecuta: solo protegen lo que integras si tu CI ejecuta `lictor check`."

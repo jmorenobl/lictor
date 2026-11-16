@@ -404,6 +404,9 @@ def test_status_groups_the_greens_from_before_as_it_groups_the_pending() -> None
         (["A-009", "A-010", "A-011"], "A-009 a A-011"),
         (["A-1", "A-2", "A-03"], "A-1, A-2, A-03"),
         (["X", "Y", "Z"], "X, Y, Z"),
+        (["A-001", "A-002", "A-005", "A-006", "A-007", "A-003", "A-004"], "A-001 a A-007"),
+        (["B-002", "A-009", "B-001"], "A-009, B-001, B-002"),
+        (["A-001", "A", "A-002", "A-003"], "A, A-001 a A-003"),
     ],
 )
 def test_consecutive_ids_are_written_as_a_range(ids: list[str], expected: str) -> None:

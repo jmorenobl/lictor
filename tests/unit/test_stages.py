@@ -13,6 +13,20 @@ from lictor.domain.stages import (
 )
 
 
+def test_doctor_names_a_single_check_control_in_the_singular() -> None:
+    assert check_controls_warning(["audit"]) == (
+        "Control que solo corre en `lictor check`: audit. Un run no lo ejecuta: solo protege lo "
+        "que integras si tu CI ejecuta `lictor check`."
+    )
+
+
+def test_the_hint_names_a_single_check_control_in_the_singular() -> None:
+    assert integration_with_check_stage("lictor/x", "/w/x", ["audit"]).startswith(
+        "El resultado está en la rama lictor/x, en `/w/x`. Queda sin comprobar audit, que solo "
+        "corre en `lictor check`: ejecútalo en ese worktree"
+    )
+
+
 @pytest.mark.parametrize(
     ("names", "spoken"),
     [
@@ -48,7 +62,7 @@ def test_the_note_names_the_check_controls_and_says_to_run_check() -> None:
 
 def test_the_note_of_a_linked_worktree_says_where_to_run_check() -> None:
     assert check_stage_note(["mutation"], "lictor/x", "/w/x") == (
-        "Quedan sin comprobar mutation, que solo corren en `lictor check`: ejecútalo en "
+        "Queda sin comprobar mutation, que solo corre en `lictor check`: ejecútalo en "
         "`/w/x`, donde está la rama lictor/x, antes de integrar."
     )
 
