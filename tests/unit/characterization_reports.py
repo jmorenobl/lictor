@@ -30,7 +30,7 @@ from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
 from lictor.domain.model import CommandOutput, ControlResult, CoverageScore, MutationScore
 from lictor.domain.rules import enforce_min_score, suite_crash_reason
-from lictor.domain.verdicts import judged_result, junit_verdict
+from lictor.domain.verdicts import report_cases
 
 READERS = ReportReaders(junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader())
 
@@ -179,16 +179,20 @@ RED_STDOUTS: dict[str, str] = {
 }
 
 
-def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenAcceptance:
+@dataclass(frozen=True)
+class SeenRed:
+    """What the red and the impostors use of a report: its cases, and whether the suite crashed."""
+
+    cases: int
+    crash: str | None
+
+
+def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenRed:
     """`CheckRed`, red and impostors: `{out}` read by the JUnit reader; the stdout is never read."""
     del stdout  # ADR-0009, change 3: the stdout is no source of a report
-    try:
-        junit = READERS.junit.read(report)
-        result = judged_result(junit_verdict(junit, code, ()), junit, 0)
-    except Exception as exc:
-        return SeenAcceptance(Seen(RAISES, type(exc).__name__))
-    crash = suite_crash_reason(code, (1,), result.test_cases)
-    return SeenAcceptance(Seen(result.ok, result.error, len(result.test_cases)), crash)
+    junit = READERS.junit.read(report)
+    cases = report_cases(junit)
+    return SeenRed(len(cases), suite_crash_reason(code, (1,), cases))
 
 
 def _output(code: int, stdout: str = "", stderr: str = "") -> CommandOutput:

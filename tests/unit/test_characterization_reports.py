@@ -37,7 +37,7 @@ def _rows(table: str, *keys: str) -> Any:
     ]
 
 
-def _check(expected: dict[str, Any], seen: c.Seen | c.SeenAcceptance) -> None:
+def _check(expected: dict[str, Any], seen: c.Seen | c.SeenAcceptance | c.SeenRed) -> None:
     assert asdict(seen) == expected
 
 
