@@ -115,8 +115,8 @@ def mutation_verdict(report: ReportOf[MutationReport], exit_code: int) -> Verdic
         case MutationReport():
             if exit_code != 0:
                 return Failed(f"La pasada de mutación falló con el código {exit_code}")
-            if report.score.total == 0:
-                return Failed("El informe de mutación no tiene mutantes")
+            if report.tried == 0:
+                return Failed("El informe de mutación no tiene mutantes probados")
             return Passed()
         case _:
             assert_never(report)
@@ -128,11 +128,11 @@ def report_cases(report: Report | None) -> tuple[TestCaseResult, ...]:
 
 
 def report_score(report: Report | None) -> Score | None:
-    """The score a report gives; only a coverage or a mutation report that measured has one."""
+    """The score a report gives: a coverage report that measured, or a pass that tried mutants."""
     if isinstance(report, CoverageReport):
         return report.score if report.measured else None
     if isinstance(report, MutationReport):
-        return report.score
+        return report.score if report.tried > 0 else None
     return None
 
 

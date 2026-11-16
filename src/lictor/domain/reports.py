@@ -70,6 +70,11 @@ class MutationReport:
     counts: Mapping[str, int]
 
     @property
+    def tried(self) -> int:
+        """The mutants the tests were run against: all of them but the skipped ones."""
+        return self.counts.get("total", 0) - self.counts.get("skipped", 0)
+
+    @property
     def score(self) -> MutationScore:
         return mutation_score(self.counts)
 

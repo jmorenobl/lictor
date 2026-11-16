@@ -686,8 +686,8 @@
 {"table": "mutation", "report": "no es JSON", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: no es JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)", "cases": 0, "score": null}}
 {"table": "mutation", "report": "lista JSON", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: no es un objeto JSON", "cases": 0, "score": null}}
 {"table": "mutation", "report": "lista JSON", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: no es un objeto JSON", "cases": 0, "score": null}}
-{"table": "mutation", "report": "objeto vacío", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no tiene mutantes", "cases": 0, "score": "mutation 0.0 (0 de 0)"}}
-{"table": "mutation", "report": "objeto vacío", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": "mutation 0.0 (0 de 0)"}}
+{"table": "mutation", "report": "objeto vacío", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no tiene mutantes probados", "cases": 0, "score": null}}
+{"table": "mutation", "report": "objeto vacío", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": null}}
 {"table": "mutation", "report": "valor negativo", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' no es un número de mutantes: -1", "cases": 0, "score": null}}
 {"table": "mutation", "report": "valor negativo", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' no es un número de mutantes: -1", "cases": 0, "score": null}}
 {"table": "mutation", "report": "valor float", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' no es un número de mutantes: 1.0", "cases": 0, "score": null}}
@@ -700,10 +700,10 @@
 {"table": "mutation", "report": "bytes no UTF-8", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: no es UTF-8", "cases": 0, "score": null}}
 {"table": "mutation", "report": "9 de 10", "code": 0, "expected": {"ok": true, "error": null, "cases": 0, "score": "mutation 90.0 (9 de 10)"}}
 {"table": "mutation", "report": "9 de 10", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": "mutation 90.0 (9 de 10)"}}
-{"table": "mutation", "report": "sin mutantes", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no tiene mutantes", "cases": 0, "score": "mutation 0.0 (0 de 0)"}}
-{"table": "mutation", "report": "sin mutantes", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": "mutation 0.0 (0 de 0)"}}
-{"table": "mutation", "report": "todos omitidos", "code": 0, "expected": {"ok": true, "error": null, "cases": 0, "score": "mutation 0.0 (0 de 5)"}}
-{"table": "mutation", "report": "todos omitidos", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": "mutation 0.0 (0 de 5)"}}
+{"table": "mutation", "report": "sin mutantes", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no tiene mutantes probados", "cases": 0, "score": null}}
+{"table": "mutation", "report": "sin mutantes", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": null}}
+{"table": "mutation", "report": "todos omitidos", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no tiene mutantes probados", "cases": 0, "score": null}}
+{"table": "mutation", "report": "todos omitidos", "code": 1, "expected": {"ok": false, "error": "La pasada de mutación falló con el código 1", "cases": 0, "score": null}}
 {"table": "mutation", "report": "más muertos que el total", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' (9) es mayor que 'total' (3)", "cases": 0, "score": null}}
 {"table": "mutation", "report": "más muertos que el total", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' (9) es mayor que 'total' (3)", "cases": 0, "score": null}}
 {"table": "mutation", "report": "más omitidos que el total", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'skipped' (4) es mayor que 'total' (1)", "cases": 0, "score": null}}

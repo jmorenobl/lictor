@@ -152,3 +152,11 @@ def test_coverage_measured_something_if_it_had_a_statement_or_a_branch(
     report: CoverageReport, measured: bool
 ) -> None:
     assert report.measured is measured
+
+
+@pytest.mark.parametrize(
+    ("counts", "tried"),
+    [({}, 0), ({"total": 4}, 4), ({"total": 4, "skipped": 1}, 3), ({"total": 2, "skipped": 2}, 0)],
+)
+def test_mutation_tried_every_mutant_but_the_skipped(counts: dict[str, int], tried: int) -> None:
+    assert MutationReport(counts).tried == tried

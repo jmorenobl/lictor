@@ -137,7 +137,17 @@ _MUTANTS = MutationReport({"killed": 1, "total": 2})
         (InvalidReport("roto"), 0, Failed("El informe de mutación no es válido: roto")),
         (_MUTANTS, 0, Passed()),
         (_MUTANTS, 4, Failed("La pasada de mutación falló con el código 4")),
-        (MutationReport({"total": 0}), 0, Failed("El informe de mutación no tiene mutantes")),
+        (
+            MutationReport({"total": 0}),
+            0,
+            Failed("El informe de mutación no tiene mutantes probados"),
+        ),
+        (
+            MutationReport({"total": 5, "skipped": 5}),
+            0,
+            Failed("El informe de mutación no tiene mutantes probados"),
+        ),
+        (MutationReport({"killed": 1, "total": 2, "skipped": 1}), 0, Passed()),
         (
             MutationReport({"total": 0}),
             1,
@@ -160,6 +170,7 @@ def test_only_junit_has_cases_and_only_scores_have_scores() -> None:
     assert report_score(_NOTHING) is None
     assert report_score(CoverageReport(0, 0, 1, 2)) is not None
     assert report_score(_MUTANTS) == _MUTANTS.score
+    assert report_score(MutationReport({"total": 3, "skipped": 3})) is None
     assert report_score(JUnitReport(cases)) is None
     assert report_score(MissingReport()) is None
     assert report_score(None) is None
