@@ -11,6 +11,8 @@ from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
     ProfileConfigInitializer,
     config_fingerprint,
+    declared_profile,
+    detected_profile,
     load_config,
     profile_skill_sections,
     resolve_defences,
@@ -36,7 +38,12 @@ from lictor.application.ports import (
     Vcs,
 )
 from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir
-from lictor.application.skill import render_skill
+from lictor.application.skill import (
+    ProjectProfile,
+    parse_profile_skill,
+    profile_part,
+    render_skill,
+)
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
@@ -95,9 +102,26 @@ def bootstrap_init(project_root: Path) -> InitProject:
     return InitProject(initializer=initializer)
 
 
-def skill_content() -> str:
-    """Lictor's skill as the installed version tells it, with what each profile adds."""
-    return render_skill(__version__, profile_skill_sections())
+def skill_content(project_root: Path, profile: str | None = None) -> str:
+    """Lictor's skill as the installed version tells it, with the project's profile.
+
+    The profile is the one asked for, the one `lictor.json` names, or the one `lictor init` would
+    detect; with none of them, the skill lists them for the person to choose.
+    """
+    profiles = [parse_profile_skill(name, text) for name, text in profile_skill_sections()]
+    declared: str | None = None
+    unreadable: str | None = None
+    try:
+        declared = declared_profile(project_root)
+    except ConfigError as err:
+        unreadable = str(err)
+    project = ProjectProfile(
+        declared=declared, unreadable=unreadable, detected=detected_profile(project_root)
+    )
+    return render_skill(
+        __version__,
+        profile_part(project, profiles, requested=profile and profile.partition("@")[0]),
+    )
 
 
 def project_journal(project_root: Path) -> EventLog:

@@ -99,6 +99,36 @@ def profile_skill_sections(profiles_dir: Path | None = None) -> list[tuple[str, 
     return sections
 
 
+def declared_profile(project_root: Path) -> str | None:
+    """The profile `lictor.json` names, without its version, or None if there is no file.
+
+    It reads that one key and nothing else, so a file that doesn't load still says its profile
+    (the skill helps a person most when the configuration is broken). A file whose profile can't
+    be read raises `ConfigError`, saying why.
+    """
+    path = project_root / CONFIG_FILENAME
+    try:
+        parsed: object = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        msg = f"No se pudo leer {CONFIG_FILENAME}: {exc}"
+        raise ConfigError(msg) from exc
+    name = parsed.get("profile") if isinstance(parsed, dict) else None
+    if not isinstance(name, str) or not name.partition("@")[0]:
+        msg = f"{CONFIG_FILENAME} no dice su perfil en «profile»"
+        raise ConfigError(msg)
+    return name.partition("@")[0]
+
+
+def detected_profile(project_root: Path, profiles_dir: Path | None = None) -> str | None:
+    """The profile `lictor init` would choose here, or None if none fits."""
+    try:
+        return detect_profile(project_root, profiles_dir).name
+    except ConfigError:
+        return None
+
+
 def load_profile(name: str, profiles_dir: Path | None = None) -> Profile:
     """Carga un perfil por su nombre o por '<nombre>@<versión>'."""
     base_name, _, requested_version = name.partition("@")
