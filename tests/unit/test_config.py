@@ -15,17 +15,17 @@ from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
     DEFAULT_PROFILES_DIR,
+    PackagedProfiles,
     build_config_from_profile,
     config_fingerprint,
     declared_profile,
     detect_profile,
-    detected_profile,
     export_config_schema,
     init_config_file,
     list_profiles,
     load_config,
     load_profile,
-    profile_skill_sections,
+    project_root_of,
     resolve_defences,
 )
 from lictor.adapters.config.models import (
@@ -115,16 +115,69 @@ def test_list_profiles_includes_python_uv() -> None:
 
 
 def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
-    [(name, text)] = profile_skill_sections()
-    assert name == "python-uv"
-    assert "uv add --dev" in text
+    packaged = PackagedProfiles()
+    assert packaged.names() == ["python-uv"]
+    assert "uv add --dev" in (packaged.skill_text("python-uv") or "")
 
     profile = (DEFAULT_PROFILES_DIR / "python-uv.json").read_text(encoding="utf-8")
     (tmp_path / "a.json").write_text(profile.replace('"python-uv"', '"a"', 1), encoding="utf-8")
     (tmp_path / "b.json").write_text(profile.replace('"python-uv"', '"b"', 1), encoding="utf-8")
     (tmp_path / "b.skill.md").write_text("Lo de b.\n", encoding="utf-8")
+    profiles = PackagedProfiles(tmp_path)
+    assert profiles.names() == ["a", "b"]
     # A profile without a section adds nothing.
-    assert profile_skill_sections(tmp_path) == [("b", "Lo de b.\n")]
+    assert profiles.skill_text("a") is None
+    assert profiles.skill_text("b") == "Lo de b.\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "why"),
+    [
+        ("cobol", r"Perfil desconocido: 'cobol'\. Los de esta versión: python-uv"),
+        ("python-uv@0.1", "ya no existe: usa python-uv@0.2"),
+        ("python-uv@9.9", "no coincide"),
+    ],
+)
+def test_a_profile_asked_for_is_refused_as_init_would_refuse_it(name: str, why: str) -> None:
+    with pytest.raises(ConfigError, match=why):
+        PackagedProfiles().requested(name)
+
+
+def test_a_profile_asked_for_with_its_version_gives_its_name() -> None:
+    assert PackagedProfiles().requested("python-uv@0.2") == "python-uv"
+    assert PackagedProfiles().requested("python-uv") == "python-uv"
+
+
+def test_the_detected_profile_is_the_one_init_would_choose(tmp_path: Path) -> None:
+    assert PackagedProfiles().detected(tmp_path) is None
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert PackagedProfiles().detected(tmp_path) == "python-uv"
+
+
+def test_the_project_root_is_found_from_a_subdirectory(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    deep = repo / "src" / "pkg"
+    deep.mkdir(parents=True)
+    # Outside a repository and without lictor.json, the directory itself.
+    assert project_root_of(deep) == deep.resolve()
+
+    (repo / ".git").mkdir()
+    assert project_root_of(deep) == repo.resolve()
+
+    (repo / "src" / "lictor.json").write_text("{}", encoding="utf-8")
+    assert project_root_of(deep) == (repo / "src").resolve()
+
+
+def test_the_project_root_stops_at_the_repository(tmp_path: Path) -> None:
+    """A `lictor.json` above the repository belongs to another project."""
+    (tmp_path / "lictor.json").write_text("{}", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    # A linked worktree has a `.git` file, not a directory.
+    (repo / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+
+    assert project_root_of(repo / "src") == repo.resolve()
 
 
 def test_the_declared_profile_is_read_even_from_a_file_that_doesnt_load(tmp_path: Path) -> None:
@@ -140,7 +193,7 @@ def test_the_declared_profile_is_read_even_from_a_file_that_doesnt_load(tmp_path
 @pytest.mark.parametrize(
     ("content", "why"),
     [
-        ("{roto", "No se pudo leer lictor.json"),
+        ("{roto", "`lictor.json` no se pudo leer"),
         ("[]", "no dice su perfil"),
         ('{"profile": 3}', "no dice su perfil"),
         ('{"profile": "@0.2"}', "no dice su perfil"),
@@ -153,13 +206,6 @@ def test_a_lictor_json_without_a_readable_profile_says_why(
 
     with pytest.raises(ConfigError, match=why):
         declared_profile(tmp_path)
-
-
-def test_the_detected_profile_is_the_one_init_would_choose(tmp_path: Path) -> None:
-    assert detected_profile(tmp_path) is None
-
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
-    assert detected_profile(tmp_path) == "python-uv"
 
 
 def test_controls_must_have_unique_ids() -> None:

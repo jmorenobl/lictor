@@ -256,10 +256,25 @@ def test_cli_skill_show_takes_the_profile_asked_for(tmp_path: Path) -> None:
     assert "## Perfil python-uv: lo esencial" in result.output
 
 
+def test_cli_skill_show_from_a_subdirectory_speaks_of_the_project(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    (tmp_path / "src").mkdir()
+
+    result = runner.invoke(app, ["skill", "--show", "--cwd", str(tmp_path / "src")])
+
+    assert result.exit_code == 0, result.output
+    assert "## Perfil python-uv: lo esencial" in result.output
+    assert f"El proyecto es `{tmp_path.resolve()}`" in result.output
+    assert "Aún no hay `lictor.json`: este es el perfil que `lictor init` detecta" in result.output
+
+
 @pytest.mark.parametrize(
     ("args", "message"),
     [
         (["skill", "--show", "--profile", "cobol"], "Perfil desconocido: 'cobol'"),
+        (["skill", "--show", "--profile", "python-uv@0.1"], "ya no existe"),
+        (["skill", "--show", "--profile", ""], "--profile necesita el nombre de un perfil"),
         (["skill", "--profile", "python-uv"], "--profile solo vale con --show"),
     ],
 )

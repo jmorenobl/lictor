@@ -9,12 +9,12 @@ from lictor import __version__
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.config.loader import (
+    PackagedProfiles,
     ProfileConfigInitializer,
     config_fingerprint,
     declared_profile,
-    detected_profile,
     load_config,
-    profile_skill_sections,
+    project_root_of,
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig, domain_controls
@@ -40,7 +40,6 @@ from lictor.application.ports import (
 from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir
 from lictor.application.skill import (
     ProjectProfile,
-    parse_profile_skill,
     profile_part,
     render_skill,
 )
@@ -102,26 +101,22 @@ def bootstrap_init(project_root: Path) -> InitProject:
     return InitProject(initializer=initializer)
 
 
-def skill_content(project_root: Path, profile: str | None = None) -> str:
+def skill_content(cwd: Path, profile: str | None = None) -> str:
     """Lictor's skill as the installed version tells it, with the project's profile.
 
     The profile is the one asked for, the one `lictor.json` names, or the one `lictor init` would
-    detect; with none of them, the skill lists them for the person to choose.
+    detect, from the project's root even when asked from a subdirectory; with none of them, the
+    skill lists them for the person to choose.
     """
-    profiles = [parse_profile_skill(name, text) for name, text in profile_skill_sections()]
+    root = project_root_of(cwd)
     declared: str | None = None
     unreadable: str | None = None
     try:
-        declared = declared_profile(project_root)
+        declared = declared_profile(root)
     except ConfigError as err:
         unreadable = str(err)
-    project = ProjectProfile(
-        declared=declared, unreadable=unreadable, detected=detected_profile(project_root)
-    )
-    return render_skill(
-        __version__,
-        profile_part(project, profiles, requested=profile and profile.partition("@")[0]),
-    )
+    project = ProjectProfile(root=root, cwd=cwd.resolve(), declared=declared, unreadable=unreadable)
+    return render_skill(__version__, profile_part(project, PackagedProfiles(), requested=profile))
 
 
 def project_journal(project_root: Path) -> EventLog:

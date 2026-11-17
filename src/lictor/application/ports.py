@@ -324,3 +324,26 @@ class ConfigInitializer(Protocol):
     ) -> ProfileInitConfig:
         """Generate project configuration JSON and gitignore entries from profile."""
         ...
+
+
+class ProfileCatalog(Protocol):
+    """The profiles of this version, as the skill needs them, read only when asked."""
+
+    def names(self) -> Sequence[str]:
+        """Every profile's name, sorted."""
+        ...
+
+    def skill_text(self, name: str) -> str | None:
+        """The profile's `<name>.skill.md`, or None if it has none."""
+        ...
+
+    def requested(self, name: str) -> str:
+        """The name of the profile `name` asks for, as `lictor init --profile` would take it.
+
+        Raises `ConfigError` for an unknown profile or a version this one isn't.
+        """
+        ...
+
+    def detected(self, project_root: Path) -> str | None:
+        """The profile `lictor init` would choose in `project_root`, or None."""
+        ...
