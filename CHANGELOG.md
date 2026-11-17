@@ -7,6 +7,26 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Al actualizar desde la 0.4.0
+
+- **`lictor doctor` avisa (⚠) de que el esbozo de la skill no es el de esta versión.** Su
+  descripción ya no dice qué hacer si la skill no carga, porque eso no sirve para decidir cuándo
+  se activa, y el cuerpo del esbozo ya lo dice. Ejecuta `lictor skill` en el proyecto para
+  actualizarlo.
+
+### Cambiado
+
+- **`lictor skill --show` habla solo del perfil del proyecto**, en vez de concatenar la parte de
+  todos los perfiles. Es el que nombra `lictor.json`, aunque el fichero no cargue; sin él, el que
+  detectaría `lictor init`; y si no hay ninguno, la skill lista los perfiles para que la persona
+  elija y se lea el suyo con la opción nueva `--profile`.
+- **Lo esencial del perfil va al principio de la skill, y el detalle al final.** Al compactar la
+  conversación, Claude Code solo conserva el principio de una skill (unos 5000 tokens). La parte
+  del perfil empezaba hacia el token 5000 y quedaba entera fuera; ahora lo esencial (las
+  dependencias antes del run, la CLI probada en el proceso, `min_score` y el momento de los
+  controles añadidos) termina hacia el token 1000. La skill acaba con una línea fija, y si falta,
+  la propia skill dice que vuelva a imprimirse con `lictor skill --show`.
+
 ## [0.4.0] - 2026-11-16
 
 Cada control dice cuándo corre: en cada intento de un run o solo en `lictor check`. Los tests

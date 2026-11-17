@@ -1,25 +1,35 @@
 Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproject.toml`).
 
+- **Todas las dependencias antes del run**, de ejecución y de desarrollo: el agente no puede tocar
+  `pyproject.toml` ni `uv.lock`. Como mínimo, `uv add --dev pytest pytest-bdd ruff mypy`. Pregunta
+  si hará falta algo más (una librería, `pytest-cov` si quiere medir cobertura) y añádelo ahora.
+- **El proyecto no se instala en el entorno de verificación**, y `src/` está en el path de
+  importación detrás de las dependencias. Una CLI se prueba en el proceso: el driver llama a
+  `main(argv)` y lee la salida con `capsys`, nunca lanza el ejecutable. Eso va en `hints`.
+- **Un mínimo de cobertura se escribe como `min_score`, nunca como `fail_under`**: `{"id":
+  "coverage", "mode": "block", "min_score": 80}`. Y nada de `--cov` en el `run` de `unit`: los
+  argumentos de cobertura los pone `coverage`, y dos veces chocarían.
+- **Cuándo corre un control añadido:** una mutación o una auditoría de dependencias, con
+  `"stage": "check"`; uno de secretos (`gitleaks`), en cada intento.
+
+<!-- lictor: detalle -->
+
 **Preparar:**
 
 1. `uv init --lib <nombre>`. Ya crea el repositorio git, con la rama por defecto de la persona:
    para llamarla `main`, `git branch -m main`; un `git init` después no hace nada.
-2. **Todas las dependencias antes del run**, de ejecución y de desarrollo: el agente no puede tocar
-   `pyproject.toml` ni `uv.lock`. Como mínimo, `uv add --dev pytest pytest-bdd ruff mypy`. Pregunta
-   si hará falta algo más (una librería, `pytest-cov` si quiere medir cobertura) y añádelo ahora.
+2. Las dependencias, todas ahora (lo esencial, arriba).
 3. Lo que exija `pyproject.toml` se fija ahora también: el `[project.scripts]` de una CLI, por
    ejemplo. El módulo y la función que fijes ahí van luego en `hints`.
 4. `uv init` deja un `hello()` de ejemplo en el paquete y un `requires-python` con la versión de la
    persona. `lictor init` toma de ahí la versión de Python de `hints`; el resto de `hints` sí hay
    que ajustarlo al proyecto.
 
-**Cómo se prueba:** el proyecto no se instala en el entorno de verificación, y `src/` está en el
-path de importación detrás de las dependencias. Por eso:
+**Cómo se prueba una CLI:**
 
-- Una CLI se prueba en el proceso: el driver llama a `main(argv)` y lee la salida con `capsys`;
-  nunca lanza el ejecutable. Decide con la persona si `main` devuelve el código de salida o termina
-  el proceso, y escríbelo en `hints`. Que `argparse` termina con `SystemExit` también en `--help` y
-  en sus propios errores es un hueco que preguntar.
+- Decide con la persona si `main` devuelve el código de salida o termina el proceso, y escríbelo en
+  `hints`. Que `argparse` termina con `SystemExit` también en `--help` y en sus propios errores es
+  un hueco que preguntar.
 - Un ejemplo de `hints` para una CLI: «Python 3.14, gestor uv, tests con pytest. El código va en
   src/romanos/. La CLI es `romanos.cli:main(argv: list[str]) -> int`, declarada en
   `[project.scripts]`; los tests la llaman en el proceso y leen stdout y stderr con `capsys`; el
@@ -36,12 +46,11 @@ mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
 
 **Cobertura con pytest:**
 
-- **El mínimo es `min_score`, nunca `fail_under`.** El perfil pasa `--cov-fail-under=0`, así que un
+- **Por qué `min_score` y no `fail_under`.** El perfil pasa `--cov-fail-under=0`, así que un
   `fail_under` de `[tool.coverage.report]` no se aplica: si se aplicara, haría fallar `unit` sin
-  ningún test en rojo. `{"id": "coverage", "mode": "block", "min_score": 80}`.
-- **Nada de `--cov` en el `run` de `unit`.** Los argumentos de cobertura los pone `coverage`; dos
-  veces chocarían. Si la persona cambia el `run` de `unit` (otro directorio, `-n auto`), `coverage`
-  lee esa ejecución igual, y tiene que seguir siendo de pytest.
+  ningún test en rojo.
+- **Otro `run` de `unit`.** Si la persona lo cambia (otro directorio, `-n auto`), `coverage` lee
+  esa ejecución igual, y tiene que seguir siendo de pytest.
 - **Para medir otra cosa, el `adds` completo.** Se escribe entero, y lo que no se escriba no se
   añade: `{"id": "coverage", "adds": "--cov=src/mipaquete --cov-branch --cov-fail-under=0
   --cov-report=json:{out}"}`. Quitar `--cov-fail-under=0` vuelve a aplicar el `fail_under` del

@@ -262,6 +262,13 @@ def skill_command(
             help="Imprimir la skill completa de la versión instalada, sin escribir nada",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Con --show, el perfil del que hablar en vez del del proyecto",
+        ),
+    ] = None,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -278,8 +285,10 @@ def skill_command(
     """
 
     def _execute() -> int:
+        if profile is not None and not show:
+            raise ConfigError("--profile solo vale con --show")
         if show:
-            typer.echo(skill_content(), nl=False)
+            typer.echo(skill_content(cwd, profile), nl=False)
             return 0
         install_skill_stub(cwd)
         typer.echo(f"Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")

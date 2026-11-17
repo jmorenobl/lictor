@@ -14,9 +14,11 @@ los tests y el código.**
 - Lo que se puede comprobar sin un modelo lo comprueba `lictor doctor`: lánzalo en vez de validar
   a mano.
 
+<!-- lictor: perfil -->
+
 ## 1. Preparar el proyecto
 
-Sigue la sección del perfil del proyecto, al final. Vale para cualquier perfil:
+Sigue lo esencial del perfil, arriba, y su detalle, al final. Vale para cualquier perfil:
 
 - Lo que el agente no puede tocar se decide antes del run: las dependencias, el manifiesto y el
   lockfile del proyecto, la pipeline. Esas rutas solo las cambia una persona; si un escenario solo
@@ -103,8 +105,8 @@ ejecutar, y el run lo salta.
      `reads` (el control cuya ejecución lee) y `adds` (los argumentos que ese control recibe), y
      no tiene `run`. Así una misma suite corre una vez y dos controles la juzgan: uno, si los
      tests pasan, y el otro, su puntuación. Quitar el control leído, o dejarlo solo en `check`
-     con su lector en cada intento, es un error que dice cómo salir; la skill del perfil dice
-     cuáles son.
+     con su lector en cada intento, es un error que dice cómo salir; el detalle del perfil, al
+     final, dice cuáles son.
    - Si a la persona le importan los tests unitarios, ofrécele un mínimo de cobertura. Con
      `{"id": "coverage", "mode": "block", "min_score": 80}` el control bloquea por debajo, y el
      agente recibe el fallo en el siguiente intento. En `measure` el porcentaje solo sale en el

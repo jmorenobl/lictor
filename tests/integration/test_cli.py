@@ -229,8 +229,47 @@ def test_cli_skill_show_prints_the_content_anywhere_and_writes_nothing(tmp_path:
 
     assert result.exit_code == 0, result.output
     assert f"Lictor {lictor.__version__}" in result.output.splitlines()[0]
-    assert "## Perfil python-uv" in result.output
     assert "No lances `lictor run`" in result.output
+    # An empty directory has no profile yet: the person chooses one.
+    assert "## Perfil del proyecto" in result.output
+    assert "`lictor skill --show --profile <nombre>`" in result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_skill_show_speaks_of_the_profile_lictor_json_names(tmp_path: Path) -> None:
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.1"}', encoding="utf-8")
+
+    result = runner.invoke(app, ["skill", "--show", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "## Perfil python-uv: lo esencial" in result.output
+    assert "## Perfil python-uv: el detalle" in result.output
+    assert "## Perfil del proyecto" not in result.output
+
+
+def test_cli_skill_show_takes_the_profile_asked_for(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app, ["skill", "--show", "--profile", "python-uv", "--cwd", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "## Perfil python-uv: lo esencial" in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["skill", "--show", "--profile", "cobol"], "Perfil desconocido: 'cobol'"),
+        (["skill", "--profile", "python-uv"], "--profile solo vale con --show"),
+    ],
+)
+def test_cli_skill_refuses_a_profile_it_cant_show(
+    tmp_path: Path, args: list[str], message: str
+) -> None:
+    result = runner.invoke(app, [*args, "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 10
+    assert message in result.output
     assert list(tmp_path.iterdir()) == []
 
 

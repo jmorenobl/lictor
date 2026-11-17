@@ -17,7 +17,9 @@ from lictor.adapters.config.loader import (
     DEFAULT_PROFILES_DIR,
     build_config_from_profile,
     config_fingerprint,
+    declared_profile,
     detect_profile,
+    detected_profile,
     export_config_schema,
     init_config_file,
     list_profiles,
@@ -123,6 +125,41 @@ def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
     (tmp_path / "b.skill.md").write_text("Lo de b.\n", encoding="utf-8")
     # A profile without a section adds nothing.
     assert profile_skill_sections(tmp_path) == [("b", "Lo de b.\n")]
+
+
+def test_the_declared_profile_is_read_even_from_a_file_that_doesnt_load(tmp_path: Path) -> None:
+    """The skill helps most when `lictor.json` is broken, so it reads only the profile."""
+    assert declared_profile(tmp_path) is None
+
+    (tmp_path / "lictor.json").write_text(
+        '{"profile": "python-uv@0.1", "acceptance": {"report": "junit"}}', encoding="utf-8"
+    )
+    assert declared_profile(tmp_path) == "python-uv"
+
+
+@pytest.mark.parametrize(
+    ("content", "why"),
+    [
+        ("{roto", "No se pudo leer lictor.json"),
+        ("[]", "no dice su perfil"),
+        ('{"profile": 3}', "no dice su perfil"),
+        ('{"profile": "@0.2"}', "no dice su perfil"),
+    ],
+)
+def test_a_lictor_json_without_a_readable_profile_says_why(
+    tmp_path: Path, content: str, why: str
+) -> None:
+    (tmp_path / "lictor.json").write_text(content, encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=why):
+        declared_profile(tmp_path)
+
+
+def test_the_detected_profile_is_the_one_init_would_choose(tmp_path: Path) -> None:
+    assert detected_profile(tmp_path) is None
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert detected_profile(tmp_path) == "python-uv"
 
 
 def test_controls_must_have_unique_ids() -> None:
