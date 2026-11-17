@@ -312,3 +312,130 @@ def test_the_ci_names_match_the_budgets() -> None:
     budgeted = [prefix for prefix, _ in _load("ci_budget").JOB_BUDGETS_MIN]
 
     assert all(any(name.startswith(prefix) for name in names) for prefix in budgeted), names
+
+
+def _answer(code: int, out: str = "", err: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(["gh", "api"], code, out, err)
+
+
+def test_the_api_is_asked_again_after_a_failure_and_its_answer_used() -> None:
+    budget = _load("ci_budget")
+    answers = [_answer(1, err="gh: HTTP 502: Bad Gateway"), _answer(0, out=json.dumps(JOBS))]
+    asked: list[str] = []
+    waits: list[float] = []
+
+    def ask(endpoint: str) -> subprocess.CompletedProcess[str]:
+        asked.append(endpoint)
+        return answers.pop(0)
+
+    fetched = budget.fetch_jobs("repos/r/x", ask=ask, wait=waits.append)
+
+    assert fetched == JOBS
+    assert asked == ["repos/r/x", "repos/r/x"]
+    assert waits == [budget.API_RETRY_WAITS_S[0]]
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (_answer(1, err="algo\ngh: HTTP 502: Bad Gateway\n"), "gh: HTTP 502: Bad Gateway"),
+        (_answer(0, out="<html>502</html>"), "la respuesta no es JSON"),
+        (_answer(0, out="[]"), "la respuesta no es un objeto JSON"),
+        (_answer(1), "sin mensaje"),
+    ],
+)
+def test_an_api_that_never_answers_well_gives_a_failure_with_its_last_reason(
+    answer: subprocess.CompletedProcess[str], reason: str
+) -> None:
+    budget = _load("ci_budget")
+    waits: list[float] = []
+
+    fetched = budget.fetch_jobs("e", ask=lambda _: answer, wait=waits.append)
+
+    assert fetched == budget.ApiFailure(attempts=3, reason=reason)
+    assert waits == list(budget.API_RETRY_WAITS_S)
+    assert "\n" not in fetched.warning
+    assert "El presupuesto no se comprobó" in fetched.warning
+
+
+def test_an_api_that_runs_out_of_time_is_asked_again() -> None:
+    budget = _load("ci_budget")
+
+    def ask(endpoint: str) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(["gh", "api", endpoint], budget.API_TIMEOUT_S)
+
+    fetched = budget.fetch_jobs("e", ask=ask, wait=lambda _: None)
+
+    assert fetched == budget.ApiFailure(attempts=3, reason="sin respuesta en 60 s")
+
+
+def test_a_long_api_error_is_cut_for_its_annotation() -> None:
+    budget = _load("ci_budget")
+
+    fetched = budget.fetch_jobs("e", ask=lambda _: _answer(1, err="x" * 500), wait=lambda _: None)
+
+    assert isinstance(fetched, budget.ApiFailure)
+    assert len(fetched.reason) == 200
+    assert fetched.reason.endswith("…")
+
+
+def test_no_gh_at_all_is_the_job_s_own_failure_and_is_not_hidden() -> None:
+    budget = _load("ci_budget")
+
+    def ask(endpoint: str) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("gh")
+
+    with pytest.raises(FileNotFoundError):
+        budget.fetch_jobs("e", ask=ask, wait=lambda _: None)
+
+
+def _fake_gh(tmp_path: Path, script: str) -> None:
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+
+
+def _api_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[ModuleType, Path]:
+    budget = _load("ci_budget")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setattr(budget, "API_RETRY_WAITS_S", (0.0, 0.0))
+    step_summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+    return budget, step_summary
+
+
+def test_api_jobs_warns_and_passes_when_the_api_keeps_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_gh(tmp_path, 'echo "gh: HTTP 502: Bad Gateway" >&2; exit 1')
+    budget, step_summary = _api_jobs(tmp_path, monkeypatch)
+
+    assert budget.main(["api-jobs", "repos/r/actions/runs/1/attempts/1/jobs"]) == 0
+    out = capsys.readouterr().out
+    assert out == (
+        "::warning::Sin datos de los trabajos: la API de GitHub falló 3 veces "
+        "(gh: HTTP 502: Bad Gateway). El presupuesto no se comprobó en esta ejecución.\n"
+    )
+    assert "Sin datos de los trabajos" in step_summary.read_text(encoding="utf-8")
+
+
+def test_api_jobs_checks_the_budget_with_what_the_api_gives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    answer = tmp_path / "jobs.json"
+    answer.write_text(json.dumps(JOBS), encoding="utf-8")
+    _fake_gh(tmp_path, f'[ "$1 $2" = "api repos/r/jobs" ] && cat "{answer}"')
+    budget, step_summary = _api_jobs(tmp_path, monkeypatch)
+
+    assert budget.main(["api-jobs", "repos/r/jobs"]) == 0
+    assert capsys.readouterr().out.startswith("::warning::Repro (macos-15")
+    assert "Camino crítico" in step_summary.read_text(encoding="utf-8")
+
+
+def test_the_ci_asks_the_api_through_the_script() -> None:
+    """A step of its own around `gh api` failed the job on a 502, before the script ran."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "ci_budget.py api-jobs" in ci
+    assert "gh api" not in ci

@@ -160,10 +160,10 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.12.18"
+      # The script asks the API itself: a failed answer (a 502 once failed this job) is asked
+      # again and, if it never comes, is a warning; a failure of the script still fails the job.
+      # Only the reader's own dependency, not the whole environment: this job reads, nothing else.
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100"
-          > "$RUNNER_TEMP/jobs.json"
-      # Only the reader's own dependency, not the whole environment: this job reads, nothing else.
-      - run: uv run --no-project --with defusedxml python scripts/ci_budget.py jobs "$RUNNER_TEMP/jobs.json"
+          JOBS_ENDPOINT: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100
+        run: uv run --no-project --with defusedxml python scripts/ci_budget.py api-jobs "$JOBS_ENDPOINT"
