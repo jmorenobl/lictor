@@ -7,6 +7,12 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.5.0] - 2026-11-17
+
+La skill de Lictor habla solo del perfil del proyecto, y lo esencial de ese perfil va al principio,
+donde sobrevive a la compactación de la conversación. La verificación, los controles y `lictor.json`
+no cambian.
+
 ### Al actualizar desde la 0.4.0
 
 - **`lictor doctor` avisa (⚠) de que el esbozo de la skill no es el de esta versión.** Su
@@ -19,8 +25,7 @@ en su significado se anota en «Cambiado».
 - **`lictor skill --show` habla solo del perfil del proyecto**, en vez de concatenar la parte de
   todos los perfiles. Es el que nombra `lictor.json`, aunque el fichero no cargue; sin él, el que
   detectaría `lictor init`; y si no hay ninguno, la skill lista los perfiles para que la persona
-  elija y se lea el suyo con la opción nueva `--profile`, que rechaza un perfil o una versión como
-  `lictor init --profile`. Busca `lictor.json` subiendo hasta la raíz del repositorio, así que una
+  elija y se lea el suyo con `--profile` (ver «Añadido»). Busca `lictor.json` subiendo hasta la raíz del repositorio, así que una
   sesión abierta en `src/` sigue hablando de su proyecto y nombra el directorio desde el que
   ejecutar `lictor`.
 - **Lo esencial del perfil va al principio de la skill, y el detalle al final.** Al compactar la
@@ -29,6 +34,12 @@ en su significado se anota en «Cambiado».
   dependencias antes del run, la CLI probada en el proceso, `min_score` y el momento de los
   controles añadidos) termina hacia el token 1000. La skill acaba con una línea fija, y si falta,
   la propia skill dice que vuelva a imprimirse con `lictor skill --show`.
+
+### Añadido
+
+- **`lictor skill --show --profile <nombre>`** imprime la skill de ese perfil, sea cual sea el del
+  proyecto. Rechaza un perfil o una versión como `lictor init --profile`: uno desconocido, una
+  versión retirada (`python-uv@0.1`) o una que no coincide salen con 10. Sin `--show`, sale con 10.
 
 ## [0.4.0] - 2026-11-16
 
@@ -463,7 +474,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.4.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jmorenobl/lictor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jmorenobl/lictor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jmorenobl/lictor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jmorenobl/lictor/compare/v0.1.1...v0.2.0
