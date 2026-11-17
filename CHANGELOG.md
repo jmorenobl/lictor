@@ -19,7 +19,10 @@ en su significado se anota en «Cambiado».
 - **`lictor skill --show` habla solo del perfil del proyecto**, en vez de concatenar la parte de
   todos los perfiles. Es el que nombra `lictor.json`, aunque el fichero no cargue; sin él, el que
   detectaría `lictor init`; y si no hay ninguno, la skill lista los perfiles para que la persona
-  elija y se lea el suyo con la opción nueva `--profile`.
+  elija y se lea el suyo con la opción nueva `--profile`, que rechaza un perfil o una versión como
+  `lictor init --profile`. Busca `lictor.json` subiendo hasta la raíz del repositorio, así que una
+  sesión abierta en `src/` sigue hablando de su proyecto y nombra el directorio desde el que
+  ejecutar `lictor`.
 - **Lo esencial del perfil va al principio de la skill, y el detalle al final.** Al compactar la
   conversación, Claude Code solo conserva el principio de una skill (unos 5000 tokens). La parte
   del perfil empezaba hacia el token 5000 y quedaba entera fuera; ahora lo esencial (las

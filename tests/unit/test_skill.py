@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lictor.adapters.config.loader import profile_skill_sections
+from lictor.adapters.config.loader import PackagedProfiles
 from lictor.application.skill import (
     DETAIL_MARK,
     END_LINE,
@@ -15,22 +15,56 @@ from lictor.application.skill import (
     install_skill_stub,
     parse_profile_skill,
     profile_part,
+    profile_summary,
     render_skill,
     skill_stub,
     skill_stub_warning,
 )
 from lictor.domain.errors import ConfigError
 
-PROFILES = [parse_profile_skill(name, text) for name, text in profile_skill_sections()]
-A = ProfileSkill(name="perfil-a", essentials="Para proyectos A.\n\nLo de A.", detail="Más de A.")
-B = ProfileSkill(name="perfil-b", essentials="Para proyectos B.", detail="Más de B.")
+ROOT = Path("/proyecto")
+TEXTS = {
+    "perfil-a": f"Para proyectos A.\n\nLo de A.\n{DETAIL_MARK}\nMás de A.\n",
+    "perfil-b": f"Para proyectos B.\n{DETAIL_MARK}\nMás de B.\n",
+}
 
 
-def _render(project: ProjectProfile | None = None) -> str:
+class FakeCatalog:
+    """Profiles in memory, recording which skill files were read."""
+
+    def __init__(
+        self, texts: dict[str, str | None] | None = None, detected: str | None = None
+    ) -> None:
+        self.texts: dict[str, str | None] = dict(TEXTS if texts is None else texts)
+        self.found = detected
+        self.read: list[str] = []
+        self.detections = 0
+
+    def names(self) -> list[str]:
+        return sorted(self.texts)
+
+    def skill_text(self, name: str) -> str | None:
+        self.read.append(name)
+        return self.texts[name]
+
+    def requested(self, name: str) -> str:
+        if name not in self.texts:
+            raise ConfigError(f"Perfil desconocido: '{name}'")
+        return name
+
+    def detected(self, project_root: Path) -> str | None:
+        assert project_root == ROOT
+        self.detections += 1
+        return self.found
+
+
+def _project(**fields: str) -> ProjectProfile:
+    return ProjectProfile(root=ROOT, cwd=ROOT, **fields)
+
+
+def _render() -> str:
     """What `--show` prints for a project of the packaged profile."""
-    return render_skill(
-        "0", profile_part(project or ProjectProfile(declared="python-uv"), PROFILES)
-    )
+    return render_skill("0", profile_part(_project(declared="python-uv"), PackagedProfiles()))
 
 
 def test_the_stub_loads_the_content_of_the_installed_version() -> None:
@@ -58,12 +92,13 @@ def test_the_description_says_when_to_load_the_skill_and_nothing_of_running_it()
 
 
 def test_the_content_puts_the_profile_s_essentials_early_and_its_detail_at_the_end() -> None:
-    text = render_skill("9.9.9", profile_part(ProjectProfile(declared="perfil-a"), [A, B]))
+    text = render_skill("9.9.9", profile_part(_project(declared="perfil-a"), FakeCatalog()))
 
     assert "Lictor 9.9.9" in text.splitlines()[0]
     order = [
         "## Límites",
         "## Perfil perfil-a: lo esencial\n\nPara proyectos A.\n\nLo de A.",
+        "El detalle de este perfil va al final de la skill.",
         "## 1. Preparar el proyecto",
         "## 4. Diagnosticar",
         "## Perfil perfil-a: el detalle\n\nMás de A.",
@@ -72,6 +107,13 @@ def test_the_content_puts_the_profile_s_essentials_early_and_its_detail_at_the_e
     assert "perfil-b" not in text
     assert "<!--" not in text
     assert text.endswith(f"\n\n{END_LINE}\n")
+
+
+def test_the_body_never_points_to_a_detail_that_may_not_be_there() -> None:
+    """Only the profile's own part says its detail is at the end: with a list there is none."""
+    text = render_skill("0", profile_part(_project(), FakeCatalog()))
+
+    assert "al final" not in text.split("## 4. Diagnosticar")[0].split("## Límites")[1]
 
 
 def test_the_header_says_how_to_tell_a_cut_skill_and_get_it_whole() -> None:
@@ -95,9 +137,17 @@ def test_the_essentials_stay_well_within_what_a_compaction_keeps() -> None:
 
 
 def test_every_packaged_profile_has_its_essentials_and_its_detail() -> None:
-    assert [profile.name for profile in PROFILES] == ["python-uv"]
-    [python_uv] = PROFILES
-    assert python_uv.summary.startswith("Para proyectos Python gestionados con `uv`")
+    """A profile without its file would be told as one the skill knows nothing of."""
+    catalog = PackagedProfiles()
+    assert catalog.names() == ["python-uv"]
+    for name in catalog.names():
+        text = catalog.skill_text(name)
+        assert text is not None, name
+        parse_profile_skill(name, text)
+    python_uv = parse_profile_skill("python-uv", catalog.skill_text("python-uv") or "")
+    assert profile_summary(python_uv.essentials).startswith(
+        "Para proyectos Python gestionados con `uv`"
+    )
     for critical in ("uv add --dev", "capsys", "`min_score`", "nada de `--cov`", "gitleaks"):
         assert critical in python_uv.essentials
 
@@ -122,44 +172,79 @@ def test_a_profile_skill_splits_at_its_mark() -> None:
     assert parsed == ProfileSkill(name="x", essentials="Para X.", detail="Más.")
 
 
-def test_the_profile_lictor_json_names_wins_over_what_is_detected() -> None:
-    part = profile_part(ProjectProfile(declared="perfil-b", detected="perfil-a"), [A, B])
+def test_the_profile_lictor_json_names_wins_and_nothing_else_is_read() -> None:
+    catalog = FakeCatalog(detected="perfil-a")
+
+    part = profile_part(_project(declared="perfil-b"), catalog)
 
     assert part == ProfilePart(
-        essentials="## Perfil perfil-b: lo esencial\n\nPara proyectos B.",
+        essentials=(
+            "## Perfil perfil-b: lo esencial\n\nPara proyectos B.\n\n"
+            "El detalle de este perfil va al final de la skill."
+        ),
         detail="## Perfil perfil-b: el detalle\n\nMás de B.",
+    )
+    assert catalog.read == ["perfil-b"]
+    assert catalog.detections == 0
+
+
+def test_a_broken_skill_of_another_profile_doesn_t_break_this_one() -> None:
+    catalog = FakeCatalog({**TEXTS, "perfil-c": "Sin marca."})
+
+    part = profile_part(_project(declared="perfil-a"), catalog)
+
+    assert part.detail == "## Perfil perfil-a: el detalle\n\nMás de A."
+
+
+def test_a_profile_without_its_skill_file_is_still_the_project_s() -> None:
+    part = profile_part(_project(declared="perfil-a"), FakeCatalog({"perfil-a": None}))
+
+    assert part == ProfilePart(
+        essentials=(
+            "## Perfil perfil-a\n\nEl perfil perfil-a no trae una parte propia en esta skill: "
+            "sigue solo lo común."
+        )
     )
 
 
 def test_the_profile_asked_for_wins_over_the_project_s() -> None:
-    part = profile_part(ProjectProfile(declared="perfil-b"), [A, B], requested="perfil-a")
+    catalog = FakeCatalog()
+
+    part = profile_part(_project(declared="perfil-b"), catalog, requested="perfil-a")
 
     assert part.essentials.startswith("## Perfil perfil-a: lo esencial")
+    assert catalog.detections == 0
 
 
-def test_a_profile_asked_for_that_doesn_t_exist_names_the_ones_that_do() -> None:
-    with pytest.raises(ConfigError, match=r"'cobol'\. Los de esta versión: perfil-a, perfil-b"):
-        profile_part(ProjectProfile(), [A, B], requested="cobol")
+def test_a_profile_asked_for_that_the_catalog_refuses_is_refused() -> None:
+    with pytest.raises(ConfigError, match="'cobol'"):
+        profile_part(_project(), FakeCatalog(), requested="cobol")
+
+
+@pytest.mark.parametrize("requested", ["", "  "])
+def test_an_empty_profile_asked_for_names_the_ones_there_are(requested: str) -> None:
+    with pytest.raises(ConfigError, match="--profile necesita el nombre de un perfil: perfil-a"):
+        profile_part(_project(), FakeCatalog(), requested=requested)
 
 
 @pytest.mark.parametrize(
-    ("project", "why"),
+    ("fields", "why"),
     [
-        (ProjectProfile(detected="perfil-a"), "Aún no hay `lictor.json`"),
+        ({}, "Aún no hay `lictor.json`"),
         (
-            ProjectProfile(declared="cobol", detected="perfil-a"),
+            {"declared": "cobol"},
             "`lictor.json` pide el perfil «cobol», que esta versión no tiene",
         ),
         (
-            ProjectProfile(unreadable="JSON roto", detected="perfil-a"),
-            "`lictor.json` no dice su perfil (JSON roto; `lictor doctor` lo detalla)",
+            {"unreadable": "`lictor.json` no se pudo leer (JSON roto)"},
+            "`lictor.json` no se pudo leer (JSON roto) (`lictor doctor` lo detalla)",
         ),
     ],
 )
 def test_without_a_profile_from_lictor_json_the_detected_one_says_why(
-    project: ProjectProfile, why: str
+    fields: dict[str, str], why: str
 ) -> None:
-    part = profile_part(project, [A, B])
+    part = profile_part(_project(**fields), FakeCatalog(detected="perfil-a"))
 
     assert part.essentials.startswith(
         f"## Perfil perfil-a: lo esencial\n\n{why}: este es el perfil que `lictor init` "
@@ -168,18 +253,39 @@ def test_without_a_profile_from_lictor_json_the_detected_one_says_why(
     assert part.detail == "## Perfil perfil-a: el detalle\n\nMás de A."
 
 
+def test_from_a_subdirectory_the_skill_names_the_project_s_root() -> None:
+    project = ProjectProfile(root=ROOT, cwd=ROOT / "src", declared="perfil-a")
+
+    part = profile_part(project, FakeCatalog())
+
+    assert part.essentials.startswith(
+        "## Perfil perfil-a: lo esencial\n\nEl proyecto es `/proyecto`: ejecuta las órdenes de "
+        "`lictor` desde ese directorio.\n\nPara proyectos A."
+    )
+
+
 def test_with_no_profile_at_all_the_person_chooses_from_the_list() -> None:
-    part = profile_part(ProjectProfile(declared="cobol"), [A, B])
+    catalog = FakeCatalog({**TEXTS, "perfil-c": "\n\nSin marca, pero con su primera línea."})
+
+    part = profile_part(_project(declared="cobol"), catalog)
 
     assert part.detail is None
     assert part.essentials.startswith("## Perfil del proyecto\n\n`lictor.json` pide el perfil")
-    assert "- `perfil-a`: Para proyectos A.\n- `perfil-b`: Para proyectos B." in part.essentials
+    assert (
+        "- `perfil-a`: Para proyectos A.\n- `perfil-b`: Para proyectos B.\n"
+        "- `perfil-c`: Sin marca, pero con su primera línea." in part.essentials
+    )
     assert "Lo de A." not in part.essentials
     assert "Pregunta a la persona" in part.essentials
     assert "`lictor skill --show --profile <nombre>`" in part.essentials
     text = render_skill("0", part)
     assert "## Perfil perfil-" not in text
     assert text.endswith(f"{END_LINE}\n")
+
+
+def test_a_profile_listed_without_its_skill_file_says_so() -> None:
+    assert profile_summary(None) == "sin descripción en la skill"
+    assert profile_summary("\n  \n") == "sin descripción en la skill"
 
 
 @pytest.mark.parametrize(
@@ -274,7 +380,7 @@ def test_configuring_offers_a_minimum_coverage_that_the_agent_sees() -> None:
 
 
 def test_the_profile_says_the_coverage_is_a_score_in_the_report() -> None:
-    [(_, section)] = [s for s in profile_skill_sections() if s[0] == "python-uv"]
+    section = PackagedProfiles().skill_text("python-uv") or ""
 
     assert "Puntuaciones" in section
     assert "su porcentaje queda en la salida del control" not in section

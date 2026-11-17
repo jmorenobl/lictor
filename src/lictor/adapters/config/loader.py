@@ -84,19 +84,20 @@ def list_profiles(profiles_dir: Path | None = None) -> list[Profile]:
     return profiles
 
 
-def profile_skill_sections(profiles_dir: Path | None = None) -> list[tuple[str, str]]:
-    """What each profile adds to Lictor's skill, from `<name>.skill.md` beside its definition.
+def project_root_of(start: Path) -> Path:
+    """The project a command in `start` belongs to, as the skill reads it.
 
-    It stays out of `config_fingerprint`: it tells a person how to prepare a project, and
-    verification never reads it.
+    The nearest directory with `lictor.json`, from `start` up to the root of its repository; with
+    none, that root (where `lictor init` would detect the profile); outside a repository, `start`.
+    A session opened in `src/` still speaks of its project.
     """
-    directory = _resolve_profiles_dir(profiles_dir)
-    sections: list[tuple[str, str]] = []
-    for profile in list_profiles(directory):
-        path = directory / f"{profile.name}.skill.md"
-        if path.is_file():
-            sections.append((profile.name, path.read_text(encoding="utf-8")))
-    return sections
+    start = start.resolve()
+    for directory in (start, *start.parents):
+        if (directory / CONFIG_FILENAME).is_file():
+            return directory
+        if (directory / ".git").exists():
+            return directory
+    return start
 
 
 def declared_profile(project_root: Path) -> str | None:
@@ -112,20 +113,49 @@ def declared_profile(project_root: Path) -> str | None:
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        msg = f"No se pudo leer {CONFIG_FILENAME}: {exc}"
+        msg = f"`{CONFIG_FILENAME}` no se pudo leer ({exc})"
         raise ConfigError(msg) from exc
     name = parsed.get("profile") if isinstance(parsed, dict) else None
     if not isinstance(name, str) or not name.partition("@")[0]:
-        msg = f"{CONFIG_FILENAME} no dice su perfil en «profile»"
+        msg = f"`{CONFIG_FILENAME}` no dice su perfil en «profile»"
         raise ConfigError(msg)
     return name.partition("@")[0]
 
 
-def detected_profile(project_root: Path, profiles_dir: Path | None = None) -> str | None:
-    """The profile `lictor init` would choose here, or None if none fits."""
-    try:
-        return detect_profile(project_root, profiles_dir).name
-    except ConfigError:
+class PackagedProfiles:
+    """The profiles that come with Lictor, read once and only as far as the skill asks.
+
+    A profile's `<name>.skill.md`, beside its definition, stays out of `config_fingerprint`: it
+    tells a person how to prepare a project, and verification never reads it.
+    """
+
+    def __init__(self, profiles_dir: Path | None = None) -> None:
+        self._directory = _resolve_profiles_dir(profiles_dir)
+        self._profiles: list[Profile] | None = None
+
+    def _all(self) -> list[Profile]:
+        if self._profiles is None:
+            self._profiles = list_profiles(self._directory)
+        return self._profiles
+
+    def names(self) -> list[str]:
+        return [profile.name for profile in self._all()]
+
+    def skill_text(self, name: str) -> str | None:
+        path = self._directory / f"{name}.skill.md"
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    def requested(self, name: str) -> str:
+        base_name = name.partition("@")[0]
+        if base_name not in self.names():
+            msg = f"Perfil desconocido: '{name}'. Los de esta versión: {', '.join(self.names())}"
+            raise ConfigError(msg)
+        return load_profile(name, self._directory).name
+
+    def detected(self, project_root: Path) -> str | None:
+        for profile in self._all():
+            if all((project_root / marker).exists() for marker in profile.detect):
+                return profile.name
         return None
 
 

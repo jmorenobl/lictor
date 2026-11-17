@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor.application.ports import ProfileCatalog
 from lictor.domain.errors import ConfigError
 
 SKILL_FILE = Path(".claude/skills/lictor/SKILL.md")
@@ -39,11 +40,6 @@ class ProfileSkill:
     essentials: str
     detail: str
 
-    @property
-    def summary(self) -> str:
-        """The first line of the essentials, which says what projects the profile is for."""
-        return self.essentials.splitlines()[0]
-
 
 def parse_profile_skill(name: str, text: str) -> ProfileSkill:
     """Split a profile's `<name>.skill.md` at its one detail mark."""
@@ -57,14 +53,22 @@ def parse_profile_skill(name: str, text: str) -> ProfileSkill:
     return ProfileSkill(name=name, essentials=essentials.strip(), detail=detail.strip())
 
 
+def profile_summary(text: str | None) -> str:
+    """The first line of a profile's skill, which says what projects it is for."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[0] if lines else "sin descripción en la skill"
+
+
 @dataclass(frozen=True)
 class ProjectProfile:
-    """What the project says of its profile: what `lictor.json` names, or `lictor init` finds."""
+    """What the project says of its profile, read from the project's root."""
 
+    root: Path
+    # Where the skill was asked from: the root is above it when the session is in a subdirectory.
+    cwd: Path
     declared: str | None = None
     # Why `lictor.json` is there and doesn't say its profile.
     unreadable: str | None = None
-    detected: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,53 +79,68 @@ class ProfilePart:
     detail: str | None = None
 
 
-def _by_name(profiles: Sequence[ProfileSkill], name: str | None) -> ProfileSkill | None:
-    return next((profile for profile in profiles if profile.name == name), None)
+def _root_note(project: ProjectProfile) -> str | None:
+    if project.root == project.cwd:
+        return None
+    return f"El proyecto es `{project.root}`: ejecuta las órdenes de `lictor` desde ese directorio."
 
 
-def _chosen(profile: ProfileSkill, note: str | None) -> ProfilePart:
-    lead = f"{note}\n\n" if note else ""
+def _chosen(name: str, catalog: ProfileCatalog, notes: Sequence[str | None]) -> ProfilePart:
+    lead = "".join(f"{note}\n\n" for note in notes if note)
+    text = catalog.skill_text(name)
+    if text is None:
+        return ProfilePart(
+            essentials=(
+                f"## Perfil {name}\n\n{lead}El perfil {name} no trae una parte propia en esta "
+                "skill: sigue solo lo común."
+            )
+        )
+    skill = parse_profile_skill(name, text)
     return ProfilePart(
-        essentials=f"## Perfil {profile.name}: lo esencial\n\n{lead}{profile.essentials}",
-        detail=f"## Perfil {profile.name}: el detalle\n\n{profile.detail}",
+        essentials=(
+            f"## Perfil {name}: lo esencial\n\n{lead}{skill.essentials}\n\n"
+            "El detalle de este perfil va al final de la skill."
+        ),
+        detail=f"## Perfil {name}: el detalle\n\n{skill.detail}",
     )
 
 
 def profile_part(
     project: ProjectProfile,
-    profiles: Sequence[ProfileSkill],
+    catalog: ProfileCatalog,
     requested: str | None = None,
 ) -> ProfilePart:
     """The profile the skill speaks of: the one asked for, the project's, or a list to ask from.
 
-    Only one profile goes in, so it stays within what a compacted conversation keeps. The one
-    `lictor.json` names wins even if the file doesn't load, because that is when the skill helps
-    most; without it, the one `lictor init` would detect; and with neither, nothing is guessed:
-    the person chooses from the list.
+    Only one profile goes in, so it stays within what a compacted conversation keeps, and only
+    its file is read whole. The one `lictor.json` names wins even if the file doesn't load,
+    because that is when the skill helps most; without it, the one `lictor init` would detect;
+    and with neither, nothing is guessed: the person chooses from the list.
     """
-    names = ", ".join(profile.name for profile in profiles)
+    where = _root_note(project)
     if requested is not None:
-        asked = _by_name(profiles, requested)
-        if asked is None:
-            msg = f"Perfil desconocido: '{requested}'. Los de esta versión: {names}"
+        if not requested.strip():
+            msg = f"--profile necesita el nombre de un perfil: {', '.join(catalog.names())}"
             raise ConfigError(msg)
-        return _chosen(asked, None)
-    declared = _by_name(profiles, project.declared)
-    if declared is not None:
-        return _chosen(declared, None)
+        return _chosen(catalog.requested(requested), catalog, [where])
+    names = catalog.names()
+    if project.declared is not None and project.declared in names:
+        return _chosen(project.declared, catalog, [where])
     if project.declared is not None:
         why = f"`lictor.json` pide el perfil «{project.declared}», que esta versión no tiene"
     elif project.unreadable is not None:
-        why = f"`lictor.json` no dice su perfil ({project.unreadable}; `lictor doctor` lo detalla)"
+        why = f"{project.unreadable} (`lictor doctor` lo detalla)"
     else:
         why = "Aún no hay `lictor.json`"
-    detected = _by_name(profiles, project.detected)
+    detected = catalog.detected(project.root)
     if detected is not None:
-        return _chosen(detected, f"{why}: este es el perfil que `lictor init` detecta aquí.")
-    listed = "\n".join(f"- `{profile.name}`: {profile.summary}" for profile in profiles)
+        found = f"{why}: este es el perfil que `lictor init` detecta aquí."
+        return _chosen(detected, catalog, [where, found])
+    listed = "\n".join(f"- `{name}`: {profile_summary(catalog.skill_text(name))}" for name in names)
+    lead = f"{where}\n\n" if where else ""
     return ProfilePart(
         essentials=(
-            "## Perfil del proyecto\n\n"
+            f"## Perfil del proyecto\n\n{lead}"
             f"{why}, y ningún perfil encaja con lo que hay en el directorio. Los de esta "
             f"versión:\n\n{listed}\n\n"
             "Pregunta a la persona con cuál va a trabajar y lee su parte con "
