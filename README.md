@@ -517,6 +517,8 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 
 En `measure`, por debajo del mínimo el control sale como fallido sin bloquear; con `"mode": "block"` también bloquea. Una pasada sin tests, con código en `src`, puntúa un 0 %, que es una medida cierta. Solo cuando lo medido no tiene código no hay puntuación, y entonces un mínimo falla: lo que no se midió no llega a ninguno. Si `unit` falló (en `measure`, o con `lictor check --keep-going`), la puntuación sale marcada «(de un unit fallido)».
 
+**El agente mide lo que se le exige.** Un control con `min_score` y `agent_run` le dice al agente, en cada intento, el mínimo y la orden con la que medirlo él mismo antes de terminar; la orden entra en las que puede ejecutar. `agent_run` es la orden tal como la ejecutaría el agente (la de `coverage` en `python-uv` saca una tabla de lo que falta por cubrir), la verificación nunca la ejecuta. Si la escribes en `lictor.json`, `agent_tools` tiene que permitirla, o no carga; la del perfil, si tus `agent_tools` no la permiten, simplemente no se le dice al agente. Un control que el run salta, porque no corre en cada intento o porque falta su plugin, no se le dice. Si cambias `adds`, cambia también `agent_run`, para que el agente mida lo mismo que la verificación.
+
 ### El oráculo y el ciclo de escenarios
 
 El driver sellado es el oráculo: lo que decide si un escenario está en verde. El perfil declara qué lo hace válido en su bloque `oracle`, que ningún `lictor.json` toca.

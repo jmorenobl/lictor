@@ -11,6 +11,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
     ImplementScenarioResult,
 )
+from lictor.domain.controls import ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
     AgentResult,
@@ -630,3 +631,44 @@ def test_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> None:
     assert "Bash solo admite: make test." in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
+
+
+_COVERAGE = ReaderControl(
+    "coverage",
+    "L2",
+    reads="unit",
+    adds="--cov {out}",
+    min_score=80,
+    when_plugin="cov.plugin",
+    agent_run="tests --cov --table",
+)
+
+
+def test_the_prompt_tells_each_minimum_and_lets_the_agent_measure_it(tmp_path: Path) -> None:
+    # F55: four of nine verifications failed on a coverage the agent couldn't measure.
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[_COVERAGE],
+        installed_plugins=["cov.plugin"],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "  - coverage: al menos 80 %, con `tests --cov --table`." in prompt
+    assert "Bash solo admite: tests, tests --cov --table." in prompt
+
+
+def test_a_minimum_the_run_skips_is_not_told(tmp_path: Path) -> None:
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[_COVERAGE],
+        installed_plugins=[],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "puntuación mínima" not in prompt
+    assert "tests --cov" not in prompt
+    assert "{medidas}" not in prompt

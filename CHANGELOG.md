@@ -16,6 +16,21 @@ en su significado se anota en «Cambiado».
   verde; si no, va a cuarentena por `spec_conflict`, como antes, sin gastar los intentos que
   quedan, y el motivo dice dónde falló. El prompt aclara que la línea solo se escribe para declarar
   un conflicto. El código de salida 11 no cambia de significado.
+- **El agente sabe medir la cobertura que se le exige.** Con `{"id": "coverage", "min_score": 80}`,
+  el agente no sabía qué mínimo había ni cómo medirlo, y la mayoría de los reintentos de un run
+  eran por cobertura. Ahora el prompt de implementación dice el mínimo de cada control que el run
+  verifica y la orden con la que medirlo, que entra en las que puede ejecutar.
+
+### Añadido
+
+- **`agent_run` en un control:** la orden con la que el agente mide ese control por su cuenta.
+  Con `min_score`, el agente recibe el mínimo y esta orden; la verificación nunca la ejecuta. Una
+  que escribe el proyecto y `agent_tools` no permite impide cargar `lictor.json`; una heredada del
+  perfil bajo unas `agent_tools` más estrechas solo deja de decirse. El `coverage` de
+  `python-uv@0.2` declara `uv run pytest tests/unit -q --cov=src --cov-branch
+  --cov-report=term-missing`; un proyecto que cambia `adds` debería cambiar también `agent_run`.
+  Cambia la huella de la configuración resuelta, así que un run empezado con la 0.5.0 no se
+  reanuda.
 
 ## [0.5.0] - 2026-11-17
 

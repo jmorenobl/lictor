@@ -16,7 +16,14 @@ from langgraph.types import interrupt
 from lictor import __version__
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
-from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.ports import (
+    Clock,
+    EventLog,
+    Executor,
+    SpecSource,
+    Vcs,
+    VerificationCommands,
+)
 from lictor.application.spec_history import GreenRecord, SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
@@ -184,6 +191,8 @@ class GraphContext:
     impostors: Impostors | None = None
     # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
     check_controls: tuple[Control, ...] = ()
+    # Only to ask which plugins load, so the agent hears of no minimum the run skips (F55).
+    environment: VerificationCommands | None = None
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -532,6 +541,10 @@ class _GraphNodes:
                     last_agent_status=state.get("last_agent_status"),
                     forbidden_paths=self.ctx.forbidden_paths,
                     max_attempts=self.ctx.max_attempts,
+                    controls=self.ctx.controls,
+                    installed_plugins=(
+                        self.ctx.environment.installed_plugins if self.ctx.environment else ()
+                    ),
                 )
             )
         except SealTamperedError as exc:

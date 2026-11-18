@@ -15,7 +15,7 @@ from typing import Literal
 
 from lictor.domain.errors import ConfigError
 from lictor.domain.reports import ReportFormat
-from lictor.domain.rules import missing_plugin
+from lictor.domain.rules import minimum_text, missing_plugin
 from lictor.domain.stages import ATTEMPT, CHECK, Stage
 from lictor.domain.verdicts import VerdictRule
 
@@ -44,6 +44,8 @@ class CommandControl:
     when_exists: str | None = None
     when_plugin: str | None = None
     min_score: float | None = None
+    # How the agent measures this control by itself: verification never runs it (F55).
+    agent_run: str | None = None
 
     @property
     def verdict_rule(self) -> VerdictRule:
@@ -69,9 +71,53 @@ class ReaderControl:
     stage: Stage = ATTEMPT
     when_plugin: str | None = None
     min_score: float | None = None
+    agent_run: str | None = None
 
 
 type Control = CommandControl | ReaderControl
+
+
+@dataclass(frozen=True)
+class AgentMeasure:
+    """A minimum the verification demands, and the command with which the agent can check it."""
+
+    control_id: str
+    command: str
+    min_score: float
+
+
+def agent_measures(
+    controls: Sequence[Control], installed: Collection[str]
+) -> tuple[AgentMeasure, ...]:
+    """What the implementer is told to measure by itself before it ends (F55).
+
+    Only a control that declares a minimum and an `agent_run`, and whose plugin the environment
+    loads: a skipped control demands nothing, and its command would fail in the agent's copy.
+    `controls` are the ones the run verifies, so the `check` ones never reach the agent.
+    """
+    return tuple(
+        AgentMeasure(control.id, control.agent_run, control.min_score)
+        for control in controls
+        if control.agent_run
+        and control.min_score is not None
+        and missing_plugin(control.when_plugin, installed) is None
+    )
+
+
+def agent_measures_text(measures: Sequence[AgentMeasure]) -> str:
+    """The lines of the implementer's prompt that name each minimum and how to measure it."""
+    if not measures:
+        return ""
+    lines = [
+        "- La verificación también exige una puntuación mínima, medida igual que con estas "
+        "órdenes. Mídela antes de terminar y, si no llega, añade tests:"
+    ]
+    for measure in measures:
+        lines.append(
+            f"  - {measure.control_id}: al menos {minimum_text(measure.min_score)} %, "
+            f"con `{measure.command}`."
+        )
+    return "\n".join(lines)
 
 
 def controls_of_stage[C: CommandControl | ReaderControl](

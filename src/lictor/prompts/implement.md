@@ -20,6 +20,7 @@ Reglas:
   se deniega y te cuesta turnos.
 - Estos escenarios ya funcionan y deben seguir funcionando: {green_ids}.
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
+{medidas}
 
 Contexto del proyecto: {hints}
 

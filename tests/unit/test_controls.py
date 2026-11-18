@@ -6,6 +6,7 @@ import pytest
 
 from lictor.domain.controls import (
     REPORT_PATHS_NOTE,
+    AgentMeasure,
     CommandControl,
     CommandPart,
     Control,
@@ -13,6 +14,8 @@ from lictor.domain.controls import (
     ReaderControl,
     ReadStep,
     RunStep,
+    agent_measures,
+    agent_measures_text,
     check_selection,
     command_controls,
     controls_of_stage,
@@ -54,6 +57,7 @@ def test_a_control_runs_in_every_attempt_and_blocks_unless_it_says_otherwise() -
     assert (control.mode, control.stage, control.timeout_s) == ("block", ATTEMPT, 600)
     assert (control.empty_exit_codes, control.when_exists, control.when_plugin) == ((), None, None)
     assert control.min_score is None
+    assert control.agent_run is None
 
 
 def test_its_verdict_rule_is_its_report_its_timeout_and_its_empty_codes() -> None:
@@ -282,3 +286,65 @@ def test_a_level_that_splits_the_pair_brings_the_read_control_in_its_place() -> 
 def test_check_refuses_an_id_that_names_nothing_and_names_what_there_is() -> None:
     with pytest.raises(ConfigError, match=r"mutacion.*acceptance, coverage, lint, unit"):
         check_selection([LINT, UNIT, COVERAGE], None, ["mutacion"], COV)
+
+
+# What the agent is told to measure by itself (F55).
+
+_COVERAGE = ReaderControl(
+    "coverage",
+    "L2",
+    reads="unit",
+    adds="--cov {out}",
+    min_score=80,
+    when_plugin="cov.plugin",
+    agent_run="tests --cov",
+)
+
+
+def test_a_minimum_with_its_command_and_its_plugin_is_told_to_the_agent() -> None:
+    assert agent_measures([_COVERAGE], ["cov.plugin"]) == (
+        AgentMeasure("coverage", "tests --cov", 80),
+    )
+
+
+@pytest.mark.parametrize(
+    ("control", "installed"),
+    [
+        (replace(_COVERAGE, min_score=None), ["cov.plugin"]),
+        (replace(_COVERAGE, agent_run=None), ["cov.plugin"]),
+        (replace(_COVERAGE, agent_run=""), ["cov.plugin"]),
+        (_COVERAGE, []),
+    ],
+    ids=["sin mínimo", "sin orden", "orden vacía", "sin su plugin"],
+)
+def test_nothing_is_told_without_a_minimum_a_command_or_the_plugin(
+    control: Control, installed: list[str]
+) -> None:
+    assert agent_measures([control], installed) == ()
+
+
+def test_a_command_control_with_a_minimum_is_told_too_and_order_is_kept() -> None:
+    mutation = CommandControl(
+        "mutation", "L5", "mutar {out}", "mutation", min_score=92.5, agent_run="mutar"
+    )
+
+    measures = agent_measures([mutation, _control("lint"), _COVERAGE], ["cov.plugin"])
+
+    assert [m.control_id for m in measures] == ["mutation", "coverage"]
+
+
+def test_the_prompt_names_each_minimum_and_its_command() -> None:
+    text = agent_measures_text(
+        [AgentMeasure("coverage", "tests --cov", 80), AgentMeasure("mutation", "mutar", 92.5)]
+    )
+
+    assert text == (
+        "- La verificación también exige una puntuación mínima, medida igual que con estas "
+        "órdenes. Mídela antes de terminar y, si no llega, añade tests:\n"
+        "  - coverage: al menos 80 %, con `tests --cov`.\n"
+        "  - mutation: al menos 92,5 %, con `mutar`."
+    )
+
+
+def test_no_minimum_leaves_the_prompt_as_it_was() -> None:
+    assert agent_measures_text([]) == ""

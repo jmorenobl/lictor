@@ -193,6 +193,20 @@
           ],
           "default": null,
           "title": "Min Score"
+        },
+        "agent_run": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "La orden con la que el agente mide este control por su cuenta, tal como la ejecutaría: con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, y tiene que estar permitida por agent_tools.",
+          "title": "Agent Run"
         }
       },
       "required": [
