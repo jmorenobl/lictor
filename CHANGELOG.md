@@ -7,6 +7,11 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.6.1] - 2026-11-18
+
+Un arreglo de la 0.6.0: medir la cobertura, como la 0.6.0 pide al agente, paraba el run en el primer
+escenario. Sin campos nuevos en `lictor.json`, así que sube el parche.
+
 ### Al actualizar desde la 0.6.0
 
 - **Un run empezado con la 0.6.0 no se reanuda.** El `gitignore` del perfil `python-uv@0.2` nombra
@@ -537,7 +542,9 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.5.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/jmorenobl/lictor/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/jmorenobl/lictor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jmorenobl/lictor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jmorenobl/lictor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jmorenobl/lictor/compare/v0.2.0...v0.3.0
