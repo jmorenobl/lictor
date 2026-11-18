@@ -506,6 +506,74 @@ def test_graph_mode_conflict(tmp_path: Path) -> None:
     assert final_state.get("reasons", {}).get("IVA-001") == "spec_conflict"
 
 
+def test_graph_a_declared_conflict_whose_attempt_passes_is_green(tmp_path: Path) -> None:
+    # F54: the agent fixed the scenario and ended with «LICTOR: SPEC_CONFLICT no aplica».
+    executor = FakeExecutor(
+        mode="good",
+        scenario_modes={"IVA-001": "conflict"},
+        files_to_write={
+            "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},
+            "IVA-001": {"src/iva.py": "# IVA-001: OK\n"},
+            "IVA-002": {"src/iva.py": "# IVA-001: OK\n# IVA-002: OK\n"},
+        },
+    )
+    context = _setup_test_environment(tmp_path, executor)
+    saver = get_sqlite_saver(tmp_path / ".lictor" / "checkpoints.sqlite")
+    graph = create_graph(context, checkpointer=saver)
+
+    initial_state = {
+        "run_id": "20261030-150000-0006",
+        "config_hash": "dummy_config_hash",
+        "driver_fresh": True,
+        "driver_attempts": 0,
+        "attempt": 0,
+        "status": {},
+        "reasons": {},
+        "totals": {},
+    }
+    config = {"configurable": {"thread_id": "20261030-150000-0006"}}
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
+
+    assert final_state.get("exit_code") == 0
+    assert final_state.get("status") == {"IVA-001": "green", "IVA-002": "green"}
+    assert executor.calls.count("IVA-001") == 1
+    assert "IVA-001" in context.vcs.get_trailers("Scenario")
+
+
+def test_graph_a_declared_conflict_whose_attempt_fails_is_quarantined_at_once(
+    tmp_path: Path,
+) -> None:
+    executor = FakeExecutor(
+        mode="good",
+        scenario_modes={"IVA-001": "conflict"},
+        files_to_write={
+            "driver": {"tests/acceptance/test_iva.py": DRIVER_TEST_CODE},
+            "IVA-001": {"src/iva.py": "# todavía no\n"},
+            "IVA-002": {"src/iva.py": "# IVA-001: OK\n# IVA-002: OK\n"},
+        },
+    )
+    context = _setup_test_environment(tmp_path, executor)
+    saver = get_sqlite_saver(tmp_path / ".lictor" / "checkpoints.sqlite")
+    graph = create_graph(context, checkpointer=saver)
+
+    initial_state = {
+        "run_id": "20261030-150000-0007",
+        "config_hash": "dummy_config_hash",
+        "driver_fresh": True,
+        "driver_attempts": 0,
+        "attempt": 0,
+        "status": {},
+        "reasons": {},
+        "totals": {},
+    }
+    config = {"configurable": {"thread_id": "20261030-150000-0007"}}
+    final_state = graph.invoke(initial_state, config=config, durability=DURABILITY)
+
+    assert final_state.get("reasons", {}).get("IVA-001") == "spec_conflict"
+    # The conflict stands because the attempt failed: no attempt left is spent on it.
+    assert executor.calls.count("IVA-001") == 1
+
+
 def test_graph_mode_rate_limit_and_resume(tmp_path: Path) -> None:
     executor = FakeExecutor(
         mode="rate_limit",

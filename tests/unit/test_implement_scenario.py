@@ -11,6 +11,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
     ImplementScenarioResult,
 )
+from lictor.domain.controls import ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
     AgentResult,
@@ -419,9 +420,14 @@ def test_implement_scenario_spec_conflict(tmp_path: Path) -> None:
         failed_at="L2 (unit)",
     )
 
+    vcs.capture.return_value = "c" * 40
+
     result = use_case.execute(req)
     assert result.attempt == 2
     assert result.agent_signal == "spec_conflict"
+    # F54: the tree of a declared conflict is kept, so verify judges it and not the text.
+    assert result.tree == "c" * 40
+    vcs.capture.assert_called_once()
 
 
 def test_implement_scenario_rate_limited_does_not_increment_attempt(tmp_path: Path) -> None:
@@ -541,18 +547,22 @@ def test_a_result_that_cant_be_read_fails_the_attempt(tmp_path: Path) -> None:
     assert result.attempt == 2
 
 
-@pytest.mark.parametrize(
-    "agent_result",
-    [AgentResult(status="rate_limited"), AgentResult(status="ok", spec_conflict="contradice")],
-    ids=["cuota", "conflicto"],
-)
-def test_no_result_is_read_from_a_call_that_produced_none(
-    tmp_path: Path, agent_result: AgentResult
-) -> None:
+def test_no_result_is_read_from_a_call_that_produced_none(tmp_path: Path) -> None:
     vcs = MagicMock(spec=Vcs)
-    result, _, _ = _execute(tmp_path, agent_result, vcs=vcs)
+    result, _, _ = _execute(tmp_path, AgentResult(status="rate_limited"), vcs=vcs)
 
     vcs.capture.assert_not_called()
+    assert result.tree is None
+
+
+def test_a_declared_conflict_whose_copy_cant_be_read_stays_a_conflict(tmp_path: Path) -> None:
+    # Nothing to verify: the conflict says more than an unreadable copy, and routing quarantines.
+    vcs = MagicMock(spec=Vcs)
+    vcs.capture.side_effect = CandidateError("repositorio anidado")
+    agent_result = AgentResult(status="ok", spec_conflict="contradice")
+    result, _, _ = _execute(tmp_path, agent_result, vcs=vcs)
+
+    assert result.agent_signal == "spec_conflict"
     assert result.tree is None
 
 
@@ -621,3 +631,44 @@ def test_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> None:
     assert "Bash solo admite: make test." in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
+
+
+_COVERAGE = ReaderControl(
+    "coverage",
+    "L2",
+    reads="unit",
+    adds="--cov {out}",
+    min_score=80,
+    when_plugin="cov.plugin",
+    agent_run="tests --cov --table",
+)
+
+
+def test_the_prompt_tells_each_minimum_and_lets_the_agent_measure_it(tmp_path: Path) -> None:
+    # F55: four of nine verifications failed on a coverage the agent couldn't measure.
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[_COVERAGE],
+        installed_plugins=["cov.plugin"],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "  - coverage: al menos 80 %, con `tests --cov --table`." in prompt
+    assert "Bash solo admite: tests, tests --cov --table." in prompt
+
+
+def test_a_minimum_the_run_skips_is_not_told(tmp_path: Path) -> None:
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[_COVERAGE],
+        installed_plugins=[],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "puntuación mínima" not in prompt
+    assert "tests --cov" not in prompt
+    assert "{medidas}" not in prompt

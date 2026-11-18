@@ -67,7 +67,9 @@ def route_implement(state: Mapping[str, Any], max_attempts: int | None = None) -
     if signal in ("rate_limited", "unavailable"):
         return "pause"
     if signal == "spec_conflict":
-        return "quarantine"
+        # A declared conflict is judged by what the attempt left, never by its text (F54): with
+        # a tree to verify it goes to verify, which quarantines it only if the tree fails.
+        return "verify" if state.get("attempt_tree") else "quarantine"
     if signal == "rejected":
         return _retry_or_quarantine(state, max_attempts)
     return "verify"
@@ -80,6 +82,8 @@ def route_verify(state: Mapping[str, Any], max_attempts: int | None = None) -> s
     last_verify = state.get("last_verify")
     if _is_verify_ok(last_verify):
         return "commit"
+    if state.get("agent_signal") == "spec_conflict":
+        return "quarantine"
     return _retry_or_quarantine(state, max_attempts)
 
 

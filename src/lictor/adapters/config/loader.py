@@ -20,6 +20,7 @@ from lictor.adapters.config.models import (
     ProfileVerification,
     ProjectVerification,
     ReaderControlConfig,
+    agent_run_problems,
     allow_empty_message,
     driver_hints_message,
     plugin_without_list_message,
@@ -524,10 +525,31 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg) from exc
     merged = _merge_profile_defaults(parsed, written, profiles_dir, config_path.parent)
     try:
-        return LictorConfig.model_validate(merged)
+        config = LictorConfig.model_validate(merged)
     except ValidationError as exc:
         msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
+    _reject_unrunnable_agent_runs(config, written, config_path)
+    return config
+
+
+def _reject_unrunnable_agent_runs(
+    config: LictorConfig, written: LictorFile, config_path: Path
+) -> None:
+    """Refuse an `agent_run` the project writes and the agent couldn't run: a mistake to fix.
+
+    One inherited from the profile under tools the project narrowed is only left untold
+    (`domain_controls`): nobody asked for it there.
+    """
+    ids = {
+        change.id
+        for change in written.controls
+        if "agent_run" in change.model_fields_set and change.agent_run is not None
+    }
+    problems = agent_run_problems([c for c in config.controls if c.id in ids], config.agent_tools)
+    if problems:
+        msg = f"Configuración inválida en '{config_path}': " + "\n".join(problems)
+        raise ConfigError(msg)
 
 
 def _validation_text(exc: ValidationError) -> str:

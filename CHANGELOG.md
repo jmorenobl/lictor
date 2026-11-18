@@ -7,6 +7,31 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Corregido
+
+- **Un conflicto declarado ya no pone en cuarentena un escenario que su intento cumple.** El
+  agente que terminaba con «LICTOR: SPEC_CONFLICT no aplica», diciendo que no había conflicto,
+  mandaba el escenario a cuarentena sin verificar lo que había escrito, y el run salía con 11.
+  Ahora el intento con un conflicto declarado se verifica igual: si pasa, el escenario queda en
+  verde; si no, va a cuarentena por `spec_conflict`, como antes, sin gastar los intentos que
+  quedan, y el motivo dice dónde falló. El prompt aclara que la línea solo se escribe para declarar
+  un conflicto. El código de salida 11 no cambia de significado.
+- **El agente sabe medir la cobertura que se le exige.** Con `{"id": "coverage", "min_score": 80}`,
+  el agente no sabía qué mínimo había ni cómo medirlo, y la mayoría de los reintentos de un run
+  eran por cobertura. Ahora el prompt de implementación dice el mínimo de cada control que el run
+  verifica y la orden con la que medirlo, que entra en las que puede ejecutar.
+
+### Añadido
+
+- **`agent_run` en un control:** la orden con la que el agente mide ese control por su cuenta.
+  Con `min_score`, el agente recibe el mínimo y esta orden; la verificación nunca la ejecuta. Una
+  que escribe el proyecto y `agent_tools` no permite impide cargar `lictor.json`; una heredada del
+  perfil bajo unas `agent_tools` más estrechas solo deja de decirse. El `coverage` de
+  `python-uv@0.2` declara `uv run pytest tests/unit -q --cov=src --cov-branch
+  --cov-report=term-missing`; un proyecto que cambia `adds` debería cambiar también `agent_run`.
+  Cambia la huella de la configuración resuelta, así que un run empezado con la 0.5.0 no se
+  reanuda.
+
 ## [0.5.0] - 2026-11-17
 
 La skill de Lictor habla solo del perfil del proyecto, y lo esencial de ese perfil va al principio,

@@ -304,6 +304,7 @@ def bootstrap_runtime(
         acceptance_timeout_s=active_config.acceptance.timeout_s,
         controls=attempt_controls,
         check_controls=check_controls,
+        environment=environment,
         prepare_driver=prepare_driver_uc,
         check_red=check_red_uc,
         implement_scenario=implement_uc,

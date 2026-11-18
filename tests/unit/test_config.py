@@ -41,6 +41,8 @@ from lictor.adapters.config.models import (
     ProjectVerification,
     ReaderControlConfig,
     RetentionConfig,
+    agent_run_problems,
+    domain_controls,
 )
 from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
@@ -1284,6 +1286,71 @@ def test_a_lictor_json_that_asks_for_the_retired_profile_is_told_what_changed(
         "El perfil python-uv@0.1 ya no existe: usa python-uv@0.2, que mide la cobertura en la "
         "ejecución de unit (ver el CHANGELOG)"
     )
+
+
+def test_the_profile_tells_the_agent_how_to_measure_its_coverage() -> None:
+    """F55: the agent couldn't measure the coverage its attempt was failed for."""
+    profile = load_profile("python-uv")
+    [coverage] = [c for c in profile.controls if c.id == "coverage"]
+
+    assert coverage.agent_run is not None
+    # The same measure as verification: the source, with branches; a table, to read the misses.
+    assert "--cov=src" in coverage.agent_run
+    assert "--cov-branch" in coverage.agent_run
+    assert "{" not in coverage.agent_run
+    assert agent_run_problems(profile.controls, profile.agent_tools) == []
+
+
+def test_an_agent_run_the_agent_tools_dont_allow_is_refused(tmp_path: Path) -> None:
+    path = _project(tmp_path, controls=[{"id": "coverage", "agent_run": "make cobertura"}])
+
+    with pytest.raises(ConfigError) as refused:
+        load_config(path)
+
+    assert "El agent_run del control 'coverage' (make cobertura) no lo permite agent_tools" in str(
+        refused.value
+    )
+
+
+def test_an_inherited_agent_run_the_project_tools_dont_allow_is_only_left_untold(
+    tmp_path: Path,
+) -> None:
+    path = _project(tmp_path, agent_tools=[])
+
+    config = load_config(path)
+
+    [coverage] = [c for c in config.controls if c.id == "coverage"]
+    assert coverage.agent_run is not None
+    [told] = [c for c in domain_controls(config) if c.id == "coverage"]
+    assert told.agent_run is None
+
+
+def test_agent_run_problems_allow_a_prefix_rule_or_an_exact_one() -> None:
+    tools = ["Bash(uv run pytest:*)", "Bash(make cov)", "Read"]
+
+    def control(agent_run: str) -> CommandControlConfig:
+        return CommandControlConfig(
+            id="c", level="L2", run="x {out}", report="coverage", agent_run=agent_run
+        )
+
+    assert agent_run_problems([control("uv run pytest -q --cov")], tools) == []
+    assert agent_run_problems([control("make cov")], tools) == []
+    assert len(agent_run_problems([control("make cov extra")], tools)) == 1
+    assert len(agent_run_problems([control("Read")], tools)) == 1
+
+
+def test_a_project_changes_or_clears_the_agent_run_by_id(tmp_path: Path) -> None:
+    command = "uv run pytest tests/unit --cov=src"
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    changed = _project(tmp_path / "a", controls=[{"id": "coverage", "agent_run": command}])
+    cleared = _project(tmp_path / "b", controls=[{"id": "coverage", "agent_run": None}])
+
+    [coverage] = [c for c in load_config(changed).controls if c.id == "coverage"]
+    [none] = [c for c in load_config(cleared).controls if c.id == "coverage"]
+
+    assert coverage.agent_run == command
+    assert none.agent_run is None
 
 
 def test_a_project_asks_for_a_minimum_coverage_by_id(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ from lictor.application.usecases.verify_attempt import (
     AgentCopyOutcome,
     IntegritySnapshot,
 )
+from lictor.domain.controls import Control, agent_measures, agent_measures_text
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
 from lictor.domain.rules import (
@@ -65,6 +66,10 @@ class ImplementScenarioRequest:
     last_agent_status: AgentStatus | None = None
     forbidden_paths: Sequence[str] = ()
     max_attempts: int = 0  # only to tell whoever watches; the graph decides when they run out
+    # The controls the run verifies, and the plugins its environment loads: the minimums of the
+    # ones that run are told to the agent (F55); a skipped control demands nothing.
+    controls: Sequence[Control] = ()
+    installed_plugins: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,9 @@ class ImplementScenario:
             )
             error_block = f"{error_block}\n{failure}".strip()
 
+        measures = agent_measures(request.controls, request.installed_plugins)
+        commands = list(dict.fromkeys([*request.check_commands, *(m.command for m in measures)]))
+
         replacements = {
             "{repo}": request.project_root.name,
             "{id}": request.scenario.id.value,
@@ -135,7 +143,8 @@ class ImplementScenario:
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
-            "{check_commands}": ", ".join(request.check_commands) or "los tests del proyecto",
+            "{check_commands}": ", ".join(commands) or "los tests del proyecto",
+            "{medidas}": agent_measures_text(measures),
             "{hints}": request.hints,
             "{bloque_de_error}": error_block,
         }
@@ -224,7 +233,8 @@ class ImplementScenario:
             snapshot.verify_and_restore()
             if snapshot.changes:
                 return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
-            if agent_result.spec_conflict or agent_result.status == "rate_limited":
+            # A declared conflict keeps its tree: what decides is whether it verifies (F54).
+            if agent_result.status == "rate_limited":
                 return AgentCopyOutcome(agent_result)
             try:
                 return AgentCopyOutcome(agent_result, tree=self.vcs.capture(workspace))

@@ -296,6 +296,13 @@ def _check_min_score(control_id: str, report: str, min_score: float | None) -> N
         raise ValueError(msg)
 
 
+AGENT_RUN_DESCRIPTION = (
+    "La orden con la que el agente mide este control por su cuenta, tal como la ejecutaría: "
+    "con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, "
+    "y tiene que estar permitida por agent_tools."
+)
+
+
 class CommandControlConfig(BaseModel):
     """Un control que ejecuta su propio comando (`run`) y se juzga por lo que deja."""
 
@@ -314,6 +321,7 @@ class CommandControlConfig(BaseModel):
     when_plugin: str | None = Field(default=None, min_length=1)
     # The lowest score that passes, in percent; only a mutation or a coverage report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
+    agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
 
     @model_validator(mode="before")
     @classmethod
@@ -359,6 +367,7 @@ class ReaderControlConfig(BaseModel):
     stage: Stage = ATTEMPT
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
+    agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
 
     @model_validator(mode="before")
     @classmethod
@@ -432,6 +441,7 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
             stage=control.stage,
             when_plugin=control.when_plugin,
             min_score=control.min_score,
+            agent_run=control.agent_run,
         )
     return CommandControl(
         id=control.id,
@@ -445,6 +455,7 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
         when_exists=control.when_exists,
         when_plugin=control.when_plugin,
         min_score=control.min_score,
+        agent_run=control.agent_run,
     )
 
 
@@ -453,6 +464,30 @@ def _check_readers(controls: Sequence[CommandControlConfig | ReaderControlConfig
     problems = reader_problems([domain_control(control) for control in controls])
     if problems:
         raise ValueError("\n".join(problems))
+
+
+def agent_run_problems(
+    controls: Sequence[CommandControlConfig | ReaderControlConfig], agent_tools: Sequence[str]
+) -> list[str]:
+    """The `agent_run` of each control that the agent's tools wouldn't let it run (F55).
+
+    A rule `Bash(<prefix>:*)` allows what starts with that prefix and `Bash(<command>)` that
+    exact command: what the backend allows, so the prompt never names a command it denies.
+    """
+    prefixes = [
+        t[len("Bash(") : -len(":*)")]
+        for t in agent_tools
+        if t.startswith("Bash(") and t.endswith(":*)")
+    ]
+    exact = {t[len("Bash(") : -1] for t in agent_tools if t.startswith("Bash(")}
+    return [
+        f"El agent_run del control '{c.id}' ({c.agent_run}) no lo permite agent_tools: el agente "
+        "no podría ejecutarlo. Escribe una orden que empiece como una de sus reglas Bash(...)."
+        for c in controls
+        if c.agent_run is not None
+        and c.agent_run not in exact
+        and not any(c.agent_run.startswith(prefix) for prefix in prefixes)
+    ]
 
 
 def _no_default(schema: JsonDict) -> None:
@@ -504,6 +539,7 @@ class ControlChange(BaseModel):
     when_exists: str | None = None
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
+    agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
 
     @model_validator(mode="before")
     @classmethod
@@ -621,6 +657,13 @@ class Profile(BaseModel):
         _check_readers(self.controls)
         return self
 
+    @model_validator(mode="after")
+    def _validate_agent_runs(self) -> Self:
+        problems = agent_run_problems(self.controls, self.agent_tools)
+        if problems:
+            raise ValueError("\n".join(problems))
+        return self
+
 
 class RetentionConfig(BaseModel):
     """Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/."""
@@ -665,8 +708,17 @@ def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
     """The resolved controls as the domain sees them, in the order they were declared.
 
     This is the only conversion: the run and `lictor check` get what it returns (ADR-0009).
+    An `agent_run` the agent's tools don't allow is dropped: it would name a command the backend
+    denies. One the project writes is refused at load instead (`load_config`).
     """
-    return tuple(domain_control(control) for control in config.controls)
+    return tuple(
+        domain_control(
+            control.model_copy(update={"agent_run": None})
+            if agent_run_problems([control], config.agent_tools)
+            else control
+        )
+        for control in config.controls
+    )
 
 
 class LictorFile(BaseModel):
