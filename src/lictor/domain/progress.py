@@ -362,19 +362,18 @@ def _state_line(view: StatusView) -> list[str]:
     return [f"Estado: terminada con código {code}.", *([f"Motivo: {reason}"] if reason else [])]
 
 
-def _step(view: StatusView) -> str:
-    """The step in progress, or the one a resume goes back to; "" when the run isn't on one."""
-    if not view.next_nodes:
-        return ""
-    node = view.next_nodes[0]
-    return str(view.values.get("resume_to") or "") if node == "pause" else node
+def _step(view: StatusView) -> str | None:
+    """The step in progress, or the one a resume goes back to; None when the run isn't on one."""
+    node = view.next_nodes[0] if view.next_nodes else None
+    if node != "pause":
+        return node
+    resume = view.values.get("resume_to")
+    return resume if isinstance(resume, str) else None
 
 
 def _attempt_line(view: StatusView) -> list[str]:
     """The step in progress, or the one a resume goes back to, with its attempt."""
     node, values = _step(view), view.values
-    if not node:
-        return []
     if node in _DRIVER_NODES:
         # The driver's call counts its attempt when it ends: the red check judges that one.
         done = int(values.get("driver_attempts") or 0)

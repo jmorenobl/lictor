@@ -370,3 +370,12 @@ def test_the_refactor_is_told_to_measure_before_and_after() -> None:
     assert "descarta el refactor si baja" in text
     assert "  - coverage: `tests --cov`." in text
     assert refactor_measures_text([]) == ""
+
+
+def test_the_refactor_measures_read_whole() -> None:
+    assert refactor_measures_text([("a", "x"), ("b", "y")]) == (
+        "- La verificación compara lo que miden estos controles con lo que medían en el verde, y "
+        "descarta el refactor si baja. Mídelo antes y después de cambiar nada:\n"
+        "  - a: `x`.\n"
+        "  - b: `y`."
+    )

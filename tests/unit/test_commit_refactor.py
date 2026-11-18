@@ -86,3 +86,38 @@ def test_without_a_candidate_or_with_another_tree_nothing_moves() -> None:
     with pytest.raises(CandidateError):
         use_case.execute(_request())
     vcs.advance_head.assert_not_called()
+
+
+LONG = Candidate(sha="a" * 40, tree="t1", parent="verde")
+
+
+def test_each_event_belongs_to_the_run_and_a_collateral_says_exactly_what_it_is() -> None:
+    use_case, vcs, event_log = _use_case()
+
+    use_case.execute(_request(candidate=LONG, collateral=("IVA-002",)))
+
+    refactored, green = _events(event_log)
+    assert (refactored.runid, green.runid) == ("run", "run")
+    vcs.get_tree.assert_called_once_with(LONG.sha)
+    vcs.parent_of.assert_called_once_with(LONG.sha)
+    assert green.data == {
+        "commit": LONG.sha,
+        "tree": "t1",
+        "attempt": 0,
+        "collateral": True,
+        "after_refactor": "IVA-001",
+    }
+
+
+def test_the_refusals_say_what_to_do() -> None:
+    use_case, _, _ = _use_case()
+    with pytest.raises(CandidateError) as missing:
+        use_case.execute(_request(candidate=None))
+    assert str(missing.value) == (
+        "No hay refactor verificado para IVA-001: lanza una ejecución nueva con --new."
+    )
+
+    use_case, _, _ = _use_case(tree="otro")
+    with pytest.raises(CandidateError) as other:
+        use_case.execute(_request(candidate=LONG))
+    assert str(other.value) == f"El commit {'a' * 12} no es el árbol verificado."

@@ -270,3 +270,7 @@ def test_route_commit_refactor_waits_for_a_blocked_branch() -> None:
 @pytest.mark.parametrize("target", ["refactor", "commit_refactor"])
 def test_route_pause_resumes_the_refactor(target: str) -> None:
     assert route_pause({"resume_to": target}) == target
+
+
+def test_route_refactor_verifies_an_error_with_no_failures_counted() -> None:
+    assert route_refactor({"agent_signal": "error"}) == "verify_refactor"

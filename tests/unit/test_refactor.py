@@ -161,3 +161,16 @@ def test_a_record_carries_everything_but_the_scenario() -> None:
         "failed_at": None,
         "collateral": ["A-002"],
     }
+
+
+def test_a_scored_command_control_measures_its_score() -> None:
+    mutation = CommandControl(id="cov", level="L2", run="c {out}", report="coverage", mode="block")
+    entry = CommandEntry(mutation, Executed(_RAN, Judged(CoverageReport(1, 4), Passed())))
+
+    assert oracle_measures([entry]) == {"cov": Measure(score=25.0)}
+
+
+def test_one_case_gone_is_a_regression_too() -> None:
+    assert refactor_regressions({"unit": Measure(passed=1)}, {}) == [
+        "unit: pasan 0 casos, y en el verde pasaban 1"
+    ]

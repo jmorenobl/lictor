@@ -616,3 +616,78 @@ def test_status_tells_a_refactor_paused_by_the_backend() -> None:
     lines = _status(["pause"], values)
 
     assert "Escenario en curso: A-001, ya en verde; su refactor, sin reintento." in lines
+
+
+def test_every_refactor_adds_to_the_refactor_spend() -> None:
+    verified = _verified("A-002", 1, ok=True, duration_ms=1000)
+    first = _verified("A-001", 1, ok=True, duration_ms=500)
+    progress = _folded(
+        _refactor_call("A-001", 0.05, 2000),
+        replace(first, data={**first.data, "role": "refactor"}),
+        _refactor_call("A-002", 0.10, 3000),
+        replace(verified, data={**verified.data, "role": "refactor"}),
+    )
+
+    total = progress.refactor_spend()
+    assert (total.calls, round(total.cost_usd, 2), total.agent_ms, total.verify_ms) == (
+        2,
+        0.15,
+        5000,
+        1500,
+    )
+    assert progress.observe(_refactored("A-002", "applied")) == [
+        "A-002: refactor aplicado, 4 s, 0,10 $."
+    ]
+
+
+def test_a_refactor_without_outcome_is_kept_as_it_came() -> None:
+    progress = RunProgress()
+    event = _refactored("A-001", "applied")
+    progress.observe(replace(event, data={}))
+
+    assert progress.refactors == {"A-001": ""}
+
+
+def test_only_the_current_green_says_its_refactor_is_in_progress() -> None:
+    values = {
+        "current": "A-001",
+        "resume_to": "refactor",
+        "status": {"A-001": "green", "A-002": "green"},
+    }
+
+    lines = _status(["pause"], values, by_hand=frozenset({"A-002"}))
+
+    assert "  - A-001: verde (refactor en curso)" in lines
+    assert "  - A-002: verde (registrado a mano)" in lines
+
+
+def test_status_splits_the_driver_and_the_refactor_spend() -> None:
+    progress = _folded(_finished(None, 0.01, 1000), _refactor_call("A-001", 0.02, 1000))
+
+    lines = _status([], {"status": {}}, progress)
+
+    assert (
+        "Agente: 2 llamadas, 0,03 $ (driver: 1 llamada, 0,01 $; refactor: 1 llamada, 0,02 $)."
+        in (lines)
+    )
+
+
+def test_one_green_from_before_and_two_waiting_read_in_the_specs_order() -> None:
+    progress = _folded(_spec("A-003", "A-001", "A-002", green=("A-003",)))
+    status = {"A-001": "pending", "A-002": "pending", "A-003": "green"}
+
+    lines = _status(["implement"], {"current": None, "status": status}, progress)
+
+    assert lines[-2:] == ["  - A-003: verde (de antes)", "  - A-001, A-002: pendientes"]
+
+
+def test_the_scenarios_go_in_the_specs_order_not_the_checkpoints() -> None:
+    progress = _folded(_spec("A-001", "A-002"))
+    status = {"A-002": "green", "A-001": "green"}
+
+    lines = _status([], {"status": status}, progress, by_hand=frozenset({"A-001", "A-002"}))
+
+    assert lines[-2:] == [
+        "  - A-001: verde (registrado a mano)",
+        "  - A-002: verde (registrado a mano)",
+    ]
