@@ -85,5 +85,5 @@
   "hint_values": {
     "requires-python": {"file": "pyproject.toml", "key": "project.requires-python", "default": ">=3.12"}
   },
-  "gitignore": ["__pycache__/", "*.pyc", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/"]
+  "gitignore": ["__pycache__/", "*.pyc", ".venv/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".coverage", ".coverage.*"]
 }

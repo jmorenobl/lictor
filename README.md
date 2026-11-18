@@ -183,7 +183,7 @@ Configuración inicializada en 'lictor.json':
   Modelo: claude-sonnet-5-5 (backend.model; otro con --model)
   hints: «Python >=3.14, gestor uv, tests con pytest. El código va en src/<paquete>/.»
     Lo lee el agente en cada llamada: ajústalo a tu proyecto.
-  .gitignore: añadidas .lictor/, __pycache__/, *.pyc, .venv/, .pytest_cache/, .mypy_cache/, .ruff_cache/
+  .gitignore: añadidas .lictor/, __pycache__/, *.pyc, .venv/, .pytest_cache/, .mypy_cache/, .ruff_cache/, .coverage, .coverage.*
   Skill de Lictor para Claude Code: .claude/skills/lictor/SKILL.md
 Siguiente paso: escribe los escenarios en features/ si aún no están (en Claude Code, la skill de Lictor te ayuda a redactarlos), haz commit y ejecuta `lictor doctor`.
 ```

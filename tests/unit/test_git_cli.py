@@ -106,6 +106,40 @@ def test_capture_leaves_what_git_ignores_out(git_repo: Path, tmp_path: Path) -> 
     assert cli.changes(cli.capture(workdir)) == []
 
 
+def test_capture_leaves_out_what_the_profile_ignores_without_a_gitignore(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo, ignored=[".coverage", ".coverage.*"])
+    workdir = _copy(cli, tmp_path)
+    (workdir / ".coverage").write_text("datos", encoding="utf-8")
+    (workdir / ".coverage.host.1").write_text("datos", encoding="utf-8")
+    (workdir / "nuevo.txt").write_text("n", encoding="utf-8")
+
+    assert [c.path for c in cli.changes(cli.capture(workdir))] == ["nuevo.txt"]
+
+
+def test_what_the_profile_ignores_cant_hide_a_tracked_file(git_repo: Path, tmp_path: Path) -> None:
+    cli = GitCli(repo_dir=git_repo, ignored=["README.md"])
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").write_text("cambiado", encoding="utf-8")
+
+    assert [c.path for c in cli.changes(cli.capture(workdir))] == ["README.md"]
+
+
+def test_capture_doesnt_read_the_users_global_ignore_file(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_home = tmp_path / "xdg"
+    (config_home / "git").mkdir(parents=True)
+    (config_home / "git" / "ignore").write_text("oculto.txt\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "oculto.txt").write_text("o", encoding="utf-8")
+
+    assert [c.path for c in cli.changes(cli.capture(workdir))] == ["oculto.txt"]
+
+
 def test_capture_skips_paths_back_to_their_version_in_head(git_repo: Path, tmp_path: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
     workdir = _copy(cli, tmp_path)

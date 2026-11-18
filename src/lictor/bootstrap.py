@@ -170,7 +170,7 @@ def bootstrap_runtime(
     lictor_dir.mkdir(parents=True, exist_ok=True)
     active_event_log = event_log if event_log is not None else project_journal(resolved_root)
 
-    vcs = GitCli(resolved_root)
+    vcs = GitCli(resolved_root, ignored=active_config.gitignore)
     runner = SubprocessRunner()
     readers = ReportReaders(
         junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader()
