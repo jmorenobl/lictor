@@ -1832,6 +1832,50 @@ def test_the_same_unit_tests_as_the_green_are_no_regression(tmp_path: Path) -> N
     assert verifier.execute(req).ok is True
 
 
+_SCORED_COVERAGE = CommandControl(
+    id="coverage", level="L2", run="cobertura {out}", report="coverage", mode="measure"
+)
+# The green CALC-024 of the second pass of phase 2: 2 lines and 2 branches never run (F61).
+_GREEN_GAPS = {"coverage": Measure(misses=(("lines", 2), ("branches", 2)))}
+
+
+def _coverage_json(lines: int, statements: int, branches: int, all_branches: int) -> str:
+    totals = {
+        "covered_lines": lines,
+        "num_statements": statements,
+        "covered_branches": branches,
+        "num_branches": all_branches,
+    }
+    return json.dumps({"totals": totals})
+
+
+def test_a_refactor_that_removes_covered_code_is_no_regression(tmp_path: Path) -> None:
+    """F61: 126 of 128 is a lower percentage than 128 of 130, and leaves the same 2 lines unrun."""
+    runner = ReportingRunner()
+    ok = CommandOutput(returncode=0, stdout="", stderr="")
+    runner.set_report("cobertura", ok, _coverage_json(126, 128, 48, 50))
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(tmp_path, runner, controls=(_SCORED_COVERAGE,), baseline=_GREEN_GAPS)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True, result.condensed_error
+
+
+def test_a_refactor_that_leaves_more_code_unrun_is_a_regression(tmp_path: Path) -> None:
+    runner = ReportingRunner()
+    ok = CommandOutput(returncode=0, stdout="", stderr="")
+    runner.set_report("cobertura", ok, _coverage_json(127, 130, 52, 54))
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(tmp_path, runner, controls=(_SCORED_COVERAGE,), baseline=_GREEN_GAPS)
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "L0-regresión")
+    assert "coverage: líneas sin cubrir: 3, y en el verde 2" in str(result.condensed_error)
+    assert "ramas sin cubrir" not in str(result.condensed_error)
+
+
 def test_an_implementation_is_never_judged_against_a_baseline(tmp_path: Path) -> None:
     """Only a refactor compares with its green: an attempt may well replace the unit tests."""
     runner = ReportingRunner()

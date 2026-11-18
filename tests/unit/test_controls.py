@@ -367,15 +367,17 @@ def test_a_refactor_measures_every_agent_run_whose_plugin_loads_with_or_without_
 def test_the_refactor_is_told_to_measure_before_and_after() -> None:
     text = refactor_measures_text([("coverage", "tests --cov")])
 
-    assert "descarta el refactor si baja" in text
+    assert "descarta el refactor si deja más" in text
+    assert "Quitar código que ya estaba probado no cuenta" in text
     assert "  - coverage: `tests --cov`." in text
     assert refactor_measures_text([]) == ""
 
 
 def test_the_refactor_measures_read_whole() -> None:
     assert refactor_measures_text([("a", "x"), ("b", "y")]) == (
-        "- La verificación compara lo que miden estos controles con lo que medían en el verde, y "
-        "descarta el refactor si baja. Mídelo antes y después de cambiar nada:\n"
+        "- La verificación compara lo que estos controles dejan sin probar con lo que dejaban en "
+        "el verde, y descarta el refactor si deja más. Quitar código que ya estaba probado no "
+        "cuenta. Mídelo antes y después de cambiar nada:\n"
         "  - a: `x`.\n"
         "  - b: `y`."
     )
