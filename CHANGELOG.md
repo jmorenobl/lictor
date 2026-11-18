@@ -7,6 +7,20 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.6.0] - 2026-11-18
+
+Dos arreglos de la pasada de referencia con la calculadora: un escenario que el agente cumplía ya
+no acaba en cuarentena porque su respuesta nombrara el conflicto, y el agente sabe qué cobertura se
+le exige y cómo medirla. `lictor.json` gana un campo opcional, `agent_run`, así que sube la versión
+menor.
+
+### Al actualizar desde la 0.5.0
+
+- **Un run empezado con la 0.5.0 no se reanuda.** El `coverage` del perfil `python-uv@0.2` declara
+  ahora `agent_run`, que entra en la huella de la configuración resuelta: la reanudación lo ve como
+  otra configuración y sale con 10. Empieza uno nuevo con `lictor run --new`. Nada más cambia:
+  `lictor.json` sigue cargando igual.
+
 ### Corregido
 
 - **Un conflicto declarado ya no pone en cuarentena un escenario que su intento cumple.** El
