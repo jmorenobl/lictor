@@ -24,6 +24,7 @@ from lictor.adapters.config.models import (
     allow_empty_message,
     driver_hints_message,
     plugin_without_list_message,
+    refactor_hints_message,
     two_shapes_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
@@ -54,6 +55,7 @@ class Defences:
     forbidden_paths: Sequence[str]
     driver_exempt_paths: Sequence[str] = ()
     driver_hints: str = ""
+    refactor_hints: str = ""
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -518,6 +520,8 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     acceptance = parsed.get("acceptance")
     if isinstance(acceptance, dict) and "driver_hints" in acceptance:
         raise ConfigError(driver_hints_message())
+    if "refactor_hints" in parsed:
+        raise ConfigError(refactor_hints_message())
     try:
         written = LictorFile.model_validate(parsed)
     except ValidationError as exc:
@@ -647,6 +651,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         forbidden_paths=profile.forbidden_paths,
         driver_exempt_paths=profile.driver_exempt_paths,
         driver_hints=profile.acceptance.driver_hints,
+        refactor_hints=profile.refactor_hints,
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

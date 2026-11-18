@@ -83,6 +83,8 @@ ORACLE = {
 
 Driver = Callable[[AgentTask, int], AgentStatus | None]
 Impl = Callable[[AgentTask, str, int], AgentStatus | None]
+# The refactor after each implemented green (ADR-0010): by default it changes nothing.
+Refactor = Callable[[AgentTask, str, int], AgentStatus | None]
 
 
 class ReproSetupError(Exception):
@@ -105,6 +107,8 @@ def known_limitation(finding: str) -> pytest.MarkDecorator:
 # `id` the way a person would, cost `mypy` and `pytest` on every verification and decide nothing
 # about a defence that the acceptance and the L0 gates prove. These marks keep all of them.
 smoke = pytest.mark.smoke
+with_refactor = pytest.mark.with_refactor
+"""The case is about the refactor (ADR-0010): it keeps it on, which a case otherwise turns off."""
 """Part of the small group that proves, with the whole configuration, that everything fits."""
 all_controls = pytest.mark.all_controls
 """The defence is about a control the light project drops: without it the case proves nothing."""
@@ -115,6 +119,16 @@ LIGHT_PAIRS = (frozenset({"unit", "coverage"}),)
 
 def uses_all_controls(marks: set[str]) -> bool:
     return bool(marks & {"smoke", "all_controls"})
+
+
+def keeps_refactor(marks: set[str]) -> bool:
+    """Only the smoke group and the refactor's own cases pay a refactor after every green."""
+    return bool(marks & {"smoke", "with_refactor"})
+
+
+def without_refactor(written: dict[str, Any]) -> dict[str, Any]:
+    """`written` with the refactor off, unless it decides the refactor itself."""
+    return {"refactor": {"enabled": False}, **written}
 
 
 def light_config(written: dict[str, Any]) -> dict[str, Any]:
@@ -184,12 +198,27 @@ def good_impl(task: AgentTask, scenario_id: str, _attempt: int = 1) -> None:
     write(task.cwd, MODULE_PATH, GOOD_BY_SCENARIO[scenario_id])
 
 
+def no_refactor(_task: AgentTask, _scenario_id: str, _attempt: int = 1) -> None:
+    """Leave the code as it is: the refactor ends unchanged."""
+
+
+def good_refactor(task: AgentTask, scenario_id: str, _attempt: int = 1) -> None:
+    """Change the code without changing what it does, so the refactor is committed."""
+    module = task.cwd / MODULE_PATH
+    write(
+        task.cwd,
+        MODULE_PATH,
+        f"{module.read_text(encoding='utf-8')}\n# refactor de {scenario_id}\n",
+    )
+
+
 @dataclass
 class Agent:
     """Scripted agent; `prompts` holds what Lictor sent, keyed by scenario or "driver"."""
 
     driver: Driver = good_driver
     impl: Impl = good_impl
+    refactor: Refactor = no_refactor
     prompts: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     errors: list[Exception] = field(default_factory=list)
 
@@ -201,8 +230,11 @@ class Agent:
         return self.executor.calls
 
     def _effect(self, task: AgentTask, scenario_id: str | None, attempt: int) -> AgentStatus | None:
-        self.prompts[scenario_id or "driver"].append(task.prompt)
+        owner = f"refactor:{scenario_id}" if task.role == "refactor" else scenario_id or "driver"
+        self.prompts[owner].append(task.prompt)
         try:
+            if task.role == "refactor":
+                return self.refactor(task, scenario_id or "", attempt)
             if scenario_id is None:
                 return self.driver(task, attempt)
             return self.impl(task, scenario_id, attempt)
@@ -303,6 +335,21 @@ def false_greens(root: Path) -> list[str]:
             if result.returncode != 0:
                 reason = result.stderr.strip().splitlines()[-1]
                 found.append(f"{scenario_id}@{sha[:7]}: {reason}")
+        # A refactor commits on top of a green without `Scenario:` (ADR-0010): the tree the run
+        # leaves must still meet every scenario it claims.
+        head = git(root, "rev-parse", "HEAD").strip()
+        commits = green_commits(root)
+        git(clone, "checkout", "-q", head)
+        checked = head in {sha for sha, _ in commits}
+        for scenario_id in () if checked else dict.fromkeys(sid for _, sid in commits):
+            check = ORACLE[scenario_id]
+            script = (
+                "import sys\nsys.path.insert(0, 'src')\nimport iva\n"
+                f"raise SystemExit(0 if {check} else 'HEAD no cumple: {check}')\n"
+            )
+            result = shell([sys.executable, "-I", "-S", "-c", script], clone)
+            if result.returncode != 0:
+                found.append(f"{scenario_id}@HEAD: {result.stderr.strip().splitlines()[-1]}")
     return found
 
 

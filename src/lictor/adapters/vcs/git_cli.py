@@ -251,6 +251,13 @@ class GitCli(Vcs, Worktrees):
             found.append(TreeChange(path=path, mode=new_mode))
         return found
 
+    def changed_paths(self, base: str, head: str) -> list[str]:
+        """List the paths that differ between two commits; renames count as two paths."""
+        raw = self._run_git(
+            ["diff-tree", "-r", "-z", "--name-only", "--no-renames", base, head]
+        ).stdout
+        return [path for path in raw.split("\0") if path]
+
     def added_lines(self, tree: str) -> list[str]:
         """Read the added lines of the diff, binary files included: a NUL must not hide them."""
         patch = self._run_git(

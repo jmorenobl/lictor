@@ -82,6 +82,7 @@
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],
   "hints": "Python {requires-python}, gestor uv, tests con pytest. El código va en src/<paquete>/.",
+  "refactor_hints": "- Funciones cortas: ninguna de más de 30 líneas de código.\n- Complejidad ciclomática baja: ninguna función por encima de 10; divide las que tengan muchas ramas.\n- Sin duplicación: extrae lo que se repite en una función con nombre.\n- Un módulo por responsabilidad dentro de src/<paquete>/, en lugar de todo en __init__.py; __init__.py solo reexporta la interfaz pública que usan los tests.\n- Nombres que digan qué hace cada cosa, y tipos en todas las firmas.\n- No cambies la interfaz pública que llaman los tests de aceptación.",
   "hint_values": {
     "requires-python": {"file": "pyproject.toml", "key": "project.requires-python", "default": ">=3.12"}
   },

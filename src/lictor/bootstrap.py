@@ -48,11 +48,13 @@ from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.check_working_tree import CheckWorkingTree
 from lictor.application.usecases.commit_green import CommitGreen
+from lictor.application.usecases.commit_refactor import CommitRefactor
 from lictor.application.usecases.implement_scenario import ImplementScenario
 from lictor.application.usecases.init_project import InitProject
 from lictor.application.usecases.preconditions import CheckPreconditions
 from lictor.application.usecases.prepare_driver import PrepareDriver
 from lictor.application.usecases.quarantine import Quarantine
+from lictor.application.usecases.refactor_scenario import RefactorScenario
 from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
@@ -332,6 +334,18 @@ def bootstrap_runtime(
         ),
         map_link=defences.map_link,
         impostors=defences.impostors,
+        # The refactor after each implemented green (ADR-0010), unless the project turned it off.
+        refactor_scenario=(
+            RefactorScenario(vcs, executor, spec_source, active_event_log, active_clock)
+            if active_config.refactor.enabled
+            else None
+        ),
+        commit_refactor=(
+            CommitRefactor(vcs, active_event_log, active_clock)
+            if active_config.refactor.enabled
+            else None
+        ),
+        refactor_hints=defences.refactor_hints,
     )
 
     return BootstrapResult(

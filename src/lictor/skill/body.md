@@ -135,8 +135,11 @@ ejecutar, y el run lo salta.
    lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
 5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
-   `lictor status`, en otra terminal, dice por dónde va. Al acabar, la persona integra la rama (un
-   merge o una pull request) y `lictor retire <nombre>` retira el worktree.
+   `lictor status`, en otra terminal, dice por dónde va. Tras cada verde que implementa, un
+   refactor aparte mejora el diseño sin cambiar el comportamiento: entra como un commit
+   `refactor(<ID>)` propio o se descarta, y el verde se queda; `"refactor": {"enabled": false}` lo
+   apaga. Al acabar, la persona integra la rama (un merge o una pull request) y
+   `lictor retire <nombre>` retira el worktree.
 
 ## 4. Diagnosticar
 
@@ -146,7 +149,7 @@ ejecutar, y el run lo salta.
   queda también en `.lictor/runs/<run_id>/report.md`, para compararlos. Las secciones que más
   dicen son «Verificaciones» (qué puerta paró cada intento), «Intentos fallidos por nivel»,
   «Cuarentenas», «Drivers rechazados», «Denegaciones» (órdenes que el agente intentó y no podía),
-  «Verdes colaterales» y
+  «Verdes colaterales», «Refactors» (cómo acabó cada uno y dónde falló el descartado) y
   «Verdes registrados a mano».
 - Si hace falta más: `.lictor/runs/<run_id>/<escenario o driver>/`, con el prompt de cada intento
   (`NNN-implement.prompt.md`), la salida cruda y, por verificación, `NNN-verify/error.txt`.

@@ -307,6 +307,19 @@
       "title": "ProjectVerification",
       "type": "object"
     },
+    "RefactorConfig": {
+      "additionalProperties": false,
+      "description": "El paso de refactor tras cada escenario implementado (ADR-0010).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "RefactorConfig",
+      "type": "object"
+    },
     "RetentionConfig": {
       "additionalProperties": false,
       "description": "Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/.",
@@ -343,6 +356,9 @@
     },
     "retention": {
       "$ref": "#/$defs/RetentionConfig"
+    },
+    "refactor": {
+      "$ref": "#/$defs/RefactorConfig"
     },
     "paths": {
       "anyOf": [

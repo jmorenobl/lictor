@@ -120,6 +120,33 @@ def agent_measures_text(measures: Sequence[AgentMeasure]) -> str:
     return "\n".join(lines)
 
 
+def refactor_measures(
+    controls: Sequence[Control], installed: Collection[str]
+) -> tuple[tuple[str, str], ...]:
+    """The id and `agent_run` of every control the refactor can measure by itself (ADR-0010).
+
+    A refactor must not measure less than its green, with or without a minimum, so every
+    `agent_run` whose plugin the environment loads counts, not only those with a `min_score`.
+    """
+    return tuple(
+        (control.id, control.agent_run)
+        for control in controls
+        if control.agent_run and missing_plugin(control.when_plugin, installed) is None
+    )
+
+
+def refactor_measures_text(measures: Sequence[tuple[str, str]]) -> str:
+    """The lines of the refactor's prompt that say how to check it measures no less than before."""
+    if not measures:
+        return ""
+    lines = [
+        "- La verificación compara lo que miden estos controles con lo que medían en el verde, y "
+        "descarta el refactor si baja. Mídelo antes y después de cambiar nada:"
+    ]
+    lines.extend(f"  - {control_id}: `{command}`." for control_id, command in measures)
+    return "\n".join(lines)
+
+
 def controls_of_stage[C: CommandControl | ReaderControl](
     controls: Sequence[C], stage: Stage
 ) -> tuple[C, ...]:

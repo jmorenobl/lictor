@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from lictor.domain.model import Event
+from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     VERIFY_FINISHED,
     acceptance_from_record,
@@ -33,10 +34,17 @@ _NODE_TEXT: Final[Mapping[str, str]] = {
     "implement": "implementar",
     "verify": "verificar",
     "commit": "confirmar el verde",
+    "refactor": "refactorizar",
+    "verify_refactor": "verificar el refactor",
+    "commit_refactor": "confirmar el refactor",
     "quarantine": "poner en cuarentena",
     "pause": "pausa",
     "report": "escribir el informe",
 }
+REFACTOR_ROLE: Final[str] = "refactor"
+_REFACTOR_NODES: Final[frozenset[str]] = frozenset(
+    {"refactor", "verify_refactor", "commit_refactor"}
+)
 _MS_PER_S: Final[int] = 1000
 _S_PER_MIN: Final[int] = 60
 _MIN_PER_H: Final[int] = 60
@@ -102,16 +110,33 @@ class RunProgress:
     collateral: list[str] = field(default_factory=list)
     reregistered: list[str] = field(default_factory=list)
     quarantined: list[str] = field(default_factory=list)
+    # How each refactor ended (ADR-0010), by scenario: applied, discarded or unchanged.
+    refactors: dict[str, str] = field(default_factory=dict)
     _spend: dict[str, Spend] = field(default_factory=dict)
+    # What the refactors cost, by scenario: apart, so a green's line tells only its own work.
+    _refactor_spend: dict[str, Spend] = field(default_factory=dict)
     _held: list[str] = field(default_factory=list)  # collateral greens not told yet
+
+    def _all_spend(self) -> list[Spend]:
+        return [*self._spend.values(), *self._refactor_spend.values()]
 
     @property
     def calls(self) -> int:
-        return sum(spend.calls for spend in self._spend.values())
+        return sum(spend.calls for spend in self._all_spend())
 
     @property
     def cost_usd(self) -> float:
-        return sum(spend.cost_usd for spend in self._spend.values())
+        return sum(spend.cost_usd for spend in self._all_spend())
+
+    def refactor_spend(self) -> Spend:
+        """What every refactor of the run has cost, added up."""
+        total = Spend()
+        for spend in self._refactor_spend.values():
+            total.calls += spend.calls
+            total.cost_usd += spend.cost_usd
+            total.agent_ms += spend.agent_ms
+            total.verify_ms += spend.verify_ms
+        return total
 
     @property
     def greens(self) -> list[str]:
@@ -158,11 +183,15 @@ class RunProgress:
             "lictor.scenario.reregistered.v1": self._reregistered,
             "lictor.scenario.green.v1": self._green,
             "lictor.scenario.quarantined.v1": self._quarantined,
+            REFACTORED: self._refactored,
             "lictor.run.finished.v1": self._run_finished,
         }
 
     def _owner(self, event: Event) -> Spend:
-        return self._spend.setdefault(event.scenarioid or DRIVER_OWNER, Spend())
+        owner = event.scenarioid or DRIVER_OWNER
+        if event.data.get("role") == REFACTOR_ROLE:
+            return self._refactor_spend.setdefault(owner, Spend())
+        return self._spend.setdefault(owner, Spend())
 
     def _resumed(self, event: Event) -> list[str]:
         return [f"Reanudando la ejecución: {node_text(str(event.data.get('resume_node', '')))}."]
@@ -176,6 +205,8 @@ class RunProgress:
         return [f"Escenarios: {total} ({green} en verde, {_pending_text(total - green)})."]
 
     def _agent_started(self, event: Event) -> list[str]:
+        if event.data.get("role") == REFACTOR_ROLE:
+            return [f"{event.scenarioid}: refactorizando sin cambiar el comportamiento…"]
         attempt = f"intento {event.data.get('attempt')}"
         if event.data.get("max_attempts"):
             attempt = f"{attempt} de {event.data['max_attempts']}"
@@ -198,7 +229,12 @@ class RunProgress:
                 "comprueba la versión de Claude Code."
             )
         if event.data.get("signal") == "error":
-            lines.append(f"{owner}: la llamada al agente falló; se repite sin gastar el intento.")
+            again = (
+                "se repite"
+                if event.data.get("role") == REFACTOR_ROLE
+                else ("se repite sin gastar el intento")
+            )
+            lines.append(f"{owner}: la llamada al agente falló; {again}.")
         if event.data.get("signal") == "spec_conflict":
             lines.append(
                 f"{owner}: el agente declara un conflicto con la especificación; su intento se "
@@ -210,7 +246,8 @@ class RunProgress:
         controls = recorded_controls(event.data.get("controls"))
         acceptance = acceptance_from_record(event.data.get("acceptance"))
         self._owner(event).verify_ms += recorded_duration(controls, acceptance)
-        if event.data.get("ok"):
+        # A refactor that fails tells it once, with `scenario.refactored`.
+        if event.data.get("ok") or event.data.get("role") == REFACTOR_ROLE:
             return []
         failed_at = event.data.get("failed_at")
         where = f" en {failed_at}" if failed_at else ""
@@ -251,6 +288,20 @@ class RunProgress:
             f"{cost_text(spend.cost_usd)}."
         ]
 
+    def _refactored(self, event: Event) -> list[str]:
+        sid = str(event.scenarioid)
+        outcome = str(event.data.get("outcome", ""))
+        self.refactors[sid] = outcome
+        spend = self._refactor_spend.get(sid, Spend())
+        took = f"{duration_text(spend.agent_ms + spend.verify_ms)}, {cost_text(spend.cost_usd)}"
+        if outcome == "applied":
+            return [f"{sid}: refactor aplicado, {took}."]
+        if outcome == "unchanged":
+            return [f"{sid}: refactor sin cambios, nada que mejorar, {took}."]
+        failed_at = event.data.get("failed_at")
+        where = f" en {failed_at}" if failed_at else ""
+        return [f"{sid}: refactor descartado (falló{where}); el verde se queda, {took}."]
+
     def _run_finished(self, _: Event) -> list[str]:
         if not self.scenario_ids:
             return []
@@ -275,7 +326,9 @@ class StatusView:
     max_driver_attempts: int
 
 
-_SCENARIO_NODES: Final[frozenset[str]] = frozenset({"implement", "verify", "commit", "pause"})
+_SCENARIO_NODES: Final[frozenset[str]] = frozenset(
+    {"implement", "verify", "commit", "pause", *_REFACTOR_NODES}
+)
 _DRIVER_NODES: Final[frozenset[str]] = frozenset({"build_driver", "red_check"})
 _KINDS: Final[tuple[tuple[str, str, str], ...]] = (
     ("implemented", "implementado", "implementados"),
@@ -309,13 +362,18 @@ def _state_line(view: StatusView) -> list[str]:
     return [f"Estado: terminada con código {code}.", *([f"Motivo: {reason}"] if reason else [])]
 
 
+def _step(view: StatusView) -> str | None:
+    """The step in progress, or the one a resume goes back to; None when the run isn't on one."""
+    node = view.next_nodes[0] if view.next_nodes else None
+    if node != "pause":
+        return node
+    resume = view.values.get("resume_to")
+    return resume if isinstance(resume, str) else None
+
+
 def _attempt_line(view: StatusView) -> list[str]:
     """The step in progress, or the one a resume goes back to, with its attempt."""
-    if not view.next_nodes:
-        return []
-    node, values = view.next_nodes[0], view.values
-    if node == "pause":
-        node = str(values.get("resume_to") or "")
+    node, values = _step(view), view.values
     if node in _DRIVER_NODES:
         # The driver's call counts its attempt when it ends: the red check judges that one.
         done = int(values.get("driver_attempts") or 0)
@@ -324,6 +382,8 @@ def _attempt_line(view: StatusView) -> list[str]:
     current = values.get("current")
     if node not in _SCENARIO_NODES or not current:
         return []
+    if node in _REFACTOR_NODES:
+        return [f"Escenario en curso: {current}, ya en verde; su refactor, sin reintento."]
     done = int(values.get("attempt") or 0)
     attempt = done + 1 if node == "implement" else max(done, 1)
     return [f"Escenario en curso: {current}, intento {attempt} de {view.max_attempts}."]
@@ -351,12 +411,15 @@ def _greens_line(view: StatusView, status: Mapping[str, str]) -> str:
 
 
 def _spend_line(progress: RunProgress) -> str:
-    driver = progress.spend(DRIVER_OWNER)
-    split = (
-        f" (driver: {calls_text(driver.calls)}, {cost_text(driver.cost_usd)})"
-        if driver.calls
-        else ""
-    )
+    parts = [
+        f"{who}: {calls_text(spend.calls)}, {cost_text(spend.cost_usd)}"
+        for who, spend in (
+            ("driver", progress.spend(DRIVER_OWNER)),
+            ("refactor", progress.refactor_spend()),
+        )
+        if spend.calls
+    ]
+    split = f" ({'; '.join(parts)})" if parts else ""
     return f"Agente: {calls_text(progress.calls)}, {cost_text(progress.cost_usd)}{split}."
 
 
@@ -431,6 +494,8 @@ def _scenario_lines(view: StatusView, status: Mapping[str, str]) -> list[str]:
                 previous.append(sid)
                 continue
             label = "registrado a mano" if sid in view.by_hand else _LABELS.get(kind, "")
+            if sid == current and _step(view) in _REFACTOR_NODES:
+                label = f"{label}, refactor en curso" if label else "refactor en curso"
         elif sid == current:
             label = "en curso"
         elif st == "pending":

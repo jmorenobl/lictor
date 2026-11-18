@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 
 from lictor.adapters.config.loader import load_config
-from tests.integration.repro.harness import LIGHT_DISABLED, light_config, uses_all_controls
+from tests.integration.repro.harness import (
+    LIGHT_DISABLED,
+    keeps_refactor,
+    light_config,
+    uses_all_controls,
+    without_refactor,
+)
 
 # Everything fits: a whole cycle to green, from the person's checkout too, controls that block, a
 # coverage score read from the one run of unit and its minimum, `check` by level and by id, and
@@ -56,6 +62,16 @@ ALL_CONTROLS = {
         "test_the_projects_fail_under_doesnt_fail_unit",
         "test_without_pytest_cov_unit_runs_as_it_is_and_coverage_is_skipped",
         "test_coverage_only_in_check_measures_there_and_never_in_the_run",
+    ),
+}
+
+
+# Cases about the refactor (ADR-0010), which every other case turns off: without it they would
+# pass because no refactor ran.
+WITH_REFACTOR = {
+    "test_v0_7_0_refactor": (
+        "test_each_implemented_green_gets_a_refactor_that_keeps_every_green",
+        "test_a_refactor_that_passes_fewer_unit_tests_is_discarded_and_the_green_stays",
     ),
 }
 
@@ -142,3 +158,26 @@ def test_a_change_the_case_writes_wins_over_the_light_project() -> None:
     assert {"id": "coverage", "mode": "block", "min_score": 90} in controls
     assert {"id": "coverage", "enabled": False} not in controls
     assert {"id": "types", "enabled": False} in controls
+
+
+@pytest.mark.parametrize(("module", "name"), _cases(WITH_REFACTOR))
+def test_a_case_about_the_refactor_keeps_it(module: str, name: str) -> None:
+    assert keeps_refactor(_marks(module, name))
+
+
+@pytest.mark.parametrize(
+    ("marks", "expected"),
+    [(set(), False), ({"smoke"}, True), ({"with_refactor"}, True), ({"all_controls"}, False)],
+)
+def test_who_keeps_the_refactor(marks: set[str], expected: bool) -> None:
+    assert keeps_refactor(marks) is expected
+
+
+def test_a_case_turns_the_refactor_off_unless_it_decides_it(tmp_path: Path) -> None:
+    written: dict[str, object] = {"profile": "python-uv@0.2"}
+    (tmp_path / "lictor.json").write_text(json.dumps(without_refactor(written)), encoding="utf-8")
+    assert load_config(tmp_path).refactor.enabled is False
+
+    on = without_refactor({**written, "refactor": {"enabled": True}})
+    (tmp_path / "lictor.json").write_text(json.dumps(on), encoding="utf-8")
+    assert load_config(tmp_path).refactor.enabled is True

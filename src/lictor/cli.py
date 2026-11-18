@@ -1315,7 +1315,7 @@ def _status_view(project_root: Path, run_id: str) -> tuple[StatusView, list[str]
 def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
     """The same as the text, for a program: the checkpoint's fields and the journal's counts."""
     values, progress = view.values, view.progress
-    driver = progress.spend("driver")
+    driver, refactor = progress.spend("driver"), progress.refactor_spend()
     return {
         "run_id": view.run_id,
         "next_nodes": list(view.next_nodes),
@@ -1332,6 +1332,11 @@ def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
         "calls": progress.calls,
         "cost_usd": round(progress.cost_usd, 6),
         "driver": {"calls": driver.calls, "cost_usd": round(driver.cost_usd, 6)},
+        "refactor": {
+            "calls": refactor.calls,
+            "cost_usd": round(refactor.cost_usd, 6),
+            "outcomes": dict(progress.refactors),
+        },
         "greens": {
             "implemented": progress.implemented,
             "collateral": progress.collateral,

@@ -25,6 +25,7 @@ class CommitGreenResult:
     """Result of CommitGreen use case."""
 
     commit_sha: str
+    scenario_commit: str = ""  # the commit whose `Scenario:` trailer names the scenario itself
 
 
 class CommitGreen:
@@ -61,7 +62,7 @@ class CommitGreen:
             data: dict[str, object] = {"attempt": 0, "collateral": True}
             self._green(request, candidate.sha, candidate.tree, collateral, data)
 
-        return CommitGreenResult(commit_sha=candidate.sha)
+        return CommitGreenResult(commit_sha=candidate.sha, scenario_commit=own)
 
     def _green(
         self, request: CommitGreenRequest, commit: str, tree: str, sid: str, data: dict[str, object]

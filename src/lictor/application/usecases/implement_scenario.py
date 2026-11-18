@@ -3,36 +3,17 @@
 import hashlib
 import importlib.resources
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
-from lictor.application.run_files import (
-    agent_workspace,
-    attempt_prefix,
-    save_prompt,
-    unused_path,
-)
-from lictor.application.usecases.agent_events import (
-    AgentCall,
-    agent_finished_event,
-    agent_started_event,
-    denial_event,
-    tamper_event,
-)
-from lictor.application.usecases.verify_attempt import (
-    AgentCopyOutcome,
-    IntegritySnapshot,
-)
+from lictor.application.run_files import attempt_prefix, save_prompt, unused_path
+from lictor.application.usecases.agent_events import AgentCall
+from lictor.application.usecases.agent_turn import AgentTurns
 from lictor.domain.controls import Control, agent_measures, agent_measures_text
-from lictor.domain.errors import CandidateError, SealTamperedError
+from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
-from lictor.domain.rules import (
-    classify_agent,
-    count_agent_failures,
-    error_for_agent,
-    keeps_attempt,
-)
+from lictor.domain.rules import error_for_agent
 
 _STOPPED_EARLY_NOTES: dict[str, str] = {
     "max_turns": "El intento anterior se quedó sin turnos antes de terminar.",
@@ -186,57 +167,24 @@ class ImplementScenario:
             project_root=request.project_root,
             prompt=prompt_file,
         )
-        self.event_log.append(agent_started_event(self.clock, started, request.max_attempts))
-        outcome = self._run_in_copy(task, request.project_root)
-        agent_result = outcome.agent_result
-
-        agent_failures = count_agent_failures(agent_result.status, request.agent_failures)
-        agent_signal = classify_agent(
-            agent_result.status,
-            agent_failures,
-            spec_conflict=bool(agent_result.spec_conflict),
-            tampered=bool(outcome.tampered),
-            unreadable=bool(outcome.unreadable),
-        )
-        keeps = keeps_attempt(agent_signal, agent_failures)
-        new_attempt = request.attempt if keeps else request.attempt + 1
-
-        call = replace(
+        turn = AgentTurns(self.vcs, self.executor, self.event_log, self.clock).take(
+            task,
             started,
-            attempt=new_attempt,
-            signal=agent_signal,
-            cli_version=agent_result.cli_version,
+            max_attempts=request.max_attempts,
+            agent_failures=request.agent_failures,
+            attempt_if_kept=request.attempt,
         )
-        event = agent_finished_event(self.clock, call, agent_result)
-        self.event_log.append(event)
-        if agent_result.permission_denials:
-            self.event_log.append(denial_event(agent_result, event))
-        if outcome.tampered:
-            self.event_log.append(tamper_event(event, outcome.tampered))
+        outcome, agent_signal = turn.outcome, turn.signal
+        new_attempt = request.attempt if turn.keeps else request.attempt + 1
 
         return ImplementScenarioResult(
-            agent_result=agent_result,
+            agent_result=outcome.agent_result,
             agent_signal=agent_signal,
             attempt=new_attempt,
             prompt_sha=prompt_sha,
-            agent_failures=agent_failures,
+            agent_failures=turn.failures,
             attempt_slot=request.attempt + 1,
             tree=outcome.tree,
             failed_at=outcome.failed_at if agent_signal == "rejected" else None,
             error=outcome.error if agent_signal == "rejected" else None,
         )
-
-    def _run_in_copy(self, task: AgentTask, project_root: Path) -> AgentCopyOutcome:
-        snapshot = IntegritySnapshot(project_root / ".lictor", project_root, self.vcs)
-        with agent_workspace(self.vcs, project_root) as workspace:
-            agent_result = self.executor.run(replace(task, cwd=workspace))
-            snapshot.verify_and_restore()
-            if snapshot.changes:
-                return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
-            # A declared conflict keeps its tree: what decides is whether it verifies (F54).
-            if agent_result.status == "rate_limited":
-                return AgentCopyOutcome(agent_result)
-            try:
-                return AgentCopyOutcome(agent_result, tree=self.vcs.capture(workspace))
-            except CandidateError as exc:
-                return AgentCopyOutcome(agent_result, unreadable=str(exc))

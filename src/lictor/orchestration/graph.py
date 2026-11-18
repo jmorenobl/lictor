@@ -28,6 +28,11 @@ from lictor.application.spec_history import GreenRecord, SpecHistory
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
+from lictor.application.usecases.commit_refactor import (
+    CommitRefactor,
+    CommitRefactorRequest,
+    refactored_event,
+)
 from lictor.application.usecases.implement_scenario import (
     ImplementScenario,
     ImplementScenarioRequest,
@@ -38,6 +43,10 @@ from lictor.application.usecases.quarantine import (
     Quarantine,
     QuarantineReason,
     QuarantineRequest,
+)
+from lictor.application.usecases.refactor_scenario import (
+    RefactorScenario,
+    RefactorScenarioRequest,
 )
 from lictor.application.usecases.verify_attempt import (
     VerifyAttempt,
@@ -52,16 +61,31 @@ from lictor.domain.errors import (
     SealTamperedError,
     SpecError,
 )
-from lictor.domain.model import AgentStatus, Candidate, Scenario, ScenarioId
-from lictor.domain.results import VERIFY_FINISHED, acceptance_record, verification_duration
+from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
+from lictor.domain.refactor import (
+    RefactorRecord,
+    measures_from_record,
+    measures_record,
+    oracle_measures,
+    settled_without_verifying,
+)
+from lictor.domain.results import (
+    VERIFY_FINISHED,
+    VerifyResult,
+    acceptance_record,
+    verification_duration,
+)
 from lictor.domain.routing import (
     route_build_driver,
     route_commit,
+    route_commit_refactor,
     route_implement,
     route_load_spec,
     route_pause,
     route_red_check,
+    route_refactor,
     route_verify,
+    route_verify_refactor,
 )
 from lictor.domain.rules import (
     Impostors,
@@ -140,6 +164,11 @@ class GraphState(TypedDict, total=False):
     green_at_load: list[str]
     failures: list[list[str] | None]
     rejected_paths: list[list[str] | None]
+    # The refactor after the current scenario's green (ADR-0010): the green's own commit, what its
+    # verification measured, and how the refactor ended once settled.
+    refactor_of: str | None
+    refactor_baseline: dict[str, dict[str, Any]]
+    refactor_outcome: str | None
 
 
 @dataclass(frozen=True)
@@ -193,6 +222,15 @@ class GraphContext:
     check_controls: tuple[Control, ...] = ()
     # Only to ask which plugins load, so the agent hears of no minimum the run skips (F55).
     environment: VerificationCommands | None = None
+    # The refactor after each implemented green (ADR-0010); without its use cases there is none.
+    refactor_scenario: RefactorScenario | None = None
+    commit_refactor: CommitRefactor | None = None
+    refactor_hints: str = ""
+
+    @property
+    def refactor(self) -> bool:
+        """Whether every implemented green goes through a refactor."""
+        return self.refactor_scenario is not None and self.commit_refactor is not None
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -406,17 +444,7 @@ class _GraphNodes:
             "agent_signal": res.agent_signal,
             "agent_failures": res.agent_failures,
             "agent_detail": res.agent_result.text,
-            "totals": {
-                "tokens": {
-                    "input": res.agent_result.tokens.input,
-                    "output": res.agent_result.tokens.output,
-                    "cache_read": res.agent_result.tokens.cache_read,
-                    "cache_write": res.agent_result.tokens.cache_write,
-                },
-                "cost_usd": res.agent_result.cost_usd or 0.0,
-                "agent_duration_ms": res.agent_result.duration_ms,
-                "verify_duration_ms": 0,
-            },
+            "totals": _agent_totals(res.agent_result),
             "resume_to": "build_driver",
         }
 
@@ -486,6 +514,8 @@ class _GraphNodes:
                     "last_error": None,
                     "last_failed_at": None,
                     "last_agent_status": None,
+                    "refactor_of": None,
+                    "refactor_outcome": None,
                 }
         return {"current": None}
 
@@ -503,18 +533,10 @@ class _GraphNodes:
                 "La especificación o el driver cambiaron a mitad de ejecución.",
             )
 
-        scenarios = state.get("scenarios", [])
-        scen_dict = next((s for s in scenarios if s["id"] == current_id), None)
-        if not scen_dict:
+        scenario = _scenario_of(state, current_id)
+        if scenario is None:
             reason = f"El escenario {current_id} no está en la spec cargada"
             return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
-
-        scenario = Scenario(
-            id=ScenarioId(scen_dict["id"]),
-            name=scen_dict["name"],
-            file=scen_dict["file"],
-            line=scen_dict["line"],
-        )
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
 
         try:
@@ -564,17 +586,7 @@ class _GraphNodes:
             "agent_detail": res.agent_result.text,
             "last_agent_status": res.agent_result.status,
             "spec_conflict": res.agent_result.spec_conflict,
-            "totals": {
-                "tokens": {
-                    "input": res.agent_result.tokens.input,
-                    "output": res.agent_result.tokens.output,
-                    "cache_read": res.agent_result.tokens.cache_read,
-                    "cache_write": res.agent_result.tokens.cache_write,
-                },
-                "cost_usd": res.agent_result.cost_usd or 0.0,
-                "agent_duration_ms": res.agent_result.duration_ms,
-                "verify_duration_ms": 0,
-            },
+            "totals": _agent_totals(res.agent_result),
             "resume_to": "implement",
         }
 
@@ -589,6 +601,7 @@ class _GraphNodes:
                 state["run_id"],
                 scenario_id=state.get("current"),
                 data={
+                    "role": "implement",
                     "attempt": attempt,
                     "ok": False,
                     "failed_at": failed_at,
@@ -646,27 +659,7 @@ class _GraphNodes:
         )
 
         verify_duration = verification_duration(res.controls, res.acceptance)
-        event = new_event(
-            self.ctx.clock,
-            VERIFY_FINISHED,
-            state["run_id"],
-            scenario_id=current_id,
-            data={
-                "attempt": state.get("attempt", 0),
-                "ok": res.ok,
-                "failed_at": res.failed_at,
-                "controls": control_summaries(res),
-                "acceptance": acceptance_record(res.acceptance),
-                "reverted_files": list(res.reverted_files),
-                "error": res.condensed_error,
-                "error_path": res.error_path,
-                "evidence": res.evidence,
-                "candidate": res.candidate.sha if res.candidate else None,
-                "tree": res.candidate.tree if res.candidate else None,
-                "collateral": list(res.collateral),
-            },
-        )
-        self.ctx.event_log.append(event)
+        self._verified(state, current_id, "implement", state.get("attempt", 0), res)
         discarded = list(res.reverted_files) if res.failed_at == "L0-rutas" else None
         rejected_paths = [*state.get("rejected_paths", []), discarded]
         needed = (
@@ -690,12 +683,8 @@ class _GraphNodes:
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
             "failures": [*state.get("failures", []), list(res.failure) if res.failure else None],
-            "totals": {
-                "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
-                "cost_usd": 0.0,
-                "agent_duration_ms": 0,
-                "verify_duration_ms": verify_duration,
-            },
+            "refactor_baseline": measures_record(oracle_measures(res.controls)) if res.ok else {},
+            "totals": _verify_totals(verify_duration),
         }
 
     def commit(self, state: GraphState) -> dict[str, Any]:
@@ -707,7 +696,7 @@ class _GraphNodes:
         verified = last_verify.get("candidate")
         collateral = list(last_verify.get("collateral") or [])
         try:
-            self.ctx.commit_green.execute(
+            committed = self.ctx.commit_green.execute(
                 CommitGreenRequest(
                     scenario_id=current_id,
                     run_id=state["run_id"],
@@ -719,7 +708,199 @@ class _GraphNodes:
         except CandidateError as exc:
             return {"agent_signal": "blocked", "agent_detail": str(exc), "resume_to": "commit"}
         greens = dict.fromkeys([current_id, *collateral], "green")
-        return {"status": greens, "agent_signal": None, "anchor": self._anchor()}
+        return {
+            "status": greens,
+            "agent_signal": None,
+            "anchor": self._anchor(),
+            "refactor_of": committed.scenario_commit,
+            "refactor_outcome": None,
+        }
+
+    def refactor(self, state: GraphState) -> dict[str, Any]:
+        """Ask the agent to improve what the scenario left, in a fresh copy of HEAD (ADR-0010)."""
+        current_id = state.get("current")
+        refactor = self.ctx.refactor_scenario
+        if not current_id or refactor is None:
+            return {"refactor_outcome": "unchanged"}  # unreachable: route_commit sends none here
+        scenario = _scenario_of(state, current_id)
+        if scenario is None:
+            reason = f"El escenario {current_id} no está en la spec cargada"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
+        try:
+            res = refactor.execute(
+                RefactorScenarioRequest(
+                    project_root=self.ctx.project_root,
+                    run_id=state["run_id"],
+                    scenario=scenario,
+                    attempt_slot=self._green_slot(state),
+                    refactor_of=state.get("refactor_of") or self.ctx.vcs.get_head_sha(),
+                    model=self.ctx.model,
+                    allowed_tools=self.ctx.allowed_tools,
+                    max_turns=self.ctx.max_turns,
+                    timeout_s=self.ctx.timeout_s,
+                    paths_writable=self.ctx.paths_writable,
+                    paths_protected=self.ctx.paths_protected,
+                    paths_driver=self.ctx.paths_driver,
+                    suppressions=self.ctx.suppressions,
+                    green_ids=[sid for sid, st in state.get("status", {}).items() if st == "green"],
+                    check_commands=self.ctx.check_commands,
+                    hints=self.ctx.hints,
+                    refactor_hints=self.ctx.refactor_hints,
+                    forbidden_paths=self.ctx.forbidden_paths,
+                    controls=self.ctx.controls,
+                    installed_plugins=(
+                        self.ctx.environment.installed_plugins if self.ctx.environment else ()
+                    ),
+                    agent_failures=state.get("agent_failures", 0),
+                )
+            )
+        except SealTamperedError as exc:
+            return self._finish(state, int(ExitCode.PRECONDITION), str(exc))
+
+        update: dict[str, Any] = {
+            "attempt_tree": res.tree,
+            "agent_signal": res.agent_signal,
+            "agent_failures": res.agent_failures,
+            "agent_detail": res.agent_result.text,
+            "refactor_outcome": None,
+            "totals": _agent_totals(res.agent_result),
+            "resume_to": "refactor",
+        }
+        settled = (
+            None
+            if res.keeps
+            else settled_without_verifying(res.agent_signal, res.agent_result.status, res.changed)
+        )
+        if settled is not None:
+            failed_at = res.failed_at or ("L0-sin-cambios" if settled == "discarded" else None)
+            self._refactored(
+                state,
+                RefactorRecord(
+                    scenario.id.value, settled, self._green_slot(state), failed_at=failed_at
+                ),
+            )
+            update["refactor_outcome"] = settled
+        return update
+
+    def verify_refactor(self, state: GraphState) -> dict[str, Any]:
+        """Verify the refactor's tree with no scenario of its own: every green must stay green."""
+        current_id = state.get("current")
+        if not current_id:
+            return {}
+        status = state.get("status", {})
+        all_sids = [s["id"] for s in state.get("scenarios", [])]
+        res = self.ctx.verify_attempt.execute(
+            VerifyAttemptRequest(
+                scenario_id=current_id,
+                run_id=state["run_id"],
+                role="refactor",
+                paths_writable=self.ctx.paths_writable,
+                paths_driver=self.ctx.paths_driver,
+                suppressions=self.ctx.suppressions,
+                controls=self.ctx.controls,
+                acceptance_run=self.ctx.acceptance_run,
+                acceptance_timeout_s=self.ctx.acceptance_timeout_s,
+                green_scenario_ids=[sid for sid, st in status.items() if st == "green"],
+                pending_scenario_ids=[
+                    sid for sid in all_sids if status.get(sid, "pending") == "pending"
+                ],
+                all_scenario_ids=all_sids,
+                scenario_files=_scenario_files(state),
+                error_max_chars=self.ctx.error_max_chars,
+                attempt=self._green_slot(state),
+                acceptance_failure_exit_codes=self.ctx.acceptance_failure_exit_codes,
+                forbidden_paths=self.ctx.forbidden_paths,
+                banned_patterns=self.ctx.banned_patterns,
+                tree=state.get("attempt_tree"),
+                link=self.ctx.map_link,
+                refactor_of=state.get("refactor_of") or "",
+                baseline=measures_from_record(state.get("refactor_baseline") or {}),
+            )
+        )
+        self._verified(state, current_id, "refactor", self._green_slot(state), res)
+        if not res.ok:
+            record = RefactorRecord(
+                current_id, "discarded", self._green_slot(state), failed_at=res.failed_at
+            )
+            self._refactored(state, record)
+        return {
+            "last_verify": {
+                "ok": res.ok,
+                "failed_at": res.failed_at,
+                "condensed_error": res.condensed_error,
+                "candidate": asdict(res.candidate) if res.candidate else None,
+                "collateral": list(res.collateral),
+            },
+            "refactor_outcome": None if res.ok else "discarded",
+            "totals": _verify_totals(verification_duration(res.controls, res.acceptance)),
+        }
+
+    def commit_refactor(self, state: GraphState) -> dict[str, Any]:
+        """Move the branch to the verified refactor, with the collaterals chained on top of it."""
+        current_id = state.get("current")
+        committer = self.ctx.commit_refactor
+        if not current_id or committer is None:
+            return {}
+        last_verify = state.get("last_verify") or {}
+        verified = last_verify.get("candidate")
+        collateral = list(last_verify.get("collateral") or [])
+        try:
+            committer.execute(
+                CommitRefactorRequest(
+                    scenario_id=current_id,
+                    run_id=state["run_id"],
+                    attempt=self._green_slot(state),
+                    candidate=Candidate(**verified) if verified else None,
+                    collateral=collateral,
+                )
+            )
+        except CandidateError as exc:
+            return {
+                "agent_signal": "blocked",
+                "agent_detail": str(exc),
+                "resume_to": "commit_refactor",
+            }
+        return {
+            "status": dict.fromkeys(collateral, "green"),
+            "agent_signal": None,
+            "anchor": self._anchor(),
+            "refactor_outcome": "applied",
+        }
+
+    def _verified(
+        self, state: GraphState, sid: str, role: str, attempt: int, res: VerifyResult
+    ) -> None:
+        """Record how a verification ended, an attempt's or a refactor's."""
+        self.ctx.event_log.append(
+            new_event(
+                self.ctx.clock,
+                VERIFY_FINISHED,
+                state["run_id"],
+                scenario_id=sid,
+                data={
+                    "role": role,
+                    "attempt": attempt,
+                    "ok": res.ok,
+                    "failed_at": res.failed_at,
+                    "controls": control_summaries(res),
+                    "acceptance": acceptance_record(res.acceptance),
+                    "reverted_files": list(res.reverted_files),
+                    "error": res.condensed_error,
+                    "error_path": res.error_path,
+                    "evidence": res.evidence,
+                    "candidate": res.candidate.sha if res.candidate else None,
+                    "tree": res.candidate.tree if res.candidate else None,
+                    "collateral": list(res.collateral),
+                },
+            )
+        )
+
+    def _green_slot(self, state: GraphState) -> int:
+        """The attempt that turned the current scenario green; its refactor is filed with it."""
+        return state.get("attempt_slot") or max(state.get("attempt", 1), 1)
+
+    def _refactored(self, state: GraphState, record: RefactorRecord) -> None:
+        self.ctx.event_log.append(refactored_event(self.ctx.clock, state["run_id"], record))
 
     def quarantine(self, state: GraphState) -> dict[str, Any]:
         current_id = state.get("current")
@@ -783,6 +964,41 @@ def _green_of(
     record = records[sid]
     green = {"commit": record.commit, "by_lictor": record.by_lictor}
     return {"green": {**green, "asserted_by": record.asserted_by}}
+
+
+def _scenario_of(state: GraphState, sid: str) -> Scenario | None:
+    """The scenario of the loaded spec with that id, or None if the spec doesn't have it."""
+    found = next((s for s in state.get("scenarios", []) if s["id"] == sid), None)
+    if found is None:
+        return None
+    return Scenario(
+        id=ScenarioId(found["id"]), name=found["name"], file=found["file"], line=found["line"]
+    )
+
+
+def _agent_totals(result: AgentResult) -> dict[str, Any]:
+    """What one agent call adds to the run's totals."""
+    return {
+        "tokens": {
+            "input": result.tokens.input,
+            "output": result.tokens.output,
+            "cache_read": result.tokens.cache_read,
+            "cache_write": result.tokens.cache_write,
+        },
+        "cost_usd": result.cost_usd or 0.0,
+        "agent_duration_ms": result.duration_ms,
+        "verify_duration_ms": 0,
+    }
+
+
+def _verify_totals(duration_ms: int) -> dict[str, Any]:
+    """What one verification adds to the run's totals."""
+    return {
+        "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+        "cost_usd": 0.0,
+        "agent_duration_ms": 0,
+        "verify_duration_ms": duration_ms,
+    }
 
 
 def _scenario_files(state: GraphState) -> dict[str, str]:
@@ -894,7 +1110,7 @@ def create_graph(
     context: GraphContext,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
-    """Build and compile the 11-node LangGraph execution graph."""
+    """Build and compile the 14-node LangGraph execution graph."""
     nodes = _GraphNodes(context)
 
     def route_preflight(state: GraphState) -> str:
@@ -913,6 +1129,9 @@ def create_graph(
     def route_verify_edge(state: GraphState) -> str:
         return route_verify(state, max_attempts=context.max_attempts)
 
+    def route_commit_edge(state: GraphState) -> str:
+        return route_commit(state, refactor=context.refactor)
+
     untrusted = _holding_checkpoint_writes(checkpointer)
     builder = StateGraph(GraphState)
 
@@ -925,6 +1144,9 @@ def create_graph(
     builder.add_node("implement", untrusted(nodes.implement))
     builder.add_node("verify", untrusted(nodes.verify))
     builder.add_node("commit", nodes.commit)
+    builder.add_node("refactor", untrusted(nodes.refactor))
+    builder.add_node("verify_refactor", untrusted(nodes.verify_refactor))
+    builder.add_node("commit_refactor", nodes.commit_refactor)
     builder.add_node("quarantine", nodes.quarantine)
     builder.add_node("pause", nodes.pause)
     builder.add_node("report", nodes.report)
@@ -974,7 +1196,28 @@ def create_graph(
     )
     builder.add_conditional_edges(
         "commit",
-        route_commit,
+        route_commit_edge,
+        {"pick_next": "pick_next", "pause": "pause", "refactor": "refactor"},
+    )
+    builder.add_conditional_edges(
+        "refactor",
+        route_refactor,
+        {
+            "pause": "pause",
+            "refactor": "refactor",
+            "verify_refactor": "verify_refactor",
+            "pick_next": "pick_next",
+            END: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "verify_refactor",
+        route_verify_refactor,
+        {"commit_refactor": "commit_refactor", "pick_next": "pick_next", END: END},
+    )
+    builder.add_conditional_edges(
+        "commit_refactor",
+        route_commit_refactor,
         {"pick_next": "pick_next", "pause": "pause"},
     )
     builder.add_edge("quarantine", "pick_next")
@@ -986,6 +1229,8 @@ def create_graph(
             "build_driver": "build_driver",
             "commit": "commit",
             "red_check": "red_check",
+            "refactor": "refactor",
+            "commit_refactor": "commit_refactor",
         },
     )
     builder.add_edge("report", END)

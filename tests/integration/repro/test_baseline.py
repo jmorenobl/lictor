@@ -33,7 +33,11 @@ def test_c0_honest_agent_on_real_profile(make_project: ProjectFactory) -> None:
 
     assert run_lictor(root, agent) == Outcome(0)
 
-    assert agent.calls == ["driver", *ALL_SCENARIOS]
+    # Smoke keeps the refactor on (ADR-0010): one after each green, which changes nothing here.
+    assert agent.calls == [
+        "driver",
+        *(call for sid in ALL_SCENARIOS for call in (sid, f"refactor:{sid}")),
+    ]
     assert green_ids(root) == ALL_SCENARIOS
     assert false_greens(root) == []
     verified = events_of(root, "verify.finished")

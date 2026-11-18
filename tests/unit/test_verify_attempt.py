@@ -24,6 +24,7 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.controls import CommandControl, Control, ReaderControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
+from lictor.domain.refactor import Measure
 from lictor.domain.reports import CoverageReport
 from tests.environments import PlainEnvironment
 from tests.readers import FlagRunner, Leaves, ReportingRunner, all_readers, coverage_json
@@ -1726,3 +1727,142 @@ def test_verify_names_no_command_for_a_unit_the_attempt_removed(tmp_path: Path) 
     assert result.failed_at == "unit"
     assert "se ejecutó como" not in (result.condensed_error or "")
     assert [call["cmd"][0] for call in runner.calls] == []
+
+
+# A refactor (ADR-0010): no scenario of its own, every green must stay green, and what the green's
+# verification measured must not go down.
+
+_BOTH_GREEN = (
+    '<testsuite><testcase name="test_iva_001"/><testcase name="test_iva_002"/></testsuite>'
+)
+_UNITTESTS = CommandControl(
+    id="unit", level="L2", run="unittests --junitxml {out}", report="junit", mode="block"
+)
+
+
+def _refactor(tmp_path: Path, runner: FakeRunner, **overrides: Any) -> tuple[VerifyAttempt, Any]:
+    verifier, req = _verify(
+        tmp_path,
+        runner,
+        role="refactor",
+        green_scenario_ids=("IVA-001",),
+        pending_scenario_ids=("IVA-002",),
+        refactor_of="green-sha",
+        **overrides,
+    )
+    return verifier, req
+
+
+def test_a_refactor_needs_no_scenario_of_its_own_and_writes_its_own_commit(
+    tmp_path: Path,
+) -> None:
+    runner = ReportingRunner()
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(tmp_path, runner)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True, result.condensed_error
+    vcs = verifier.vcs
+    assert isinstance(vcs, FakeVcs)
+    assert vcs.candidate_trailers == {"Lictor-Run": req.run_id, "Lictor-Refactor-Of": "green-sha"}
+    assert result.evidence["path"] == f".lictor/runs/{req.run_id}/IVA-001/002-refactor-verify"
+    assert result.collateral == ()
+
+
+def test_a_refactor_that_breaks_a_green_fails_in_the_acceptance(tmp_path: Path) -> None:
+    runner = ReportingRunner()
+    broken = (
+        '<testsuite><testcase name="test_iva_001"><failure message="roto">t</failure></testcase>'
+        '<testcase name="test_iva_002"/></testsuite>'
+    )
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), broken)
+    verifier, req = _refactor(tmp_path, runner)
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "acceptance")
+    assert "Regresión detectada en escenario verde previo: IVA-001" in str(result.condensed_error)
+
+
+def test_a_refactor_that_turns_a_pending_green_chains_a_collateral(tmp_path: Path) -> None:
+    runner = ReportingRunner()
+    runner.set_report("suite", CommandOutput(returncode=0, stdout="", stderr=""), _BOTH_GREEN)
+    verifier, req = _refactor(tmp_path, runner)
+
+    result = verifier.execute(req)
+
+    assert result.ok is True
+    assert result.collateral == ("IVA-002",)
+    assert result.candidate is not None
+    assert result.candidate.sha == "fake-colateral"
+
+
+def test_a_refactor_that_passes_fewer_unit_tests_than_its_green_is_a_regression(
+    tmp_path: Path,
+) -> None:
+    runner = ReportingRunner()
+    one_case = '<testsuite><testcase name="test_a"/></testsuite>'
+    runner.set_report("unittests", CommandOutput(returncode=0, stdout="", stderr=""), one_case)
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(
+        tmp_path, runner, controls=(_UNITTESTS,), baseline={"unit": Measure(passed=3)}
+    )
+
+    result = verifier.execute(req)
+
+    assert (result.ok, result.failed_at) == (False, "L0-regresión")
+    assert "unit: pasan 1 casos, y en el verde pasaban 3" in str(result.condensed_error)
+    assert result.acceptance is None  # it stopped before running the acceptance
+
+
+def test_the_same_unit_tests_as_the_green_are_no_regression(tmp_path: Path) -> None:
+    runner = ReportingRunner()
+    three = "".join(f'<testcase name="test_{n}"/>' for n in "abc")
+    runner.set_report(
+        "unittests",
+        CommandOutput(returncode=0, stdout="", stderr=""),
+        f"<testsuite>{three}</testsuite>",
+    )
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(
+        tmp_path, runner, controls=(_UNITTESTS,), baseline={"unit": Measure(passed=3)}
+    )
+
+    assert verifier.execute(req).ok is True
+
+
+def test_an_implementation_is_never_judged_against_a_baseline(tmp_path: Path) -> None:
+    """Only a refactor compares with its green: an attempt may well replace the unit tests."""
+    runner = ReportingRunner()
+    runner.set_report(
+        "unittests", CommandOutput(returncode=0, stdout="", stderr=""), "<testsuite></testsuite>"
+    )
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    unit = replace(_UNITTESTS, empty_exit_codes=(0,))
+    verifier, req = _verify(
+        tmp_path, runner, controls=(unit,), baseline={"unit": Measure(passed=3)}
+    )
+
+    assert verifier.execute(req).ok is True
+
+
+def test_a_refactor_must_keep_the_seal(tmp_path: Path) -> None:
+    project_root, run_id = _setup_project(tmp_path, seal_tampered=True)
+    verifier = VerifyAttempt(
+        vcs=FakeVcs(changed_files=["src/code.py"]),
+        environment=PlainEnvironment(FakeRunner()),
+        readers=all_readers(),
+        project_root=project_root,
+    )
+    req = VerifyAttemptRequest(
+        tree="agent-tree",
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role="refactor",
+        paths_writable=("src/",),
+        paths_driver=("tests/acceptance/",),
+        suppressions=_SUPPRESSIONS,
+    )
+
+    assert verifier.execute(req).failed_at == "L0-sello"

@@ -657,7 +657,7 @@ def test_report_lists_reopened_and_reregistered_scenarios(tmp_path: Path) -> Non
         "- **IVA-001**: sigue pasando con la especificación nueva; "
         f"registrado sin agente en `{'b' * 12}`" in section
     )
-    assert "| IVA-001 | General | verde | - |" in report
+    assert "| IVA-001 | General | verde | - | - |" in report
 
 
 def test_report_says_when_nothing_was_reopened_or_reregistered(tmp_path: Path) -> None:
@@ -678,7 +678,7 @@ def test_report_lists_collateral_greens(tmp_path: Path) -> None:
 
     section = report.split("## Verdes colaterales")[1].split("##")[0]
     assert f"- **IVA-002**: pasó sin llamar al agente en `{'c' * 12}`" in section
-    assert f"| IVA-002 | R | verde (colateral) | - | - | - | - | - | - | {'c' * 12} |" in report
+    assert f"| IVA-002 | R | verde (colateral) | - | - | - | - | - | - | - | {'c' * 12} |" in report
     assert "*Ningún verde colateral.*" in _report(tmp_path, [])
 
 
@@ -719,7 +719,7 @@ def test_a_verification_repeated_in_the_same_attempt_shows_twice_in_one_attempt(
     assert "| IVA-001 | 1 | L1 | - |" in rows
     assert "| IVA-001 | 1 | verde | - |" in rows
     assert "| IVA-001 | General |" in report
-    assert report.split("| IVA-001 | General |")[1].split("|")[1].strip() == "1"
+    assert report.split("| IVA-001 | General |")[1].split("|")[3].strip() == "1"
 
 
 def test_an_event_repeated_by_a_resumed_node_counts_once(tmp_path: Path) -> None:
@@ -886,7 +886,7 @@ def _summary_run() -> list[Event]:
 def test_report_gives_the_calls_and_cost_of_the_whole_run(tmp_path: Path) -> None:
     report = _report(tmp_path, _summary_run())
 
-    assert "- **Llamadas al agente**: 2 (driver: 1)" in report
+    assert "- **Llamadas al agente**: 2 (driver: 1, refactor: 0)" in report
     assert "- **Coste total**: 0,1220 $" in report
     assert "- **Duración total**: 2 min 7 s (agente 2 min 2 s, verificación 4 s)" in report
 
@@ -895,14 +895,14 @@ def test_report_has_a_row_for_the_driver_and_one_for_the_total(tmp_path: Path) -
     report = _report(tmp_path, _summary_run())
 
     assert (
-        f"| driver | Driver de aceptación | sellado | 1 | 1 | 42008 / 1783 | 0,0720 $ | 1 min 1 s "
-        f"| - | {'d' * 12} |"
+        "| driver | Driver de aceptación | sellado | - | 1 | 1 | 42008 / 1783 | 0,0720 $ "
+        f"| 1 min 1 s | - | {'d' * 12} |"
     ) in report
     assert (
-        f"| IVA-001 | General | verde | 1 | 1 | 42008 / 1783 | 0,0500 $ | 1 min 1 s | 4 s "
+        f"| IVA-001 | General | verde | - | 1 | 1 | 42008 / 1783 | 0,0500 $ | 1 min 1 s | 4 s "
         f"| {'a' * 12} |"
     ) in report
-    assert "| **Total** | | | | 2 | 84016 / 3566 | 0,1220 $ | 2 min 2 s | 4 s | |" in report
+    assert "| **Total** | | | | | 2 | 84016 / 3566 | 0,1220 $ | 2 min 2 s | 4 s | |" in report
     assert "La entrada incluye la caché" in report
     assert "a" * 13 not in report
 
@@ -925,7 +925,9 @@ def test_report_names_statuses_in_spanish(tmp_path: Path) -> None:
 def test_a_sealed_driver_that_was_only_checked_says_so(tmp_path: Path) -> None:
     report = _report(tmp_path, [_event("lictor.driver.checked.v1", {"attempt": 1})])
 
-    assert "| driver | Driver de aceptación | comprobado | - | - | - | - | - | - | - |" in report
+    assert (
+        "| driver | Driver de aceptación | comprobado | - | - | - | - | - | - | - | - |" in report
+    )
 
 
 def test_a_driver_rejected_for_good_says_so(tmp_path: Path) -> None:
@@ -936,7 +938,7 @@ def test_a_driver_rejected_for_good_says_so(tmp_path: Path) -> None:
 
     report = _report(tmp_path, [_call(None, 2, 0.01, {}), rejected])
 
-    assert "| driver | Driver de aceptación | rechazado | 2 | 1 |" in report
+    assert "| driver | Driver de aceptación | rechazado | - | 2 | 1 |" in report
 
 
 def test_each_run_keeps_a_copy_of_its_report(tmp_path: Path) -> None:
@@ -967,3 +969,85 @@ def test_each_run_keeps_a_copy_of_its_report(tmp_path: Path) -> None:
     assert (runs / "run-2" / "report.md").read_text(encoding="utf-8") == two.content
     assert two.report_path.read_text(encoding="utf-8") == two.content
     assert one.content != two.content
+
+
+# The refactor after each implemented green (ADR-0010): its own column, row and section.
+
+
+def _refactor_run(outcome: str, failed_at: str | None = None) -> list[Event]:
+    tokens = {"input": 1, "output": 2, "cache_read": 0, "cache_write": 0}
+    refactor_call = _call("IVA-001", 1, 0.03, tokens)
+    refactor_call = Event(
+        id="refactor-call",
+        type=refactor_call.type,
+        source=refactor_call.source,
+        time=refactor_call.time,
+        runid=refactor_call.runid,
+        scenarioid="IVA-001",
+        data={**refactor_call.data, "role": "refactor", "duration_ms": 2000},
+    )
+    refactor_verify = _event(
+        "lictor.verify.finished.v2",
+        {
+            "role": "refactor",
+            "attempt": 1,
+            "ok": failed_at is None,
+            "failed_at": failed_at,
+            "controls": {"unit": _executed(duration_ms=3000)},
+        },
+        "IVA-001",
+    )
+    refactored = _event(
+        "lictor.scenario.refactored.v1",
+        {
+            "outcome": outcome,
+            "attempt": 1,
+            "commit": "e" * 40 if outcome == "applied" else None,
+            "failed_at": failed_at,
+            "collateral": [],
+        },
+        "IVA-001",
+    )
+    run = _summary_run()
+    return [*run[:-1], refactor_call, refactor_verify, refactored, run[-1]]
+
+
+def test_the_implementers_call_and_the_refactors_are_both_kept(tmp_path: Path) -> None:
+    """Same scenario and attempt: only the role tells them apart, and both count."""
+    report = _report(tmp_path, _refactor_run("applied"))
+
+    assert "- **Llamadas al agente**: 3 (driver: 1, refactor: 1)" in report
+    assert "- **Coste total**: 0,1520 $" in report
+
+
+def test_the_scenario_row_keeps_its_own_spend_and_says_how_its_refactor_ended(
+    tmp_path: Path,
+) -> None:
+    report = _report(tmp_path, _refactor_run("applied"))
+
+    assert (
+        f"| IVA-001 | General | verde | aplicado | 1 | 1 | 42008 / 1783 | 0,0500 $ | 1 min 1 s "
+        f"| 4 s | {'a' * 12} |"
+    ) in report
+    assert (
+        "| refactor | Todos los refactors | - | - | - | 1 | 1 / 2 | 0,0300 $ | 2 s | 3 s | - |"
+        in (report)
+    )
+    section = report.split("## Refactors")[1].split("##")[0]
+    assert f"- **IVA-001**: aplicado en `{'e' * 12}`; 1 llamada, 0,0300 $, 5 s" in section
+
+
+def test_a_discarded_refactor_names_where_it_failed_and_costs_no_attempt(tmp_path: Path) -> None:
+    report = _report(tmp_path, _refactor_run("discarded", "L0-regresión"))
+
+    assert "| IVA-001 | General | verde | descartado (L0-regresión) | 1 |" in report
+    assert "- **IVA-001**: descartado (L0-regresión); 1 llamada" in report
+    levels = report.split("## Intentos fallidos por nivel")[1].split("##")[0]
+    assert "L0-regresión" not in levels
+    assert "| IVA-001 | 1 (refactor) | L0-regresión |" in report
+
+
+def test_a_run_without_refactors_says_so(tmp_path: Path) -> None:
+    report = _report(tmp_path, _summary_run())
+
+    assert "- *Ningún refactor.*" in report.split("## Refactors")[1]

@@ -379,22 +379,24 @@ def suspicious_driver(
 
 
 def acceptance_failure(
-    scenario_id: str,
+    scenario_id: str | None,
     green_scenario_ids: Sequence[str],
     mapped: dict[str, TestCaseResult],
 ) -> tuple[str, tuple[TestCaseResult, ...]] | None:
     """Explain why an attempt fails acceptance, or return None if it passes.
 
-    Only the current scenario and broken greens matter: pending scenarios are expected to fail.
+    Only the current scenario and broken greens matter: pending scenarios are expected to fail. A
+    refactor has no current scenario (ADR-0010): only the greens, its own among them, matter.
     """
     reasons: list[str] = []
     cases: list[TestCaseResult] = []
-    current = mapped.get(scenario_id)
-    if current is None:
-        reasons.append(f"Escenario {scenario_id} no pasó (sin resultado)")
-    elif current.status != "passed":
-        reasons.append(f"Escenario {scenario_id} no pasó ({current.status})")
-        cases.append(current)
+    if scenario_id is not None:
+        current = mapped.get(scenario_id)
+        if current is None:
+            reasons.append(f"Escenario {scenario_id} no pasó (sin resultado)")
+        elif current.status != "passed":
+            reasons.append(f"Escenario {scenario_id} no pasó ({current.status})")
+            cases.append(current)
     for green_id in green_scenario_ids:
         case = mapped.get(green_id)
         if case is None or case.status != "passed":
@@ -812,7 +814,7 @@ def coverage_score(totals: Mapping[str, int]) -> CoverageScore:
     )
 
 
-def _percent_text(percent: float) -> str:
+def percent_text(percent: float) -> str:
     """One decimal, cut and not rounded: 89,99 must never read as a 90 it doesn't reach."""
     tenths = int(percent * 10 + 1e-9)
     return f"{tenths // 10},{tenths % 10} %"
@@ -824,7 +826,7 @@ def describe_score(score: Score) -> str:
         counted = f"{score.covered_lines} de {score.num_statements} líneas"
         if score.num_branches:
             counted += f", {score.covered_branches} de {score.num_branches} ramas"
-        return f"{_percent_text(score.percent)} ({counted})"
+        return f"{percent_text(score.percent)} ({counted})"
     tried = score.total - score.skipped
     apart = [f"{score.survived} vivos", f"{score.timeout} por tiempo"]
     for count, label in (
@@ -835,7 +837,7 @@ def describe_score(score: Score) -> str:
     ):
         if count:
             apart.append(f"{count} {label}")
-    return f"{_percent_text(score.percent)} ({score.killed} de {tried} muertos; {', '.join(apart)})"
+    return f"{percent_text(score.percent)} ({score.killed} de {tried} muertos; {', '.join(apart)})"
 
 
 def score_from_record(raw: object) -> Score | None:
