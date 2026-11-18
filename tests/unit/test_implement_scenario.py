@@ -419,9 +419,14 @@ def test_implement_scenario_spec_conflict(tmp_path: Path) -> None:
         failed_at="L2 (unit)",
     )
 
+    vcs.capture.return_value = "c" * 40
+
     result = use_case.execute(req)
     assert result.attempt == 2
     assert result.agent_signal == "spec_conflict"
+    # F54: the tree of a declared conflict is kept, so verify judges it and not the text.
+    assert result.tree == "c" * 40
+    vcs.capture.assert_called_once()
 
 
 def test_implement_scenario_rate_limited_does_not_increment_attempt(tmp_path: Path) -> None:
@@ -541,18 +546,22 @@ def test_a_result_that_cant_be_read_fails_the_attempt(tmp_path: Path) -> None:
     assert result.attempt == 2
 
 
-@pytest.mark.parametrize(
-    "agent_result",
-    [AgentResult(status="rate_limited"), AgentResult(status="ok", spec_conflict="contradice")],
-    ids=["cuota", "conflicto"],
-)
-def test_no_result_is_read_from_a_call_that_produced_none(
-    tmp_path: Path, agent_result: AgentResult
-) -> None:
+def test_no_result_is_read_from_a_call_that_produced_none(tmp_path: Path) -> None:
     vcs = MagicMock(spec=Vcs)
-    result, _, _ = _execute(tmp_path, agent_result, vcs=vcs)
+    result, _, _ = _execute(tmp_path, AgentResult(status="rate_limited"), vcs=vcs)
 
     vcs.capture.assert_not_called()
+    assert result.tree is None
+
+
+def test_a_declared_conflict_whose_copy_cant_be_read_stays_a_conflict(tmp_path: Path) -> None:
+    # Nothing to verify: the conflict says more than an unreadable copy, and routing quarantines.
+    vcs = MagicMock(spec=Vcs)
+    vcs.capture.side_effect = CandidateError("repositorio anidado")
+    agent_result = AgentResult(status="ok", spec_conflict="contradice")
+    result, _, _ = _execute(tmp_path, agent_result, vcs=vcs)
+
+    assert result.agent_signal == "spec_conflict"
     assert result.tree is None
 
 

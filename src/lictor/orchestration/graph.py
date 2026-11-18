@@ -719,6 +719,11 @@ class _GraphNodes:
         details = state.get("last_error") or ""
         if conflict:
             reason, details = "spec_conflict", state.get("spec_conflict") or ""
+            # With a tree, verify judged this very attempt: the conflict stands because it failed.
+            if state.get("attempt_tree") and state.get("last_failed_at"):
+                details = f"{details}\n\nY el intento no pasa la verificación: falló en " + str(
+                    state["last_failed_at"]
+                )
         elif suspicious_driver(failures, self.ctx.paths_driver):
             reason = "driver_sospechoso"
             origin = next(f[1] for f in reversed(failures) if f is not None)

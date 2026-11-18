@@ -7,6 +7,16 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Corregido
+
+- **Un conflicto declarado ya no pone en cuarentena un escenario que su intento cumple.** El
+  agente que terminaba con «LICTOR: SPEC_CONFLICT no aplica», diciendo que no había conflicto,
+  mandaba el escenario a cuarentena sin verificar lo que había escrito, y el run salía con 11.
+  Ahora el intento con un conflicto declarado se verifica igual: si pasa, el escenario queda en
+  verde; si no, va a cuarentena por `spec_conflict`, como antes, sin gastar los intentos que
+  quedan, y el motivo dice dónde falló. El prompt aclara que la línea solo se escribe para declarar
+  un conflicto. El código de salida 11 no cambia de significado.
+
 ## [0.5.0] - 2026-11-17
 
 La skill de Lictor habla solo del perfil del proyecto, y lo esencial de ese perfil va al principio,

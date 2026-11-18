@@ -25,5 +25,8 @@ Contexto del proyecto: {hints}
 
 {bloque_de_error}
 
-Si el escenario es imposible o contradice a otro, no lo fuerces. Termina tu respuesta con una línea:
+Si el escenario es imposible o contradice a otro, no lo fuerces: declara el conflicto terminando
+tu respuesta con una línea que empiece así, seguida del motivo y la evidencia:
 LICTOR: SPEC_CONFLICT <motivo y evidencia>
+Escribe esa línea solo para declarar un conflicto; si no lo hay, no la escribas. Lictor verifica tu
+intento igualmente: si pasa, el escenario queda en verde.

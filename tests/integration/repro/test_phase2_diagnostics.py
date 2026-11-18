@@ -32,6 +32,7 @@ from tests.integration.repro.harness import (
     git,
     good_driver,
     good_impl,
+    no_op_change,
     require,
     run_lictor,
     write,
@@ -301,7 +302,16 @@ def test_m4_spec_conflict_keeps_the_agents_reason(
     make_project: ProjectFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = make_project()
-    agent = Agent()
+
+    # The conflict stands only if the attempt fails its verification (F54): one that passes is
+    # green, whatever its text says. This attempt leaves the stub as it was.
+    def impl(task: AgentTask, scenario_id: str, attempt: int = 1) -> None:
+        if scenario_id == "IVA-001":
+            no_op_change(task)
+        else:
+            good_impl(task, scenario_id, attempt)
+
+    agent = Agent(impl=impl)
     agent.executor.scenario_modes["IVA-001"] = "conflict"
 
     outcome = run_lictor(root, agent)

@@ -199,6 +199,11 @@ class RunProgress:
             )
         if event.data.get("signal") == "error":
             lines.append(f"{owner}: la llamada al agente falló; se repite sin gastar el intento.")
+        if event.data.get("signal") == "spec_conflict":
+            lines.append(
+                f"{owner}: el agente declara un conflicto con la especificación; su intento se "
+                "verifica igualmente y, si pasa, queda en verde."
+            )
         return lines
 
     def _verify_finished(self, event: Event) -> list[str]:

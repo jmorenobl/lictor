@@ -224,7 +224,8 @@ class ImplementScenario:
             snapshot.verify_and_restore()
             if snapshot.changes:
                 return AgentCopyOutcome(agent_result, tampered=tuple(snapshot.changes))
-            if agent_result.spec_conflict or agent_result.status == "rate_limited":
+            # A declared conflict keeps its tree: what decides is whether it verifies (F54).
+            if agent_result.status == "rate_limited":
                 return AgentCopyOutcome(agent_result)
             try:
                 return AgentCopyOutcome(agent_result, tree=self.vcs.capture(workspace))

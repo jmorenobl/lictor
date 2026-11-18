@@ -53,8 +53,25 @@ def test_route_implement_rate_limited() -> None:
     assert route_implement({"agent_signal": "rate_limited"}) == "pause"
 
 
-def test_route_implement_spec_conflict() -> None:
+def test_route_implement_spec_conflict_without_a_tree_is_quarantined() -> None:
     assert route_implement({"agent_signal": "spec_conflict"}) == "quarantine"
+    assert route_implement({"agent_signal": "spec_conflict", "attempt_tree": None}) == "quarantine"
+
+
+def test_route_implement_spec_conflict_with_a_tree_is_verified() -> None:
+    # F54: «LICTOR: SPEC_CONFLICT no aplica» put a scenario its tree met in quarantine.
+    state = {"agent_signal": "spec_conflict", "attempt_tree": "a" * 40}
+    assert route_implement(state) == "verify"
+
+
+def test_route_verify_a_declared_conflict_that_passes_is_committed() -> None:
+    state = {"agent_signal": "spec_conflict", "last_verify": VerifyResult(ok=True), "attempt": 1}
+    assert route_verify(state, max_attempts=3) == "commit"
+
+
+def test_route_verify_a_declared_conflict_that_fails_is_quarantined_with_attempts_left() -> None:
+    state = {"agent_signal": "spec_conflict", "last_verify": VerifyResult(ok=False), "attempt": 1}
+    assert route_verify(state, max_attempts=3) == "quarantine"
 
 
 def test_route_implement_ok_or_error() -> None:

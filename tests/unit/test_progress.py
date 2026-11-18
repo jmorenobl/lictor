@@ -219,6 +219,15 @@ def test_a_failed_call_that_keeps_the_attempt_says_so() -> None:
     assert progress.observe(_finished(None, 0.0, 10, signal="rate_limited")) == []
 
 
+def test_a_declared_conflict_says_the_attempt_is_still_verified() -> None:
+    progress = RunProgress()
+
+    assert progress.observe(_finished("A-001", 0.0, 10, signal="spec_conflict")) == [
+        "A-001: el agente declara un conflicto con la especificación; su intento se verifica "
+        "igualmente y, si pasa, queda en verde."
+    ]
+
+
 def test_the_driver_steps_that_need_no_agent_are_told() -> None:
     progress = RunProgress()
 
