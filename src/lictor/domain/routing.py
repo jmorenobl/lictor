@@ -104,8 +104,44 @@ def _retry_or_quarantine(state: Mapping[str, Any], max_attempts: int | None) -> 
     return "quarantine"
 
 
-def route_commit(state: Mapping[str, Any]) -> str:
-    """Route after commit node: a branch that can't advance waits for the user."""
+def route_commit(state: Mapping[str, Any], refactor: bool = False) -> str:
+    """Route after commit node: a branch that can't advance waits for the user.
+
+    With the refactor on (ADR-0010), every implemented green goes through one before the next
+    scenario: `commit` only follows a verified implementation, never a collateral or a register.
+    """
+    if state.get("agent_signal") == "blocked":
+        return "pause"
+    return "refactor" if refactor else "pick_next"
+
+
+def route_refactor(state: Mapping[str, Any]) -> str:
+    """Route after refactor node: its tree is verified, unless the call already settled it.
+
+    A failed call that keeps its attempt is made again, as for the driver: a refactor has a single
+    attempt, so there is nothing to spend. One the node settled (`refactor_outcome`) goes on.
+    """
+    if state.get("exit_code") is not None:
+        return END
+    signal = state.get("agent_signal")
+    if signal in ("rate_limited", "unavailable"):
+        return "pause"
+    if signal == "error" and keeps_attempt(signal, state.get("agent_failures", 0)):
+        return "refactor"
+    if state.get("refactor_outcome"):
+        return "pick_next"
+    return "verify_refactor"
+
+
+def route_verify_refactor(state: Mapping[str, Any]) -> str:
+    """Route after verify_refactor: one that passes is committed, one that fails is dropped."""
+    if state.get("exit_code") is not None:
+        return END
+    return "commit_refactor" if _is_verify_ok(state.get("last_verify")) else "pick_next"
+
+
+def route_commit_refactor(state: Mapping[str, Any]) -> str:
+    """Route after commit_refactor: a branch that can't advance waits for the user, as in commit."""
     return "pause" if state.get("agent_signal") == "blocked" else "pick_next"
 
 

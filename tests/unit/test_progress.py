@@ -508,3 +508,111 @@ def test_a_call_that_loaded_a_skill_of_the_project_says_so() -> None:
     assert line.startswith("⚠ A-001:")
     assert "lictor" in line
     assert progress.observe(_finished("A-001", 0.0, 10)) == []
+
+
+# The refactor after each implemented green (ADR-0010): its own lines, and its spend apart.
+
+
+def _refactor_call(owner: str, cost: float, ms: int, signal: str = "ok") -> Event:
+    return _event(
+        "agent.finished",
+        owner,
+        role="refactor",
+        attempt=1,
+        signal=signal,
+        cost_usd=cost,
+        duration_ms=ms,
+    )
+
+
+def _refactored(owner: str, outcome: str, failed_at: str | None = None) -> Event:
+    return replace(
+        _event("scenario.refactored", owner, outcome=outcome, attempt=1, failed_at=failed_at),
+        type="lictor.scenario.refactored.v1",
+    )
+
+
+def test_a_refactor_says_it_starts_without_an_attempt_count() -> None:
+    started = _event("agent.started", "A-001", role="refactor", attempt=1, max_attempts=1)
+
+    assert RunProgress().observe(started) == [
+        "A-001: refactorizando sin cambiar el comportamiento…"
+    ]
+
+
+def test_a_refactor_costs_apart_from_its_green_and_counts_in_the_total() -> None:
+    progress = RunProgress()
+    lines = _lines(
+        progress,
+        _finished("A-001", 0.10, 1000),
+        _event("scenario.green", "A-001", attempt=1),
+        _refactor_call("A-001", 0.05, 2000),
+        _refactored("A-001", "applied"),
+    )
+
+    assert lines == [
+        "A-001: verde, intento 1, 1 s, 0,10 $.",
+        "A-001: refactor aplicado, 2 s, 0,05 $.",
+    ]
+    assert progress.spend("A-001").calls == 1
+    assert (progress.calls, round(progress.cost_usd, 2)) == (2, 0.15)
+    assert progress.refactor_spend().calls == 1
+    assert progress.refactors == {"A-001": "applied"}
+
+
+@pytest.mark.parametrize(
+    ("outcome", "failed_at", "line"),
+    [
+        ("unchanged", None, "A-001: refactor sin cambios, nada que mejorar, 0 s, 0,00 $."),
+        (
+            "discarded",
+            "acceptance",
+            "A-001: refactor descartado (falló en acceptance); el verde se queda, 0 s, 0,00 $.",
+        ),
+        ("discarded", None, "A-001: refactor descartado (falló); el verde se queda, 0 s, 0,00 $."),
+    ],
+)
+def test_each_way_a_refactor_ends_has_its_line(
+    outcome: str, failed_at: str | None, line: str
+) -> None:
+    assert RunProgress().observe(_refactored("A-001", outcome, failed_at)) == [line]
+
+
+def test_a_failed_refactor_verification_is_told_once_by_its_outcome() -> None:
+    verified = _verified("A-001", 1, ok=False, failed_at="acceptance", duration_ms=500)
+    progress = RunProgress()
+
+    assert progress.observe(replace(verified, data={**verified.data, "role": "refactor"})) == []
+    assert progress.refactor_spend().verify_ms == 500
+    assert progress.spend("A-001").verify_ms == 0
+
+
+def test_a_failed_refactor_call_is_repeated_without_talk_of_attempts() -> None:
+    assert RunProgress().observe(_refactor_call("A-001", 0.0, 0, signal="error")) == [
+        "A-001: la llamada al agente falló; se repite."
+    ]
+
+
+def test_status_says_a_refactor_is_in_progress_and_spends_apart() -> None:
+    progress = _folded(
+        _spec("A-001", "A-002"),
+        _finished("A-001", 0.10, 1000),
+        _event("scenario.green", "A-001", attempt=1),
+        _refactor_call("A-001", 0.05, 2000),
+    )
+    values = {"current": "A-001", "attempt": 1, "status": {"A-001": "green", "A-002": "pending"}}
+
+    lines = _status(["verify_refactor"], values, progress)
+
+    assert "Estado: sin terminar; siguiente paso: verificar el refactor." in lines
+    assert "Escenario en curso: A-001, ya en verde; su refactor, sin reintento." in lines
+    assert "  - A-001: verde (implementado, refactor en curso)" in lines
+    assert "Agente: 2 llamadas, 0,15 $ (refactor: 1 llamada, 0,05 $)." in lines
+
+
+def test_status_tells_a_refactor_paused_by_the_backend() -> None:
+    values = {"current": "A-001", "resume_to": "refactor", "status": {"A-001": "green"}}
+
+    lines = _status(["pause"], values)
+
+    assert "Escenario en curso: A-001, ya en verde; su refactor, sin reintento." in lines

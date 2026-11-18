@@ -139,7 +139,7 @@ class Totals:
         )
 
 
-AgentRole = Literal["driver", "implement"]
+AgentRole = Literal["driver", "implement", "refactor"]
 
 
 @dataclass(frozen=True)

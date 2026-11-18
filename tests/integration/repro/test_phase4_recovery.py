@@ -43,9 +43,15 @@ MATRIX_ENV = "LICTOR_KILL_MATRIX"
 
 ALL_GREEN = ["IVA-001", "IVA-002", "IVA-003"]
 MOMENTS = ("antes", "durante", "despues")
-MODE_BY_NODE = {"quarantine": "cuarentena", "pause": "pausa"}
+REFACTOR_NODES = ("refactor", "verify_refactor", "commit_refactor")
+MODE_BY_NODE = {
+    "quarantine": "cuarentena",
+    "pause": "pausa",
+    **dict.fromkeys(REFACTOR_NODES, "refactor"),
+}
 EXPECTED = {
     "verde": (0, ALL_GREEN, []),
+    "refactor": (0, ALL_GREEN, []),
     "pausa": (0, ALL_GREEN, []),
     "cuarentena": (30, ALL_GREEN[:2], ["IVA-003"]),
 }
@@ -60,6 +66,7 @@ NODES = (
     "implement",
     "verify",
     "commit",
+    *REFACTOR_NODES,
     "quarantine",
     "pause",
     "report",
@@ -93,19 +100,32 @@ KILL_CLASSES: dict[str, tuple[str, ...]] = {
         "pick_next:despues",
         "implement:antes",
         "verify:antes",
+        "refactor:antes",
+        "verify_refactor:antes",
+        "commit_refactor:antes",
     ),
     # The driver is in the state and not sealed: the call repeats from HEAD.
     "driver sin sellar": ("build_driver:despues", "build_driver:durante"),
     # The agent worked in a copy outside the project: the copy goes and the call repeats.
-    "llamada al agente": ("implement:durante", "implement:despues"),
+    "llamada al agente": (
+        "implement:durante",
+        "implement:despues",
+        "refactor:durante",
+        "refactor:despues",
+    ),
     # A command in the clean clone outlives Lictor: the clone goes and verification repeats.
-    "verificación a medias": ("verify:durante", "red_check:durante"),
+    "verificación a medias": ("verify:durante", "red_check:durante", "verify_refactor:durante"),
     # Sealed, with the branch moved, and the checkpoint doesn't know.
     "sello sin registrar": ("red_check:despues",),
     # A verified candidate outside the branch that the checkpoint doesn't know.
-    "candidato sin registrar": ("verify:despues",),
+    "candidato sin registrar": ("verify:despues", "verify_refactor:despues"),
     # The branch moved to the candidate and the checkpoint doesn't know.
-    "rama movida sin registrar": ("commit:durante", "commit:despues"),
+    "rama movida sin registrar": (
+        "commit:durante",
+        "commit:despues",
+        "commit_refactor:durante",
+        "commit_refactor:despues",
+    ),
     "cuarentena": ("quarantine:durante", "quarantine:antes", "quarantine:despues"),
     "pausa": ("pause:durante", "pause:antes"),
     "informe": ("report:durante", "report:antes", "report:despues"),
@@ -185,6 +205,14 @@ def _relaunch(root: Path, tmp_path: Path, mode: str, *, in_place: bool = False) 
     raise AssertionError("no terminó tras varias reanudaciones")
 
 
+def _refactored(root: Path) -> list[str]:
+    """The scenario of each refactor commit, oldest first (ADR-0010)."""
+    subjects = git(root, "log", "--reverse", "--format=%s").splitlines()
+    return [
+        s.removeprefix("refactor(").split(")")[0] for s in subjects if s.startswith("refactor(")
+    ]
+
+
 def _record(cell: Cell) -> None:
     path = os.environ.get(MATRIX_ENV)
     if path:
@@ -220,7 +248,11 @@ def test_kill_9_at_every_node_loses_nothing_and_invents_nothing(
     mode = MODE_BY_NODE.get(node, "verde")
     marker = tmp_path / "alcanzado"
     in_a_command = point == "verify:durante"
-    root = make_project(extra_controls=[_control_killed_midway(marker)] if in_a_command else None)
+    root = make_project(
+        extra_controls=[_control_killed_midway(marker)] if in_a_command else None,
+        # A case runs without the refactor (ADR-0010) unless its point is in one.
+        config_changes={"refactor": {"enabled": True}} if mode == "refactor" else None,
+    )
 
     head = git(root, "rev-parse", "HEAD")
 
@@ -235,6 +267,8 @@ def test_kill_9_at_every_node_loses_nothing_and_invents_nothing(
     assert green_ids(worktree) == expected_greens, "ni commits dobles ni verdes perdidos"
     assert false_greens(worktree) == []
     assert sorted(set(quarantined(worktree))) == expected_quarantine
+    expected_refactors = expected_greens if mode == "refactor" else []
+    assert _refactored(worktree) == expected_refactors, "un refactor por verde, ni doble ni perdido"
     assert not git(worktree, "status", "--short"), "no debe quedar nada a medias en el árbol"
     assert (worktree / ".lictor" / "report.md").is_file()
     assert git(root, "rev-parse", "HEAD") == head, "el checkout de la persona no se toca"

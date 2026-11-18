@@ -38,6 +38,7 @@ class FakeExecutor:
         cost_per_call: float = 0.005,
         duration_ms: int = 150,
         effect: FakeEffect | None = None,
+        refactor_mode: FakeMode = "good",
     ) -> None:
         self.default_mode = mode
         self.scenario_modes = scenario_modes or {}
@@ -51,6 +52,9 @@ class FakeExecutor:
         self.cost_per_call = cost_per_call
         self.duration_ms = duration_ms
         self.effect = effect
+        # A refactor writes only what is under "refactor" or "refactor:<ID>": by default nothing,
+        # so it ends unchanged and the tree of the run is the implementer's (ADR-0010).
+        self.refactor_mode = refactor_mode
         self.calls: list[str] = []
 
     def health(self) -> Health:
@@ -65,6 +69,13 @@ class FakeExecutor:
     def _detect_scenario_id(self, prompt: str) -> str | None:
         match = _SCENARIO_TAG_RE.search(prompt)
         return match.group(1) if match else None
+
+    def _apply_refactor_effects(self, cwd: Path, scenario_id: str | None) -> None:
+        for key in ("refactor", f"refactor:{scenario_id}" if scenario_id else ""):
+            for rel_path, content in self.files_to_write.get(key, {}).items():
+                dest = cwd / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
 
     def _apply_filesystem_effects(
         self,
@@ -108,9 +119,12 @@ class FakeExecutor:
 
     def run(self, task: AgentTask) -> AgentResult:
         """Execute a deterministic fake agent run according to active mode."""
-        scenario_id = self._detect_scenario_id(task.prompt) if task.role == "implement" else None
+        named = task.role in ("implement", "refactor")
+        scenario_id = self._detect_scenario_id(task.prompt) if named else None
         mode: FakeMode = self.default_mode
-        if scenario_id and scenario_id in self.scenario_modes:
+        if task.role == "refactor":
+            mode = self.refactor_mode
+        elif scenario_id and scenario_id in self.scenario_modes:
             mode = self.scenario_modes[scenario_id]
 
         if self.crash_on_role and task.role == self.crash_on_role:
@@ -122,9 +136,14 @@ class FakeExecutor:
         if mode == "crash":
             raise RuntimeError("Simulated FakeExecutor crash")
 
-        call_key = scenario_id or task.role
+        call_key = (
+            f"refactor:{scenario_id}" if task.role == "refactor" else scenario_id or task.role
+        )
         self.calls.append(call_key)
-        self._apply_filesystem_effects(mode, task.cwd, role=task.role, scenario_id=scenario_id)
+        if task.role == "refactor":
+            self._apply_refactor_effects(task.cwd, scenario_id)
+        else:
+            self._apply_filesystem_effects(mode, task.cwd, role=task.role, scenario_id=scenario_id)
         status, spec_conflict, result_text = self._build_mode_outcome(mode)
         if self.effect is not None:
             status = self.effect(task, scenario_id, self.calls.count(call_key)) or status

@@ -10,7 +10,8 @@ A point is `<node>:antes`, `<node>:durante` or `<node>:despues`, or `red_check:r
 branch has advanced inside the red check and the checkpoint doesn't know it yet. On reaching it
 the process creates the marker and sleeps, so the test can send a real SIGKILL at exactly that
 moment. With a release file it goes on as soon as that file exists. Without a point it runs to
-the end: that is the resume.
+the end: that is the resume. In the mode `refactor` every green gets a refactor that changes the
+code and keeps what it does (ADR-0010).
 """
 
 import os
@@ -32,7 +33,7 @@ from lictor.bootstrap import BootstrapResult, bootstrap_runtime
 from lictor.domain.errors import LictorError
 from lictor.domain.model import AgentStatus, AgentTask
 from lictor.orchestration.graph import _GraphNodes
-from tests.integration.repro.harness import Agent, good_driver, good_impl
+from tests.integration.repro.harness import Agent, good_driver, good_impl, good_refactor
 
 NODES = (
     "preflight",
@@ -43,6 +44,9 @@ NODES = (
     "implement",
     "verify",
     "commit",
+    "refactor",
+    "verify_refactor",
+    "commit_refactor",
     "quarantine",
     "pause",
     "report",
@@ -65,8 +69,16 @@ class _Stall:
         self.at(f"{node}:antes")
 
     def advanced(self) -> None:
+        """The branch moved: inside the red check it registered, elsewhere it committed."""
         if self.node == "red_check":
             self.at("red_check:registro")
+        elif self.node in ("commit", "commit_refactor"):
+            self.at(f"{self.node}:durante")
+
+    def inside(self, node: str) -> None:
+        """Stop at `<node>:durante` only while that node runs: the same call happens elsewhere."""
+        if self.node == node:
+            self.at(f"{node}:durante")
 
     def at(self, point: str) -> None:
         if point == self.point and not self.done and self.marker is not None:
@@ -107,7 +119,6 @@ def _install(stall: _Stall) -> None:
         (GitCli, "status", "preflight", False),
         (GherkinSource, "load", "load_spec", False),
         (VerificationEnvironment, "run", "red_check", False),
-        (GitCli, "advance_head", "commit", False),
         (Quarantine, "execute", "quarantine", False),
         (BuildReport, "execute", "report", True),
     )
@@ -118,6 +129,8 @@ def _install(stall: _Stall) -> None:
     # The worktree and its branch exist, and nothing of the run has started in it.
     _around(GitCli, "add_worktree", _nothing, partial(stall.at, "worktree:durante"))
     _around(GitCli, "advance_head", _nothing, stall.advanced)
+    # A command of the refactor's verification ran in its clean clone, which is still there.
+    _around(VerificationEnvironment, "run", _nothing, partial(stall.inside, "verify_refactor"))
 
 
 def _agent(mode: str, flags: Path, stall: _Stall) -> Agent:
@@ -135,7 +148,13 @@ def _agent(mode: str, flags: Path, stall: _Stall) -> Agent:
         stall.at("implement:durante")
         return None
 
-    return Agent(driver=driver, impl=impl)
+    def refactor(task: AgentTask, scenario_id: str, attempt: int) -> AgentStatus | None:
+        if mode == "refactor":
+            good_refactor(task, scenario_id, attempt)
+        stall.at("refactor:durante")
+        return None
+
+    return Agent(driver=driver, impl=impl, refactor=refactor)
 
 
 def main(args: list[str]) -> int:

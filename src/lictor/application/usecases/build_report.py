@@ -10,7 +10,15 @@ from typing import Any, Final
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.model import Event, JournalDamage
-from lictor.domain.progress import DRIVER_OWNER, cost_text, duration_text, status_text
+from lictor.domain.progress import (
+    DRIVER_OWNER,
+    REFACTOR_ROLE,
+    calls_text,
+    cost_text,
+    duration_text,
+    status_text,
+)
+from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     OLDER_EVENTS,
     VERIFY_FINISHED,
@@ -60,7 +68,9 @@ def _total_duration(info: dict[str, Any]) -> str:
     The agent's and the controls' times leave out what is neither, such as building the
     verification environment, so the wall clock is the one that matches what the person waited.
     """
-    owners = _owner_totals([*info["scenarios"].values(), info["driver"]])
+    owners = _owner_totals(
+        [*info["scenarios"].values(), info["driver"], *info["refactors"].values()]
+    )
     split = (
         f"agente {duration_text(int(owners['agent_ms']))}, "
         f"verificación {duration_text(int(owners['verify_ms']))}"
@@ -76,11 +86,12 @@ def _short(commit: str) -> str:
     return commit[:_SHORT_SHA] if commit and commit != "-" else "-"
 
 
-def _row(ident: str, name: str, status: str, owner: Mapping[str, Any]) -> str:
+def _row(ident: str, name: str, status: str, owner: Mapping[str, Any], refactor: str = "-") -> str:
     """One row of the table: what the agent's calls of one owner cost, or `-` without calls."""
     called = owner["calls"] > 0
     attempts = str(owner["attempts"]) if owner["attempts"] else "-"
     cells = [
+        refactor,
         attempts,
         str(owner["calls"]) if called else "-",
         f"{owner['tokens_in']} / {owner['tokens_out']}" if called else "-",
@@ -90,6 +101,61 @@ def _row(ident: str, name: str, status: str, owner: Mapping[str, Any]) -> str:
         _short(owner["commit"]),
     ]
     return f"| {ident} | {name} | {status} | {' | '.join(cells)} |"
+
+
+_REFACTOR_TEXT: Final[Mapping[str, str]] = {
+    "applied": "aplicado",
+    "discarded": "descartado",
+    "unchanged": "sin cambios",
+}
+
+
+def _refactor_of(info: dict[str, Any], sid: str) -> dict[str, Any]:
+    """What the refactor of one scenario ended in and cost, made on first sight."""
+    refactors: dict[str, dict[str, Any]] = info["refactors"]
+    return refactors.setdefault(sid, {**_new_owner(), "status": "", "failed_at": ""})
+
+
+def _refactor_text(refactor: Mapping[str, Any] | None) -> str:
+    """The refactor's cell: how it ended, and where a discarded one failed."""
+    if refactor is None or not refactor["status"]:
+        return "-" if refactor is None else "en curso"
+    text = _REFACTOR_TEXT.get(refactor["status"], refactor["status"])
+    return f"{text} ({refactor['failed_at']})" if refactor["failed_at"] else text
+
+
+def _refactor_lines(info: Mapping[str, Any]) -> list[str]:
+    """Each refactor with how it ended, its commit and what it cost (ADR-0010)."""
+    lines = []
+    for sid, refactor in sorted(info["refactors"].items()):
+        commit = f" en `{_short(refactor['commit'])}`" if refactor["commit"] != "-" else ""
+        spent = duration_text(refactor["agent_ms"] + refactor["verify_ms"])
+        lines.append(
+            f"- **{sid}**: {_refactor_text(refactor)}{commit}; {calls_text(refactor['calls'])}, "
+            f"{cost_text(refactor['cost_usd'], _COST_DECIMALS)}, {spent}"
+        )
+    return lines or ["- *Ningún refactor.*"]
+
+
+def _add_call(owner: dict[str, Any], data: Mapping[str, Any], *, count_attempt: bool) -> None:
+    """Add one agent call to what its owner spent; a refactor's call spends no attempt."""
+    owner["calls"] += 1
+    tok = data.get("tokens")
+    if isinstance(tok, dict):
+        # What the model read: its cache is most of an agent's input (F14).
+        owner["tokens_in"] += sum(
+            int(tok.get(key, 0) or 0) for key in ("input", "cache_read", "cache_write")
+        )
+        owner["tokens_out"] += int(tok.get("output", 0) or 0)
+    raw_cost = data.get("cost_usd")
+    if isinstance(raw_cost, (int, float, str)):
+        owner["cost_usd"] += float(raw_cost)
+    raw_dur = data.get("duration_ms")
+    if isinstance(raw_dur, (int, str)):
+        owner["agent_ms"] += int(raw_dur)
+    raw_att = data.get("attempt")
+    if isinstance(raw_att, (int, str)) and count_attempt:
+        owner["attempts"] = max(owner["attempts"], int(raw_att))
 
 
 def _new_owner() -> dict[str, Any]:
@@ -251,10 +317,10 @@ def _scenario_table(
     """A row per scenario, one for the driver if it was called, and the total."""
     lines = [
         (
-            "| ID | Nombre | Estado | Intentos | Llamadas | Tokens (entrada / salida) | "
+            "| ID | Nombre | Estado | Refactor | Intentos | Llamadas | Tokens (entrada / salida) | "
             "Coste | Tiempo agente | Tiempo verificación | Commit |"
         ),
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     if info["driver_seen"]:
         driver = info["driver"]
@@ -263,14 +329,19 @@ def _scenario_table(
         status = status_text(s["status"])
         if s["status"] == "green" and s["collateral"]:
             status = f"{status} (colateral)"
-        lines.append(_row(sid, s["name"], status, s))
+        refactor = info["refactors"].get(sid)
+        lines.append(_row(sid, s["name"], status, s, _refactor_text(refactor)))
+    refactors = list(info["refactors"].values())
+    if refactors:
+        spent = {**_new_owner(), **_owner_totals(refactors)}
+        lines.append(_row("refactor", "Todos los refactors", "-", spent))
     if not owners:
         return lines
     tokens = f"{totals['tokens_in']} / {totals['tokens_out']}"
     return [
         *lines,
         (
-            f"| **Total** | | | | {totals['calls']} | {tokens} | "
+            f"| **Total** | | | | | {totals['calls']} | {tokens} | "
             f"{cost_text(float(totals['cost_usd']), _COST_DECIMALS)} | "
             f"{duration_text(int(totals['agent_ms']))} | "
             f"{duration_text(int(totals['verify_ms']))} | |"
@@ -306,18 +377,21 @@ class BuildReport:
         return BuildReportResult(report_path=report_path, content=report_md)
 
     def _deduplicate_events(self, events: list[Event]) -> list[Event]:
-        """Keep the last event for each (type, runid, scenarioid, attempt, evidence).
+        """Keep the last event for each (type, runid, scenarioid, role, attempt, evidence).
+
+        The role tells apart the implementer's call and the refactor's of the same attempt, which
+        share scenario and attempt (ADR-0010).
 
         A node that runs again after a crash repeats its event, and only the last one counts. A
         step that ran twice left two evidence directories, whose names are never reused: both
         happened, so both stay.
         """
-        seen: dict[tuple[str, str | None, str | None, Any, Any], Event] = {}
+        seen: dict[tuple[str, str | None, str | None, Any, Any, Any], Event] = {}
         for ev in events:
             attempt = ev.data.get("attempt")
             evidence = ev.data.get("evidence")
             where = evidence.get("path") if isinstance(evidence, dict) else None
-            key = (ev.type, ev.runid, ev.scenarioid, attempt, where)
+            key = (ev.type, ev.runid, ev.scenarioid, ev.data.get("role"), attempt, where)
             seen[key] = ev
         return list(seen.values())
 
@@ -356,6 +430,8 @@ class BuildReport:
             "collateral": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
+            # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
+            "refactors": {},
             "driver_seen": False,
             "started_at": "",
             "finished_at": "",
@@ -382,6 +458,7 @@ class BuildReport:
             "lictor.driver.checked.v1": self._on_driver_checked,
             "lictor.scenario.reopened.v1": self._on_scenario_reopened,
             "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
+            REFACTORED: self._on_scenario_refactored,
         }
         handler = handlers.get(ev.type)
         if handler is not None:
@@ -427,8 +504,10 @@ class BuildReport:
     def _on_scenario_green(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
         if ev.data.get("collateral"):
+            after = ev.data.get("after_refactor")
+            how = f"tras el refactor de {after}" if after else "sin llamar al agente"
             info["collateral"].append(
-                f"- **{sid}**: pasó sin llamar al agente en `{str(ev.data.get('commit', ''))[:12]}`"
+                f"- **{sid}**: pasó {how} en `{str(ev.data.get('commit', ''))[:12]}`"
             )
         if sid and sid in info["scenarios"]:
             info["scenarios"][sid]["status"] = "green"
@@ -510,6 +589,13 @@ class BuildReport:
                 line = f"- **{where}**: {tool} {_denied_target(denial)}"
                 info["denials"].append(line.rstrip())
 
+    def _on_scenario_refactored(self, ev: Event, info: dict[str, Any]) -> None:
+        if ev.scenarioid:
+            refactor = _refactor_of(info, ev.scenarioid)
+            refactor["status"] = str(ev.data.get("outcome", "") or "")
+            refactor["failed_at"] = str(ev.data.get("failed_at") or "")
+            refactor["commit"] = str(ev.data.get("commit") or "-")
+
     def _process_agent_finished(self, ev: Event, info: dict[str, Any]) -> None:
         role = str(ev.data.get("role", "") or "")
         sha = ev.data.get("prompt_sha")
@@ -524,38 +610,27 @@ class BuildReport:
         if sid is None:
             info["driver_seen"] = True
         scen = info["driver"] if sid is None else info["scenarios"].get(sid)
+        if sid is not None and role == REFACTOR_ROLE:
+            scen = _refactor_of(info, sid)
         if scen is not None:
-            scen["calls"] += 1
-            tok = ev.data.get("tokens")
-            if isinstance(tok, dict):
-                # What the model read: its cache is most of an agent's input (F14).
-                scen["tokens_in"] += sum(
-                    int(tok.get(key, 0) or 0) for key in ("input", "cache_read", "cache_write")
-                )
-                scen["tokens_out"] += int(tok.get("output", 0) or 0)
-            raw_cost = ev.data.get("cost_usd")
-            if isinstance(raw_cost, (int, float, str)):
-                scen["cost_usd"] += float(raw_cost)
-            raw_dur = ev.data.get("duration_ms")
-            if isinstance(raw_dur, (int, str)):
-                scen["agent_ms"] += int(raw_dur)
-            raw_att = ev.data.get("attempt")
-            if isinstance(raw_att, (int, str)):
-                scen["attempts"] = max(scen["attempts"], int(raw_att))
+            _add_call(scen, ev.data, count_attempt=role != REFACTOR_ROLE)
 
     def _process_verify_finished(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
         controls = recorded_controls(ev.data.get("controls"))
         acceptance = acceptance_from_record(ev.data.get("acceptance"))
-        if sid and sid in info["scenarios"]:
-            info["scenarios"][sid]["verify_ms"] += recorded_duration(controls, acceptance)
+        refactor = ev.data.get("role") == REFACTOR_ROLE
+        owner = _refactor_of(info, sid) if refactor and sid else info["scenarios"].get(sid or "")
+        if owner is not None:
+            owner["verify_ms"] += recorded_duration(controls, acceptance)
 
-        if not ev.data.get("ok"):
+        # A refactor's failure costs no attempt: it is told in its own section.
+        if not ev.data.get("ok") and not refactor:
             failed_at = ev.data.get("failed_at")
             if failed_at:
                 info["failed_by_level"][str(failed_at)] += 1
 
-        attempt = ev.data.get("attempt")
+        attempt = f"{ev.data.get('attempt')} (refactor)" if refactor else ev.data.get("attempt")
         outcome = "verde" if ev.data.get("ok") else str(ev.data.get("failed_at") or "falló")
         error_path = ev.data.get("error_path")
         error_cell = f"`{error_path}`" if error_path else "-"
@@ -608,9 +683,15 @@ class BuildReport:
         greens = sum(1 for s in info["scenarios"].values() if s["status"] == "green")
         quarantined = len(info["quarantines"])
         pending = len(info["scenarios"]) - greens - quarantined
-        owners = [*info["scenarios"].values(), *([info["driver"]] if info["driver_seen"] else [])]
+        refactors = list(info["refactors"].values())
+        owners = [
+            *info["scenarios"].values(),
+            *([info["driver"]] if info["driver_seen"] else []),
+            *refactors,
+        ]
         totals = _owner_totals(owners)
         driver_calls = info["driver"]["calls"]
+        refactor_calls = sum(r["calls"] for r in refactors)
 
         lines = [
             "# Informe de ejecución de Lictor",
@@ -622,7 +703,10 @@ class BuildReport:
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
             *([f"- **Motivo**: {info['exit_reason']}"] if info["exit_reason"] else []),
-            f"- **Llamadas al agente**: {totals['calls']} (driver: {driver_calls})",
+            (
+                f"- **Llamadas al agente**: {totals['calls']} (driver: {driver_calls}, "
+                f"refactor: {refactor_calls})"
+            ),
             f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
             f"- **Duración total**: {_total_duration(info)}",
             "",
@@ -642,6 +726,7 @@ class BuildReport:
                     lines.append("  ```")
 
         lines.extend(_green_sections(info))
+        lines.extend(["", "## Refactors", *_refactor_lines(info)])
 
         lines.extend(["", "## Denegaciones"])
         lines.extend(info["denials"] or ["- *El backend no denegó nada al agente.*"])

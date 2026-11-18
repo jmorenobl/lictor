@@ -24,6 +24,8 @@ from lictor.domain.controls import (
     lent_by_check,
     reader_of,
     reader_problems,
+    refactor_measures,
+    refactor_measures_text,
     verification_steps,
 )
 from lictor.domain.errors import ConfigError
@@ -348,3 +350,23 @@ def test_the_prompt_names_each_minimum_and_its_command() -> None:
 
 def test_no_minimum_leaves_the_prompt_as_it_was() -> None:
     assert agent_measures_text([]) == ""
+
+
+def test_a_refactor_measures_every_agent_run_whose_plugin_loads_with_or_without_a_minimum() -> None:
+    """It must not measure less than its green, minimum or not (ADR-0010)."""
+    unscored = replace(_COVERAGE, id="otra", min_score=None)
+    controls = [_control("lint"), _COVERAGE, unscored, replace(_COVERAGE, id="sin", agent_run="")]
+
+    assert refactor_measures(controls, ["cov.plugin"]) == (
+        ("coverage", "tests --cov"),
+        ("otra", "tests --cov"),
+    )
+    assert refactor_measures(controls, []) == ()
+
+
+def test_the_refactor_is_told_to_measure_before_and_after() -> None:
+    text = refactor_measures_text([("coverage", "tests --cov")])
+
+    assert "descarta el refactor si baja" in text
+    assert "  - coverage: `tests --cov`." in text
+    assert refactor_measures_text([]) == ""

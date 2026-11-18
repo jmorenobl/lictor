@@ -623,6 +623,8 @@ class Profile(BaseModel):
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
+    # The goals every refactor of the profile is told to reach (ADR-0010): only the profile's.
+    refactor_hints: str = ""
     # What `{name}` in `hints` stands for, read from the project when the hints are written.
     hint_values: dict[str, HintValue] = Field(default_factory=dict)
     gitignore: list[str] = Field(default_factory=list)
@@ -665,6 +667,22 @@ class Profile(BaseModel):
         return self
 
 
+class RefactorConfig(BaseModel):
+    """El paso de refactor tras cada escenario implementado (ADR-0010)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = True
+
+
+def refactor_hints_message() -> str:
+    """Why `lictor.json` can't declare the refactor's goals, and where the project's go."""
+    return (
+        "lictor.json no puede declarar refactor_hints: esos objetivos son del perfil, que los "
+        "mejora en cada versión, y una copia los tapa. Bórralo; lo propio del proyecto va en hints."
+    )
+
+
 class RetentionConfig(BaseModel):
     """Cuánta evidencia de ejecuciones anteriores se conserva en .lictor/runs/."""
 
@@ -684,6 +702,7 @@ class LictorConfig(BaseModel):
     backend: BackendConfig = Field(default_factory=BackendConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -735,6 +754,7 @@ class LictorFile(BaseModel):
     backend: BackendConfig = Field(default_factory=BackendConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)

@@ -214,6 +214,22 @@ def test_changes_report_a_rename_as_deletion_and_addition(git_repo: Path, tmp_pa
     assert sorted(c.path for c in cli.changes(cli.capture(workdir))) == ["LEEME.md", "README.md"]
 
 
+def test_changed_paths_name_what_a_commit_changes_renames_as_two(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """What a green commit changed is what the refactor is told to look at first (ADR-0010)."""
+    cli = GitCli(repo_dir=git_repo)
+    base = cli.get_head_sha()
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").rename(workdir / "LEEME.md")
+    (workdir / "src").mkdir()
+    (workdir / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    commit = cli.commit_tree(cli.capture(workdir), message="cambio")
+
+    assert sorted(cli.changed_paths(base, commit.sha)) == ["LEEME.md", "README.md", "src/a.py"]
+    assert cli.changed_paths(base, base) == []
+
+
 def test_added_lines_come_only_from_what_the_tree_adds(git_repo: Path, tmp_path: Path) -> None:
     cli = GitCli(repo_dir=git_repo)
     workdir = _copy(cli, tmp_path)

@@ -1359,3 +1359,50 @@ def test_a_project_asks_for_a_minimum_coverage_by_id(tmp_path: Path) -> None:
     [coverage] = [c for c in load_config(path).controls if c.id == "coverage"]
 
     assert (coverage.min_score, coverage.mode) == (80, "measure")
+
+
+# The refactor after each implemented green (ADR-0010).
+
+
+def test_the_refactor_is_on_unless_the_project_turns_it_off(tmp_path: Path) -> None:
+    assert load_config(_project(tmp_path)).refactor.enabled is True
+    off = _project(tmp_path, refactor={"enabled": False})
+    assert load_config(off).refactor.enabled is False
+
+
+def test_init_does_not_write_the_refactor(tmp_path: Path) -> None:
+    """What `init` doesn't write comes from the model: on, as the ADR decides."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    init_config_file(tmp_path)
+
+    assert "refactor" not in json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+
+
+def test_turning_the_refactor_off_changes_the_fingerprint(tmp_path: Path) -> None:
+    before = _fingerprint(_project(tmp_path))
+
+    assert _fingerprint(_project(tmp_path, refactor={"enabled": False})) != before
+
+
+def test_the_refactor_hints_are_the_profiles_and_in_the_fingerprint(tmp_path: Path) -> None:
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    assert "Complejidad ciclomática" in defences.refactor_hints
+    other = replace(defences, refactor_hints=f"{defences.refactor_hints} Más.")
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_a_lictor_json_with_refactor_hints_is_refused_naming_hints(tmp_path: Path) -> None:
+    path = _project(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**data, "refactor_hints": "Más corto."}), encoding="utf-8")
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "refactor_hints" in message
+    assert "hints" in message.replace("refactor_hints", "")

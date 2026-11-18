@@ -106,6 +106,7 @@ markers = [
     "exhaustive: cells of a matrix beyond one per class; nightly and on a tag, not in a PR",
     "smoke: repro cases that prove, with the whole configuration, that everything fits",
     "all_controls: repro cases whose defence needs the controls a light project drops",
+    "with_refactor: repro cases about the refactor, which keep it on (ADR-0010)",
 ]
 filterwarnings = [
     "ignore:cannot collect test class 'TestCaseResult'.*:pytest.PytestCollectionWarning",
@@ -127,11 +128,13 @@ source_paths = [
     "src/lictor/application/spec_history.py",
     "src/lictor/application/usecases/agent_events.py",
     "src/lictor/application/usecases/commit_green.py",
+    "src/lictor/application/usecases/commit_refactor.py",
     "src/lictor/application/usecases/quarantine.py",
 ]
 also_copy = ["src/"]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_rules.py",
+    "tests/unit/test_refactor.py",
     "tests/unit/test_routing.py",
     "tests/unit/test_model.py",
     "tests/unit/test_anchor.py",
@@ -149,6 +152,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_implement_scenario.py",
     "tests/unit/test_prepare_driver.py",
     "tests/unit/test_commit_green.py",
+    "tests/unit/test_commit_refactor.py",
     "tests/unit/test_quarantine.py",
     "tests/unit/test_reports.py",
     "tests/unit/test_verdicts.py",

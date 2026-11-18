@@ -217,3 +217,42 @@ class TestFakeExecutor:
 
         assert attempts == [1, 2]
         assert fake.calls == ["driver", "driver"]
+
+
+def _refactor_task(cwd: Path) -> AgentTask:
+    task = _sample_task(
+        cwd, cwd / ".lictor" / "refactor.json", "El escenario IVA-001 acaba de pasar"
+    )
+    return replace(task, role="refactor")
+
+
+def test_a_refactor_writes_nothing_unless_told_so_whatever_the_mode(tmp_path: Path) -> None:
+    """By default it ends unchanged: the run's tree is the implementer's (ADR-0010)."""
+    fake = FakeExecutor(mode="good", files_to_write={"good": {"src/calc.py": "x = 1\n"}})
+
+    res = fake.run(_refactor_task(tmp_path))
+
+    assert res.status == "ok"
+    assert not (tmp_path / "src").exists()
+    assert fake.calls == ["refactor:IVA-001"]
+
+
+def test_a_refactor_writes_what_is_under_its_key_and_its_scenarios(tmp_path: Path) -> None:
+    fake = FakeExecutor(
+        files_to_write={
+            "refactor": {"src/a.py": "a = 1\n"},
+            "refactor:IVA-001": {"src/b.py": "b = 1\n"},
+            "refactor:IVA-002": {"src/c.py": "c = 1\n"},
+        }
+    )
+
+    fake.run(_refactor_task(tmp_path))
+
+    assert sorted(p.name for p in (tmp_path / "src").iterdir()) == ["a.py", "b.py"]
+
+
+def test_a_refactor_has_a_mode_of_its_own(tmp_path: Path) -> None:
+    fake = FakeExecutor(mode="good", refactor_mode="rate_limit")
+
+    assert fake.run(_refactor_task(tmp_path)).status == "rate_limited"
+    assert fake.run(_sample_task(tmp_path, tmp_path / "raw.json")).status == "ok"

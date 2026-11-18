@@ -73,6 +73,7 @@ Para profundizar en el concepto:
 
 - 🔴🟢 **Ciclo Rojo → Verde Determinista:** Generación asistida del *driver* de aceptación (`pytest-bdd`), comprobación automática de la regla del rojo y sellado criptográfico en `.lictor/seal.json`. Un rojo solo vale si cada test ejecuta su escenario y falla por una aserción o por la interfaz sin implementar, y si deja de pasar cuando la interfaz devuelve una constante.
 - 🛡️ **Defensa en Profundidad (`L0`–`L5`):** Tubería secuencial desde integridad del arnés (`L0`), análisis estático y tipos estrictos (`L1`), tests unitarios (`L2`), aceptación sin regresiones (`L3`), arquitectura y seguridad (`L4`), hasta pruebas de mutación (`L5`).
+- ♻️ **Rojo → Verde → Refactor:** Tras el verde de cada escenario implementado, una llamada aparte mejora el diseño sin cambiar el comportamiento. Se verifica como un intento: pasan los mismos controles, todos los verdes siguen en verde y no baja lo que medían los controles en el verde (casos que pasan y puntuaciones). Si pasa, entra como un commit `refactor(<ID>)` propio; si no, se descarta y el verde se queda. Nunca gasta intentos ni pone nada en cuarentena ([ADR-0010](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0010-refactor-tras-cada-escenario.md)).
 - 🧬 **Aislamiento, Commits Atómicos y Cuarentena:** Cada escenario verificado produce un `git commit` limpio. Si un escenario agota sus intentos o el agente declara conflicto de especificación (`LICTOR: SPEC_CONFLICT`), Lictor pone el escenario en **cuarentena** y continúa con el resto. No hay nada que deshacer: el agente trabaja en una copia y la rama solo avanza con lo verificado.
 - 📊 **Trazabilidad CloudEvents 1.0 e Informes Ejecutivos:** Bitácora append-only en `.lictor/journal.jsonl` y generación automática de `.lictor/report.md` con métricas de tokens, coste en USD, duración de agente vs. verificación y commits por escenario.
 - 🏛️ **Arquitectura Hexagonal Pura:** Dominio 100 % libre de frameworks (`langgraph`, `pydantic`, `typer` prohibidos en el núcleo), blindado con contratos de `import-linter`.
@@ -81,7 +82,7 @@ Para profundizar en el concepto:
 
 ## 🔄 Ciclo de Ejecución
 
-El motor de orquestación ejecuta un grafo de estados de **11 nodos** con persistencia transaccional en SQLite (`PRAGMA synchronous = FULL`):
+El motor de orquestación ejecuta un grafo de estados de **14 nodos** con persistencia transaccional en SQLite (`PRAGMA synchronous = FULL`):
 
 ```mermaid
 flowchart TD
@@ -111,10 +112,18 @@ flowchart TD
     verify -->|Todo en verde| commit["✅ commit<br/>git commit atómico del escenario"]:::green
     verify -->|Fallo y quedan intentos| implement
     verify -->|Intentos agotados| quarantine
-    commit --> pick_next
+    commit -->|Refactor apagado| pick_next
+    commit -->|Refactor activo| refactor["♻️ refactor<br/>Agente mejora el diseño sin cambiar el comportamiento"]:::agent
+    refactor -->|Sin cambios o descartado| pick_next
+    refactor -->|Cuota agotada| pause
+    refactor -->|Cambios listos| verify_refactor["🛡️ verify_refactor<br/>Las mismas puertas, sin escenario propio"]:::gate
+    verify_refactor -->|Falla: se descarta, el verde se queda| pick_next
+    verify_refactor -->|Todo en verde| commit_refactor["✅ commit_refactor<br/>commit refactor propio"]:::green
+    commit_refactor --> pick_next
     quarantine --> pick_next
     pause -.->|Reanudar lictor run| implement
     pause -.->|Reanudar lictor run| build_driver
+    pause -.->|Reanudar lictor run| refactor
     report --> End
 ```
 
@@ -303,11 +312,17 @@ driver: escribiendo el driver, intento 1 de 2…
 driver: sellado (1 llamada, 0,07 $).
 IVA-001: implementando, intento 1 de 3…
 IVA-001: verde, intento 1, 28 s, 0,03 $.
+IVA-001: refactorizando sin cambiar el comportamiento…
+IVA-001: refactor sin cambios, nada que mejorar, 12 s, 0,01 $.
 IVA-002: implementando, intento 1 de 3…
 IVA-002: verde, intento 1, 27 s, 0,02 $.
+IVA-002: refactorizando sin cambiar el comportamiento…
+IVA-002: refactor aplicado, 25 s, 0,02 $.
 IVA-003: implementando, intento 1 de 3…
 IVA-003: verde, intento 1, 31 s, 0,02 $.
-Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
+IVA-003: refactorizando sin cambiar el comportamiento…
+IVA-003: refactor sin cambios, nada que mejorar, 10 s, 0,01 $.
+Total: 7 llamadas, 0,18 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 ```
 
 `lictor status` dice, para cada ejecución con su rama, en qué escenario e intento está, cuántos verdes lleva y cómo llegaron (implementados, colaterales, de antes), y las llamadas y el coste acumulados. El informe y la evidencia están en el `.lictor/` del worktree.
@@ -325,18 +340,19 @@ Total: 4 llamadas, 0,14 $; 3 en verde, 0 en cuarentena, 0 pendientes.
 - **Escenarios pendientes**: 0
 - **Código de salida**: 0
 - **Motivo**: Ejecución completada: 3 escenarios en verde
-- **Llamadas al agente**: 4 (driver: 1)
-- **Coste total**: 0,1406 $
+- **Llamadas al agente**: 7 (driver: 1, refactor: 3)
+- **Coste total**: 0,1823 $
 - **Duración total**: 2 min 31 s (agente 1 min 58 s, verificación 9 s)
 
 ## Escenarios
-| ID | Nombre | Estado | Intentos | Llamadas | Tokens (entrada / salida) | Coste | Tiempo agente | Tiempo verificación | Commit |
-|---|---|---|---|---|---|---|---|---|---|
-| driver | Driver de aceptación | sellado | 1 | 1 | 61204 / 2310 | 0,0710 $ | 41 s | - | 3f9c2a7b1d04 |
-| IVA-001 | IVA general | verde | 1 | 1 | 41120 / 890 | 0,0257 $ | 25 s | 3 s | a1b2c3d4e5f6 |
-| IVA-002 | IVA reducido | verde | 1 | 1 | 38850 / 640 | 0,0212 $ | 24 s | 3 s | 0e4f5a6b7c8d |
-| IVA-003 | Importe negativo | verde | 1 | 1 | 40010 / 710 | 0,0227 $ | 28 s | 3 s | 9a7b8c6d5e4f |
-| **Total** | | | | 4 | 181184 / 4550 | 0,1406 $ | 1 min 58 s | 9 s | |
+| ID | Nombre | Estado | Refactor | Intentos | Llamadas | Tokens (entrada / salida) | Coste | Tiempo agente | Tiempo verificación | Commit |
+|---|---|---|---|---|---|---|---|---|---|---|
+| driver | Driver de aceptación | sellado | - | 1 | 1 | 61204 / 2310 | 0,0710 $ | 41 s | - | 3f9c2a7b1d04 |
+| IVA-001 | IVA general | verde | sin cambios | 1 | 1 | 41120 / 890 | 0,0257 $ | 25 s | 3 s | a1b2c3d4e5f6 |
+| IVA-002 | IVA reducido | verde | aplicado | 1 | 1 | 38850 / 640 | 0,0212 $ | 24 s | 3 s | 0e4f5a6b7c8d |
+| IVA-003 | Importe negativo | verde | sin cambios | 1 | 1 | 40010 / 710 | 0,0227 $ | 28 s | 3 s | 9a7b8c6d5e4f |
+| refactor | Todos los refactors | - | - | - | 3 | 52400 / 1210 | 0,0417 $ | 44 s | 3 s | - |
+| **Total** | | | | | 7 | 233584 / 5760 | 0,1823 $ | 2 min 42 s | 12 s | |
 
 *La entrada incluye la caché: los tokens leídos y escritos en ella, que son casi toda la entrada de un agente.*
 
@@ -446,7 +462,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 ### Ejemplo de `lictor.json`
 
-`lictor init` escribe solo lo que decide la persona. Lo demás (`paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `gitignore`, `limits`, `retention`) sale del perfil en cada carga, así que una mejora del perfil llega al proyecto sin editar su `lictor.json`:
+`lictor init` escribe solo lo que decide la persona. Lo demás (`paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `gitignore`, `limits`, `retention`, `refactor`) sale del perfil o del valor por defecto en cada carga, así que una mejora del perfil llega al proyecto sin editar su `lictor.json`:
 
 ```json
 {
@@ -480,11 +496,19 @@ Un `lictor.json` con todo copiado, como los que escribía la 0.2.0, ya no vale: 
 
 Un control `check` solo protege lo que integras si tu CI ejecuta `lictor check`. El run los nombra en «Controles solo en `lictor check`» de `report.md` y en el motivo final, si guardó algún verde; `lictor doctor` lo recuerda con un ⚠. Si `lictor check` falla después de un run, los escenarios siguen en verde y el arreglo es tuyo, como el de una CI que falla después de fusionar. Los controles del perfil `python-uv` van todos en cada intento; en el `lictor.json` de Lictor, `mutation` y `audit` van en `check`.
 
+**El refactor tras cada escenario está activado por defecto** ([ADR-0010](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0010-refactor-tras-cada-escenario.md)). Después de cada verde que implementó el agente, una llamada aparte, con una copia nueva de HEAD, mejora el diseño sin cambiar el comportamiento, con los objetivos del perfil (`refactor_hints`: funciones cortas, complejidad baja, sin duplicación, un módulo por responsabilidad). Puede tocar `paths.writable`, los unitarios incluidos, pero se descarta si algún control JUnit pasa menos casos, o algún control con puntuación puntúa menos, que en la verificación del verde (`L0-regresión`). Tiene un solo intento: si falla, el verde se queda y el run sigue. Si un escenario pendiente pasa tras el refactor, queda en verde colateral. Se apaga con:
+
+```json
+{"refactor": {"enabled": false}}
+```
+
+Cambiarlo impide reanudar un run empezado con el otro valor. Los objetivos son del perfil, como `acceptance.driver_hints`: un `lictor.json` con `refactor_hints` no carga.
+
 **Qué manda cada lado.** Lo que garantiza la verificación lo declara solo el perfil y se lee de él en cada carga: un `lictor.json` no lo contiene, así que no puede quedar obsoleto. Declarar en `lictor.json` cualquiera de estos campos es un error de configuración.
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
 | Proyecto | `controls` | Cambios por `id` sobre los del perfil: cambian campos, quitan (`enabled: false`) o añaden |
@@ -564,7 +588,7 @@ Ambas se probaron con `uv` 0.12.18 contra un índice local con autenticación b�
 | `.lictor/report.md` | Informe ejecutivo en Markdown generado al finalizar o mediante `lictor report`. Cada ejecución lo sobrescribe y deja una copia en `.lictor/runs/<run_id>/report.md`. |
 | `.lictor/verify-env/` | Entorno de verificación, construido una vez por ejecución fuera del clon. |
 | `.lictor/verify_env.json` | Hash esperado de ese entorno y plugins que tiene instalados. |
-| `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente, su stderr y el prompt que recibió (`NNN-implement.json`, `NNN-implement.stderr.log`, `NNN-implement.prompt.md`) y un directorio por verificación (`NNN-verify/`, `NNN-red/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. Al empezar una ejecución nueva se conservan las `retention.keep_runs` más recientes (10 por defecto, contando la nueva) y nunca la de `current_run`; la bitácora registra lo retirado (`runs.pruned`) y el informe lo distingue de la evidencia alterada. |
+| `.lictor/runs/<run_id>/<escenario o driver>/` | Evidencia por intento: crudo del agente, su stderr y el prompt que recibió (`NNN-implement.json`, `NNN-implement.stderr.log`, `NNN-implement.prompt.md`; los del refactor, `NNN-refactor.*`, junto al intento que dio el verde) y un directorio por verificación (`NNN-verify/`, `NNN-red/`, `NNN-refactor-verify/`) con informes, salida de cada control y el error completo (`error.txt`). Ningún reintento pisa a otro: los nombres repetidos llevan `-rN`. Al empezar una ejecución nueva se conservan las `retention.keep_runs` más recientes (10 por defecto, contando la nueva) y nunca la de `current_run`; la bitácora registra lo retirado (`runs.pruned`) y el informe lo distingue de la evidencia alterada. |
 | `.lictor/check/` | Lo que deja el último `lictor check`: informes y salida de cada control, el log del entorno y su bitácora. Cada `check` sustituye al anterior. |
 | `.lictor/doctor/` | El log y la bitácora del entorno desechable del último `lictor doctor`. |
 
@@ -644,6 +668,7 @@ flowchart TB
 - 📝 **[ADR-0005](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0005-worktree-y-rama-propios.md):** Cada ejecución trabaja en su propio worktree y en su propia rama.
 - 📌 **[ADR-0006](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0006-precondiciones-check-y-registro-manual.md):** Precondiciones comunes, un `lictor check` que significa lo mismo que `run` y el registro manual de escenarios.
 - 📌 **[ADR-0007](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0007-momento-de-cada-control.md):** Cada control declara su momento: en cada intento o solo en `lictor check`.
+- 📌 **[ADR-0010](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0010-refactor-tras-cada-escenario.md):** Un paso de refactor tras cada escenario implementado, verificado como un intento.
 
 Los cambios de cada versión están en [`CHANGELOG.md`](https://github.com/jmorenobl/lictor/blob/master/CHANGELOG.md).
 

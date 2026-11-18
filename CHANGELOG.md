@@ -7,6 +7,42 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Un paso de refactor tras cada escenario implementado (ADR-0010): el «refactor» de
+rojo-verde-refactor, con el mismo oráculo. `lictor.json` gana un campo opcional, `refactor`, así que
+sube la versión menor.
+
+### Al actualizar desde la 0.6.1
+
+- **Un run empezado con la 0.6.1 no se reanuda.** El perfil `python-uv@0.2` declara ahora
+  `refactor_hints` y la configuración resuelta incluye `refactor`, que entran en la huella: la
+  reanudación sale con 10. Empieza uno nuevo con `lictor run --new`.
+- **Cada escenario implementado cuesta una llamada y una verificación más.** Se apaga con
+  `"refactor": {"enabled": false}` en `lictor.json`.
+
+### Añadido
+
+- **Refactor tras cada verde implementado.** Después del commit de un escenario que implementó el
+  agente, una llamada aparte, con una copia nueva de HEAD, mejora el diseño sin cambiar el
+  comportamiento, con los objetivos de calidad del perfil (`refactor_hints`). Se verifica como un
+  intento, sin escenario propio: las puertas L0, el sello y los controles de cada intento, y todos
+  los verdes tienen que seguir en verde. Si pasa, entra como un commit
+  `refactor(<ID>): mejorar el código sin cambiar el comportamiento`, sin `Scenario:` y con
+  `Lictor-Refactor-Of`; si no, se descarta y el verde se queda. Tiene un solo intento, no gasta los
+  del escenario y nunca lo pone en cuarentena. Un colateral, un registro o un re-registro no tienen
+  refactor, porque no cambian código.
+- **`L0-regresión`: un refactor no puede bajar lo que mide la verificación.** Se descarta si un
+  control JUnit pasa menos casos, o un control con puntuación puntúa menos, que en la verificación
+  del verde. Así no puede borrar los unitarios, que pasan vacíos, ni bajar la cobertura, que en
+  `python-uv` solo se mide.
+- **Un pendiente que pasa tras un refactor queda en verde colateral**, encadenado como en un
+  intento, y `report.md` dice de qué refactor salió.
+- **El refactor se ve aparte.** `lictor run` dice en stderr cómo acaba cada uno (aplicado, sin
+  cambios o descartado, y dónde falló), `lictor status` dice si hay uno en curso y separa su gasto
+  (`--json` gana `refactor`), y `report.md` gana una columna «Refactor», una fila «Todos los
+  refactors» y una sección «Refactors». El journal gana `lictor.scenario.refactored.v1`, y
+  `verify.finished` y las llamadas al agente llevan el rol `refactor`. La evidencia va en
+  `NNN-refactor.json` y `NNN-refactor-verify/`, junto al intento que dio el verde.
+
 ## [0.6.1] - 2026-11-18
 
 Un arreglo de la 0.6.0: medir la cobertura, como la 0.6.0 pide al agente, paraba el run en el primer

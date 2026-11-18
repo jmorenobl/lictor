@@ -47,6 +47,14 @@ from lictor.domain.model import (
     ScenarioId,
     TestCaseResult,
 )
+from lictor.domain.refactor import (
+    REFACTOR_REGRESSION,
+    Measure,
+    oracle_measures,
+    refactor_regressions,
+    refactor_subject,
+    regression_reason,
+)
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
@@ -84,7 +92,7 @@ from lictor.domain.verdicts import (
     trust,
 )
 
-RoleKind = Literal["implement", "driver"]
+RoleKind = Literal["implement", "driver", "refactor"]
 
 STATE_TAMPERED = "El estado de la ejecución fue modificado indebidamente"
 
@@ -113,6 +121,9 @@ class VerifyAttemptRequest:
     banned_patterns: Sequence[str] = ()
     tree: str | None = None
     link: MapLink = "name"
+    # A refactor (ADR-0010): the green it starts from, and what its verification measured.
+    refactor_of: str = ""
+    baseline: Mapping[str, Measure] = field(default_factory=dict)
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
     tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
@@ -251,7 +262,8 @@ class VerifyAttempt:
         """Run verification steps L0 to Acceptance sequentially."""
         scenario = _scenario_str(req.scenario_id)
         prefix = attempt_prefix(self.project_root, req.run_id, scenario, req.attempt)
-        step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-verify"))
+        step = "refactor-verify" if req.role == "refactor" else "verify"
+        step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-{step}"))
         req = replace(req, step_dir=step_dir)
         result = self._verify(req, scenario)
         return replace(result, evidence=step_evidence(step_dir, self.project_root))
@@ -318,7 +330,7 @@ class VerifyAttempt:
         if not routes_res.ok:
             return routes_res
 
-        if req.role == "implement":
+        if req.role != "driver":
             seal_res = self._check_seal(req)
             if not seal_res.ok:
                 return seal_res
@@ -334,6 +346,12 @@ class VerifyAttempt:
         return self.environment.run(cmd, self._tree_dir(req), timeout_s)
 
     def _create_candidate(self, req: VerifyAttemptRequest, scenario: str) -> Candidate:
+        if req.role == "refactor":
+            return self.vcs.commit_tree(
+                self._tree(req),
+                message=refactor_subject(scenario),
+                trailers={"Lictor-Run": req.run_id, "Lictor-Refactor-Of": req.refactor_of},
+            )
         return self.vcs.commit_tree(
             self._tree(req),
             message=f"feat({scenario}): implementar escenario",
@@ -373,6 +391,13 @@ class VerifyAttempt:
                     return self._fail(req, failure)
                 case Proceed():
                     pass
+        if req.role == "refactor":
+            regressions = refactor_regressions(req.baseline, oracle_measures(entries))
+            if regressions:
+                failure = _Failure(
+                    REFACTOR_REGRESSION, regression_reason(regressions), controls=tuple(entries)
+                )
+                return self._fail(req, failure)
         return self._run_acceptance(req, tuple(entries))
 
     def _fail(self, req: VerifyAttemptRequest, failure: _Failure) -> VerifyResult:
@@ -601,8 +626,10 @@ class VerifyAttempt:
 
         scenario_results: dict[str, str] = {sid: str(tc.status) for sid, tc in mapped.items()}
 
-        current = mapped.get(_scenario_str(req.scenario_id))
-        failure = acceptance_failure(_scenario_str(req.scenario_id), req.green_scenario_ids, mapped)
+        # A refactor has no scenario of its own to turn green: only the greens must stay green.
+        target = None if req.role == "refactor" else _scenario_str(req.scenario_id)
+        current = mapped.get(target) if target is not None else None
+        failure = acceptance_failure(target, req.green_scenario_ids, mapped)
         if failure is not None:
             reason, relevant_cases = failure
             failed = current is not None and current.status != "passed"

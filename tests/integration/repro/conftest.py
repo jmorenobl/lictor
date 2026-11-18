@@ -16,11 +16,13 @@ from tests.integration.repro.harness import (
     copy_project,
     git,
     isolated_env,
+    keeps_refactor,
     light_config,
     require,
     shell,
     uses_all_controls,
     uv_sync,
+    without_refactor,
 )
 
 DEMO_IVA_DIR = Path(__file__).resolve().parents[3] / "examples" / "demo-iva"
@@ -113,10 +115,17 @@ def make_project(
 ) -> ProjectFactory:
     """Return a factory of per-case projects, with optional `lictor.json` overrides.
 
-    The project is light (`light_config`) unless the case is marked `smoke` or `all_controls`.
-    Light rewrites the template's only commit, so the history has the same shape either way.
+    The project is light (`light_config`) unless the case is marked `smoke` or `all_controls`,
+    and has no refactor (ADR-0010) unless it is marked `smoke` or `with_refactor`. Either rewrites
+    the template's only commit, so the history has the same shape either way.
     """
-    light = not uses_all_controls({mark.name for mark in request.node.iter_markers()})
+    marks = {mark.name for mark in request.node.iter_markers()}
+    light = not uses_all_controls(marks)
+    refactor = keeps_refactor(marks)
+
+    def shaped(config: dict[str, Any]) -> dict[str, Any]:
+        config = light_config(config) if light else config
+        return config if refactor else without_refactor(config)
 
     def factory(
         *,
@@ -130,14 +139,14 @@ def make_project(
         copy_project(template, root)
         profiles = _case_profiles(allowed_paths, tmp_path / "perfiles", downloads=downloads)
         monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
-        if light:
-            _write_config(root, light_config(_read_config(root)))
+        if light or not refactor:
+            _write_config(root, shaped(_read_config(root)))
             git(root, "commit", "-q", "-a", "--amend", "--no-edit")
         if extra_controls or config_changes:
             config = _read_config(root)
             config.setdefault("controls", []).extend(extra_controls or [])
             config.update(config_changes or {})
-            _write_config(root, light_config(config) if light else config)
+            _write_config(root, shaped(config))
             git(root, "add", "-A")
             git(root, "commit", "-q", "--allow-empty", "-m", "chore: controles del caso")
         if sync:

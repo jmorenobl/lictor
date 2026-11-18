@@ -5,11 +5,14 @@ from lictor.domain.routing import (
     END,
     route_build_driver,
     route_commit,
+    route_commit_refactor,
     route_implement,
     route_load_spec,
     route_pause,
     route_red_check,
+    route_refactor,
     route_verify,
+    route_verify_refactor,
 )
 
 
@@ -213,3 +216,57 @@ def test_route_verify_ends_when_the_verification_stopped_the_run() -> None:
     state = {"exit_code": 10, "last_verify": {"ok": False}, "attempt": 2}
 
     assert route_verify(state, max_attempts=3) == END
+
+
+# The refactor after each implemented green (ADR-0010).
+
+
+def test_route_commit_goes_to_the_refactor_only_when_it_is_on() -> None:
+    assert route_commit({"agent_signal": None}) == "pick_next"
+    assert route_commit({"agent_signal": None}, refactor=True) == "refactor"
+    assert route_commit({"agent_signal": "blocked"}, refactor=True) == "pause"
+
+
+def test_route_refactor_ends_with_the_run() -> None:
+    assert route_refactor({"exit_code": 10, "agent_signal": "ok"}) == END
+
+
+@pytest.mark.parametrize("signal", ["rate_limited", "unavailable"])
+def test_route_refactor_pauses_when_the_backend_fails(signal: str) -> None:
+    assert route_refactor({"agent_signal": signal}) == "pause"
+
+
+def test_route_refactor_repeats_a_failed_call_that_keeps_its_attempt() -> None:
+    assert route_refactor({"agent_signal": "error", "agent_failures": 1}) == "refactor"
+
+
+def test_route_refactor_verifies_an_error_that_spent_its_attempt() -> None:
+    assert route_refactor({"agent_signal": "error", "agent_failures": 0}) == "verify_refactor"
+
+
+def test_route_refactor_goes_on_once_the_call_settled_it() -> None:
+    assert route_refactor({"agent_signal": "ok", "refactor_outcome": "unchanged"}) == "pick_next"
+    assert (
+        route_refactor({"agent_signal": "rejected", "refactor_outcome": "discarded"}) == "pick_next"
+    )
+
+
+@pytest.mark.parametrize("signal", ["ok", "spec_conflict"])
+def test_route_refactor_verifies_a_tree_it_left(signal: str) -> None:
+    assert route_refactor({"agent_signal": signal, "refactor_outcome": None}) == "verify_refactor"
+
+
+def test_route_verify_refactor_commits_what_passed_and_drops_what_failed() -> None:
+    assert route_verify_refactor({"last_verify": {"ok": True}}) == "commit_refactor"
+    assert route_verify_refactor({"last_verify": {"ok": False}}) == "pick_next"
+    assert route_verify_refactor({"exit_code": 40, "last_verify": {"ok": True}}) == END
+
+
+def test_route_commit_refactor_waits_for_a_blocked_branch() -> None:
+    assert route_commit_refactor({"agent_signal": "blocked"}) == "pause"
+    assert route_commit_refactor({"agent_signal": None}) == "pick_next"
+
+
+@pytest.mark.parametrize("target", ["refactor", "commit_refactor"])
+def test_route_pause_resumes_the_refactor(target: str) -> None:
+    assert route_pause({"resume_to": target}) == target
