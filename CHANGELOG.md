@@ -7,6 +7,30 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Al actualizar desde la 0.6.0
+
+- **Un run empezado con la 0.6.0 no se reanuda.** El `gitignore` del perfil `python-uv@0.2` nombra
+  ahora `.coverage`, y entra en la huella de la configuración resuelta: la reanudación sale con 10.
+  Empieza uno nuevo con `lictor run --new`. Un proyecto creado con `lictor init` de la 0.6.0 no
+  necesita tocar su `.gitignore`: Lictor ya deja fuera `.coverage` por su cuenta.
+
+### Corregido
+
+- **Medir la cobertura ya no para el run en el primer escenario** (F59). La 0.6.0 pide al agente
+  medirla con el `agent_run` del perfil, y pytest-cov deja `.coverage` en su copia. El `.gitignore`
+  que escribía `lictor init` no lo nombraba, así que entraba en el cambio del agente: `L0-rutas` lo
+  descartaba en cada intento y, al repetirse la ruta, el run salía con 10 diciendo que una persona
+  tenía que cambiar `.coverage`. Ahora lo que generan las herramientas del perfil (su lista
+  `gitignore`) se queda fuera del cambio del agente, diga lo que diga el `.gitignore` del proyecto,
+  y `lictor init` añade `.coverage` y `.coverage.*`. Lo mismo vale para `lictor check` con cambios
+  sin confirmar.
+
+### Cambiado
+
+- **El fichero global de ignorados del usuario (`~/.config/git/ignore`) ya no decide qué entra en
+  el cambio del agente ni en lo que verifica `lictor check`.** Lo que se verifica no depende de la
+  configuración de la máquina, como ya pasaba con el resto de la configuración de git.
+
 ## [0.6.0] - 2026-11-18
 
 Dos arreglos de la pasada de referencia con la calculadora: un escenario que el agente cumplía ya

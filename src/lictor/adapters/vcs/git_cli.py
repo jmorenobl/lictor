@@ -43,9 +43,16 @@ _EXECUTABLE_MODE = "100755"
 class GitCli(Vcs, Worktrees):
     """VCS implementation using the local git command line binary."""
 
-    def __init__(self, repo_dir: Path | None = None) -> None:
+    def __init__(self, repo_dir: Path | None = None, ignored: Sequence[str] = ()) -> None:
+        """`ignored` holds gitignore patterns `capture` leaves out whatever the tree ignores.
+
+        They are what the profile's own tools generate (F59): an agent that measures coverage
+        leaves `.coverage` in its copy, and a project whose `.gitignore` lacks it must not get it
+        in the candidate. They can only hide untracked files, as a `.gitignore` can.
+        """
         self.repo_dir = Path(repo_dir) if repo_dir is not None else Path.cwd()
         self._git_binary = shutil.which("git") or "git"
+        self._ignored = tuple(ignored)
 
     def _run_git(
         self,
@@ -208,10 +215,13 @@ class GitCli(Vcs, Worktrees):
         """Read a directory into a throwaway index over HEAD, without touching anything else.
 
         Only what git would track counts: an ignored file stays out, whoever ignored it, so a
-        `.gitignore` in `workdir` can only hide files from the result. A tracked file is always
-        compared, so it can't be hidden, and a deletion counts like any other change.
+        `.gitignore` in `workdir` can only hide files from the result. The patterns given as
+        `ignored` count as one more such file. A tracked file is always compared, so it can't be
+        hidden, and a deletion counts like any other change.
         """
         with tempfile.TemporaryDirectory(prefix="lictor-index-") as tmp:
+            excludes = Path(tmp) / "exclude"
+            excludes.write_text("".join(f"{p}\n" for p in self._ignored), encoding="utf-8")
             env = {
                 "GIT_INDEX_FILE": str(Path(tmp) / "index"),
                 "GIT_DIR": str(self._git_dir()),
@@ -219,7 +229,12 @@ class GitCli(Vcs, Worktrees):
                 **_NO_USER_CONFIG,
             }
             self._run_git(["read-tree", "HEAD"], env=env)
-            added = self._run_git(["add", "-A"], check=False, env=env, cwd=workdir)
+            added = self._run_git(
+                ["-c", f"core.excludesFile={excludes}", "add", "-A"],
+                check=False,
+                env=env,
+                cwd=workdir,
+            )
             if added.returncode != 0:
                 raise CandidateError(f"No se pudo leer el resultado: {added.stderr.strip()}")
             if skip:
