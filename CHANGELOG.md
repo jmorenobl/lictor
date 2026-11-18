@@ -7,6 +7,8 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.7.0] - 2026-11-18
+
 Un paso de refactor tras cada escenario implementado (ADR-0010): el «refactor» de
 rojo-verde-refactor, con el mismo oráculo. `lictor.json` gana un campo opcional, `refactor`, así que
 sube la versión menor.
@@ -578,7 +580,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.6.1...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jmorenobl/lictor/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmorenobl/lictor/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jmorenobl/lictor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jmorenobl/lictor/compare/v0.4.0...v0.5.0
