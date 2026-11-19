@@ -691,3 +691,46 @@ def test_the_scenarios_go_in_the_specs_order_not_the_checkpoints() -> None:
         "  - A-001: verde (registrado a mano)",
         "  - A-002: verde (registrado a mano)",
     ]
+
+
+def test_greens_the_code_already_met_go_on_a_line_of_their_own() -> None:
+    """ADR-0011: proved by the impostor of the interface, not by a test that failed once."""
+    progress = RunProgress()
+
+    held = _lines(
+        progress,
+        _event("scenario.green", "A-002", collateral=True),
+        _event("scenario.green", "A-003", collateral=True, proof="interface"),
+        _event("scenario.green", "A-004", collateral=True, proof="interface"),
+    )
+
+    assert held == []
+    assert progress.flush() == [
+        "A-002: verde colateral, sin llamar al agente.",
+        "A-003, A-004: ya se cumplían; sus tests comprueban el resultado, sin llamar al agente.",
+    ]
+    assert (progress.collateral, progress.already_met) == (["A-002"], ["A-003", "A-004"])
+
+
+def test_a_single_green_already_met_is_singular() -> None:
+    progress = RunProgress()
+    progress.observe(_event("scenario.green", "A-002", collateral=True, proof="interface"))
+
+    assert progress.flush() == [
+        "A-002: ya se cumplía; su test comprueba el resultado, sin llamar al agente."
+    ]
+    assert progress.greens == []  # greens follow the spec's ids, and none was loaded
+
+
+def test_status_tells_a_green_already_met_apart() -> None:
+    progress = _folded(
+        _spec("A-001", "A-002"),
+        _event("scenario.green", "A-001", collateral=True, proof="interface"),
+    )
+    values = {"status": {"A-001": "green", "A-002": "pending"}, "exit_code": 0}
+
+    lines = _status([], values, progress)
+
+    assert "Verdes: 1 de 2 (1 ya se cumplía). En cuarentena: 0. Pendientes: 1." in lines
+    assert "  - A-001: verde (ya se cumplía)" in lines
+    assert progress.greens == ["A-001"]

@@ -170,10 +170,21 @@ class VerificationEnvironment:
             fixed[self.spec.plugin_variable] = ",".join(plugins)
         return inherited | fixed
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
-        """Run a verification command inside this environment, with a home nobody has used."""
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        """Run a verification command inside this environment, with a home nobody has used.
+
+        `extra_env` is for what only Lictor sets, one run at a time: the variable of the profile's
+        impostor (ADR-0011), which the profile reserves so no project can fix it.
+        """
         with scratch_dir(self.project_root, "home-") as home:
-            return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=self.command_env(home))
+            env = {**self.command_env(home), **(extra_env or {})}
+            return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s, env=env)
 
     def _prepare_env(self, run_id: str, home: Path) -> dict[str, str]:
         """Return what `prepare` runs with, which no verification command gets to see."""

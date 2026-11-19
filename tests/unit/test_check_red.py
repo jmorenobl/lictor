@@ -1,4 +1,5 @@
 import contextlib
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from lictor.application.usecases.check_red import (
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
+from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import (
     Candidate,
     CommandOutput,
@@ -708,15 +710,16 @@ def _events(event_log: MagicMock, kind: str) -> list[Event]:
 def test_check_red_new_scenario_passing_with_a_fresh_driver_is_another_try(
     tmp_path: Path,
 ) -> None:
-    """With stubs in place, a new test that passes most likely checks nothing: the agent fixes."""
+    """A profile without the interface's impostor can't tell: the agent gets another try."""
     use_case, request, event_log, spec_source, _ = _real_check(tmp_path, _REPORT_OFFENDER, 1)
 
     result = use_case.execute(request)
 
     assert result.ok is False
     error = result.last_error or ""
-    assert "test_iva_002 del escenario IVA-002 pasa con un driver nuevo, sin llegar a" in error
-    assert "comprobar el resultado" in error
+    assert "test_iva_002 del escenario IVA-002 pasa con un driver nuevo, y este perfil no" in error
+    assert "sin llegar a la interfaz" not in error
+    assert "mientras la interfaz no esté implementada" not in error
     assert "--allow-empty" not in error
     rejection = _rejection(event_log)
     assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", False)
@@ -1250,3 +1253,344 @@ def test_check_red_never_judges_the_lines_of_a_sealed_driver(tmp_path: Path) -> 
     use_case.execute(request)
 
     use_case.vcs.added_lines.assert_not_called()
+
+
+# The impostor of the interface (ADR-0011): a new scenario that passes with a fresh driver.
+_INTERFACE = InterfaceImpostor("LICTOR_IMPOSTOR", "control", ("mas", "menos"))
+
+
+def _iface_xml(
+    name: str, failure: str = "", calls: int = 1, altered: int = 1, frame: str = ""
+) -> str:
+    props = [
+        ("lictor.interface.calls", str(calls)),
+        ("lictor.interface.altered", str(altered)),
+    ]
+    if failure:
+        props += [("lictor.failure", failure), ("lictor.frame", frame or "tests/acceptance/t.py")]
+    body = "".join(f'<property name="{key}" value="{value}"/>' for key, value in props)
+    fails = '<failure message="m"/>' if failure else ""
+    return f'<testcase name="{name}"><properties>{body}</properties>{fails}</testcase>'
+
+
+_IFACE_RED = _suite(_iface_xml("test_iva_001", "assertion"), _iface_xml("test_iva_002"))
+_IFACE_CONTROL = _IFACE_RED
+_IFACE_CAUGHT = _suite(
+    _iface_xml("test_iva_001", "assertion"), _iface_xml("test_iva_002", "assertion")
+)
+
+
+class _InterfaceRunner(_SuiteRunner):
+    """Reports by the mode the impostor's variable gives, or as the red without it."""
+
+    def __init__(self, reports: dict[str, tuple[str, int]]) -> None:
+        super().__init__("", 1)
+        self.reports = reports
+        self.told: list[dict[str, Any] | None] = []
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandOutput:
+        raw = (env or {}).get("LICTOR_IMPOSTOR")
+        told = json.loads(raw) if raw else None
+        self.told.append(told)
+        self.report, self.code = self.reports[told["mode"] if told else "red"]
+        return super().run(cmd, cwd, timeout_s, env)
+
+
+def _interface_check(
+    tmp_path: Path, reports: dict[str, tuple[str, int]], **overrides: Any
+) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock, _InterfaceRunner, MagicMock]:
+    fields: dict[str, Any] = {
+        "oracle": _ORACLE,
+        "interface_impostor": _INTERFACE,
+        "tree": "driver-tree",
+        **overrides,
+    }
+    use_case, request, event_log, spec_source, _ = _real_check(tmp_path, "", 1, **fields)
+    runner = _InterfaceRunner(reports)
+    use_case.environment.runner = runner
+    vcs = use_case.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.commit_tree.side_effect = [
+        Candidate("driver", "driver-tree", "head"),
+        Candidate("registro", "driver-tree", "driver"),
+    ]
+    return use_case, request, event_log, spec_source, runner, vcs
+
+
+def _proved_reports() -> dict[str, tuple[str, int]]:
+    return {
+        "red": (_IFACE_RED, 1),
+        "control": (_IFACE_CONTROL, 1),
+        "mas": (_IFACE_CAUGHT, 1),
+        "menos": (_IFACE_CAUGHT, 1),
+    }
+
+
+def test_check_red_a_new_scenario_the_code_already_met_is_a_proved_collateral(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, spec_source, runner, vcs = _interface_check(
+        tmp_path, _proved_reports()
+    )
+
+    result = use_case.execute(request)
+
+    assert result.ok is True
+    assert result.scenario_status == {"IVA-001": "pending", "IVA-002": "green"}
+    assert [t["mode"] if t else None for t in runner.told] == [None, "control", "mas", "menos"]
+    spec_source.write_seal.assert_called_once()
+    registration = vcs.commit_tree.call_args_list[1]
+    assert registration.kwargs["message"] == "test(IVA-002): ya se cumplía"
+    assert registration.kwargs["trailers"] == {
+        "Scenario": ["IVA-002"],
+        "Lictor-Collateral": "driver",
+        "Lictor-Proof": "interfaz",
+        "Lictor-Run": "R",
+    }
+    assert (registration.kwargs["parent"], registration.kwargs["empty"]) == ("driver", True)
+    vcs.advance_head.assert_called_once_with("registro", expected="head")
+    [green] = _events(event_log, "lictor.scenario.green.v1")
+    assert (green.scenarioid, green.data) == (
+        "IVA-002",
+        {"commit": "registro", "collateral": True, "proof": "interface"},
+    )
+    [sealed] = _events(event_log, "lictor.driver.sealed.v1")
+    assert sealed.data["already_met"] == ["IVA-002"]
+    assert sealed.data["stub_impostors"] is None
+    step = runner.paths[0].parent
+    for mode in ("control", "mas", "menos"):
+        log = (step / f"interfaz-{mode}" / "acceptance.log").read_text(encoding="utf-8")
+        assert log.startswith("Comando: ")
+
+
+def test_check_red_tells_the_impostor_where_the_boundary_lies_in_each_clone(
+    tmp_path: Path,
+) -> None:
+    use_case, request, _, _, runner, _ = _interface_check(tmp_path, _proved_reports())
+
+    use_case.execute(request)
+
+    told = [t for t in runner.told if t is not None]
+    for entry in told:
+        [writable], [driver] = entry["writable"], entry["driver"]
+        assert Path(writable).name == "src"
+        assert Path(driver).parts[-2:] == ("tests", "acceptance")
+        assert Path(writable).parent == Path(driver).parent.parent
+    assert len({entry["writable"][0] for entry in told}) == len(told), "un clon por modo"
+
+
+def test_check_red_a_new_test_that_survives_an_alteration_is_another_try(tmp_path: Path) -> None:
+    reports = {**_proved_reports(), "menos": (_IFACE_RED, 1)}
+    use_case, request, event_log, spec_source, _, vcs = _interface_check(tmp_path, reports)
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    rejection = _rejection(event_log)
+    assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", False)
+    error = str(rejection.data["error"])
+    assert "sigue pasando cuando la interfaz devuelve otro valor (modo menos)" in error
+    assert "lictor register" not in error
+    spec_source.write_seal.assert_not_called()
+    vcs.advance_head.assert_not_called()
+    assert _events(event_log, "lictor.scenario.green.v1") == []
+
+
+def test_check_red_a_surviving_test_on_the_last_attempt_carries_the_hint(tmp_path: Path) -> None:
+    reports = {**_proved_reports(), "mas": (_IFACE_RED, 1)}
+    use_case, request, event_log, _, _, _ = _interface_check(
+        tmp_path, reports, driver_attempts=3, max_driver_attempts=3
+    )
+
+    with pytest.raises(DriverError, match="tras 3 intentos") as raised:
+        use_case.execute(request)
+
+    assert "`lictor register IVA-002`" in str(raised.value)
+    assert _rejection(event_log).data["final"] is True
+
+
+def test_check_red_what_no_retry_can_change_stops_for_a_person(tmp_path: Path) -> None:
+    """The interface returns an object the impostor can't alter: the agent can't change that."""
+    untouched = _suite(
+        _iface_xml("test_iva_001", "assertion"), _iface_xml("test_iva_002", altered=0)
+    )
+    reports = {**_proved_reports(), "mas": (untouched, 1), "menos": (untouched, 1)}
+    use_case, request, event_log, spec_source, _, _ = _interface_check(tmp_path, reports)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    message = str(raised.value)
+    assert raised.value.exit_code == 10
+    assert "no se puede alterar" in message
+    assert "Otro intento del driver no lo cambiaría" in message
+    assert "`lictor register IVA-002`" in message
+    rejection = _rejection(event_log)
+    assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", True)
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_an_impostor_run_that_crashed_proves_nothing(tmp_path: Path) -> None:
+    reports = {**_proved_reports(), "mas": ("", 2)}
+    use_case, request, event_log, spec_source, _, _ = _interface_check(tmp_path, reports)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    assert "con el modo mas del impostor no dejó un informe válido" in str(raised.value)
+    assert _rejection(event_log).data["reason"] == "sin_prueba"
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_an_impostor_run_that_doesn_t_map_proves_nothing(tmp_path: Path) -> None:
+    lost = _suite(_iface_xml("test_iva_001", "assertion"), _iface_xml("test_otro", "assertion"))
+    reports = {**_proved_reports(), "control": (lost, 1)}
+    use_case, request, _, _, _, _ = _interface_check(tmp_path, reports)
+
+    with pytest.raises(DriverError, match="no se pudo emparejar"):
+        use_case.execute(request)
+
+
+def test_check_red_proves_nothing_unless_every_scenario_is_proved(tmp_path: Path) -> None:
+    """Once sealed, the next red would register an unproved one as a collateral: no half seal."""
+    red = _suite(_iface_xml("test_iva_001"), _iface_xml("test_iva_002"))
+    half = _suite(_iface_xml("test_iva_001", "assertion"), _iface_xml("test_iva_002"))
+    reports = {"red": (red, 0), "control": (red, 0), "mas": (half, 1), "menos": (half, 1)}
+    use_case, request, event_log, spec_source, _, vcs = _interface_check(tmp_path, reports)
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    error = str(_rejection(event_log).data["error"])
+    assert "IVA-002" in error
+    assert "IVA-001" not in error
+    spec_source.write_seal.assert_not_called()
+    assert vcs.commit_tree.call_count == 1  # the driver's candidate, and no registration
+
+
+def test_check_red_a_reopened_scenario_never_runs_the_impostor(tmp_path: Path) -> None:
+    use_case, request, _, _, runner, _ = _interface_check(tmp_path, _proved_reports())
+    assert isinstance(use_case.history, MagicMock)
+    use_case.history.classify.side_effect = lambda current: {
+        "IVA-001": "new",
+        "IVA-002": "reopened",
+    }
+
+    with pytest.raises(DriverError, match="La especificación de IVA-002 cambió"):
+        use_case.execute(request)
+
+    assert runner.told == [None]
+
+
+def test_check_red_a_sealed_driver_never_runs_the_impostor(tmp_path: Path) -> None:
+    use_case, request, event_log, _, runner, vcs = _interface_check(
+        tmp_path, _proved_reports(), driver_fresh=False, driver_attempts=0, tree=None
+    )
+    vcs.commit_tree.side_effect = None
+    vcs.commit_tree.return_value = Candidate("registro", "tree", "head")
+
+    assert use_case.execute(request).ok is True
+
+    assert runner.told == [None]
+    [green] = _events(event_log, "lictor.scenario.green.v1")
+    assert "proof" not in green.data
+
+
+def test_check_red_tampering_during_an_impostor_run_is_a_recorded_rejection(
+    tmp_path: Path,
+) -> None:
+    use_case, request, event_log, spec_source, runner, _ = _interface_check(
+        tmp_path, _proved_reports()
+    )
+    state = tmp_path / ".lictor" / "seal.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{}", encoding="utf-8")
+
+    def tamper() -> None:
+        if len(runner.told) == 2:  # the control run is about to report
+            state.write_text('{"forjado": true}', encoding="utf-8")
+
+    runner.on_run = tamper
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert _rejection(event_log).data["reason"] == "L0-estado"
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_a_profile_without_the_impostor_runs_nothing_more(tmp_path: Path) -> None:
+    use_case, request, event_log, _, runner, _ = _interface_check(
+        tmp_path, _proved_reports(), interface_impostor=None
+    )
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert runner.told == [None]
+    assert "este perfil no puede comprobar" in str(_rejection(event_log).data["error"])
+
+
+def _without_stubs(dest: Path) -> None:
+    (dest / "src").mkdir(parents=True)
+    (dest / "src" / "iva.py").write_text("def general():\n    return 21\n", encoding="utf-8")
+
+
+def test_check_red_stub_impostors_with_no_stub_run_nothing_and_say_so(tmp_path: Path) -> None:
+    """In a project with code there is nothing to replace: the count says so (ADR-0011, 7)."""
+    red = _suite(_iface_xml("test_iva_001", "assertion"), _iface_xml("test_iva_002", "assertion"))
+    use_case, request, event_log, spec_source, runner, vcs = _interface_check(
+        tmp_path, {"red": (red, 1)}, impostors=_IMPOSTORS
+    )
+    vcs.export_tree.side_effect = lambda _rev, dest: _without_stubs(dest)
+
+    assert use_case.execute(request).ok is True
+
+    assert runner.told == [None]
+    spec_source.write_seal.assert_called_once()
+    [sealed] = _events(event_log, "lictor.driver.sealed.v1")
+    assert sealed.data["stub_impostors"] == 0
+
+
+def test_check_red_counts_the_stubs_the_impostors_replaced(tmp_path: Path) -> None:
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+        "return True": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is True
+
+    [sealed] = _events(event_log, "lictor.driver.sealed.v1")
+    assert sealed.data["stub_impostors"] == 1
+
+
+def test_check_red_a_stub_failure_with_no_stub_to_replace_is_refused(tmp_path: Path) -> None:
+    red = _suite(
+        _case_xml("test_iva_001", "not_implemented"), _case_xml("test_iva_002", "assertion")
+    )
+    use_case, request, event_log, _, runner, vcs = _interface_check(
+        tmp_path, {"red": (red, 1)}, impostors=_IMPOSTORS
+    )
+    vcs.export_tree.side_effect = lambda _rev, dest: _without_stubs(dest)
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    rejection = _rejection(event_log)
+    assert rejection.data["reason"] == "impostor"
+    assert "no hay ningún stub que sustituir" in str(rejection.data["error"])
+    assert runner.told == [None]

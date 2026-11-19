@@ -266,10 +266,18 @@ class CommandOutput:
 
 
 # Properties a profile's runner may attach to each test case. Lictor names them, not the tool.
-FAILURE_PROPERTY = "lictor.failure"  # assertion | not_implemented | error
+FAILURE_PROPERTY = "lictor.failure"  # assertion | not_implemented | impostor | error
 ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to the project
+FRAME_PROPERTY = "lictor.frame"  # last frame of the failure inside the project, relative to it
+INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to the interface
+INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
 SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
 FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
+
+
+def _count(value: str) -> int:
+    """Read a count a plugin reported; anything that isn't one counts as nothing."""
+    return int(value) if value.isascii() and value.isdigit() else 0
 
 
 @dataclass(frozen=True)
@@ -292,6 +300,25 @@ class TestCaseResult:
     def origin(self) -> str:
         """Where the failure was raised, or "" if outside the project or not reported."""
         return self.properties.get(ORIGIN_PROPERTY, "")
+
+    @property
+    def frame(self) -> str:
+        """The last frame of the failure inside the project, or "" if none is or it isn't said.
+
+        An assertion the test runner raises for the test, as when an expected exception never
+        came, has its innermost frame inside the runner: this is the test's own line.
+        """
+        return self.properties.get(FRAME_PROPERTY, "")
+
+    @property
+    def interface_calls(self) -> int:
+        """How many times the test called the interface, as the impostor counted them."""
+        return _count(self.properties.get(INTERFACE_CALLS_PROPERTY, ""))
+
+    @property
+    def interface_altered(self) -> int:
+        """How many results of those calls the impostor managed to alter."""
+        return _count(self.properties.get(INTERFACE_ALTERED_PROPERTY, ""))
 
     @property
     def scenario_tags(self) -> tuple[str, ...]:

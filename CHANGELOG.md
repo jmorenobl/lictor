@@ -7,6 +7,50 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Un escenario nuevo que el código ya cumple se prueba con un impostor de la interfaz, en lugar de
+pedir un registro a mano (ADR-0011, F58). Cambia lo que hace un run, así que sube la versión menor.
+
+### Al actualizar desde la 0.7.1
+
+- **Un run empezado con la 0.7.1 no se reanuda.** El perfil `python-uv@0.2` declara
+  `oracle.interface_impostor`, un plugin más y `LICTOR_*` en `reserved`, que entran en la huella:
+  la reanudación sale con 10. Empieza uno nuevo con `lictor run --new`.
+- **Un `lictor.json` no puede fijar ni heredar una variable `LICTOR_*`:** son del perfil.
+
+### Añadido
+
+- **El impostor de la interfaz.** Con un driver nuevo, un escenario nuevo que ya pasa se prueba
+  antes de rechazar el driver: el plugin `lictor_impostor` del perfil altera lo que la interfaz
+  devuelve al driver (el número + 1 y − 1, el booleano al contrario, un texto o una colección con
+  un elemento de más o de menos, la excepción tragada o cambiada por otra). Si en los dos modos el
+  test falla por una aserción suya, el código ya cumplía el escenario: queda en verde sin llamar al
+  agente y sin registro a mano, en un commit vacío con `Lictor-Collateral` y `Lictor-Proof:
+  interfaz`. La aceptación corre tres veces más, solo cuando hay escenarios nuevos que pasan.
+- `report.md` tiene una sección «Ya se cumplían» y marca esos escenarios «verde (ya se cumplía)»;
+  `lictor status` y el progreso del run los cuentan aparte (`--json`: `greens.already_met`).
+- `driver.sealed` lleva `already_met` y `stub_impostors` (cuántos stubs sustituyeron los
+  impostores; 0 si no había ninguno y no se ejecutaron).
+
+### Cambiado
+
+- **El rechazo `sin_prueba` dice lo que vio el impostor:** que el test no llama a la interfaz, que
+  sigue pasando con otro valor, que falla pero no por una aserción suya, o que lo que devuelve no
+  se puede alterar. Ya no afirma que el test «pasa sin llegar a la interfaz» ni pide que falle
+  mientras la interfaz no esté implementada. Cuando ningún reintento puede cambiarlo (un objeto que
+  no se altera, una ejecución del impostor que cae), para con exit 10 a la primera y pide decidir
+  con `lictor register`, en lugar de gastar el resto de intentos del driver.
+- **Los impostores de stubs no se dan por superados sin stubs.** En un proyecto con código no había
+  nada que sustituir y la comprobación pasaba sin probar nada; ahora no se ejecutan y el sello lo
+  dice. Un test que falla por `NotImplementedError` sin ningún stub que sustituir se rechaza.
+- El prompt del driver ya no dice que cada test tiene que fallar: si el código ya cumple el
+  escenario, el test pasa y Lictor lo comprueba. Pide los valores del Gherkin, nunca de ejecutar el
+  código.
+
+### Limitaciones conocidas
+
+- El impostor prueba que el test mira el resultado, no que lo compare con el valor del escenario:
+  un driver que copia en el assert lo que devuelve el código lo supera aunque ese valor esté mal.
+
 ## [0.7.1] - 2026-11-19
 
 Un arreglo de la 0.7.0: la guarda del refactor descartaba los refactors que solo quitaban código

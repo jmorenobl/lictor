@@ -170,6 +170,7 @@ def _new_owner() -> dict[str, Any]:
         "verify_ms": 0,
         "commit": "-",
         "collateral": False,
+        "already_met": False,
     }
 
 
@@ -292,6 +293,12 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         "",
         "## Verdes colaterales",
         *(sorted(info["collateral"]) or ["- *Ningún verde colateral.*"]),
+        "",
+        "## Ya se cumplían",
+        *(
+            sorted(info["already_met"])
+            or ["- *Ningún escenario nuevo que el código ya cumpliera.*"]
+        ),
     ]
 
 
@@ -327,7 +334,9 @@ def _scenario_table(
         lines.append(_row(DRIVER_OWNER, "Driver de aceptación", driver["status"], driver))
     for sid, s in sorted(info["scenarios"].items()):
         status = status_text(s["status"])
-        if s["status"] == "green" and s["collateral"]:
+        if s["status"] == "green" and s["already_met"]:
+            status = f"{status} (ya se cumplía)"
+        elif s["status"] == "green" and s["collateral"]:
             status = f"{status} (colateral)"
         refactor = info["refactors"].get(sid)
         lines.append(_row(sid, s["name"], status, s, _refactor_text(refactor)))
@@ -428,6 +437,7 @@ class BuildReport:
             "reregistered": [],
             "by_hand": [],
             "collateral": [],
+            "already_met": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -503,7 +513,13 @@ class BuildReport:
 
     def _on_scenario_green(self, ev: Event, info: dict[str, Any]) -> None:
         sid = ev.scenarioid
-        if ev.data.get("collateral"):
+        commit = str(ev.data.get("commit", ""))[:12]
+        if ev.data.get("proof") == "interface":
+            info["already_met"].append(
+                f"- **{sid}**: el código ya lo cumplía; su test falla cuando la interfaz devuelve "
+                f"otro valor, y pasó sin llamar al agente en `{commit}`"
+            )
+        elif ev.data.get("collateral"):
             after = ev.data.get("after_refactor")
             how = f"tras el refactor de {after}" if after else "sin llamar al agente"
             info["collateral"].append(
@@ -513,6 +529,7 @@ class BuildReport:
             info["scenarios"][sid]["status"] = "green"
             info["scenarios"][sid]["commit"] = str(ev.data.get("commit", "-"))
             info["scenarios"][sid]["collateral"] = bool(ev.data.get("collateral"))
+            info["scenarios"][sid]["already_met"] = ev.data.get("proof") == "interface"
             raw_attempts = ev.data.get("attempt", ev.data.get("attempts", 1))
             if isinstance(raw_attempts, (int, str)):
                 info["scenarios"][sid]["attempts"] = max(

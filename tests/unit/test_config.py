@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -44,11 +44,16 @@ from lictor.adapters.config.models import (
     agent_run_problems,
     domain_controls,
 )
-from lictor.adapters.config.profiles.python_uv import lictor_outcome, lictor_project_path
+from lictor.adapters.config.profiles.python_uv import (
+    lictor_impostor,
+    lictor_outcome,
+    lictor_project_path,
+)
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
 )
 from lictor.domain.errors import ConfigError, ExitCode
+from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.rules import banned_matches
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -523,7 +528,11 @@ def test_profile_declares_how_verification_stays_out_of_the_agents_reach() -> No
 def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
     spec = resolve_defences(load_config(REPO_ROOT)).verification
 
-    assert [path.name for path in spec.files] == ["lictor_project_path.py", "lictor_outcome.py"]
+    assert [path.name for path in spec.files] == [
+        "lictor_project_path.py",
+        "lictor_outcome.py",
+        "lictor_impostor.py",
+    ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
     assert "get_path" in spec.files_dir_command
@@ -544,7 +553,25 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     ("plugin", "expected"),
     [
         (lictor_project_path.__file__, {"pytest", "sys", "typing"}),
-        (lictor_outcome.__file__, {"pytest", "pathlib", "typing", "collections"}),
+        (lictor_outcome.__file__, {"pytest", "pathlib", "sys", "typing", "collections"}),
+        (
+            lictor_impostor.__file__,
+            {
+                "collections",
+                "decimal",
+                "fractions",
+                "functools",
+                "importlib",
+                "inspect",
+                "json",
+                "math",
+                "os",
+                "pytest",
+                "sys",
+                "types",
+                "typing",
+            },
+        ),
     ],
 )
 def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> None:
@@ -704,6 +731,7 @@ def _project(tmp_path: Path, **fields: object) -> Path:
         {"verification": {"unset": []}},
         {"verification": {"reserved": []}},
         {"verification": {"plugin_variable": "OTRA"}},
+        {"oracle": {"interface_impostor": None}},
     ],
     ids=lambda fields: next(iter(fields.get("verification", fields))),
 )
@@ -735,6 +763,8 @@ def test_a_project_cannot_declare_a_defence_of_the_profile(
         "COV_CORE_SOURCE",
         "MYPYPATH",
         "RUFF_CONFIG",
+        "LICTOR_IMPOSTOR",
+        "LICTOR_OTRA",
         "PATH",
         "HOME",
         "NETRC",
@@ -828,7 +858,11 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
     profiles.mkdir()
     (profiles / "python-uv.json").write_text(json.dumps(profile_data), encoding="utf-8")
     (profiles / "python_uv").mkdir()
-    for plugin in (lictor_project_path.__file__, lictor_outcome.__file__):
+    for plugin in (
+        lictor_project_path.__file__,
+        lictor_outcome.__file__,
+        lictor_impostor.__file__,
+    ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
     defences = resolve_defences(load_config(tmp_path, profiles), profiles)
@@ -866,7 +900,7 @@ def test_demo_declares_nothing_of_its_own() -> None:
 def test_profile_no_longer_assumes_a_project_dependency() -> None:
     verification = load_profile("python-uv").verification
 
-    assert verification.plugins == ["lictor_project_path", "lictor_outcome"]
+    assert verification.plugins == ["lictor_project_path", "lictor_outcome", "lictor_impostor"]
     assert "PYTEST_PLUGINS" not in verification.env
 
 
@@ -1406,3 +1440,50 @@ def test_a_lictor_json_with_refactor_hints_is_refused_naming_hints(tmp_path: Pat
     assert exc_info.value.exit_code == ExitCode.PRECONDITION
     assert "refactor_hints" in message
     assert "hints" in message.replace("refactor_hints", "")
+
+
+def test_the_profile_declares_the_impostor_of_the_interface() -> None:
+    defences = resolve_defences(load_config(REPO_ROOT))
+
+    assert defences.interface_impostor == InterfaceImpostor(
+        "LICTOR_IMPOSTOR", "control", ("mas", "menos")
+    )
+
+
+def _profile_with(**changes: Any) -> dict[str, Any]:
+    data = load_profile("python-uv").model_dump(mode="json")
+    for dotted, value in changes.items():
+        *path, key = dotted.split("__")
+        target = data
+        for part in path:
+            target = target[part]
+        target[key] = value
+    return data
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"verification__reserved": ["PYTHON*"]}, "no está en reserved"),
+        ({"verification__inherit": ["PATH", "LICTOR_IMPOSTOR"]}, "que fija verification"),
+        ({"verification__env": {"LICTOR_IMPOSTOR": "1"}}, "que fija verification"),
+        (
+            {"oracle__interface_impostor": {"variable": "X", "control": "a", "modes": ["a"]}},
+            "repite un modo",
+        ),
+        (
+            {"oracle__interface_impostor": {"variable": "X", "control": "a", "modes": ["../b"]}},
+            "pattern",
+        ),
+        (
+            {"oracle__interface_impostor": {"variable": "x-y", "control": "a", "modes": ["b"]}},
+            "pattern",
+        ),
+        ({"oracle__interface_impostor": {"variable": "X", "control": "a", "modes": []}}, "modes"),
+    ],
+)
+def test_the_impostor_s_variable_and_modes_are_checked_with_the_profile(
+    changes: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Profile.model_validate(_profile_with(**changes))

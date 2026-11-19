@@ -1051,3 +1051,21 @@ def test_a_run_without_refactors_says_so(tmp_path: Path) -> None:
     report = _report(tmp_path, _summary_run())
 
     assert "- *Ningún refactor.*" in report.split("## Refactors")[1]
+
+
+def test_report_lists_the_scenarios_the_code_already_met(tmp_path: Path) -> None:
+    loaded = _event("lictor.spec.loaded.v1", {"scenarios": [{"id": "IVA-002", "name": "R"}]})
+    green = _event(
+        "lictor.scenario.green.v1",
+        {"commit": "c" * 40, "attempt": 0, "collateral": True, "proof": "interface"},
+        "IVA-002",
+    )
+
+    report = _report(tmp_path, [loaded, green])
+
+    section = report.split("## Ya se cumplían")[1].split("##")[0]
+    assert "- **IVA-002**: el código ya lo cumplía; su test falla cuando" in section
+    assert f"`{'c' * 12}`" in section
+    assert "verde (ya se cumplía)" in report
+    assert "*Ningún verde colateral.*" in report
+    assert "*Ningún escenario nuevo que el código ya cumpliera.*" in _report(tmp_path, [])

@@ -1,6 +1,7 @@
 import re
 import shlex
 from collections.abc import Sequence
+from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
@@ -229,6 +230,31 @@ class ImpostorConfig(BaseModel):
         return _validate_regexes([pattern])[0]
 
 
+_MODE_NAME = r"^[a-z][a-z0-9_-]*$"
+
+
+class InterfaceImpostorConfig(BaseModel):
+    """How the profile's impostor of the interface is told what to do (ADR-0011).
+
+    Each run of the acceptance gets `variable` with one mode: `control` wraps the interface and
+    alters nothing, and each of `modes` alters what it returns to the driver.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    variable: str = Field(pattern=r"^[A-Z_][A-Z0-9_]*$")
+    # Each mode names a directory of evidence: `interfaz-<modo>`.
+    control: str = Field(pattern=_MODE_NAME)
+    modes: list[Annotated[str, Field(pattern=_MODE_NAME)]] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_distinct_modes(self) -> Self:
+        names = [self.control, *self.modes]
+        if len(set(names)) != len(names):
+            raise ValueError("oracle.interface_impostor repite un modo")
+        return self
+
+
 class ProfileOracle(BaseModel):
     """What makes the sealed driver a valid oracle: only the profile declares it."""
 
@@ -237,6 +263,7 @@ class ProfileOracle(BaseModel):
     link: MapLinkKind = "name"
     red_kinds: list[RedKind] = Field(default_factory=list)
     impostors: ImpostorConfig | None = None
+    interface_impostor: InterfaceImpostorConfig | None = None
 
 
 class ProjectVerification(BaseModel):
@@ -657,6 +684,22 @@ class Profile(BaseModel):
     @model_validator(mode="after")
     def _validate_readers(self) -> Self:
         _check_readers(self.controls)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_impostor_variable(self) -> Self:
+        """The impostor's variable belongs to it alone: nothing else may fix or inherit it."""
+        impostor = self.oracle.interface_impostor
+        if impostor is None:
+            return self
+        verification = self.verification
+        taken = {*verification.env, *verification.inherit, verification.plugin_variable}
+        if impostor.variable in taken:
+            msg = f"oracle.interface_impostor usa {impostor.variable}, que fija verification"
+            raise ValueError(msg)
+        if not any(fnmatchcase(impostor.variable, p) for p in verification.reserved):
+            msg = f"oracle.interface_impostor usa {impostor.variable}, que no está en reserved"
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")

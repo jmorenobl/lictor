@@ -17,6 +17,7 @@ from lictor.adapters.config.models import (
     LictorFile,
     LimitsConfig,
     Profile,
+    ProfileOracle,
     ProfileVerification,
     ProjectVerification,
     ReaderControlConfig,
@@ -30,6 +31,7 @@ from lictor.adapters.config.models import (
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.errors import ConfigError
+from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.rules import Impostors, MapLink
 
 CONFIG_FILENAME = "lictor.json"
@@ -59,6 +61,7 @@ class Defences:
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
+    interface_impostor: InterfaceImpostor | None = None
 
 
 def _resolve_profiles_dir(profiles_dir: Path | None) -> Path:
@@ -600,8 +603,12 @@ def _allow_empty_in_profile(profile: Profile, control_id: str) -> str:
     return allow_empty_message(control_id, codes)
 
 
-def _reject_reserved_names(project: ProjectVerification, profile: ProfileVerification) -> None:
+def _reject_reserved_names(
+    project: ProjectVerification, profile: ProfileVerification, oracle: ProfileOracle
+) -> None:
+    impostor = oracle.interface_impostor
     fixed_by_profile = {
+        *([impostor.variable] if impostor is not None else []),
         *profile.env,
         *profile.inherit,
         *profile.prepare_inherit,
@@ -627,7 +634,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
     """Combine the project's needs with its profile: the profile wins, the project only adds."""
     profile = load_profile(config.profile, profiles_dir)
     project = config.verification
-    _reject_reserved_names(project, profile.verification)
+    _reject_reserved_names(project, profile.verification, profile.oracle)
     if not profile.verification.plugins_command:
         for control in config.controls:
             if control.when_plugin is not None:
@@ -657,6 +664,11 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         impostors=(
             Impostors(imp.pattern, tuple(imp.replacements))
             if (imp := profile.oracle.impostors) is not None
+            else None
+        ),
+        interface_impostor=(
+            InterfaceImpostor(face.variable, face.control, tuple(face.modes))
+            if (face := profile.oracle.interface_impostor) is not None
             else None
         ),
     )

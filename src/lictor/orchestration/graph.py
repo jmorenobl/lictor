@@ -61,6 +61,7 @@ from lictor.domain.errors import (
     SealTamperedError,
     SpecError,
 )
+from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.refactor import (
     RefactorRecord,
@@ -218,6 +219,7 @@ class GraphContext:
     oracle: RedOracle = field(default_factory=RedOracle)
     map_link: MapLink = "name"
     impostors: Impostors | None = None
+    interface_impostor: InterfaceImpostor | None = None
     # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
     check_controls: tuple[Control, ...] = ()
     # Only to ask which plugins load, so the agent hears of no minimum the run skips (F55).
@@ -472,6 +474,7 @@ class _GraphNodes:
                     oracle=self.ctx.oracle,
                     link=self.ctx.map_link,
                     impostors=self.ctx.impostors,
+                    interface_impostor=self.ctx.interface_impostor,
                     suppressions=self.ctx.suppressions,
                     banned_patterns=self.ctx.banned_patterns,
                 )

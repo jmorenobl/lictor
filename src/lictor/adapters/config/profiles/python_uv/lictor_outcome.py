@@ -6,6 +6,7 @@ failures count as a valid red is up to the profile. It runs in the same process 
 test, which could forge them, as it could forge the whole report.
 """
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 FAILURE = "lictor.failure"
 ORIGIN = "lictor.origin"
+FRAME = "lictor.frame"
 SCENARIO = "lictor.scenario"
 FEATURE = "lictor.feature"
 
@@ -28,12 +30,22 @@ def _relative(path: object, root: Path) -> str:
         return ""
 
 
+def _impostor_error() -> type[BaseException] | None:
+    """The error the profile's impostor raises in place of the interface's, if it loaded."""
+    module = sys.modules.get("lictor_impostor")
+    error = getattr(module, "ImpostorError", None)
+    return error if isinstance(error, type) and issubclass(error, BaseException) else None
+
+
 def failure_kind(excinfo: pytest.ExceptionInfo[BaseException], when: str) -> str:
     """Classify by the exception's class, never by its text."""
     if when != "call":
         return "error"
     if excinfo.errisinstance(NotImplementedError):
         return "not_implemented"
+    impostor = _impostor_error()
+    if impostor is not None and excinfo.errisinstance(impostor):
+        return "impostor"
     if excinfo.errisinstance((AssertionError, pytest.fail.Exception)):
         return "assertion"
     return "error"
@@ -56,6 +68,21 @@ def pytest_runtest_makereport(
     report = outcome.get_result()
     recorded = any(name == FAILURE for name, _ in item.user_properties)
     if report.failed and call.excinfo is not None and not recorded:
-        origin = _relative(call.excinfo.traceback[-1].path, item.config.rootpath)
+        root = item.config.rootpath
+        origin = _relative(call.excinfo.traceback[-1].path, root)
         item.user_properties.append((FAILURE, failure_kind(call.excinfo, call.when)))
         item.user_properties.append((ORIGIN, origin))
+        item.user_properties.append((FRAME, _last_frame_inside(call.excinfo, root)))
+
+
+def _last_frame_inside(excinfo: pytest.ExceptionInfo[BaseException], root: Path) -> str:
+    """The innermost frame of the failure inside the project: the line of the test that failed.
+
+    It differs from the origin when pytest raises for the test, as `pytest.raises` that saw
+    nothing does: the origin is then inside pytest, and so outside the project.
+    """
+    for entry in reversed(excinfo.traceback):
+        inside = _relative(entry.path, root)
+        if inside:
+            return inside
+    return ""
