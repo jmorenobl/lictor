@@ -7,6 +7,17 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Corregido
+
+- **`L0-regresión` ya no descarta un refactor que solo quita código cubierto.** La 0.7.0 comparaba
+  el porcentaje de cobertura con el del verde, y quitar código que los tests ya ejecutaban lo baja
+  aunque quede sin probar exactamente lo mismo: un refactor que simplificaba se descartaba por una
+  décima. Ahora se compara lo que queda sin probar, en número: no más líneas ni ramas sin cubrir
+  que el verde, y, para un control de mutación, no más mutantes probados sin matar. El prompt del
+  refactor lo dice así, y el error nombra cuántas quedan sin cubrir en lugar del porcentaje.
+- Un run de la 0.7.0 que se reanude con un refactor a medias no compara la cobertura de ese
+  refactor: el checkpoint guardaba el porcentaje, que ya no se lee. Los casos JUnit sí se comparan.
+
 ## [0.7.0] - 2026-11-18
 
 Un paso de refactor tras cada escenario implementado (ADR-0010): el «refactor» de

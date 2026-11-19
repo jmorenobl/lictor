@@ -136,12 +136,13 @@ def refactor_measures(
 
 
 def refactor_measures_text(measures: Sequence[tuple[str, str]]) -> str:
-    """The lines of the refactor's prompt that say how to check it measures no less than before."""
+    """The lines of the refactor's prompt that say how to check it leaves no more untested."""
     if not measures:
         return ""
     lines = [
-        "- La verificación compara lo que miden estos controles con lo que medían en el verde, y "
-        "descarta el refactor si baja. Mídelo antes y después de cambiar nada:"
+        "- La verificación compara lo que estos controles dejan sin probar con lo que dejaban en "
+        "el verde, y descarta el refactor si deja más. Quitar código que ya estaba probado no "
+        "cuenta. Mídelo antes y después de cambiar nada:"
     ]
     lines.extend(f"  - {control_id}: `{command}`." for control_id, command in measures)
     return "\n".join(lines)

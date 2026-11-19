@@ -18,7 +18,8 @@ Reglas:
   el refactor.
 - Tampoco crees ni modifiques, en ninguna carpeta: {forbidden}.
 - Puedes reorganizar los tests unitarios para que sigan al código, pero no quites ninguno que pase
-  ni bajes lo que miden: un refactor que pase menos tests, o mida menos, se descarta.
+  ni dejes más código sin probar: un refactor que pase menos tests, o deje más sin probar que el
+  verde, se descarta. Quitar código que ya estaba probado no cuenta en contra.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.

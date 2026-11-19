@@ -46,8 +46,11 @@ oráculo.
    - `VerifyAttempt` gana el rol `refactor` en lugar de duplicar la verificación: su candidato es el
      commit del punto 3 y la aceptación no exige un objetivo (`acceptance_failure` sin escenario).
    - **No baja lo que mide el oráculo** (`refactor_regressions`, dominio). Ningún control JUnit
-     puede tener menos casos en verde, ni ningún control con puntuación una puntuación más baja, que
-     en la verificación del verde. Sin esto, un refactor podría borrar los unitarios: en
+     puede tener menos casos en verde, ni ningún control con puntuación dejar más sin probar, que en
+     la verificación del verde. Lo que deja sin probar se cuenta, no se da en porcentaje: líneas y
+     ramas sin cubrir, mutantes probados sin matar (`score_misses`). Enmienda de la 0.7.1: la 0.7.0
+     comparaba el porcentaje, y quitar código cubierto lo baja aunque deje sin probar lo mismo; en
+     la segunda pasada de la fase 2 descartó así tres refactors por una décima (F61). Sin esto, un refactor podría borrar los unitarios: en
      `python-uv` la cobertura es `measure` y sin mínimo, y `unit` pasa vacío. La referencia se
      guarda en el estado al confirmar el verde (`refactor_baseline`). Un fallo de esta guarda es
      `L0-regresión`.
