@@ -7,9 +7,11 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.9.0] - 2026-11-19
+
 Lictor anota como hechos lo que solo sacaba la sonda de la pasada de la biblioteca, y mide con
 ellos lo que dirían las reglas que vienen (fase 2b, paso A). No cambia ningún veredicto ni ningún
-mensaje al agente.
+mensaje al agente, pero añade un evento y propiedades del perfil, así que sube la versión menor.
 
 ### Al actualizar desde la 0.8.0
 
@@ -666,7 +668,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.8.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jmorenobl/lictor/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jmorenobl/lictor/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jmorenobl/lictor/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jmorenobl/lictor/compare/v0.6.1...v0.7.0
