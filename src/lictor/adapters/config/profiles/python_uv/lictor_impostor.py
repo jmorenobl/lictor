@@ -5,7 +5,9 @@ and must import nothing of it. Without its variable it does nothing. With it, it
 is imported, the functions and methods of the modules under the writable paths, outside the driver:
 a call from a file of the driver runs the real function, and in every mode but the control one its
 result is altered. It reports, for each test, how many calls crossed that boundary and how many of
-their results it altered, as JUnit properties, and decides nothing.
+their results it altered, in all and by the kind of Gherkin step that made them, as JUnit
+properties, and decides nothing. In the control it alters nothing, and counts instead the results
+every mode could alter.
 
 It runs in the same process as the code under test, which could see it and behave otherwise, as it
 could forge the whole report.
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
 VARIABLE = "LICTOR_IMPOSTOR"
 CALLS = "lictor.interface.calls"
 ALTERED = "lictor.interface.altered"
+ALTERABLE = "lictor.interface.alterable"  # only in the control: what every mode could alter
+STEPS = ("given", "when", "then")
 CONTROL = "control"
 MORE = "mas"  # one more: number + 1, one element more, the exception swallowed
 LESS = "menos"  # one less: number - 1, one element less, another exception in its place
@@ -115,8 +119,19 @@ class _Impostor:
         self.mode = mode
         self.writable = [_real(root) for root in writable]
         self.driver = [_real(root) for root in driver]
+        self.reset()
+
+    def reset(self) -> None:
+        """Count a new test from nothing, outside any step."""
         self.calls = 0
         self.altered = 0
+        self.step: str | None = None
+        self.by_step = {name: dict.fromkeys(STEPS, 0) for name in (CALLS, ALTERED, ALTERABLE)}
+
+    def count(self, name: str) -> None:
+        """Count one more `name` in the step in progress; outside a step only the total holds it."""
+        if self.step in STEPS:
+            self.by_step[name][self.step] += 1
 
     def wraps(self, path: str) -> bool:
         return _under(path, self.writable) and not _under(path, self.driver)
@@ -127,17 +142,30 @@ class _Impostor:
             if not _under(sys._getframe(1).f_code.co_filename, self.driver):
                 return func(*args, **kwargs)
             self.calls += 1
+            self.count(CALLS)
             if self.mode == CONTROL:
-                return func(*args, **kwargs)
+                return self._counted(func, args, kwargs)
             return self._altered(func, args, kwargs)
 
         return wrapper
+
+    def _counted(self, func: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+        """Run the real function, and count its result if every mode could alter it."""
+        try:
+            result = func(*args, **kwargs)
+        except Exception:
+            self.count(ALTERABLE)
+            raise
+        if _alterable(result):
+            self.count(ALTERABLE)
+        return result
 
     def _altered(self, func: Callable[..., Any], args: Any, kwargs: Any) -> Any:
         try:
             result = func(*args, **kwargs)
         except Exception as exc:
             self.altered += 1
+            self.count(ALTERED)
             if self.mode == MORE:
                 return None
             raise ImpostorError(f"{type(exc).__name__} sustituida por el impostor") from exc
@@ -145,7 +173,18 @@ class _Impostor:
         if changed is _UNALTERED:
             return result
         self.altered += 1
+        self.count(ALTERED)
         return changed
+
+
+def _alterable(value: Any) -> bool:
+    """Whether every mode would alter `value`. The control must pass as the red did, so a value
+    whose own arithmetic or comparison raises counts as one no mode could alter, and raises
+    nothing."""
+    try:
+        return all(alter(value, mode) is not _UNALTERED for mode in (MORE, LESS))
+    except Exception:
+        return False
 
 
 def _plain(func: object) -> TypeGuard[types.FunctionType]:
@@ -252,8 +291,29 @@ if IMPOSTOR is not None:
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Count each test on its own."""
     if IMPOSTOR is not None:
-        IMPOSTOR.calls = 0
-        IMPOSTOR.altered = 0
+        IMPOSTOR.reset()
+
+
+# Which step is in progress. They run inside the runner's handling of each step, so they do
+# nothing that could raise.
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_bdd_before_step(step: Any) -> None:
+    if IMPOSTOR is not None:
+        IMPOSTOR.step = str(getattr(step, "type", ""))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_bdd_after_step() -> None:
+    if IMPOSTOR is not None:
+        IMPOSTOR.step = None
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_bdd_step_error() -> None:
+    if IMPOSTOR is not None:
+        IMPOSTOR.step = None
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -265,3 +325,7 @@ def pytest_runtest_makereport(
     if IMPOSTOR is not None and call.when == "call":
         item.user_properties.append((CALLS, str(IMPOSTOR.calls)))
         item.user_properties.append((ALTERED, str(IMPOSTOR.altered)))
+        counted = (CALLS, ALTERED, ALTERABLE) if IMPOSTOR.mode == CONTROL else (CALLS, ALTERED)
+        for name in counted:
+            for step in STEPS:
+                item.user_properties.append((f"{name}.{step}", str(IMPOSTOR.by_step[name][step])))

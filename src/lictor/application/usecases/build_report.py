@@ -1,6 +1,6 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -9,6 +9,7 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
+from lictor.domain.driver_measures import DriverMeasures, measures_from_record
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
@@ -302,6 +303,107 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
     ]
 
 
+_MEASURES_NOTE = (
+    "*Lo que dirían de cada driver nuevo las reglas más estrictas que aún no se aplican: B en el "
+    "impostor de la interfaz (solo prueba una aserción de un Entonces, o el error del impostor "
+    "desde el Cuando) y C en los de stubs (alguna constante tiene que hacer fallar una aserción "
+    "del driver en un Entonces). No deciden nada. B tampoco alteraría lo que devuelve un Dado, y "
+    "eso cambia la ejecución: un test cazado hoy en un Dado sale aparte, porque con B no se sabe "
+    "qué pasaría.*"
+)
+_STEP_WORDS = {"given": "Dado", "when": "Cuando", "then": "Entonces"}
+_CAUGHT_WORDS = {
+    "entonces": "aserción de un Entonces",
+    "otro_paso": "aserción de otro paso",
+    "no_aserta": "falla sin una aserción del driver",
+    "sin_implementar": "sin implementar",
+    "pasa": "pasa",
+    "sin_resultado": "sin resultado",
+}
+_RULE_B_WORDS = {
+    "probado": "probado",
+    "fuera_del_entonces": "cazado fuera del Entonces",
+    "sin_alterar": "nada que alterar desde el Cuando",
+    "no_probado": "no probado",
+}
+
+
+def _step_word(step: str | None) -> str:
+    return _STEP_WORDS.get(step or "", "fuera de un paso")
+
+
+def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> list[str]:
+    """A table per red check of a fresh driver, with what B and C would say of each scenario."""
+    if not entries:
+        return ["- *Ningún driver nuevo medido.*"]
+    lines = [_MEASURES_NOTE]
+    for attempt, step, measures in sorted(entries, key=lambda entry: entry[:2]):
+        where = f" (`{step}`)" if step else ""
+        lines += ["", f"### Intento {attempt}{where}", *_measure_totals(measures), ""]
+        lines += [
+            "| Escenario | Rojo | Stubs, por constante | Con C | Interfaz hoy | Con B | "
+            "Falla en, por modo (✓: lo acepta B) | "
+            "Llamadas del control (Dado / Cuando / Entonces / fuera) | "
+            "Alterables desde el Cuando |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        lines += [_measure_row(sid, measures) for sid in _measured_ids(measures)]
+    return lines
+
+
+def _measured_ids(measures: DriverMeasures) -> list[str]:
+    ids = set(measures.red) | set(measures.stubs or {}) | set(measures.interface or {})
+    return sorted(ids)
+
+
+def _measure_totals(measures: DriverMeasures) -> list[str]:
+    """How many scenarios fall in each answer of B and C, to compare with a pass of the probe."""
+    lines: list[str] = []
+    if measures.stubs is not None:
+        by_c = Counter[str](m.rule_c for m in measures.stubs.values())
+        lines.append(f"- **Con C**: {_counted(by_c, _CAUGHT_WORDS)}")
+    if measures.interface is not None:
+        by_b = Counter[str](m.rule_b for m in measures.interface.values())
+        lines.append(f"- **Con B**: {_counted(by_b, _RULE_B_WORDS)}")
+    return lines or ["- *Solo el rojo: ningún impostor corrió.*"]
+
+
+def _counted(found: Mapping[str, int], words: Mapping[str, str]) -> str:
+    return ", ".join(f"{found[key]} {word}" for key, word in words.items() if found[key])
+
+
+def _mode_text(caught: str, step: str | None) -> str:
+    """Where one mode made the test fail, marked when B would accept it."""
+    if caught in ("pasa", "sin_resultado"):
+        return _CAUGHT_WORDS[caught]
+    return f"{_step_word(step)} ✓" if caught == "entonces" else _step_word(step)
+
+
+def _measure_row(sid: str, measures: DriverMeasures) -> str:
+    red = measures.red.get(sid)
+    red_text = f"{_CAUGHT_WORDS[red.caught]} ({_step_word(red.step)})" if red else "-"
+    stub = (measures.stubs or {}).get(sid)
+    stub_text = (
+        "; ".join(f"`{c}`: {_CAUGHT_WORDS[v]}" for c, v in stub.by_constant.items())
+        if stub
+        else "-"
+    )
+    rule_c = _CAUGHT_WORDS[stub.rule_c] if stub else "-"
+    found = (measures.interface or {}).get(sid)
+    if found is None:
+        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - | - | - |"
+    caught = "; ".join(
+        f"{mode}: {_mode_text(c, found.failed_step.get(mode))}" for mode, c in found.caught.items()
+    )
+    calls = found.calls
+    return (
+        f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.today}` | "
+        f"{_RULE_B_WORDS[found.rule_b]} | {caught or '-'} | "
+        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} | "
+        f"{found.alterable.from_when} |"
+    )
+
+
 def _evidence_lines(info: Mapping[str, Any]) -> list[str]:
     altered = [f"- **Alterada tras registrarse**: `{path}`" for path in info["altered_evidence"]]
     retired: list[str] = info["retired_evidence"]
@@ -399,7 +501,8 @@ class BuildReport:
         for ev in events:
             attempt = ev.data.get("attempt")
             evidence = ev.data.get("evidence")
-            where = evidence.get("path") if isinstance(evidence, dict) else None
+            # A step whose event can't hash it, because others still write there, names it.
+            where = evidence.get("path") if isinstance(evidence, dict) else ev.data.get("step")
             key = (ev.type, ev.runid, ev.scenarioid, ev.data.get("role"), attempt, where)
             seen[key] = ev
         return list(seen.values())
@@ -433,6 +536,7 @@ class BuildReport:
             "scores": [],
             "skipped_controls": [],
             "rejected_drivers": [],
+            "driver_measures": [],
             "reopened": [],
             "reregistered": [],
             "by_hand": [],
@@ -466,6 +570,7 @@ class BuildReport:
             "lictor.driver.rejected.v1": self._on_driver_rejected,
             "lictor.driver.sealed.v1": self._on_driver_sealed,
             "lictor.driver.checked.v1": self._on_driver_checked,
+            "lictor.driver.measured.v1": self._on_driver_measured,
             "lictor.scenario.reopened.v1": self._on_scenario_reopened,
             "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
             REFACTORED: self._on_scenario_refactored,
@@ -561,6 +666,15 @@ class BuildReport:
     def _on_driver_checked(self, _: Event, info: dict[str, Any]) -> None:
         info["driver_seen"] = True
         info["driver"]["status"] = "comprobado"
+
+    def _on_driver_measured(self, ev: Event, info: dict[str, Any]) -> None:
+        measures = measures_from_record(ev.data)
+        if measures is not None:
+            attempt = ev.data.get("attempt")
+            step = ev.data.get("step")
+            info["driver_measures"].append(
+                (attempt if isinstance(attempt, int) else 0, str(step or ""), measures)
+            )
 
     def _on_driver_rejected(self, ev: Event, info: dict[str, Any]) -> None:
         info["driver_seen"] = True
@@ -781,6 +895,8 @@ class BuildReport:
 
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])
+
+        lines.extend(["", "## Medidas del driver", *_driver_measure_lines(info["driver_measures"])])
 
         lines.extend(["", "## Integridad de la bitácora"])
         lines.extend(_journal_lines(info["journal_damage"]))

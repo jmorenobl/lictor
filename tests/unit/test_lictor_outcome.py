@@ -15,8 +15,17 @@ from lictor.domain.model import TestCaseResult
 from lictor.domain.reports import JUnitReport
 
 TESTS = """
+from types import SimpleNamespace
+
+import lictor_outcome
 import pytest
 from iva import general
+
+
+def paso_falla(request, kind, exc):
+    \"\"\"What the runner of the Gherkin does when a step raises: tells the plugin, re-raises.\"\"\"
+    lictor_outcome.pytest_bdd_step_error(request, SimpleNamespace(type=kind), exc)
+    raise exc
 
 
 @pytest.fixture
@@ -70,6 +79,27 @@ def test_passes():
 def test_library():
     import json
     json.loads("{")
+
+
+def test_then(request):
+    paso_falla(request, "then", AssertionError("no"))
+
+
+def test_given_error(request):
+    paso_falla(request, "given", KeyError("x"))
+
+
+def test_fail_in_a_step(request):
+    paso_falla(request, "when", pytest.fail.Exception("no"))
+
+
+def test_another_failure_than_the_step_s(request):
+    lictor_outcome.pytest_bdd_step_error(request, SimpleNamespace(type="given"), ValueError())
+    assert 1 == 2
+
+
+def test_xfail_in_a_step(request):
+    paso_falla(request, "when", pytest.xfail.Exception("aún no"))
 """
 
 
@@ -146,6 +176,33 @@ def test_each_failure_carries_the_last_frame_inside_the_project(
 
 def test_a_passing_test_carries_nothing(cases: dict[str, TestCaseResult]) -> None:
     assert cases["test_passes"].properties == {}
+
+
+@pytest.mark.parametrize(
+    ("name", "step", "kind"),
+    [
+        ("test_then", "then", "assertion"),
+        ("test_given_error", "given", "error"),
+        ("test_fail_in_a_step", "when", "assertion"),
+        # The step raised something else, which the test caught: its failure is outside a step.
+        ("test_another_failure_than_the_step_s", None, "assertion"),
+        ("test_assertion", None, "assertion"),
+        ("test_setup", None, "error"),
+    ],
+)
+def test_each_failure_carries_the_step_that_raised_it(
+    cases: dict[str, TestCaseResult], name: str, step: str | None, kind: str
+) -> None:
+    assert (cases[name].failed_step, cases[name].failure_kind) == (step, kind)
+    assert "lictor.step" in cases[name].properties
+
+
+def test_an_xfail_raised_in_a_step_fails_nothing_and_carries_no_step(
+    cases: dict[str, TestCaseResult],
+) -> None:
+    """The runner tells of an `xfail` as of any failure of a step: it isn't one."""
+    assert cases["test_xfail_in_a_step"].status == "skipped"
+    assert cases["test_xfail_in_a_step"].properties == {}
 
 
 def test_the_scenario_a_test_executes_is_recorded(tmp_path: Path) -> None:

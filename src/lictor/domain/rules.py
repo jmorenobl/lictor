@@ -311,6 +311,14 @@ class Impostors:
     replacements: tuple[str, ...]
 
 
+_GROUP_REFERENCE = re.compile(r"\\(?:\d+|g<\w+>)")
+
+
+def impostor_name(replacement: str) -> str:
+    """The code a replacement puts in place of a stub, without the groups it keeps: its name."""
+    return _GROUP_REFERENCE.sub("", replacement).strip() or replacement
+
+
 def impostor_source(text: str, pattern: str, replacement: str) -> tuple[str, int]:
     """Replace every line that matches `pattern` and say how many were replaced."""
     regex = re.compile(pattern)

@@ -271,13 +271,46 @@ ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to
 FRAME_PROPERTY = "lictor.frame"  # last frame of the failure inside the project, relative to it
 INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to the interface
 INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
+# In the control, those whose result every mode could alter; it alters none of them there.
+INTERFACE_ALTERABLE_PROPERTY = "lictor.interface.alterable"
 SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
 FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
+STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised in
+
+# The kinds of a Gherkin step, as the runner names them: «And» and «But» take the one before.
+Step = Literal["given", "when", "then"]
+STEPS: tuple[Step, ...] = ("given", "when", "then")
+InterfaceCount = Literal["calls", "altered", "alterable"]
+_INTERFACE_PROPERTIES: Mapping[InterfaceCount, str] = {
+    "calls": INTERFACE_CALLS_PROPERTY,
+    "altered": INTERFACE_ALTERED_PROPERTY,
+    "alterable": INTERFACE_ALTERABLE_PROPERTY,
+}
+
+
+def step_property(name: str, step: Step) -> str:
+    """The property that counts, for one kind of step, what `name` counts for the whole test."""
+    return f"{name}.{step}"
 
 
 def _count(value: str) -> int:
     """Read a count a plugin reported; anything that isn't one counts as nothing."""
     return int(value) if value.isascii() and value.isdigit() else 0
+
+
+@dataclass(frozen=True)
+class StepCounts:
+    """A count of one test, split by the kind of step it happened in, and what fell outside one."""
+
+    given: int = 0
+    when: int = 0
+    then: int = 0
+    outside: int = 0
+
+    @property
+    def from_when(self) -> int:
+        """What happened from the When on: what a step that acts and one that checks did."""
+        return self.when + self.then
 
 
 @dataclass(frozen=True)
@@ -319,6 +352,24 @@ class TestCaseResult:
     def interface_altered(self) -> int:
         """How many results of those calls the impostor managed to alter."""
         return _count(self.properties.get(INTERFACE_ALTERED_PROPERTY, ""))
+
+    @property
+    def failed_step(self) -> Step | None:
+        """The kind of step the failure was raised in, or None outside a step or not reported."""
+        value = self.properties.get(STEP_PROPERTY, "")
+        return next((step for step in STEPS if step == value), None)
+
+    def interface_by_step(self, count: InterfaceCount) -> StepCounts:
+        """What the impostor counted for this test, by step; `outside` is what no step holds.
+
+        The total of `alterable` isn't reported: what falls outside a step is then unknown, and 0.
+        """
+        name = _INTERFACE_PROPERTIES[count]
+        given, when, then = (
+            _count(self.properties.get(step_property(name, step), "")) for step in STEPS
+        )
+        total = _count(self.properties.get(name, ""))
+        return StepCounts(given, when, then, max(total - given - when - then, 0))
 
     @property
     def scenario_tags(self) -> tuple[str, ...]:

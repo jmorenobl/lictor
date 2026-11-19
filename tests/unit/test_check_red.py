@@ -120,11 +120,16 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     seal_source = spec_source.write_seal.call_args.kwargs["source_root"]
     assert seal_source == vcs.export_tree.call_args.args[1]
 
-    event_log.append.assert_called_once()
-    event = event_log.append.call_args[0][0]
-    assert isinstance(event, Event)
-    assert event.type == "lictor.driver.sealed.v1"
-    assert event.data["commit"] == "driver_commit_sha"
+    measured, sealed = (call.args[0] for call in event_log.append.call_args_list)
+    assert isinstance(sealed, Event)
+    assert sealed.type == "lictor.driver.sealed.v1"
+    assert sealed.data["commit"] == "driver_commit_sha"
+    # What the stricter rules would say comes first, and names its step without hashing it.
+    assert measured.type == "lictor.driver.measured.v1"
+    assert measured.data["step"] == sealed.data["evidence"]["path"]
+    assert "evidence" not in measured.data
+    assert measured.data["red"] == {"IVA-002": {"step": None, "caught": "no_aserta"}}
+    assert (measured.data["stubs"], measured.data["interface"]) == (None, None)
 
 
 def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) -> None:
@@ -1594,3 +1599,130 @@ def test_check_red_a_stub_failure_with_no_stub_to_replace_is_refused(tmp_path: P
     assert rejection.data["reason"] == "impostor"
     assert "no hay ningún stub que sustituir" in str(rejection.data["error"])
     assert runner.told == [None]
+
+
+def _stepped_xml(name: str, failure: str = "", step: str = "", **counts: int) -> str:
+    """A case with the impostor's counts by step (`calls_then=1`) and the step it failed in."""
+    props = [(f"lictor.interface.{key.replace('_', '.')}", str(n)) for key, n in counts.items()]
+    for total in ("calls", "altered"):
+        props.append(
+            (
+                f"lictor.interface.{total}",
+                str(sum(counts.get(f"{total}_{step}", 0) for step in ("given", "when", "then"))),
+            )
+        )
+    if failure:
+        props += [
+            ("lictor.failure", failure),
+            ("lictor.frame", "tests/acceptance/t.py"),
+            ("lictor.step", step),
+        ]
+    body = "".join(f'<property name="{key}" value="{value}"/>' for key, value in props)
+    fails = '<failure message="m"/>' if failure else ""
+    return f'<testcase name="{name}"><properties>{body}</properties>{fails}</testcase>'
+
+
+def _measured_reports(menos: str) -> dict[str, tuple[str, int]]:
+    red = _stepped_xml("test_iva_001", "assertion", "then")
+    control = _stepped_xml("test_iva_002", calls_given=1, calls_then=1, alterable_then=1)
+    caught = _stepped_xml("test_iva_002", "assertion", "then", calls_then=1, altered_then=1)
+    return {
+        "red": (_suite(red, _stepped_xml("test_iva_002")), 1),
+        "control": (_suite(red, control), 1),
+        "mas": (_suite(red, caught), 1),
+        "menos": (_suite(red, menos), 1),
+    }
+
+
+def test_check_red_measures_what_b_would_make_of_a_proved_scenario(tmp_path: Path) -> None:
+    caught = _stepped_xml("test_iva_002", "impostor", "when", calls_when=1, altered_when=1)
+    use_case, request, event_log, _, _, _ = _interface_check(tmp_path, _measured_reports(caught))
+
+    assert use_case.execute(request).ok is True
+
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    types = [call.args[0].type for call in event_log.append.call_args_list]
+    assert types.index("lictor.driver.measured.v1") < types.index("lictor.driver.sealed.v1")
+    assert measured.data["red"] == {"IVA-001": {"step": "then", "caught": "entonces"}}
+    found = measured.data["interface"]["IVA-002"]
+    assert (found["today"], found["rule_b"]) == ("probado", "probado")
+    assert found["calls"] == {"given": 1, "when": 0, "then": 1, "outside": 0}
+    assert found["failed_step"] == {"mas": "then", "menos": "when"}
+    assert found["caught"] == {"mas": "entonces", "menos": "entonces"}
+    assert measured.data["stubs"] is None
+
+
+def test_check_red_measures_a_driver_it_rejects_before_rejecting_it(tmp_path: Path) -> None:
+    """A Given that the impostor altered caught it: proved today, not what B looks at."""
+    caught = _stepped_xml("test_iva_002", "assertion", "given", calls_given=1, altered_given=1)
+    survives = _stepped_xml("test_iva_002", calls_then=1, altered_then=1)
+    red = _stepped_xml("test_iva_001", "assertion", "then")
+    reports = {**_measured_reports(caught), "mas": (_suite(red, survives), 1)}
+    use_case, request, event_log, _, _, _ = _interface_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is False
+
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    rejection = _rejection(event_log)
+    assert measured.data["step"] == rejection.data["evidence"]["path"]
+    found = measured.data["interface"]["IVA-002"]
+    assert (found["today"], found["rule_b"]) == ("sobrevive", "no_probado")
+    assert found["caught"] == {"mas": "pasa", "menos": "dado"}
+    assert found["failed_step"] == {"mas": None, "menos": "given"}
+    # The agent reads what it read before: the measures add nothing to its message.
+    assert "Entonces" not in str(rejection.data["error"])
+
+
+def test_check_red_measures_how_each_new_test_fared_with_each_stub_constant(
+    tmp_path: Path,
+) -> None:
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "error")),
+            1,
+        ),
+        "return True": (
+            _suite(_case_xml("test_iva_001"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is True
+
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    # `_case_xml` reports no frame in the driver: none of them is an assertion of the driver.
+    assert measured.data["stubs"] == {
+        "IVA-001": {
+            "by_constant": {"return None": "no_aserta", "return True": "pasa"},
+            "rule_c": "no_aserta",
+        },
+        "IVA-002": {
+            "by_constant": {"return None": "no_aserta", "return True": "no_aserta"},
+            "rule_c": "no_aserta",
+        },
+    }
+    assert measured.data["red"]["IVA-001"] == {"step": None, "caught": "sin_implementar"}
+
+
+def test_check_red_measures_the_stub_runs_of_a_driver_they_reject(tmp_path: Path) -> None:
+    passing = (_suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")), 1)
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": passing}
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is False
+
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    assert measured.data["stubs"]["IVA-002"]["rule_c"] == "pasa"
+    assert _rejection(event_log).data["reason"] == "impostor"
+
+
+def test_check_red_measures_nothing_of_a_sealed_driver(tmp_path: Path) -> None:
+    use_case, request, event_log, _, _, _ = _interface_check(
+        tmp_path, _proved_reports(), driver_fresh=False
+    )
+
+    use_case.execute(request)
+
+    assert _events(event_log, "lictor.driver.measured.v1") == []
