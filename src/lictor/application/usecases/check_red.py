@@ -24,6 +24,13 @@ from lictor.application.run_files import (
 from lictor.application.spec_history import SpecHistory
 from lictor.application.usecases.verify_attempt import IntegritySnapshot, describe_tampering
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.driver_measures import (
+    DriverMeasures,
+    interface_measures,
+    measures_record,
+    red_measures,
+    stub_measures,
+)
 from lictor.domain.errors import DriverError
 from lictor.domain.interface_proof import (
     InterfaceImpostor,
@@ -42,6 +49,7 @@ from lictor.domain.rules import (
     RedVerdict,
     condense_error,
     describe_suppressions,
+    impostor_name,
     impostor_problem,
     impostor_source,
     impostor_survivors,
@@ -139,6 +147,7 @@ class _Registration:
     red_cases: tuple[TestCaseResult, ...] = ()  # every case of the red, for the full error
     red_output: str = ""
     stub_impostors: int | None = None  # stubs the impostors replaced; None if they didn't run
+    measures: DriverMeasures | None = None  # what the stricter rules would say; a fresh driver's
 
     @property
     def subject(self) -> str:
@@ -149,6 +158,19 @@ class _Registration:
         if not self.collateral:
             return "volver a registrar sin agente"
         return "registrar sin agente"
+
+
+@dataclass(frozen=True)
+class _InterfaceRuns:
+    """What the impostor of the interface proved, and what each of its runs reported."""
+
+    proofs: dict[str, InterfaceProof]
+    control: Mapping[str, TestCaseResult]  # empty when the run told nothing
+    modes: Mapping[str, Mapping[str, TestCaseResult]]
+
+
+# Each run of the stubs' impostors: the constant, and what it reported of each scenario.
+_StubRuns = list[tuple[str, Mapping[str, TestCaseResult]]]
 
 
 @dataclass(frozen=True)
@@ -224,25 +246,93 @@ class CheckRed:
         tree: Path,
         registration: _Registration,
     ) -> _Registration | CheckRedResult:
-        """Judge what the red alone can't: the stubs' impostors, and the interface's (ADR-0011)."""
+        """Judge what the red alone can't: the stubs' impostors, and the interface's (ADR-0011).
+
+        What the stricter rules would say of what they ran is recorded first, whatever follows:
+        it matters most in a driver rejected for what they found.
+        """
+        rejection: _Rejection | None = None
         # Project code just ran, and it can reach the environment as well.
         env_problem = self.environment.ensure(request.run_id)
         if env_problem:
             rejection = _Rejection("L0-entorno", env_problem)
+        if rejection is None:
+            rejection, registration = self._stubs_step(request, step_dir, rev, tree, registration)
+        proofs: dict[str, InterfaceProof] | None = None
+        if rejection is None:
+            rejection, registration, proofs = self._interface_step(
+                request, step_dir, rev, registration
+            )
+        if registration.measures is not None:
+            self._measured(request, step_dir, registration.measures)
+        if rejection is not None:
             return self._reject_or_raise(request, step_dir, rejection)
-
-        if request.driver_fresh and request.impostors and registration.new_pending:
-            impostor, stubs = self._check_impostors(request, step_dir, rev, tree, registration)
-            if impostor is not None:
-                return self._reject_or_raise(request, step_dir, impostor)
-            registration = replace(registration, stub_impostors=stubs)
-
         if registration.unproven:
-            proved = self._prove_or_reject(request, step_dir, rev, registration)
+            proved = self._prove_or_reject(request, step_dir, registration, proofs)
             if isinstance(proved, CheckRedResult):
                 return proved
             registration = replace(registration, already_met=proved)
         return registration
+
+    def _stubs_step(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        tree: Path,
+        registration: _Registration,
+    ) -> tuple[_Rejection | None, _Registration]:
+        """Run the stubs' impostors over a fresh driver's new pending tests, and measure them."""
+        if not (request.driver_fresh and request.impostors and registration.new_pending):
+            return None, registration
+        rejection, stubs, runs = self._check_impostors(request, step_dir, rev, tree, registration)
+        measures = registration.measures
+        if runs and measures is not None:
+            found = stub_measures(registration.new_pending, runs, request.oracle.driver)
+            measures = replace(measures, stubs=found)
+        return rejection, replace(registration, stub_impostors=stubs, measures=measures)
+
+    def _interface_step(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        registration: _Registration,
+    ) -> tuple[_Rejection | None, _Registration, dict[str, InterfaceProof] | None]:
+        """Run the impostor of the interface over the new tests that pass, and measure them.
+
+        Without one in the profile, or nothing to prove, there are no proofs.
+        """
+        impostor = request.interface_impostor
+        if not registration.unproven or impostor is None:
+            return None, registration, None
+        ran = self._prove_interface(request, step_dir, rev, impostor, list(registration.unproven))
+        if isinstance(ran, _Rejection):
+            return ran, registration, None
+        measures = registration.measures
+        if measures is not None:
+            found = interface_measures(ran.proofs, ran.control, ran.modes, request.oracle.driver)
+            measures = replace(measures, interface=found)
+        return None, replace(registration, measures=measures), ran.proofs
+
+    def _measured(self, request: CheckRedRequest, step_dir: Path, measures: DriverMeasures) -> None:
+        """Record what the stricter rules would say of a fresh driver; they decide nothing yet.
+
+        It names its step without hashing it: the rejection or the seal that follows still writes
+        there, and hashes it then.
+        """
+        self.event_log.append(
+            new_event(
+                self.clock,
+                "lictor.driver.measured.v1",
+                request.run_id,
+                data={
+                    "attempt": request.driver_attempts,
+                    "step": relative_to_project(step_dir, request.project_root),
+                    **measures_record(measures),
+                },
+            )
+        )
 
     def _checked(self, request: CheckRedRequest, step_dir: Path, result: CheckRedResult) -> None:
         """Record a sealed driver that passed, so its evidence is in the journal like any other."""
@@ -356,6 +446,9 @@ class CheckRed:
             unproven={sid: mapped[sid] for sid in verdict.unproven},
             red_cases=tuple(cases),
             red_output=raw_output,
+            measures=DriverMeasures(red_measures(verdict.pending, mapped, request.oracle.driver))
+            if request.driver_fresh
+            else None,
         )
         scenario_status = {sid: "pending" if sid in verdict.pending else "green" for sid in ids}
         return CheckRedResult(ok=True, scenario_status=scenario_status), registration
@@ -367,22 +460,22 @@ class CheckRed:
         rev: str,
         tree: Path,
         registration: _Registration,
-    ) -> tuple[_Rejection | None, int]:
+    ) -> tuple[_Rejection | None, int, _StubRuns]:
         """Prove each new test uses what the interface returns: with constants, it must fail.
 
         Without a stub to replace there is nothing to run, and the count says so instead of
-        passing it (ADR-0011, point 7).
+        passing it (ADR-0011, point 7). It also gives back what each run reported.
         """
         impostors = request.impostors
         if impostors is None:
-            return None, 0
+            return None, 0, []
         stubs = self._impersonate(tree, request.oracle, impostors.pattern, None)
         if stubs == 0:
-            return _without_stubs(registration), 0
-        rejection = self._run_stub_impostors(
+            return _without_stubs(registration), 0, []
+        rejection, runs = self._run_stub_impostors(
             request, step_dir, rev, impostors, registration.new_pending
         )
-        return rejection, stubs
+        return rejection, stubs, runs
 
     def _run_stub_impostors(
         self,
@@ -391,13 +484,13 @@ class CheckRed:
         rev: str,
         impostors: Impostors,
         new_pending: Sequence[str],
-    ) -> _Rejection | None:
+    ) -> tuple[_Rejection | None, _StubRuns]:
         """Run the acceptance with each constant in place of the stubs; some must fail each test.
 
         Two opposite constants, because a legitimate test may pass with one of them. A run that
         crashed, didn't map or kept a stub proves nothing, and doesn't count.
         """
-        runs: list[dict[str, str]] = []
+        runs: _StubRuns = []
         for index, replacement in enumerate(impostors.replacements, start=1):
             run_dir = step_dir / f"impostor-{index}"
             run_dir.mkdir()
@@ -408,46 +501,40 @@ class CheckRed:
                 )
             save_output(run_dir / "acceptance.log", command, output)
             if tampered:
-                return _Rejection("L0-estado", describe_tampering(tampered))
+                return _Rejection("L0-estado", describe_tampering(tampered)), runs
             env_problem = self.environment.ensure(request.run_id)
             if env_problem:
-                return _Rejection("L0-entorno", env_problem)
+                return _Rejection("L0-entorno", env_problem), runs
             results, problem = self._impostor_results(request, run_dir, output)
             if problem is not None:
                 reason = f"No se pudo construir el impostor {replacement!r}: {problem}"
-                return _Rejection("impostor", reason, output=format_output(output))
-            runs.append(results)
-        survivors = impostor_survivors(list(new_pending), runs)
+                return _Rejection("impostor", reason, output=format_output(output)), runs
+            runs.append((impostor_name(replacement), results))
+        statuses = [{sid: str(case.status) for sid, case in run.items()} for _, run in runs]
+        survivors = impostor_survivors(list(new_pending), statuses)
         if not survivors:
-            return None
+            return None, runs
         constants = ", ".join(repr(r) for r in impostors.replacements)
         return _Rejection(
             "impostor",
             f"Los tests de {', '.join(survivors)} pasan aunque la interfaz devuelva siempre "
             f"una constante ({constants}): ignoran el valor que devuelve la interfaz.",
-        )
+        ), runs
 
     def _prove_or_reject(
         self,
         request: CheckRedRequest,
         step_dir: Path,
-        rev: str,
         registration: _Registration,
+        proofs: dict[str, InterfaceProof] | None,
     ) -> tuple[str, ...] | CheckRedResult:
-        """Prove the new scenarios that pass, or reject the driver for those it can't (ADR-0011).
+        """Register the new scenarios that pass if the impostor proved them all, or reject the
+        driver for those it couldn't (ADR-0011); without an impostor, `proofs` is None.
 
         Nothing is registered unless every one is proved: once sealed, the next red check would
         register an unproved one as a collateral green.
         """
         unproven = registration.unproven
-        impostor = request.interface_impostor
-        if impostor is None:
-            proofs: dict[str, InterfaceProof] | None = None
-        else:
-            outcome = self._prove_interface(request, step_dir, rev, impostor, list(unproven))
-            if isinstance(outcome, _Rejection):
-                return self._reject_or_raise(request, step_dir, outcome)
-            proofs = outcome
         failed = [sid for sid in unproven if proofs is None or not proofs[sid].proved]
         if not failed:
             return tuple(unproven)
@@ -481,7 +568,7 @@ class CheckRed:
         rev: str,
         impostor: InterfaceImpostor,
         scenario_ids: Sequence[str],
-    ) -> dict[str, InterfaceProof] | _Rejection:
+    ) -> _InterfaceRuns | _Rejection:
         """Run the acceptance once per mode of the impostor, each in a clean clone of `rev`."""
         runs: dict[str, Mapping[str, TestCaseResult] | str] = {}
         for mode in (impostor.control, *impostor.modes):
@@ -507,7 +594,12 @@ class CheckRed:
                 return _Rejection("L0-entorno", env_problem)
             runs[mode] = self._interface_results(request, run_dir, output, mode)
         control = runs.pop(impostor.control)
-        return interface_proofs(scenario_ids, control, runs, request.oracle.driver)
+        proofs = interface_proofs(scenario_ids, control, runs, request.oracle.driver)
+        return _InterfaceRuns(
+            proofs,
+            {} if isinstance(control, str) else control,
+            {mode: {} if isinstance(run, str) else run for mode, run in runs.items()},
+        )
 
     def _interface_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput, mode: str
@@ -555,7 +647,7 @@ class CheckRed:
 
     def _impostor_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
-    ) -> tuple[dict[str, str], str | None]:
+    ) -> tuple[Mapping[str, TestCaseResult], str | None]:
         junit = self.reader.read(run_dir / "acceptance.xml")
         cases = report_cases(junit)
         execution = Execution.of(output, request.acceptance_timeout_s)
@@ -571,7 +663,7 @@ class CheckRed:
         except DriverError as exc:
             return {}, impostor_problem(crash, str(exc), cases)
         problem = impostor_problem(crash, None, cases)
-        return {sid: str(case.status) for sid, case in mapped.items()}, problem
+        return mapped, problem
 
     def _run_acceptance_suite(
         self,

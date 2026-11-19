@@ -26,7 +26,7 @@ from lictor.adapters.config.profiles.python_uv.lictor_impostor import (
 )
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.domain.interface_proof import interface_proofs
-from lictor.domain.model import TestCaseResult
+from lictor.domain.model import StepCounts, TestCaseResult
 from lictor.domain.reports import JUnitReport
 
 CODE = """
@@ -72,6 +72,15 @@ class Resultado:
 
 def resultado():
     return Resultado(4)
+
+
+class Raro(int):
+    def __add__(self, other):
+        raise RuntimeError("no se suma")
+
+
+def raro():
+    return Raro(3)
 
 
 class Calculadora:
@@ -206,6 +215,38 @@ def test_sin_llamar():
     assert 6 == 6
 """
 
+# The runner of the Gherkin tells the plugin which step is in progress; here the test does.
+STEPS_DRIVER = """
+from types import SimpleNamespace
+
+import lictor_impostor as plugin
+
+from calc import evaluar, nada, raro, resultado
+
+
+def paso(kind):
+    plugin.pytest_bdd_before_step(SimpleNamespace(type=kind))
+
+
+def test_por_pasos():
+    paso("given")
+    nada()
+    resultado()
+    plugin.pytest_bdd_after_step()
+    evaluar("1")
+    paso("when")
+    total = evaluar("2 + 4")
+    plugin.pytest_bdd_step_error()
+    paso("then")
+    assert total == 6
+    assert evaluar("1") == 1
+
+
+def test_raro():
+    paso("then")
+    assert raro() == 3
+"""
+
 EXPECTED = {
     "test_igual": "probado",
     "test_espera_uno": "probado",
@@ -271,6 +312,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str | None, dict[str,
     (project / "src" / "calc" / "__init__.py").write_text(CODE, encoding="utf-8")
     (project / "tests" / "acceptance").mkdir(parents=True)
     (project / "tests" / "acceptance" / "test_calc.py").write_text(DRIVER, encoding="utf-8")
+    (project / "tests" / "acceptance" / "test_pasos.py").write_text(STEPS_DRIVER, encoding="utf-8")
     (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     return {mode: _run(project, mode) for mode in (None, "control", MORE, LESS)}
 
@@ -280,7 +322,7 @@ def test_every_test_passes_with_the_real_code(
 ) -> None:
     for mode in (None, "control"):
         assert {name: case.status for name, case in runs[mode].items()} == dict.fromkeys(
-            EXPECTED, "passed"
+            [*EXPECTED, "test_por_pasos", "test_raro"], "passed"
         )
 
 
@@ -302,6 +344,43 @@ def test_each_shape_of_test_gets_the_verdict_of_the_adr(
     )
 
     assert proofs[name].outcome == outcome, (name, proofs[name])
+
+
+def test_the_control_counts_by_step_what_every_mode_could_alter(
+    runs: dict[str | None, dict[str, TestCaseResult]],
+) -> None:
+    """`nada` returns None, which every mode alters; `resultado` an object, which none does."""
+    case = runs["control"]["test_por_pasos"]
+
+    assert case.interface_calls == 5
+    assert case.interface_by_step("calls") == StepCounts(given=2, when=1, then=1, outside=1)
+    assert case.interface_by_step("alterable") == StepCounts(given=1, when=1, then=1)
+    assert case.interface_by_step("altered") == StepCounts()
+
+
+@pytest.mark.parametrize("mode", [MORE, LESS])
+def test_each_mode_counts_by_step_what_it_altered(
+    runs: dict[str | None, dict[str, TestCaseResult]], mode: str
+) -> None:
+    """The altered total fails the Then's first assertion, so the Then calls nothing."""
+    case = runs[mode]["test_por_pasos"]
+
+    assert case.status == "failure"
+    assert case.interface_by_step("calls") == StepCounts(given=2, when=1, then=0, outside=1)
+    assert case.interface_by_step("altered") == StepCounts(given=1, when=1, then=0, outside=1)
+    assert "lictor.interface.alterable.then" not in case.properties
+
+
+def test_a_value_whose_own_arithmetic_raises_leaves_the_control_as_it_was(
+    runs: dict[str | None, dict[str, TestCaseResult]],
+) -> None:
+    """The control must pass as the red did: what no mode can alter without raising isn't
+    alterable, and raises nothing there."""
+    case = runs["control"]["test_raro"]
+
+    assert case.status == "passed"
+    assert case.interface_by_step("calls") == StepCounts(then=1)
+    assert case.interface_by_step("alterable") == StepCounts()
 
 
 def test_a_call_inside_the_code_crosses_no_boundary(

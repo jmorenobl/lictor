@@ -7,6 +7,30 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Lictor anota como hechos lo que solo sacaba la sonda de la pasada de la biblioteca, y mide con
+ellos lo que dirían las reglas que vienen (fase 2b, paso A). No cambia ningún veredicto ni ningún
+mensaje al agente.
+
+### Al actualizar desde la 0.8.0
+
+- **Un run empezado con la 0.8.0 no se reanuda:** los plugins del perfil cambian y entran en la
+  huella. Empieza uno nuevo con `lictor run --new`.
+
+### Añadido
+
+- **El paso en que falla cada test.** `lictor_outcome` anota `lictor.step` (`given`, `when` o
+  `then`, con «Y» y «Pero» resueltos) en toda ejecución de la aceptación, `pytest.fail` incluido.
+  Un `xfail` lanzado en un paso no cuenta.
+- **Las llamadas a la interfaz por paso.** `lictor_impostor` anota también
+  `lictor.interface.calls.<paso>` y `lictor.interface.altered.<paso>`, y en el control
+  `lictor.interface.alterable.<paso>`: lo que los dos modos podrían alterar, sin alterarlo. Un valor
+  cuya propia aritmética lanza no cuenta como alterable y no rompe el control.
+- **`lictor.driver.measured.v1`**, una vez por rojo de un driver nuevo, antes de sellarlo o de
+  rechazarlo: cómo falló cada pendiente en el rojo, cómo le fue con cada constante de los
+  impostores de stubs y qué haría con él la regla C (una aserción del driver en un Entonces), y lo
+  que vio el impostor de la interfaz paso a paso con lo que diría la regla B (una aserción de un
+  Entonces, o su error desde el Cuando). `report.md` lo muestra en «Medidas del driver».
+
 ## [0.8.0] - 2026-11-19
 
 Un escenario nuevo que el código ya cumple se prueba con un impostor de la interfaz, en lugar de

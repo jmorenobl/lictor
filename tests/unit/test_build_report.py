@@ -8,7 +8,14 @@ from lictor.application.usecases.build_report import (
     BuildReport,
     BuildReportRequest,
 )
-from lictor.domain.model import Event, JournalDamage
+from lictor.domain.driver_measures import (
+    DriverMeasures,
+    InterfaceMeasure,
+    RedMeasure,
+    StubMeasure,
+    measures_record,
+)
+from lictor.domain.model import Event, JournalDamage, StepCounts
 
 
 class InMemoryEventLog(EventLog):
@@ -1069,3 +1076,100 @@ def test_report_lists_the_scenarios_the_code_already_met(tmp_path: Path) -> None
     assert "verde (ya se cumplía)" in report
     assert "*Ningún verde colateral.*" in report
     assert "*Ningún escenario nuevo que el código ya cumpliera.*" in _report(tmp_path, [])
+
+
+def _measured(attempt: int, step: str, measures: DriverMeasures) -> Event:
+    data: dict[str, object] = {"attempt": attempt, "step": step, **measures_record(measures)}
+    return _event("lictor.driver.measured.v1", data)
+
+
+_MEASURES = DriverMeasures(
+    red={"PRE-008": RedMeasure("then", "sin_implementar")},
+    stubs={"PRE-008": StubMeasure({"return None": "entonces", "return True": "no_aserta"})},
+    interface={
+        "PRE-004": InterfaceMeasure(
+            today="sobrevive",
+            rule_b="sin_alterar",
+            calls=StepCounts(given=3, when=1, then=1),
+            alterable=StepCounts(given=3),
+            altered={"mas": StepCounts(given=3), "menos": StepCounts(given=3)},
+            failed_step={"mas": None, "menos": None},
+            caught={"mas": "pasa", "menos": "pasa"},
+        ),
+        "PRE-001": InterfaceMeasure(
+            today="probado",
+            rule_b="probado",
+            calls=StepCounts(given=1, when=1, then=2),
+            alterable=StepCounts(given=1, when=1, then=2),
+            altered={"mas": StepCounts(given=1, when=1), "menos": StepCounts(given=1, when=1)},
+            failed_step={"mas": "then", "menos": "when"},
+            caught={"mas": "entonces", "menos": "entonces"},
+        ),
+        "APA-001": InterfaceMeasure(
+            today="probado",
+            rule_b="fuera_del_entonces",
+            calls=StepCounts(given=2, then=1),
+            alterable=StepCounts(given=2, then=1),
+            altered={"mas": StepCounts(given=1), "menos": StepCounts(given=1)},
+            failed_step={"mas": "given", "menos": "given"},
+            caught={"mas": "dado", "menos": "dado"},
+        ),
+    },
+)
+
+
+def test_report_shows_what_b_and_c_would_say_of_each_driver_measured(tmp_path: Path) -> None:
+    events = [
+        _measured(2, ".lictor/runs/run-1/driver/002-red", DriverMeasures(red={})),
+        _measured(1, ".lictor/runs/run-1/driver/001-red", _MEASURES),
+    ]
+
+    report = _report(tmp_path, events)
+
+    section = report.split("## Medidas del driver")[1].split("\n## ")[0]
+    assert "No deciden nada" in section
+    first, second = section.split("### Intento 2")
+    assert "### Intento 1 (`.lictor/runs/run-1/driver/001-red`)" in first
+    assert "- **Con C**: 1 aserción de un Entonces" in first
+    assert (
+        "- **Con B**: 1 probado, 1 cazado fuera del Entonces, 1 nada que alterar desde el Cuando"
+        in first
+    )
+    assert (
+        "| PRE-001 | - | - | - | `probado` | probado | mas: Entonces ✓; menos: Cuando ✓ "
+        "| 1 / 1 / 2 / 0 | 3 |" in first
+    )
+    assert (
+        "| APA-001 | - | - | - | `probado` | cazado fuera del Entonces | mas: Dado; menos: Dado"
+        in (first)
+    )
+    assert "| PRE-004 | - | - | - | `sobrevive` | nada que alterar desde el Cuando | mas: pasa" in (
+        first
+    )
+    assert (
+        "| PRE-008 | sin implementar (Entonces) | `return None`: aserción de un Entonces; "
+        "`return True`: falla sin una aserción del driver | aserción de un Entonces | - |" in first
+    )
+    assert "- *Solo el rojo: ningún impostor corrió.*" in second
+
+
+def test_report_without_a_fresh_driver_measured_says_so(tmp_path: Path) -> None:
+    report = _report(tmp_path, [])
+
+    assert "## Medidas del driver\n- *Ningún driver nuevo medido.*" in report
+
+
+def test_report_keeps_each_red_check_of_one_attempt_and_skips_what_doesn_t_follow(
+    tmp_path: Path,
+) -> None:
+    """A red check run again after a crash leaves another step: both happened."""
+    events = [
+        _measured(1, ".lictor/runs/run-1/driver/001-red", _MEASURES),
+        _measured(1, ".lictor/runs/run-1/driver/001-red-r1", _MEASURES),
+        _event("lictor.driver.measured.v1", {"attempt": 3, "red": "roto"}),
+    ]
+
+    report = _report(tmp_path, events)
+
+    assert report.count("### Intento 1") == 2
+    assert "### Intento 3" not in report

@@ -37,6 +37,7 @@ from lictor.domain.rules import (
     describe_suppressions,
     error_for_agent,
     forbidden_paths,
+    impostor_name,
     impostor_problem,
     impostor_source,
     impostor_survivors,
@@ -937,6 +938,22 @@ def test_judge_red_rejects_a_pending_that_fails_with_an_error(cls: ScenarioClass
     )
     assert verdict.cases == (bad,)
     assert verdict.pending == ()
+
+
+@pytest.mark.parametrize(
+    ("replacement", "name"),
+    [
+        (r"\1return None", "return None"),
+        (r"\g<sangria>return True", "return True"),
+        (r"\12return 0 ", "return 0"),
+        ("return x", "return x"),
+        (r"\1", r"\1"),
+    ],
+)
+def test_an_impostor_is_named_by_the_code_it_puts_in_place_of_a_stub(
+    replacement: str, name: str
+) -> None:
+    assert impostor_name(replacement) == name
 
 
 def test_impostor_source_replaces_whole_matching_lines_only() -> None:

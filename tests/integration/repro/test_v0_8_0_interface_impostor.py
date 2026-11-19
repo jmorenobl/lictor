@@ -82,6 +82,38 @@ def test_a_new_scenario_the_code_already_meets_goes_green_without_a_person(
     assert false_greens(root) == []
 
 
+def test_the_red_check_records_in_which_step_each_impostor_caught_each_test(
+    make_project: ProjectFactory,
+) -> None:
+    """The facts come from the real runner of the Gherkin: the step and the calls of each step.
+
+    Each test calls the interface only in its Then, through what its When left.
+    """
+    root = make_project()
+    _code_already_meets(root)
+    agent = Agent(driver=_driver_over_the_code())
+    require(run_lictor(root, agent) == Outcome(0), "el run debía acabar en verde")
+
+    [measured] = events_of(root, "driver.measured")
+    data = measured["data"]
+    assert data["red"] == {"IVA-003": {"step": "then", "caught": "sin_implementar"}}
+    assert data["stubs"] == {
+        "IVA-003": {
+            "by_constant": {"return None": "entonces", "return True": "pasa"},
+            "rule_c": "entonces",
+        }
+    }
+    for sid in ("IVA-001", "IVA-002"):
+        found = data["interface"][sid]
+        assert (found["today"], found["rule_b"]) == ("probado", "probado")
+        assert found["calls"] == {"given": 0, "when": 0, "then": 1, "outside": 0}
+        assert found["alterable"]["then"] == 1
+        assert found["failed_step"] == {"mas": "then", "menos": "then"}
+        assert found["altered"]["mas"]["then"] == 1
+    report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
+    assert "- **Con B**: 2 probado" in report
+
+
 _CHECKS_THAT_IGNORE_THE_RESULT = [
     pytest.param("calculo()", id="sin-assert"),
     pytest.param("calculo().real", id="atributo-suelto", marks=pytest.mark.exhaustive),

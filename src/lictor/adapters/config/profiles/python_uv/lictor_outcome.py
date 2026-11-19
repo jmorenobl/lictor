@@ -1,4 +1,4 @@
-"""Tells, for each failed test, how it failed and which Gherkin scenario it executed.
+"""Tells, for each failed test, how it failed, in which kind of step, and which scenario it ran.
 
 Lictor copies this file into the verification environment, so it runs where Lictor isn't installed
 and must import nothing of it. It reports facts as JUnit properties and decides nothing: which
@@ -20,6 +20,11 @@ ORIGIN = "lictor.origin"
 FRAME = "lictor.frame"
 SCENARIO = "lictor.scenario"
 FEATURE = "lictor.feature"
+STEP = "lictor.step"
+
+# The exception a Gherkin step raised, and the kind of that step. The report records the kind only
+# for that same exception: the hook also sees an `xfail` raised in a step, which fails nothing.
+_STEP_ERROR = pytest.StashKey[tuple[BaseException, str]]()
 
 
 def _relative(path: object, root: Path) -> str:
@@ -59,6 +64,17 @@ def pytest_bdd_before_scenario(request: pytest.FixtureRequest, feature: Any, sce
     request.node.user_properties.append((FEATURE, _relative(feature.filename, root)))
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_bdd_step_error(
+    request: pytest.FixtureRequest, step: Any, exception: BaseException
+) -> None:
+    """Keep the step a failure was raised in: `Given`, `When` or `Then`, «And» and «But» resolved.
+
+    It runs inside the runner's handling of that failure, so it does nothing that could raise.
+    """
+    request.node.stash[_STEP_ERROR] = (exception, str(getattr(step, "type", "")))
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
@@ -73,6 +89,13 @@ def pytest_runtest_makereport(
         item.user_properties.append((FAILURE, failure_kind(call.excinfo, call.when)))
         item.user_properties.append((ORIGIN, origin))
         item.user_properties.append((FRAME, _last_frame_inside(call.excinfo, root)))
+        item.user_properties.append((STEP, _failed_step(item, call.excinfo.value)))
+
+
+def _failed_step(item: pytest.Item, failure: BaseException) -> str:
+    """The kind of step that raised the test's failure, or "" if no step raised it."""
+    raised = item.stash.get(_STEP_ERROR, None)
+    return raised[1] if raised is not None and raised[0] is failure else ""
 
 
 def _last_frame_inside(excinfo: pytest.ExceptionInfo[BaseException], root: Path) -> str:

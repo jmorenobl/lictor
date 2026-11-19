@@ -14,10 +14,12 @@ from lictor.domain.model import (
     MutationScore,
     Scenario,
     ScenarioId,
+    StepCounts,
     TestCaseResult,
     Tokens,
     Totals,
     TreeChange,
+    step_property,
 )
 
 
@@ -311,3 +313,45 @@ def test_agent_result_has_no_cli_version_by_default() -> None:
 def test_a_tree_change_tells_a_deleted_path() -> None:
     assert TreeChange("a.py", "000000").is_deleted is True
     assert TreeChange("a.py", "100644").is_deleted is False
+
+
+@pytest.mark.parametrize(
+    ("value", "step"),
+    [("given", "given"), ("when", "when"), ("then", "then"), ("", None), ("and", None)],
+)
+def test_a_case_names_the_step_its_failure_was_raised_in(value: str, step: str | None) -> None:
+    assert TestCaseResult("t", properties={"lictor.step": value}).failed_step == step
+    assert TestCaseResult("t").failed_step is None
+
+
+def test_the_impostor_s_counts_split_by_step_and_what_no_step_holds() -> None:
+    case = TestCaseResult(
+        "t",
+        properties={
+            "lictor.interface.calls": "7",
+            "lictor.interface.calls.given": "3",
+            "lictor.interface.calls.when": "1",
+            "lictor.interface.calls.then": "2",
+            "lictor.interface.altered.then": "x",
+            "lictor.interface.alterable.when": "4",
+        },
+    )
+
+    assert case.interface_by_step("calls") == StepCounts(given=3, when=1, then=2, outside=1)
+    assert case.interface_by_step("altered") == StepCounts()
+    # Without a total, what falls outside a step can't be told, and is 0.
+    assert case.interface_by_step("alterable") == StepCounts(when=4)
+
+
+def test_a_total_below_its_steps_leaves_nothing_outside() -> None:
+    case = TestCaseResult(
+        "t",
+        properties={"lictor.interface.calls": "1", "lictor.interface.calls.then": "2"},
+    )
+
+    assert case.interface_by_step("calls") == StepCounts(then=2)
+
+
+def test_what_happened_from_the_when_on_leaves_the_givens_out() -> None:
+    assert StepCounts(given=5, when=1, then=2, outside=9).from_when == 3
+    assert step_property("lictor.interface.calls", "then") == "lictor.interface.calls.then"
