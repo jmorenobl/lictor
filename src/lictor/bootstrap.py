@@ -334,6 +334,7 @@ def bootstrap_runtime(
         ),
         map_link=defences.map_link,
         impostors=defences.impostors,
+        interface_impostor=defences.interface_impostor,
         # The refactor after each implemented green (ADR-0010), unless the project turned it off.
         refactor_scenario=(
             RefactorScenario(vcs, executor, spec_source, active_event_log, active_clock)

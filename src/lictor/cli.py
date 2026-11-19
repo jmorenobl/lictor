@@ -1340,6 +1340,7 @@ def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
         "greens": {
             "implemented": progress.implemented,
             "collateral": progress.collateral,
+            "already_met": progress.already_met,
             "reregistered": progress.reregistered,
             "previous": progress.previous,
         },

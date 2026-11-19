@@ -108,6 +108,8 @@ class RunProgress:
     previous: list[str] = field(default_factory=list)  # green before this run started
     implemented: list[str] = field(default_factory=list)
     collateral: list[str] = field(default_factory=list)
+    # New scenarios the code already met: the impostor of the interface proved it (ADR-0011).
+    already_met: list[str] = field(default_factory=list)
     reregistered: list[str] = field(default_factory=list)
     quarantined: list[str] = field(default_factory=list)
     # How each refactor ended (ADR-0010), by scenario: applied, discarded or unchanged.
@@ -116,6 +118,7 @@ class RunProgress:
     # What the refactors cost, by scenario: apart, so a green's line tells only its own work.
     _refactor_spend: dict[str, Spend] = field(default_factory=dict)
     _held: list[str] = field(default_factory=list)  # collateral greens not told yet
+    _held_met: list[str] = field(default_factory=list)  # those already met, not told yet
 
     def _all_spend(self) -> list[Spend]:
         return [*self._spend.values(), *self._refactor_spend.values()]
@@ -141,7 +144,13 @@ class RunProgress:
     @property
     def greens(self) -> list[str]:
         """Every scenario green now, in the order of the spec."""
-        green = {*self.previous, *self.implemented, *self.collateral, *self.reregistered}
+        green = {
+            *self.previous,
+            *self.implemented,
+            *self.collateral,
+            *self.already_met,
+            *self.reregistered,
+        }
         return [sid for sid in self.scenario_ids if sid in green]
 
     def spend(self, owner: str) -> Spend:
@@ -156,13 +165,24 @@ class RunProgress:
         return [*told, *(handler(event) if handler else [])]
 
     def flush(self) -> list[str]:
-        """Tell the collateral greens held so far, on one line."""
+        """Tell the collateral greens held so far, on one line, and those already met on another."""
         held, self._held = self._held, []
-        if not held:
-            return []
+        met, self._held_met = self._held_met, []
+        lines: list[str] = []
         if len(held) == 1:
-            return [f"{held[0]}: verde colateral, sin llamar al agente."]
-        return [f"{', '.join(held)}: verdes colaterales, sin llamar al agente."]
+            lines.append(f"{held[0]}: verde colateral, sin llamar al agente.")
+        elif held:
+            lines.append(f"{', '.join(held)}: verdes colaterales, sin llamar al agente.")
+        if len(met) == 1:
+            lines.append(
+                f"{met[0]}: ya se cumplía; su test comprueba el resultado, sin llamar al agente."
+            )
+        elif met:
+            lines.append(
+                f"{', '.join(met)}: ya se cumplían; sus tests comprueban el resultado, sin llamar "
+                "al agente."
+            )
+        return lines
 
     def _handlers(self) -> Mapping[str, Callable[[Event], list[str]]]:
         return {
@@ -268,6 +288,10 @@ class RunProgress:
 
     def _green(self, event: Event) -> list[str]:
         sid = str(event.scenarioid)
+        if event.data.get("proof") == "interface":
+            self.already_met.append(sid)
+            self._held_met.append(sid)
+            return []
         if event.data.get("collateral"):
             self.collateral.append(sid)
             self._held.append(sid)
@@ -333,6 +357,7 @@ _DRIVER_NODES: Final[frozenset[str]] = frozenset({"build_driver", "red_check"})
 _KINDS: Final[tuple[tuple[str, str, str], ...]] = (
     ("implemented", "implementado", "implementados"),
     ("collateral", "colateral", "colaterales"),
+    ("already_met", "ya se cumplía", "ya se cumplían"),
     ("reregistered", "registrado de nuevo", "registrados de nuevo"),
     ("previous", "de antes", "de antes"),
 )
@@ -344,6 +369,7 @@ def _green_kind(view: StatusView, sid: str) -> str:
         ("reregistered", progress.reregistered),
         ("implemented", progress.implemented),
         ("collateral", progress.collateral),
+        ("already_met", progress.already_met),
         ("previous", progress.previous),
     ):
         if sid in members:

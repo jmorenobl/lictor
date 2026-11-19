@@ -6,7 +6,8 @@ los tests y el código.**
 
 - No escribas tests, ni el driver (`paths.driver` de `lictor.json`), ni código de la aplicación.
   Si la persona lo pide, explica que el driver lo escribe y lo sella Lictor, y que si el código
-  ya existe y cumple escenarios, lo que toca es `lictor register`.
+  ya existe y cumple escenarios, Lictor lo prueba por su cuenta cuando puede, y si no, lo que
+  toca es `lictor register`.
 - No lances `lictor run`: es largo, gasta cuota y la persona tiene que verlo. Dale el comando.
 - No hagas commits ni lances `lictor register`: propón el comando y explica qué afirma.
 - No toques `.lictor/`. No escribas ni cambies `features/` ni `lictor.json` sin enseñar antes el
@@ -131,8 +132,10 @@ ejecutar, y el run lo salta.
    repositorio y el árbol, y no construye el entorno, pero los escenarios sí los valida.
    `lictor check` ejecuta los controles en un clon limpio, como haría un run, y además los que
    un run deja para `check`, marcados «(solo en check)».
-4. Si ya hay código que cumple escenarios: `lictor register <ID>…`, antes del primer run y
-   lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
+4. Si ya hay código que cumple escenarios, Lictor lo prueba alterando lo que devuelve la
+   interfaz: si el test lo nota, el escenario sale en verde sin llamar al agente. Lo que devuelve
+   objetos o estado no lo puede alterar: para eso, `lictor register <ID>…`, antes del primer run
+   y lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
 5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
    `lictor status`, en otra terminal, dice por dónde va. Tras cada verde que implementa, un
@@ -158,7 +161,7 @@ ejecutar, y el run lo salta.
 | Código | Significa | Qué hacer |
 |---|---|---|
 | 0 | Todo en verde | Revisar con la persona el código y el driver de la rama `lictor/<nombre>`, y que la integre |
-| 10 | Hay que cambiar algo del proyecto | Leer el motivo, que el run imprime: árbol sucio en el worktree, una rama que ya existe, varias ejecuciones que reanudar sin `--branch`, configuración, un feature inválido, el sello alterado, una ruta que solo puede tocar una persona, un escenario nuevo que pasa con un driver nuevo (un test vacío, o código que ya cumple: `lictor register`), un escenario reabierto que sigue pasando (solo la persona sabe si el cambio fue de redacción) |
+| 10 | Hay que cambiar algo del proyecto | Leer el motivo, que el run imprime: árbol sucio en el worktree, una rama que ya existe, varias ejecuciones que reanudar sin `--branch`, configuración, un feature inválido, el sello alterado, una ruta que solo puede tocar una persona, un escenario nuevo que pasa con un driver nuevo y que Lictor no pudo probar (un test que no compara el resultado, o código que ya cumple con un resultado que no se puede alterar: `lictor register`), un escenario reabierto que sigue pasando (solo la persona sabe si el cambio fue de redacción) |
 | 11 | El agente declaró un conflicto de especificación | Leer el motivo en el informe y revisar los escenarios con la persona |
 | 30 | Cuarentena tras agotar los intentos | «Intentos fallidos por nivel» y `error.txt`; el motivo `driver_sospechoso` apunta al driver |
 | 40 | El entorno no deja ejecutar | `lictor doctor` dice qué; no es culpa de ningún escenario |

@@ -134,6 +134,7 @@ source_paths = [
 also_copy = ["src/"]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_rules.py",
+    "tests/unit/test_interface_proof.py",
     "tests/unit/test_refactor.py",
     "tests/unit/test_routing.py",
     "tests/unit/test_model.py",

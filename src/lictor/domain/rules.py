@@ -33,7 +33,7 @@ _ASSERTION_LINE = re.compile(r"^\s*E\s|\bassert\b|\w*(Error|Exception)\b")
 _CLIPPED = " […] "
 _OMISSION_RESERVE = 60
 _FAILED_STATUSES = ("failure", "error")
-_NOT_IMPLEMENTED = "not_implemented"
+NOT_IMPLEMENTED = "not_implemented"
 SUSPICIOUS_DRIVER = "driver_sospechoso"
 # What the clock generates: the date first, so that sorting the names sorts the runs.
 RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
@@ -235,7 +235,7 @@ def red_failure_problem(case: TestCaseResult, oracle: RedOracle) -> str | None:
     where = f" en {origin}" if origin else ""
     if kind not in oracle.red_kinds:
         return f"falla con {kind or 'un fallo sin clasificar'}{where}"
-    if kind == _NOT_IMPLEMENTED and (
+    if kind == NOT_IMPLEMENTED and (
         not _under(origin, oracle.writable) or _under(origin, oracle.driver)
     ):
         return (
@@ -332,7 +332,7 @@ def impostor_problem(
         return crash
     if mapping_error is not None:
         return mapping_error
-    kept = [case.name for case in test_cases if case.failure_kind == _NOT_IMPLEMENTED]
+    kept = [case.name for case in test_cases if case.failure_kind == NOT_IMPLEMENTED]
     if kept:
         return (
             f"{', '.join(kept)} siguen lanzando NotImplementedError: escribe cada "

@@ -1,7 +1,7 @@
 # ADR-0004: El oráculo se valida antes de sellarse y un verde vale para la especificación de su commit
 
 ## Estado
-Aceptada
+Aceptada. La ADR-0011 cambia el punto 3 para un escenario nuevo que pasa con un driver nuevo: se prueba con un impostor de la interfaz antes de rechazar el driver, y si queda probado se registra como verde colateral después del sello.
 
 ## Contexto
 El driver sellado decide qué escenario está en verde. La auditoría de la v0.1 mostró cuatro huecos en ese ciclo:

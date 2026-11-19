@@ -96,11 +96,17 @@ def pending(phase: int, finding: str) -> pytest.MarkDecorator:
     return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"Fase {phase}: {finding}")
 
 
-def known_limitation(finding: str) -> pytest.MarkDecorator:
-    """Mark a case no phase of this plan closes: it stays visible until the sandbox arrives."""
-    return pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason=f"Limitación de la v0.1, incremento 4: {finding}"
+def known_limitation(finding: str, *, until: str = "") -> pytest.MarkDecorator:
+    """Mark a case no phase of this plan closes: it stays visible until what closes it arrives.
+
+    Without `until`, that is the sandbox of increment 4.
+    """
+    reason = (
+        f"Limitación conocida, {until}: {finding}"
+        if until
+        else (f"Limitación de la v0.1, incremento 4: {finding}")
     )
+    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)
 
 
 # A case runs on a light project: the profile's lint, type, unit and coverage controls, dropped by

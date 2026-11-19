@@ -127,6 +127,23 @@ def test_each_failure_carries_its_kind_and_origin(
     assert (case.failure_kind, case.origin) == (kind, origin)
 
 
+@pytest.mark.parametrize(
+    ("name", "frame"),
+    [
+        ("test_assertion", "tests/test_x.py"),
+        ("test_stub", "src/iva/__init__.py"),
+        # pytest raises these for the test: the origin is inside pytest, the frame is the test's.
+        ("test_did_not_raise", "tests/test_x.py"),
+        ("test_fail", "tests/test_x.py"),
+        ("test_library", "tests/test_x.py"),
+    ],
+)
+def test_each_failure_carries_the_last_frame_inside_the_project(
+    cases: dict[str, TestCaseResult], name: str, frame: str
+) -> None:
+    assert cases[name].frame == frame
+
+
 def test_a_passing_test_carries_nothing(cases: dict[str, TestCaseResult]) -> None:
     assert cases["test_passes"].properties == {}
 

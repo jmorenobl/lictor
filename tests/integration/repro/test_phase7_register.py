@@ -75,18 +75,21 @@ def test_a_registered_scenario_is_green_by_hand_and_the_rest_by_lictor(
     assert "IVA-002: verde (implementado)\n" in status.output
 
 
-def test_without_registering_the_same_project_stops_for_a_person(
+def test_without_registering_lictor_proves_what_the_code_already_meets(
     make_project: ProjectFactory,
 ) -> None:
+    """ADR-0011: the impostor of the interface proves IVA-001's test reads the result (F58)."""
     root = _with_iva_001_done(make_project)
     agent = Agent(driver=_driver_over_existing_code)
 
     outcome = run_lictor(root, agent)
 
-    assert outcome.exit_code == 10
-    assert agent.calls == ["driver", "driver"]
-    reason = events_of(root, "run.finished")[0]["data"]["reason"]
-    assert "`lictor register IVA-001`" in reason
+    assert outcome.exit_code == 0
+    assert agent.calls == ["driver", "IVA-002", "IVA-003"]
+    [proved] = [e for e in events_of(root, "scenario.green") if e["data"].get("proof")]
+    assert (proved["scenarioid"], proved["data"]["proof"]) == ("IVA-001", "interface")
+    assert events_of(root, "driver.rejected") == []
+    assert false_greens(root) == []
 
 
 @pytest.mark.parametrize(
