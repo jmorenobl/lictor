@@ -7,6 +7,8 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.8.0] - 2026-11-19
+
 Un escenario nuevo que el código ya cumple se prueba con un impostor de la interfaz, en lugar de
 pedir un registro a mano (ADR-0011, F58). Cambia lo que hace un run, así que sube la versión menor.
 
@@ -640,7 +642,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.7.1...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jmorenobl/lictor/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jmorenobl/lictor/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jmorenobl/lictor/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmorenobl/lictor/compare/v0.6.0...v0.6.1

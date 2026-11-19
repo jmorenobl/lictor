@@ -159,7 +159,7 @@ uv sync --all-groups
 uv run lictor --help
 ```
 
-Esa copia es editable, y con el venv del repositorio activado puede ir delante de la instalada en el `PATH`. `lictor --version` lo dice: `lictor 0.7.1 (editable, desde /ruta/al/repositorio)`. Una instalación desde PyPI dice solo la versión.
+Esa copia es editable, y con el venv del repositorio activado puede ir delante de la instalada en el `PATH`. `lictor --version` lo dice: `lictor 0.8.0 (editable, desde /ruta/al/repositorio)`. Una instalación desde PyPI dice solo la versión.
 
 ---
 
