@@ -7,6 +7,11 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.7.1] - 2026-11-19
+
+Un arreglo de la 0.7.0: la guarda del refactor descartaba los refactors que solo quitaban código
+cubierto. Sin campos nuevos en `lictor.json`, así que sube el parche.
+
 ### Corregido
 
 - **`L0-regresión` ya no descarta un refactor que solo quita código cubierto.** La 0.7.0 comparaba
@@ -591,7 +596,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.7.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/jmorenobl/lictor/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jmorenobl/lictor/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmorenobl/lictor/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jmorenobl/lictor/compare/v0.5.0...v0.6.0
