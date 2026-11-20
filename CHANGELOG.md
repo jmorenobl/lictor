@@ -7,6 +7,8 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.10.0] - 2026-11-20
+
 El impostor de la interfaz aplica la regla B (enmienda de la ADR-0011): solo un Entonces prueba que
 un test comprueba lo que devuelve la interfaz. Cambian veredictos y mensajes al agente.
 
@@ -708,7 +710,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.9.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jmorenobl/lictor/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jmorenobl/lictor/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jmorenobl/lictor/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jmorenobl/lictor/compare/v0.7.0...v0.7.1
