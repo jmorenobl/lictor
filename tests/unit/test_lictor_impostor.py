@@ -1,7 +1,9 @@
 """The profile's impostor of the interface, run in real pytest processes as verification would.
 
-Each test of the fake driver is one shape a test of a scenario takes; the domain's rule then judges
-what the plugin reported, so the table of ADR-0011 is checked end to end, without Lictor's graph.
+Each test of the fake driver is one shape a test of a scenario takes, run as the only Then of its
+scenario (`THEN_CONFTEST` tells the plugins what the runner of the Gherkin would); the domain's rule
+then judges what the plugin reported, so the table of ADR-0011 is checked end to end, without
+Lictor's graph.
 """
 
 import json
@@ -25,7 +27,7 @@ from lictor.adapters.config.profiles.python_uv.lictor_impostor import (
     alter,
 )
 from lictor.adapters.readers.junit import JUnitReader
-from lictor.domain.interface_proof import interface_proofs
+from lictor.domain.interface_proof import ALTERED_STEPS, interface_proofs
 from lictor.domain.model import StepCounts, TestCaseResult
 from lictor.domain.reports import JUnitReport
 
@@ -215,17 +217,56 @@ def test_sin_llamar():
     assert 6 == 6
 """
 
+# What pytest-bdd does around a step, for each test of test_calc.py: one Then, the whole test.
+THEN_CONFTEST = """
+from types import SimpleNamespace
+
+import lictor_impostor
+import lictor_outcome
+import pytest
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    if item.module.__name__ != "test_calc":
+        yield
+        return
+    step = SimpleNamespace(type="then")
+    lictor_impostor.pytest_bdd_before_step(step)
+    outcome = yield
+    if outcome.excinfo is None:
+        lictor_impostor.pytest_bdd_after_step()
+    else:
+        lictor_outcome.pytest_bdd_step_error(item._request, step, outcome.excinfo[1])
+        lictor_impostor.pytest_bdd_step_error()
+"""
+
 # The runner of the Gherkin tells the plugin which step is in progress; here the test does.
 STEPS_DRIVER = """
 from types import SimpleNamespace
+
+import pytest
 
 import lictor_impostor as plugin
 
 from calc import evaluar, nada, raro, resultado
 
 
+@pytest.fixture
+def preparado():
+    return evaluar("3")
+
+
 def paso(kind):
     plugin.pytest_bdd_before_step(SimpleNamespace(type=kind))
+
+
+def test_un_fixture_pedido_en_un_cuando(request):
+    paso("when")
+    tres = request.getfixturevalue("preparado")
+    plugin.pytest_bdd_after_step()
+    paso("then")
+    assert tres == 3
 
 
 def test_por_pasos():
@@ -274,25 +315,30 @@ EXPECTED = {
 }
 
 
-def _run(project: Path, mode: str | None) -> dict[str, TestCaseResult]:
+def _told(project: Path, mode: str) -> dict[str, Any]:
+    """What Lictor tells the plugin for one run, as `CheckRed` does."""
+    return {
+        "mode": mode,
+        "writable": [str(project / "src")],
+        "driver": [str(project / "tests" / "acceptance")],
+        "steps": list(ALTERED_STEPS),
+    }
+
+
+def _pytest(
+    project: Path, told: dict[str, Any] | None, report: Path
+) -> subprocess.CompletedProcess[bytes]:
     plugin_dir = DEFAULT_PROFILES_DIR / "python_uv"
     env = {
         **{k: v for k, v in os.environ.items() if not k.startswith(("PYTEST", "LICTOR"))},
         "PYTHONPATH": os.pathsep.join([str(plugin_dir), str(project / "src")]),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
-    if mode is not None:
-        env["LICTOR_IMPOSTOR"] = json.dumps(
-            {
-                "mode": mode,
-                "writable": [str(project / "src")],
-                "driver": [str(project / "tests" / "acceptance")],
-            }
-        )
-    report = project / f"out-{mode}.xml"
+    if told is not None:
+        env["LICTOR_IMPOSTOR"] = json.dumps(told)
     command = [sys.executable, "-B", "-m", "pytest", "-p", "lictor_outcome", "-p"]
     command += ["lictor_impostor", "-p", "no:cacheprovider", "-q", "tests", "--junitxml"]
-    subprocess.run(
+    return subprocess.run(
         [*command, str(report)],
         cwd=project,
         env=env,
@@ -300,6 +346,11 @@ def _run(project: Path, mode: str | None) -> dict[str, TestCaseResult]:
         check=False,
         timeout=120,
     )
+
+
+def _run(project: Path, mode: str | None) -> dict[str, TestCaseResult]:
+    report = project / f"out-{mode}.xml"
+    _pytest(project, None if mode is None else _told(project, mode), report)
     result = JUnitReader().read(report)
     assert isinstance(result, JUnitReport), result
     return {case.name: case for case in result.cases}
@@ -313,8 +364,11 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str | None, dict[str,
     (project / "tests" / "acceptance").mkdir(parents=True)
     (project / "tests" / "acceptance" / "test_calc.py").write_text(DRIVER, encoding="utf-8")
     (project / "tests" / "acceptance" / "test_pasos.py").write_text(STEPS_DRIVER, encoding="utf-8")
+    (project / "tests" / "acceptance" / "conftest.py").write_text(THEN_CONFTEST, encoding="utf-8")
     (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
-    return {mode: _run(project, mode) for mode in (None, "control", MORE, LESS)}
+    runs = {mode: _run(project, mode) for mode in (None, "control", MORE, LESS)}
+    runs["proyecto"] = {"": TestCaseResult(str(project))}  # where it is, for a run of its own
+    return runs
 
 
 def test_every_test_passes_with_the_real_code(
@@ -322,7 +376,8 @@ def test_every_test_passes_with_the_real_code(
 ) -> None:
     for mode in (None, "control"):
         assert {name: case.status for name, case in runs[mode].items()} == dict.fromkeys(
-            [*EXPECTED, "test_por_pasos", "test_raro"], "passed"
+            [*EXPECTED, "test_por_pasos", "test_raro", "test_un_fixture_pedido_en_un_cuando"],
+            "passed",
         )
 
 
@@ -346,41 +401,75 @@ def test_each_shape_of_test_gets_the_verdict_of_the_adr(
     assert proofs[name].outcome == outcome, (name, proofs[name])
 
 
-def test_the_control_counts_by_step_what_every_mode_could_alter(
+def test_the_control_counts_by_step_and_alters_nothing(
     runs: dict[str | None, dict[str, TestCaseResult]],
 ) -> None:
-    """`nada` returns None, which every mode alters; `resultado` an object, which none does."""
     case = runs["control"]["test_por_pasos"]
 
     assert case.interface_calls == 5
     assert case.interface_by_step("calls") == StepCounts(given=2, when=1, then=1, outside=1)
-    assert case.interface_by_step("alterable") == StepCounts(given=1, when=1, then=1)
     assert case.interface_by_step("altered") == StepCounts()
 
 
 @pytest.mark.parametrize("mode", [MORE, LESS])
-def test_each_mode_counts_by_step_what_it_altered(
+def test_each_mode_alters_only_what_the_when_and_the_then_get(
     runs: dict[str | None, dict[str, TestCaseResult]], mode: str
 ) -> None:
-    """The altered total fails the Then's first assertion, so the Then calls nothing."""
+    """The Given's None and the call outside a step stay real; the altered total fails the Then's
+    first assertion, so the Then calls nothing."""
     case = runs[mode]["test_por_pasos"]
 
     assert case.status == "failure"
     assert case.interface_by_step("calls") == StepCounts(given=2, when=1, then=0, outside=1)
-    assert case.interface_by_step("altered") == StepCounts(given=1, when=1, then=0, outside=1)
-    assert "lictor.interface.alterable.then" not in case.properties
+    assert case.interface_by_step("altered") == StepCounts(when=1)
+    assert case.interface_altered_none == 0
 
 
-def test_a_value_whose_own_arithmetic_raises_leaves_the_control_as_it_was(
+@pytest.mark.parametrize("mode", [MORE, LESS])
+def test_a_fixture_a_when_requests_prepares_as_a_given_does(
+    runs: dict[str | None, dict[str, TestCaseResult]], mode: str
+) -> None:
+    """pytest-bdd resolves a step's fixtures once the step is in progress: they stay real."""
+    case = runs[mode]["test_un_fixture_pedido_en_un_cuando"]
+
+    assert case.status == "passed"
+    assert case.interface_by_step("calls") == StepCounts(outside=1)
+    assert case.interface_altered == 0
+
+
+@pytest.mark.parametrize("mode", [MORE, LESS])
+def test_an_altered_none_is_counted_apart(
+    runs: dict[str | None, dict[str, TestCaseResult]], mode: str
+) -> None:
+    case = runs[mode]["test_nada"]
+
+    assert (case.interface_altered, case.interface_altered_none) == (1, 1)
+    assert case.failed_step == "then"
+
+
+def test_the_real_result_reaches_a_test_in_the_control(
     runs: dict[str | None, dict[str, TestCaseResult]],
 ) -> None:
-    """The control must pass as the red did: what no mode can alter without raising isn't
-    alterable, and raises nothing there."""
+    """`raro` returns a value whose own arithmetic raises: the control passes as the red did."""
     case = runs["control"]["test_raro"]
 
     assert case.status == "passed"
     assert case.interface_by_step("calls") == StepCounts(then=1)
-    assert case.interface_by_step("alterable") == StepCounts()
+
+
+def test_without_the_steps_to_alter_the_impostor_runs_no_test(
+    runs: dict[str | None, dict[str, TestCaseResult]], tmp_path: Path
+) -> None:
+    """What Lictor doesn't say it alters isn't guessed: the run tells nothing, and proves none."""
+    project = Path(runs["proyecto"][""].name)
+    told = _told(project, MORE)
+    del told["steps"]
+
+    done = _pytest(project, told, tmp_path / "out.xml")
+
+    assert done.returncode != 0
+    assert b"KeyError: 'steps'" in done.stderr + done.stdout
+    assert not (tmp_path / "out.xml").exists()
 
 
 def test_a_call_inside_the_code_crosses_no_boundary(

@@ -7,6 +7,46 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+El impostor de la interfaz aplica la regla B (enmienda de la ADR-0011): solo un Entonces prueba que
+un test comprueba lo que devuelve la interfaz. Cambian veredictos y mensajes al agente.
+
+### Al actualizar desde la 0.9.0
+
+- **Un run empezado con la 0.9.0 no se reanuda:** el plugin y las instrucciones del driver del
+  perfil cambian y entran en la huella. Empieza uno nuevo con `lictor run --new`.
+
+### Cambiado
+
+- **Solo prueba una aserción de un Entonces**, o el `ImpostorError` en un Cuando o un Entonces. Una
+  aserción de un Dado ya no prueba un escenario «ya se cumplía»: en la biblioteca, 13 de 33
+  probados lo eran así sin mirar su Entonces (F63).
+- **Lo que devuelve un Dado, un fixture o el código fuera de un paso no se altera.** Lictor pasa al
+  plugin los pasos que altera (`steps`, sin valor por defecto) y comprueba que lo haya cumplido: un
+  modo que alteró un Dado no prueba nada.
+- **`sin_alterar` es exacto:** nada alterable desde el Cuando, o solo el `None` de una orden. Es
+  final, con exit 10 a la primera si ningún otro escenario se puede arreglar. Antes el `None` de un
+  Dado lo escondía y el test «sobrevivía», con un mensaje falso y un reintento en balde.
+- **Mensajes al agente:**
+  - `fuera_del_entonces`, nuevo y reintentable, dice en qué paso falló la aserción y que la
+    comprobación va en un Entonces, también la de un error.
+  - `no_llama` distingue al test que solo llama a la interfaz desde un Dado.
+  - `sin_alterar` solo pide no cambiar ese test. Por qué no se pudo comprobar va a la persona, en el
+    rechazo final o en el último intento, y la línea final ya no dice que el test esté mal.
+- **Instrucciones del driver de `python-uv`:** los Dados solo preparan, el resultado lo obtienen el
+  Cuando o el Entonces, y la comprobación va en un Entonces.
+- **`lictor.driver.measured.v1`** ya no mide B, que es la regla: guarda por escenario lo que probó
+  la interfaz (`outcome`), las llamadas y alteraciones por paso y el paso que falla. C sigue
+  medido y sin aplicarse. `report.md` lo muestra en «Medidas del driver».
+
+### Añadido
+
+- **`lictor.interface.altered_none`**, los resultados alterados que eran `None`.
+
+### Quitado
+
+- **`lictor.interface.alterable.<paso>`** y los campos `rule_b`, `today`, `alterable` y `caught` de
+  las medidas.
+
 ## [0.9.0] - 2026-11-19
 
 Lictor anota como hechos lo que solo sacaba la sonda de la pasada de la biblioteca, y mide con

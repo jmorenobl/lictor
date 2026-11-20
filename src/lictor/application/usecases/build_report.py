@@ -304,12 +304,10 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
 
 
 _MEASURES_NOTE = (
-    "*Lo que dirían de cada driver nuevo las reglas más estrictas que aún no se aplican: B en el "
-    "impostor de la interfaz (solo prueba una aserción de un Entonces, o el error del impostor "
-    "desde el Cuando) y C en los de stubs (alguna constante tiene que hacer fallar una aserción "
-    "del driver en un Entonces). No deciden nada. B tampoco alteraría lo que devuelve un Dado, y "
-    "eso cambia la ejecución: un test cazado hoy en un Dado sale aparte, porque con B no se sabe "
-    "qué pasaría.*"
+    "*Lo que vio el rojo de cada driver nuevo, y lo que diría C de los impostores de stubs, que "
+    "aún no se aplica: alguna constante tiene que hacer fallar una aserción del driver en un "
+    "Entonces. C no decide nada; la columna «Interfaz» es lo que el impostor de la interfaz "
+    "probó.*"
 )
 _STEP_WORDS = {"given": "Dado", "when": "Cuando", "then": "Entonces"}
 _CAUGHT_WORDS = {
@@ -320,12 +318,6 @@ _CAUGHT_WORDS = {
     "pasa": "pasa",
     "sin_resultado": "sin resultado",
 }
-_RULE_B_WORDS = {
-    "probado": "probado",
-    "fuera_del_entonces": "cazado fuera del Entonces",
-    "sin_alterar": "nada que alterar desde el Cuando",
-    "no_probado": "no probado",
-}
 
 
 def _step_word(step: str | None) -> str:
@@ -333,7 +325,7 @@ def _step_word(step: str | None) -> str:
 
 
 def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> list[str]:
-    """A table per red check of a fresh driver, with what B and C would say of each scenario."""
+    """A table per red check of a fresh driver, with what C would say of each scenario."""
     if not entries:
         return ["- *Ningún driver nuevo medido.*"]
     lines = [_MEASURES_NOTE]
@@ -341,11 +333,10 @@ def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> lis
         where = f" (`{step}`)" if step else ""
         lines += ["", f"### Intento {attempt}{where}", *_measure_totals(measures), ""]
         lines += [
-            "| Escenario | Rojo | Stubs, por constante | Con C | Interfaz hoy | Con B | "
-            "Falla en, por modo (✓: lo acepta B) | "
-            "Llamadas del control (Dado / Cuando / Entonces / fuera) | "
-            "Alterables desde el Cuando |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| Escenario | Rojo | Stubs, por constante | Con C | Interfaz | "
+            "Falla en, por modo | "
+            "Llamadas del control (Dado / Cuando / Entonces / fuera) |",
+            "|---|---|---|---|---|---|---|",
         ]
         lines += [_measure_row(sid, measures) for sid in _measured_ids(measures)]
     return lines
@@ -357,26 +348,22 @@ def _measured_ids(measures: DriverMeasures) -> list[str]:
 
 
 def _measure_totals(measures: DriverMeasures) -> list[str]:
-    """How many scenarios fall in each answer of B and C, to compare with a pass of the probe."""
+    """How many scenarios fall in each answer of C and of the interface, to compare passes."""
     lines: list[str] = []
     if measures.stubs is not None:
         by_c = Counter[str](m.rule_c for m in measures.stubs.values())
         lines.append(f"- **Con C**: {_counted(by_c, _CAUGHT_WORDS)}")
     if measures.interface is not None:
-        by_b = Counter[str](m.rule_b for m in measures.interface.values())
-        lines.append(f"- **Con B**: {_counted(by_b, _RULE_B_WORDS)}")
+        by_proof = Counter[str](m.outcome for m in measures.interface.values())
+        lines.append(
+            "- **Interfaz**: "
+            + ", ".join(f"{n} `{outcome}`" for outcome, n in sorted(by_proof.items()))
+        )
     return lines or ["- *Solo el rojo: ningún impostor corrió.*"]
 
 
 def _counted(found: Mapping[str, int], words: Mapping[str, str]) -> str:
     return ", ".join(f"{found[key]} {word}" for key, word in words.items() if found[key])
-
-
-def _mode_text(caught: str, step: str | None) -> str:
-    """Where one mode made the test fail, marked when B would accept it."""
-    if caught in ("pasa", "sin_resultado"):
-        return _CAUGHT_WORDS[caught]
-    return f"{_step_word(step)} ✓" if caught == "entonces" else _step_word(step)
 
 
 def _measure_row(sid: str, measures: DriverMeasures) -> str:
@@ -391,16 +378,15 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
     rule_c = _CAUGHT_WORDS[stub.rule_c] if stub else "-"
     found = (measures.interface or {}).get(sid)
     if found is None:
-        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - | - | - |"
-    caught = "; ".join(
-        f"{mode}: {_mode_text(c, found.failed_step.get(mode))}" for mode, c in found.caught.items()
+        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - |"
+    failed = "; ".join(
+        f"{mode}: {_step_word(step) if step else 'sin fallo en un paso'}"
+        for mode, step in found.failed_step.items()
     )
     calls = found.calls
     return (
-        f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.today}` | "
-        f"{_RULE_B_WORDS[found.rule_b]} | {caught or '-'} | "
-        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} | "
-        f"{found.alterable.from_when} |"
+        f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.outcome}` | {failed or '-'} | "
+        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} |"
     )
 
 

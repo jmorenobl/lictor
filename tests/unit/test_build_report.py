@@ -1088,37 +1088,30 @@ _MEASURES = DriverMeasures(
     stubs={"PRE-008": StubMeasure({"return None": "entonces", "return True": "no_aserta"})},
     interface={
         "PRE-004": InterfaceMeasure(
-            today="sobrevive",
-            rule_b="sin_alterar",
+            outcome="sin_alterar",
             calls=StepCounts(given=3, when=1, then=1),
-            alterable=StepCounts(given=3),
-            altered={"mas": StepCounts(given=3), "menos": StepCounts(given=3)},
+            altered={"mas": StepCounts(), "menos": StepCounts()},
             failed_step={"mas": None, "menos": None},
-            caught={"mas": "pasa", "menos": "pasa"},
         ),
         "PRE-001": InterfaceMeasure(
-            today="probado",
-            rule_b="probado",
+            outcome="probado",
             calls=StepCounts(given=1, when=1, then=2),
-            alterable=StepCounts(given=1, when=1, then=2),
-            altered={"mas": StepCounts(given=1, when=1), "menos": StepCounts(given=1, when=1)},
+            altered={"mas": StepCounts(when=1), "menos": StepCounts(when=1)},
             failed_step={"mas": "then", "menos": "when"},
-            caught={"mas": "entonces", "menos": "entonces"},
         ),
         "APA-001": InterfaceMeasure(
-            today="probado",
-            rule_b="fuera_del_entonces",
-            calls=StepCounts(given=2, then=1),
-            alterable=StepCounts(given=2, then=1),
-            altered={"mas": StepCounts(given=1), "menos": StepCounts(given=1)},
-            failed_step={"mas": "given", "menos": "given"},
-            caught={"mas": "dado", "menos": "dado"},
+            outcome="fuera_del_entonces",
+            calls=StepCounts(given=2, when=1),
+            altered={"mas": StepCounts(when=1), "menos": StepCounts(when=1)},
+            failed_step={"mas": "when", "menos": "when"},
         ),
     },
 )
 
 
-def test_report_shows_what_b_and_c_would_say_of_each_driver_measured(tmp_path: Path) -> None:
+def test_report_shows_what_the_red_saw_and_c_would_say_of_each_driver_measured(
+    tmp_path: Path,
+) -> None:
     events = [
         _measured(2, ".lictor/runs/run-1/driver/002-red", DriverMeasures(red={})),
         _measured(1, ".lictor/runs/run-1/driver/001-red", _MEASURES),
@@ -1127,24 +1120,18 @@ def test_report_shows_what_b_and_c_would_say_of_each_driver_measured(tmp_path: P
     report = _report(tmp_path, events)
 
     section = report.split("## Medidas del driver")[1].split("\n## ")[0]
-    assert "No deciden nada" in section
+    assert "C no decide nada" in section
     first, second = section.split("### Intento 2")
     assert "### Intento 1 (`.lictor/runs/run-1/driver/001-red`)" in first
     assert "- **Con C**: 1 aserción de un Entonces" in first
-    assert (
-        "- **Con B**: 1 probado, 1 cazado fuera del Entonces, 1 nada que alterar desde el Cuando"
-        in first
-    )
-    assert (
-        "| PRE-001 | - | - | - | `probado` | probado | mas: Entonces ✓; menos: Cuando ✓ "
-        "| 1 / 1 / 2 / 0 | 3 |" in first
-    )
-    assert (
-        "| APA-001 | - | - | - | `probado` | cazado fuera del Entonces | mas: Dado; menos: Dado"
-        in (first)
-    )
-    assert "| PRE-004 | - | - | - | `sobrevive` | nada que alterar desde el Cuando | mas: pasa" in (
+    assert "- **Interfaz**: 1 `fuera_del_entonces`, 1 `probado`, 1 `sin_alterar`" in first
+    assert "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 |" in (
         first
+    )
+    assert "| APA-001 | - | - | - | `fuera_del_entonces` | mas: Cuando; menos: Cuando |" in first
+    assert (
+        "| PRE-004 | - | - | - | `sin_alterar` | mas: sin fallo en un paso; menos: sin fallo en "
+        "un paso | 3 / 1 / 1 / 0 |" in first
     )
     assert (
         "| PRE-008 | sin implementar (Entonces) | `return None`: aserción de un Entonces; "

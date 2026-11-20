@@ -1267,12 +1267,16 @@ _INTERFACE = InterfaceImpostor("LICTOR_IMPOSTOR", "control", ("mas", "menos"))
 def _iface_xml(
     name: str, failure: str = "", calls: int = 1, altered: int = 1, frame: str = ""
 ) -> str:
+    """A test that calls the interface, and fails if it does, in its Then."""
     props = [
         ("lictor.interface.calls", str(calls)),
+        ("lictor.interface.calls.then", str(calls)),
         ("lictor.interface.altered", str(altered)),
+        ("lictor.interface.altered.then", str(altered)),
     ]
     if failure:
         props += [("lictor.failure", failure), ("lictor.frame", frame or "tests/acceptance/t.py")]
+        props += [("lictor.step", "then")]
     body = "".join(f'<property name="{key}" value="{value}"/>' for key, value in props)
     fails = '<failure message="m"/>' if failure else ""
     return f'<testcase name="{name}"><properties>{body}</properties>{fails}</testcase>'
@@ -1433,9 +1437,11 @@ def test_check_red_what_no_retry_can_change_stops_for_a_person(tmp_path: Path) -
 
     message = str(raised.value)
     assert raised.value.exit_code == 10
-    assert "no se puede alterar" in message
+    assert "Este test no lo cambies" in message
+    assert "Lictor no pudo comprobar IVA-002: lo que la interfaz les devuelve" in message
     assert "Otro intento del driver no lo cambiaría" in message
     assert "`lictor register IVA-002`" in message
+    assert "corrígelo" not in message
     rejection = _rejection(event_log)
     assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", True)
     spec_source.write_seal.assert_not_called()
@@ -1624,7 +1630,7 @@ def _stepped_xml(name: str, failure: str = "", step: str = "", **counts: int) ->
 
 def _measured_reports(menos: str) -> dict[str, tuple[str, int]]:
     red = _stepped_xml("test_iva_001", "assertion", "then")
-    control = _stepped_xml("test_iva_002", calls_given=1, calls_then=1, alterable_then=1)
+    control = _stepped_xml("test_iva_002", calls_given=1, calls_then=1)
     caught = _stepped_xml("test_iva_002", "assertion", "then", calls_then=1, altered_then=1)
     return {
         "red": (_suite(red, _stepped_xml("test_iva_002")), 1),
@@ -1634,7 +1640,7 @@ def _measured_reports(menos: str) -> dict[str, tuple[str, int]]:
     }
 
 
-def test_check_red_measures_what_b_would_make_of_a_proved_scenario(tmp_path: Path) -> None:
+def test_check_red_measures_what_the_interface_proved_of_a_scenario(tmp_path: Path) -> None:
     caught = _stepped_xml("test_iva_002", "impostor", "when", calls_when=1, altered_when=1)
     use_case, request, event_log, _, _, _ = _interface_check(tmp_path, _measured_reports(caught))
 
@@ -1645,19 +1651,18 @@ def test_check_red_measures_what_b_would_make_of_a_proved_scenario(tmp_path: Pat
     assert types.index("lictor.driver.measured.v1") < types.index("lictor.driver.sealed.v1")
     assert measured.data["red"] == {"IVA-001": {"step": "then", "caught": "entonces"}}
     found = measured.data["interface"]["IVA-002"]
-    assert (found["today"], found["rule_b"]) == ("probado", "probado")
+    assert found["outcome"] == "probado"
     assert found["calls"] == {"given": 1, "when": 0, "then": 1, "outside": 0}
     assert found["failed_step"] == {"mas": "then", "menos": "when"}
-    assert found["caught"] == {"mas": "entonces", "menos": "entonces"}
+    assert found["altered"]["menos"] == {"given": 0, "when": 1, "then": 0, "outside": 0}
     assert measured.data["stubs"] is None
 
 
 def test_check_red_measures_a_driver_it_rejects_before_rejecting_it(tmp_path: Path) -> None:
-    """A Given that the impostor altered caught it: proved today, not what B looks at."""
-    caught = _stepped_xml("test_iva_002", "assertion", "given", calls_given=1, altered_given=1)
-    survives = _stepped_xml("test_iva_002", calls_then=1, altered_then=1)
+    """The test checks the result in its When: caught, but not where a Then would catch it."""
+    in_the_when = _stepped_xml("test_iva_002", "assertion", "when", calls_when=1, altered_when=1)
     red = _stepped_xml("test_iva_001", "assertion", "then")
-    reports = {**_measured_reports(caught), "mas": (_suite(red, survives), 1)}
+    reports = {**_measured_reports(in_the_when), "mas": (_suite(red, in_the_when), 1)}
     use_case, request, event_log, _, _, _ = _interface_check(tmp_path, reports)
 
     assert use_case.execute(request).ok is False
@@ -1666,11 +1671,61 @@ def test_check_red_measures_a_driver_it_rejects_before_rejecting_it(tmp_path: Pa
     rejection = _rejection(event_log)
     assert measured.data["step"] == rejection.data["evidence"]["path"]
     found = measured.data["interface"]["IVA-002"]
-    assert (found["today"], found["rule_b"]) == ("sobrevive", "no_probado")
-    assert found["caught"] == {"mas": "pasa", "menos": "dado"}
-    assert found["failed_step"] == {"mas": None, "menos": "given"}
-    # The agent reads what it read before: the measures add nothing to its message.
-    assert "Entonces" not in str(rejection.data["error"])
+    assert found["outcome"] == "fuera_del_entonces"
+    assert found["failed_step"] == {"mas": "when", "menos": "when"}
+    assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", False)
+    error = str(rejection.data["error"])
+    assert "falla, pero por una aserción de un Cuando (modo mas: m), no de un Entonces" in error
+    assert "compáralo en el Entonces" in error
+
+
+def _mixed_reports() -> dict[str, tuple[str, int]]:
+    """IVA-002 gets nothing alterable; IVA-003 never calls the interface, which can be fixed."""
+    untouched = _stepped_xml("test_iva_002", calls_then=1)
+    red = _stepped_xml("test_iva_001", "assertion", "then")
+    rest = (untouched, _stepped_xml("test_iva_003"))
+    return {
+        "red": (_suite(red, _stepped_xml("test_iva_002"), _stepped_xml("test_iva_003")), 1),
+        **{mode: (_suite(red, *rest), 1) for mode in ("control", "mas", "menos")},
+    }
+
+
+def _mixed_check(
+    tmp_path: Path, **overrides: Any
+) -> tuple[CheckRed, CheckRedRequest, MagicMock, MagicMock]:
+    use_case, request, event_log, spec_source, _, _ = _interface_check(
+        tmp_path, _mixed_reports(), all_scenario_ids=("IVA-001", "IVA-002", "IVA-003"), **overrides
+    )
+    assert isinstance(use_case.history, MagicMock)
+    use_case.history.classify.side_effect = lambda current: dict.fromkeys(current, "new")
+    return use_case, request, event_log, spec_source
+
+
+def test_check_red_tells_only_the_person_why_a_test_couldn_t_be_judged(tmp_path: Path) -> None:
+    """A retry for another scenario: the agent reads not to change the one it can't fix."""
+    use_case, request, event_log, spec_source = _mixed_check(tmp_path)
+
+    assert use_case.execute(request).ok is False
+
+    rejection = _rejection(event_log)
+    assert (rejection.data["reason"], rejection.data["final"]) == ("sin_prueba", False)
+    error = str(rejection.data["error"])
+    assert "IVA-002 pasa con un driver nuevo. Este test no lo cambies" in error
+    assert "IVA-003 pasa con un driver nuevo, pero no llama a la interfaz" in error
+    assert "Lictor no pudo comprobar" not in error
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_on_the_last_attempt_tells_the_person_why_too(tmp_path: Path) -> None:
+    use_case, request, _, _ = _mixed_check(tmp_path, driver_attempts=3, max_driver_attempts=3)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    lines = str(raised.value).splitlines()
+    note = next(i for i, line in enumerate(lines) if line.startswith("Lictor no pudo comprobar"))
+    assert lines[note].startswith("Lictor no pudo comprobar IVA-002: lo que la interfaz")
+    assert "`lictor register IVA-002 IVA-003`" in lines[note + 1]
 
 
 def test_check_red_measures_how_each_new_test_fared_with_each_stub_constant(

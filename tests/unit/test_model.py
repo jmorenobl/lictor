@@ -333,14 +333,13 @@ def test_the_impostor_s_counts_split_by_step_and_what_no_step_holds() -> None:
             "lictor.interface.calls.when": "1",
             "lictor.interface.calls.then": "2",
             "lictor.interface.altered.then": "x",
-            "lictor.interface.alterable.when": "4",
+            "lictor.interface.altered_none": "2",
         },
     )
 
     assert case.interface_by_step("calls") == StepCounts(given=3, when=1, then=2, outside=1)
     assert case.interface_by_step("altered") == StepCounts()
-    # Without a total, what falls outside a step can't be told, and is 0.
-    assert case.interface_by_step("alterable") == StepCounts(when=4)
+    assert case.interface_altered_none == 2
 
 
 def test_a_total_below_its_steps_leaves_nothing_outside() -> None:
