@@ -268,6 +268,7 @@ def test_test_case_reads_the_properties_lictor_names() -> None:
             "lictor.scenario": "IVA-001 lento",
             "lictor.feature": "features/iva.feature",
             "lictor.frame": "tests/acceptance/test_iva.py",
+            "lictor.line": "41",
             "lictor.interface.calls": "3",
             "lictor.interface.altered": "12",
         },
@@ -277,7 +278,7 @@ def test_test_case_reads_the_properties_lictor_names() -> None:
     assert case.origin == "src/iva/__init__.py"
     assert case.scenario_tags == ("IVA-001", "lento")
     assert case.feature == "features/iva.feature"
-    assert case.frame == "tests/acceptance/test_iva.py"
+    assert (case.frame, case.frame_line) == ("tests/acceptance/test_iva.py", 41)
     assert (case.interface_calls, case.interface_altered) == (3, 12)
 
 
@@ -285,6 +286,7 @@ def test_test_case_without_properties_reports_nothing() -> None:
     case = TestCaseResult(name="test_iva_001")
     assert (case.failure_kind, case.origin, case.scenario_tags, case.feature) == ("", "", (), "")
     assert (case.frame, case.interface_calls, case.interface_altered) == ("", 0, 0)
+    assert case.frame_line is None
 
 
 @pytest.mark.parametrize("value", ["-1", "1.5", "", " 2", "٣", "dos"])

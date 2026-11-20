@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 FAILURE = "lictor.failure"
 ORIGIN = "lictor.origin"
 FRAME = "lictor.frame"
+LINE = "lictor.line"
 SCENARIO = "lictor.scenario"
 FEATURE = "lictor.feature"
 STEP = "lictor.step"
@@ -88,7 +89,9 @@ def pytest_runtest_makereport(
         origin = _relative(call.excinfo.traceback[-1].path, root)
         item.user_properties.append((FAILURE, failure_kind(call.excinfo, call.when)))
         item.user_properties.append((ORIGIN, origin))
-        item.user_properties.append((FRAME, _last_frame_inside(call.excinfo, root)))
+        frame, line = _last_frame_inside(call.excinfo, root)
+        item.user_properties.append((FRAME, frame))
+        item.user_properties.append((LINE, line))
         item.user_properties.append((STEP, _failed_step(item, call.excinfo.value)))
 
 
@@ -98,14 +101,15 @@ def _failed_step(item: pytest.Item, failure: BaseException) -> str:
     return raised[1] if raised is not None and raised[0] is failure else ""
 
 
-def _last_frame_inside(excinfo: pytest.ExceptionInfo[BaseException], root: Path) -> str:
-    """The innermost frame of the failure inside the project: the line of the test that failed.
+def _last_frame_inside(excinfo: pytest.ExceptionInfo[BaseException], root: Path) -> tuple[str, str]:
+    """The innermost frame of the failure inside the project, the test's own, and its line.
 
     It differs from the origin when pytest raises for the test, as `pytest.raises` that saw
-    nothing does: the origin is then inside pytest, and so outside the project.
+    nothing does: the origin is then inside pytest, and so outside the project. The line counts
+    from 1; both are "" when no frame lies inside the project.
     """
     for entry in reversed(excinfo.traceback):
         inside = _relative(entry.path, root)
         if inside:
-            return inside
-    return ""
+            return inside, str(entry.lineno + 1)
+    return "", ""

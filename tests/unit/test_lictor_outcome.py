@@ -157,21 +157,37 @@ def test_each_failure_carries_its_kind_and_origin(
     assert (case.failure_kind, case.origin) == (kind, origin)
 
 
+def _line_in_the_tests(text: str) -> str:
+    """The line of the test module that holds `text`, from 1, as a frame names it."""
+    return str(TESTS.splitlines().index(text) + 1)
+
+
 @pytest.mark.parametrize(
-    ("name", "frame"),
+    ("name", "frame", "line"),
     [
-        ("test_assertion", "tests/test_x.py"),
-        ("test_stub", "src/iva/__init__.py"),
+        ("test_assertion", "tests/test_x.py", "    assert 1 == 2"),
+        ("test_stub", "src/iva/__init__.py", "2"),
         # pytest raises these for the test: the origin is inside pytest, the frame is the test's.
-        ("test_did_not_raise", "tests/test_x.py"),
-        ("test_fail", "tests/test_x.py"),
-        ("test_library", "tests/test_x.py"),
+        ("test_did_not_raise", "tests/test_x.py", "    with pytest.raises(ValueError):"),
+        ("test_fail", "tests/test_x.py", '    pytest.fail("no")'),
+        ("test_library", "tests/test_x.py", '    json.loads("{")'),
     ],
 )
-def test_each_failure_carries_the_last_frame_inside_the_project(
-    cases: dict[str, TestCaseResult], name: str, frame: str
+def test_each_failure_carries_the_last_frame_inside_the_project_and_its_line(
+    cases: dict[str, TestCaseResult], name: str, frame: str, line: str
 ) -> None:
-    assert cases[name].frame == frame
+    expected = line if line.isdigit() else _line_in_the_tests(line)
+    assert (cases[name].frame, cases[name].frame_line) == (frame, int(expected))
+
+
+def test_a_failure_with_no_frame_inside_the_project_carries_no_line(tmp_path: Path) -> None:
+    """Every frame of an exception raised here lies outside `tmp_path`, the project."""
+    try:
+        raise ValueError("fuera")
+    except ValueError as raised:
+        excinfo = pytest.ExceptionInfo.from_exception(raised)
+
+    assert lictor_outcome._last_frame_inside(excinfo, tmp_path) == ("", "")
 
 
 def test_a_passing_test_carries_nothing(cases: dict[str, TestCaseResult]) -> None:

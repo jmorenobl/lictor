@@ -151,21 +151,35 @@ def _failure_objection(
         return None
     if own:
         return InterfaceProof("fuera_del_entonces", _outside_the_then(mode, step, case.message))
+    said = _said(mode, case.message)
     if kind == IMPOSTOR_KIND:
-        return InterfaceProof("no_aserta", f"el error del impostor {_STEP_PLACE[step]}")
-    where = case.frame or case.origin
-    place = f"en {where}" if where else "fuera del proyecto"
+        return InterfaceProof("no_aserta", f"el error del impostor {_STEP_PLACE[step]} {said}")
+    place = _place(case)
     if kind == ASSERTION_KIND:
-        return InterfaceProof("no_aserta", f"una aserción {place}, que no es del driver")
-    return InterfaceProof("no_aserta", f"{kind or 'un fallo sin clasificar'} {place}")
+        return InterfaceProof("no_aserta", f"una aserción {place}, que no es del driver {said}")
+    what = kind or "un fallo sin clasificar"
+    return InterfaceProof("no_aserta", f"{what} {_STEP_PLACE[step]}, {place} {said}")
 
 
-def _outside_the_then(mode: str, step: Step | None, message: str | None) -> str:
-    """Where the test's own assertion failed, and what it said, cut to one short line."""
+def _place(case: TestCaseResult) -> str:
+    """Where a failure was raised: the test's own line when the project holds it."""
+    if case.frame:
+        line = case.frame_line
+        return f"en {case.frame}:{line}" if line is not None else f"en {case.frame}"
+    return f"en {case.origin}" if case.origin else "fuera del proyecto"
+
+
+def _said(mode: str, message: str | None) -> str:
+    """The mode a failure was seen in, and what it said, cut to one short line."""
     said = " ".join((message or "").split())
     if len(said) > _MESSAGE_LIMIT:
         said = said[: _MESSAGE_LIMIT - 1] + "…"
-    return f"una aserción {_STEP_PLACE[step]} (modo {mode}" + (f": {said})" if said else ")")
+    return f"(modo {mode}" + (f": {said})" if said else ")")
+
+
+def _outside_the_then(mode: str, step: Step | None, message: str | None) -> str:
+    """Where the test's own assertion failed, and what it said."""
+    return f"una aserción {_STEP_PLACE[step]} {_said(mode, message)}"
 
 
 def interface_proofs(
@@ -209,9 +223,12 @@ _REASONS: Mapping[str, str] = {
         "comprueba el resultado. Compáralo con assert con el valor que da su escenario, tomado "
         "del Gherkin."
     ),
+    # The other value is Lictor's, which a test that trips on it may want to handle apart: it
+    # mustn't, or it survives. What it said and where tell which line of the test to change.
     "no_aserta": (
         "{head}. Cuando la interfaz devuelve otro valor falla, pero con {detail}, no con una "
-        "aserción del test: compara con assert el resultado con el valor que da su escenario."
+        "aserción del test: compara con assert el resultado con el valor que da su escenario. "
+        "Ese otro valor lo pone Lictor para comprobar el test: no lo trates aparte."
     ),
     "fuera_del_entonces": (
         "{head}. Cuando la interfaz devuelve otro valor falla, pero por {detail}, no de un "

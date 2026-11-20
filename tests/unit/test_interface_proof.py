@@ -22,7 +22,12 @@ OWN = "tests/acceptance/test_calc.py"
 Status = Literal["passed", "failure", "error", "skipped"]
 
 
-_FAILURE_PROPERTIES = {"kind": "lictor.failure", "frame": "lictor.frame", "step": "lictor.step"}
+_FAILURE_PROPERTIES = {
+    "kind": "lictor.failure",
+    "frame": "lictor.frame",
+    "line": "lictor.line",
+    "step": "lictor.step",
+}
 
 
 def _case(
@@ -35,7 +40,8 @@ def _case(
 ) -> TestCaseResult:
     """A test as the plugins report it; by default it calls and gets altered in its Then.
 
-    `failure` gives its `kind`, `frame` and `step`; a count `fuera` is one outside any step.
+    `failure` gives its `kind`, `frame`, `line` and `step`; a count `fuera` is one outside any
+    step.
     """
     calls = {"then": 1} if calls is None else calls
     altered = {"then": 1} if altered is None else altered
@@ -100,22 +106,41 @@ def test_the_impostor_s_own_error_counts_from_the_when_on(step: str) -> None:
             "then",
             "src/calc/__init__.py",
             "no_aserta",
-            "una aserción en src/calc/__init__.py, que no es del driver",
+            "una aserción en src/calc/__init__.py, que no es del driver (modo mas)",
         ),
         (
             "assertion",
             "then",
             "",
             "no_aserta",
-            "una aserción fuera del proyecto, que no es del driver",
+            "una aserción fuera del proyecto, que no es del driver (modo mas)",
         ),
         ("impostor", "when", "src/c.py", None, ""),
         ("impostor", "then", "src/c.py", None, ""),
-        ("impostor", "given", "src/c.py", "no_aserta", "el error del impostor de un Dado"),
-        ("impostor", "", "src/c.py", "no_aserta", "el error del impostor fuera de los pasos"),
-        ("error", "then", OWN, "no_aserta", f"error en {OWN}"),
-        ("error", "when", OWN, "no_aserta", f"error en {OWN}"),
-        ("", "then", OWN, "no_aserta", f"un fallo sin clasificar en {OWN}"),
+        (
+            "impostor",
+            "given",
+            "src/c.py",
+            "no_aserta",
+            "el error del impostor de un Dado (modo mas)",
+        ),
+        (
+            "impostor",
+            "",
+            "src/c.py",
+            "no_aserta",
+            "el error del impostor fuera de los pasos (modo mas)",
+        ),
+        ("error", "then", OWN, "no_aserta", f"error de un Entonces, en {OWN} (modo mas)"),
+        ("error", "when", OWN, "no_aserta", f"error de un Cuando, en {OWN} (modo mas)"),
+        ("error", "", "", "no_aserta", "error fuera de los pasos, fuera del proyecto (modo mas)"),
+        (
+            "",
+            "then",
+            OWN,
+            "no_aserta",
+            f"un fallo sin clasificar de un Entonces, en {OWN} (modo mas)",
+        ),
     ],
 )
 def test_what_each_failure_says_wherever_it_is_raised(
@@ -128,6 +153,41 @@ def test_what_each_failure_says_wherever_it_is_raised(
     assert proof == (
         InterfaceProof("probado") if outcome is None else InterfaceProof(outcome, detail)
     )
+
+
+def test_an_error_of_the_test_says_what_it_said_and_on_which_line() -> None:
+    """The file alone sent the agent to move its steps out of it, six times out of six."""
+    failed = replace(
+        _case("failure", kind="error", frame=OWN, line="97", step="then"),
+        message="AttributeError: 'AlteredByLictor' object has no attribute 'isbn'",
+    )
+
+    proof = interface_proof(PASSED, _modes(failed, ASSERTED), DRIVER)
+
+    assert proof == InterfaceProof(
+        "no_aserta",
+        f"error de un Entonces, en {OWN}:97 (modo mas: AttributeError: 'AlteredByLictor' object "
+        "has no attribute 'isbn')",
+    )
+
+
+def test_a_failure_raised_outside_the_project_names_where_it_was_raised() -> None:
+    failed = replace(
+        _failed("error", "then", frame=""),
+        properties={
+            "lictor.failure": "error",
+            "lictor.origin": "src/calc/__init__.py",
+            "lictor.step": "then",
+            "lictor.interface.calls": "1",
+            "lictor.interface.altered": "1",
+            "lictor.interface.calls.then": "1",
+            "lictor.interface.altered.then": "1",
+        },
+    )
+
+    proof = interface_proof(PASSED, _modes(failed, ASSERTED), DRIVER)
+
+    assert proof.detail == "error de un Entonces, en src/calc/__init__.py (modo mas)"
 
 
 def test_an_assertion_outside_the_then_says_what_it_said_and_can_be_fixed() -> None:
@@ -355,7 +415,8 @@ _HEAD = "El test test_calc_001 del escenario CALC-001 pasa con un driver nuevo"
             InterfaceProof("no_aserta", "error en t.py"),
             f"{_HEAD}. Cuando la interfaz devuelve otro valor falla, pero con error en t.py, no "
             "con una aserción del test: compara con assert el resultado con el valor que da su "
-            "escenario.",
+            "escenario. Ese otro valor lo pone Lictor para comprobar el test: no lo trates "
+            "aparte.",
         ),
         (
             InterfaceProof("fuera_del_entonces", "una aserción de un Cuando (modo mas)"),

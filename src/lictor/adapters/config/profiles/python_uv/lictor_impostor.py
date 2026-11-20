@@ -48,14 +48,18 @@ class ImpostorError(Exception):
     """Raised in place of the interface's own exception: a test expecting that one must fail."""
 
 
-class _Sentinel:
-    """What a call returns in place of None: equal to nothing but itself."""
+class AlteredByLictor:
+    """What a call returns in place of None: equal to nothing but itself.
+
+    It also fills an empty collection. Its name is what a test that trips on it reads in the
+    error (`'AlteredByLictor' object has no attribute ...`), so it says where it came from.
+    """
 
     def __repr__(self) -> str:
         return "<impostor de Lictor>"
 
 
-SENTINEL = _Sentinel()
+SENTINEL = AlteredByLictor()
 _UNALTERED = object()
 
 
@@ -68,7 +72,18 @@ def _under(path: str, roots: Sequence[str]) -> bool:
     return any(real == root or real.startswith(root + os.sep) for root in roots)
 
 
+def _of_its_form(element: Any) -> Any:
+    """An element like `element` that isn't equal to it when its kind is known, else itself.
+
+    A collection grows with it: a test that reads each element (`[p.isbn for p in x]`) then fails
+    by its assertion, not by an error on a foreign value, and a set of primitives still changes.
+    """
+    changed = alter(element, MORE)
+    return element if changed is _UNALTERED else changed
+
+
 def _shorter(value: Any) -> Any:
+    """One element less: the first of a sequence, so that what its first one was changes too."""
     if isinstance(value, dict):
         return dict(list(value.items())[:-1]) if value else {SENTINEL: SENTINEL}
     if isinstance(value, set | frozenset):
@@ -77,19 +92,20 @@ def _shorter(value: Any) -> Any:
         return value[:-1] if value else "·"
     if isinstance(value, bytes):
         return value[:-1] if value else b"\0"
-    return value[:-1] if value else type(value)([SENTINEL])
+    return value[1:] if value else type(value)([SENTINEL])
 
 
 def _longer(value: Any) -> Any:
+    """One element more, of the collection's own form; at the start of a sequence."""
     if isinstance(value, dict):
-        return {**value, SENTINEL: SENTINEL}
+        return {**value, SENTINEL: _of_its_form(list(value.values())[-1]) if value else SENTINEL}
     if isinstance(value, set | frozenset):
         return type(value)({*value, SENTINEL})
     if isinstance(value, str):
         return value + "·"
     if isinstance(value, bytes):
         return value + b"\0"
-    return type(value)([*value, SENTINEL])
+    return type(value)([_of_its_form(value[-1]), *value] if value else [SENTINEL])
 
 
 def alter(value: Any, mode: str) -> Any:

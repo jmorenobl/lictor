@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -501,10 +502,14 @@ def test_the_impostor_s_error_is_classified_by_its_class(
         ("ab", "ab·", "a"),
         ("", "·", "·"),
         (b"ab", b"ab\0", b"a"),
-        ([1, 2], [1, 2, SENTINEL], [1]),
-        ((1,), (1, SENTINEL), ()),
+        # A sequence changes at its start, growing with an element of its own form.
+        ([1, 2], [3, 1, 2], [2]),
+        (["a", "b"], ["b·", "a", "b"], ["b"]),
+        ([[1], [2]], [[3, 2], [1], [2]], [[2]]),
+        ([None], [SENTINEL, None], []),
+        ((1,), (2, 1), ()),
         ([], [SENTINEL], [SENTINEL]),
-        ({"a": 1}, {"a": 1, SENTINEL: SENTINEL}, {}),
+        ({"a": 1}, {"a": 1, SENTINEL: 2}, {}),
         ({}, {SENTINEL: SENTINEL}, {SENTINEL: SENTINEL}),
         (frozenset({1}), frozenset({1, SENTINEL}), frozenset()),
         (set(), {SENTINEL}, {SENTINEL}),
@@ -525,6 +530,89 @@ def test_what_can_t_be_altered_is_left_as_it_is(value: Any) -> None:
     assert alter(value, LESS) is lictor_impostor._UNALTERED
 
 
+def test_a_sequence_of_objects_grows_with_one_of_them_not_with_the_sentinel() -> None:
+    """Of an unknown kind, the element is the last one itself: it has every attribute it has."""
+    first, last = object(), object()
+
+    assert alter([first, last], MORE) == [last, first, last]
+    assert alter([first, last], LESS) == [last]
+    assert alter({"k": last}, MORE) == {"k": last, SENTINEL: last}
+
+
+class _Loan:
+    """What a library returns in a list: an object the impostor doesn't know how to alter."""
+
+    def __init__(self, isbn: str) -> None:
+        self.isbn = isbn
+
+
+def _strong(value: Any) -> Callable[[Any], object]:
+    return lambda got: got == value
+
+
+# Tests a driver writes over what the interface returned, and what the impostor proves of each:
+# the correct ones are proved, the weak ones survive, and what neither mode can tell apart is
+# rejected as before. A row changes only with a deliberate change of `alter` (ADR-0011, its
+# amendment for collections).
+_TWO = [_Loan("222"), _Loan("111")]
+_CHECKS: list[tuple[str, Any, Callable[[Any], object], str]] = [
+    ("isbn de cada uno", _TWO, lambda x: [p.isbn for p in x] == ["222", "111"], "probado"),
+    ("el primero", _TWO, lambda x: x[0].isbn == "222", "probado"),
+    ("el segundo de tres", [*_TWO, _Loan("333")], lambda x: x[1].isbn == "111", "probado"),
+    ("cuántos", _TWO, lambda x: len(x) == 2, "probado"),
+    ("lista vacía", [], _strong([]), "probado"),
+    ("lista de primitivos", [5, 2], _strong([5, 2]), "probado"),
+    ("ordenada", [5, 2], lambda x: sorted(x) == [2, 5], "probado"),
+    ("como conjunto", [1, 2], lambda x: set(x) == {1, 2}, "probado"),
+    ("suma", [5, 2, 0], lambda x: sum(x) == 7, "probado"),
+    ("unida", ["a", "b"], lambda x: ", ".join(x) == "a, b", "probado"),
+    ("isbn unidos", _TWO, lambda x: ", ".join(p.isbn for p in x) == "222, 111", "probado"),
+    ("desempaquetada", (10, 2), lambda x: x[0] == 10 and x[1] == 2, "probado"),
+    (
+        "valores de un dict",
+        {"a": _TWO[0]},
+        lambda d: [v.isbn for v in d.values()] == ["222"],
+        "probado",
+    ),
+    ("dict entero", {"ana": 3}, _strong({"ana": 3}), "probado"),
+    # Weak: they don't compare with the scenario's value.
+    ("no vacía", _TWO, bool, "sobrevive"),
+    ("al menos uno", _TWO, lambda x: len(x) > 0, "sobrevive"),
+    ("de su clase", _TWO, lambda x: all(isinstance(p, _Loan) for p in x), "sobrevive"),
+    ("contiene", [1, 2], lambda x: 2 in x, "sobrevive"),
+    ("el primero existe", _TWO, lambda x: x[0] is not None, "sobrevive"),
+    # Known limits: what changing the start of a sequence can't tell apart.
+    ("el último", [1, 2], lambda x: x[-1] == 2, "sobrevive"),
+    ("por clave", {"ana": 3, "luis": 1}, lambda d: d["ana"] == 3, "sobrevive"),
+    ("el único, por índice", ["ana"], lambda x: x[0] == "ana", "no_aserta"),
+    ("de cada uno, vacía", [], lambda x: [p.isbn for p in x] == [], "no_aserta"),
+]
+
+
+def _judged(value: Any, check: Callable[[Any], object]) -> str:
+    """What the proof says of a test that asserts `check` on what the interface returned."""
+    results = []
+    for mode in (MORE, LESS):
+        try:
+            results.append("aserción" if not check(alter(value, mode)) else "pasa")
+        except Exception:
+            results.append("error")
+    if "pasa" in results:
+        return "sobrevive"
+    return "no_aserta" if "error" in results else "probado"
+
+
+@pytest.mark.parametrize(
+    ("value", "check", "outcome"), [row[1:] for row in _CHECKS], ids=[row[0] for row in _CHECKS]
+)
+def test_what_the_impostor_proves_of_each_way_of_checking_a_result(
+    value: Any, check: Callable[[Any], object], outcome: str
+) -> None:
+    assert check(value), "el control tiene que pasar"
+    assert _judged(value, check) == outcome
+
+
 def test_the_sentinel_is_none_of_the_values_a_test_expects() -> None:
     assert SENTINEL not in (None, 0, "", False, [], ())
     assert repr(SENTINEL) == "<impostor de Lictor>"
+    assert type(SENTINEL).__name__ == "AlteredByLictor"
