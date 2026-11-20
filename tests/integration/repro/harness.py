@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -319,12 +319,13 @@ def green_ids(root: Path) -> list[str]:
     return [sid for _, sid in green_commits(root)]
 
 
-def false_greens(root: Path) -> list[str]:
+def false_greens(root: Path, oracle: Mapping[str, str] = ORACLE) -> list[str]:
     """Check each green commit in a clean clone, with neither pytest nor the project venv.
 
     The oracle is deliberately independent of the acceptance suite: it calls the public API on
     the committed tree, so nothing ignored by git and no plugin can influence it. Without green
-    commits it returns nothing, so callers must first establish that the agent actually ran.
+    commits it returns nothing, so callers must first establish that the agent actually ran. A
+    case whose code returns something else than `ORACLE` expects passes its own checks.
     """
     found: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -332,7 +333,7 @@ def false_greens(root: Path) -> list[str]:
         git(root, "clone", "-q", "--no-hardlinks", ".", str(clone))
         for sha, scenario_id in green_commits(root):
             git(clone, "checkout", "-q", sha)
-            check = ORACLE[scenario_id]
+            check = oracle[scenario_id]
             script = (
                 "import sys\nsys.path.insert(0, 'src')\nimport iva\n"
                 f"raise SystemExit(0 if {check} else 'el commit no cumple: {check}')\n"
@@ -348,7 +349,7 @@ def false_greens(root: Path) -> list[str]:
         git(clone, "checkout", "-q", head)
         checked = head in {sha for sha, _ in commits}
         for scenario_id in () if checked else dict.fromkeys(sid for _, sid in commits):
-            check = ORACLE[scenario_id]
+            check = oracle[scenario_id]
             script = (
                 "import sys\nsys.path.insert(0, 'src')\nimport iva\n"
                 f"raise SystemExit(0 if {check} else 'HEAD no cumple: {check}')\n"

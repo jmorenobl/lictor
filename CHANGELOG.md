@@ -7,6 +7,34 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+El impostor de la interfaz altera las colecciones con elementos de su forma y por el principio
+(enmienda de las colecciones de la ADR-0011). Cambian veredictos y el mensaje de `no_aserta`.
+
+### Al actualizar desde la 0.10.0
+
+- **Un run empezado con la 0.10.0 no se reanuda:** los plugins del perfil cambian y entran en la
+  huella. Empieza uno nuevo con `lictor run --new`.
+
+### Cambiado
+
+- **Una lista o tupla cambia por el principio, con un elemento de su forma.** En `mas` se antepone
+  el último, alterado si es un número, un texto o una colección; en `menos` se quita el primero. Un
+  diccionario gana en `mas` una clave con un valor así. Antes el centinela entraba en la lista: un
+  test correcto que leía un atributo de cada elemento fallaba por un error (`no_aserta`), y uno que
+  leía el primero sobrevivía. En la biblioteca, los probados pasan de 136 a 162 de 187, los
+  `no_aserta` de 13 a 1 y los que sobreviven de 14 a 0.
+- **`x[-1]` ya no se prueba** con una lista de números o textos: `menos` quita el primero. Es un
+  límite conocido, como el primer elemento de una lista de uno.
+- **El mensaje de `no_aserta` dice qué pasó:** la excepción, el paso, el fichero y la línea, y el
+  modo, y que el otro valor lo pone Lictor y el test no debe tratarlo aparte. Con solo el fichero,
+  el agente real movía sus pasos fuera de él en vez de arreglar el test.
+- **El centinela se llama `AlteredByLictor`**, para que un error que tropieza con él diga de dónde
+  viene.
+
+### Añadido
+
+- **`lictor.line`**, la línea del último frame del fallo dentro del proyecto, en `lictor_outcome`.
+
 ## [0.10.0] - 2026-11-20
 
 El impostor de la interfaz aplica la regla B (enmienda de la ADR-0011): solo un Entonces prueba que

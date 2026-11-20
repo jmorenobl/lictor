@@ -269,6 +269,7 @@ class CommandOutput:
 FAILURE_PROPERTY = "lictor.failure"  # assertion | not_implemented | impostor | error
 ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to the project
 FRAME_PROPERTY = "lictor.frame"  # last frame of the failure inside the project, relative to it
+LINE_PROPERTY = "lictor.line"  # the line of that frame, from 1
 INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to the interface
 INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
 # Of those, the ones whose real result was None, as an order that only changes the state returns.
@@ -341,6 +342,12 @@ class TestCaseResult:
         came, has its innermost frame inside the runner: this is the test's own line.
         """
         return self.properties.get(FRAME_PROPERTY, "")
+
+    @property
+    def frame_line(self) -> int | None:
+        """The line of `frame`, or None if it isn't said."""
+        line = _count(self.properties.get(LINE_PROPERTY, ""))
+        return line or None
 
     @property
     def interface_calls(self) -> int:

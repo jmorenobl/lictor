@@ -57,8 +57,8 @@ Hay además tres defectos en lo que existe:
    | Ejecución | Qué hace |
    |:--|:--|
    | Control | Envuelve y cuenta, sin alterar nada. Tiene que pasar como el rojo. |
-   | Modo `mas` | Número + 1, `bool` al contrario, texto o colección con un elemento de más, `None` por un centinela; una excepción se traga y devuelve `None`. |
-   | Modo `menos` | Número − 1, `bool` al contrario, texto o colección con uno de menos (o uno nuevo si estaba vacía), `None` por un centinela; una excepción se cambia por `ImpostorError`. |
+   | Modo `mas` | Número + 1, `bool` al contrario, texto con un carácter de más, colección con un elemento de más (una lista o tupla, al principio y de su forma: enmienda de las colecciones), `None` por un centinela; una excepción se traga y devuelve `None`. |
+   | Modo `menos` | Número − 1, `bool` al contrario, texto o colección con uno de menos (de una lista o tupla, el primero), o el centinela si estaba vacía, `None` por un centinela; una excepción se cambia por `ImpostorError`. |
 
    Cualquier otro objeto no se altera. Una alteración que deja el valor igual al real (un `inf`, un
    número enorme) no cuenta como alteración.
@@ -184,3 +184,41 @@ obtienen el Cuando o el Entonces y que la comprobación va en un Entonces, tambi
 **Lo que no cambia:** el falso verde de las consecuencias (un test que copia el valor del código)
 sigue igual, y lo que se mide de C (impostores de stubs) sigue sin aplicarse.
 
+## Enmienda de las colecciones (0.11.0, 2026-11-20)
+
+Medir cómo reaccionaba el modelo real a los mensajes de la 0.10.0 (`.audits/qa/biblioteca/reaccion.md`)
+mostró que dos rechazos reintentables caían sobre tests correctos de listas de objetos, y que el
+agente no los podía arreglar: PRE-005 en 0 de 6 llamadas y PRE-007 en 1 de 6. El diseño y sus
+variantes están en `diseno-colecciones.md`.
+
+| Defecto | Test correcto | Qué cambia |
+|:--|:--|:--|
+| En `mas`, el centinela entraba en la lista y el test fallaba por un error, no por su aserción (`no_aserta`) | `[p.isbn for p in prestamos_de(s)] == esperados` | El elemento nuevo es de la forma de los demás: el último alterado si es de un tipo que se sabe alterar, y si no, el propio último. En un diccionario, el valor de la clave nueva |
+| Se cambiaba el final, y el primero quedaba igual (`sobrevive`) | `prestamos_de(s)[0].isbn == isbn` | Una lista o tupla cambia por el principio: `mas` antepone el elemento nuevo y `menos` quita el primero |
+| El mensaje de `no_aserta` solo nombraba el fichero, y el agente lo tomó por la causa en las 6 llamadas | — | Dice la excepción, el paso, la línea (`lictor.line`, nuevo en `lictor_outcome`) y el modo, y que el valor lo pone Lictor y el test no debe tratarlo aparte |
+
+En los 187 casos de la biblioteca (41 escenarios), los probados pasan de 136 a 162, los `no_aserta`
+de 13 a 1 y los que sobreviven de 14 a 0; ninguno empeora. Una tabla de 23 tests correctos y
+débiles, en `test_lictor_impostor.py`, fija lo que se prueba de cada forma de comprobar una lista.
+
+**Límites conocidos**, que siguen rechazados:
+
+- `x[-1] == v`: `menos` quita el primero y el último no cambia. Con números o textos, la 0.10.0
+  lo probaba.
+- El primero de una lista de un objeto: el elemento nuevo es una copia de ese objeto.
+- El primero de una lista de un número o un texto: con uno de menos, el índice falla antes que la
+  aserción.
+- Acceso por clave en un diccionario, `in` y `max`.
+
+Lo revisó Fable antes de implementarla. Descartó dos variantes que se habían medido:
+
+- **Un centinela que absorbe** atributos, índices y llamadas: se itera sin fin, y da por probados
+  un bucle sobre una lista vacía y un test condicional sobre un `None`.
+- **Un trato aparte para la lista de uno:** da por probado un `isinstance` y pierde `len(x) == 1`.
+
+También pidió alterar el elemento nuevo en vez de copiarlo, porque con una copia `set(x) == {1, 2}`
+dejaba de probarse. Y pidió que el centinela tuviera un nombre que se explique solo en un error:
+`AlteredByLictor`.
+
+**Lo que no cambia:** las reglas del dominio (qué prueba un test y qué es final), los números, los
+textos y los booleanos, y el `None`, que sigue cambiándose por el centinela.
