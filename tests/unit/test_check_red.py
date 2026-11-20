@@ -35,7 +35,7 @@ from lictor.domain.model import (
     TestCaseResult,
 )
 from lictor.domain.reports import JUnitReport
-from lictor.domain.rules import Impostors, RedOracle
+from lictor.domain.rules import Impostors, RedOracle, StubConstant
 
 
 def _environment(
@@ -914,27 +914,38 @@ def test_check_red_reregistration_alone_carries_no_collateral_trailer(tmp_path: 
 _ORACLE = RedOracle(
     red_kinds=("assertion", "not_implemented"), writable=("src/",), driver=("tests/acceptance/",)
 )
-_IMPOSTORS = Impostors(
-    r"^(\s*)raise NotImplementedError\b.*$", (r"\1return None", r"\1return True")
-)
+_PATTERN = r"^(\s*)raise NotImplementedError\b.*$"
+_NONE = StubConstant(r"\1return None", "None")
+_TRUE = StubConstant(r"\1return True", "True")
+_ONE = StubConstant(r"\1return ONE", "un doble de Lictor", double=True)
+_IMPOSTORS = Impostors(_PATTERN, (_NONE, _TRUE))
+_WITH_A_DOUBLE = Impostors(_PATTERN, (_NONE, _TRUE, _ONE))
 _STUB = "def general():\n    raise NotImplementedError\n"
 
 
-def _case_xml(name: str, failure: str = "") -> str:
+def _case_xml(name: str, failure: str = "", step: str = "then", message: str = "m") -> str:
+    """A case of the acceptance; an assertion is the driver's own, in `step`."""
     if not failure:
         return f'<testcase name="{name}"/>'
-    props = f'<properties><property name="lictor.failure" value="{failure}"/>'
-    props += '<property name="lictor.origin" value="src/iva.py"/></properties>'
-    return f'<testcase name="{name}">{props}<failure message="m"/></testcase>'
+    props = [("lictor.failure", failure), ("lictor.step", step)]
+    if failure == "assertion":
+        props += [("lictor.frame", "tests/acceptance/test_iva.py"), ("lictor.line", "12")]
+    else:
+        props += [("lictor.origin", "src/iva.py"), ("lictor.frame", "tests/acceptance/test_iva.py")]
+    body = "".join(f'<property name="{key}" value="{value}"/>' for key, value in props)
+    fails = f'<failure message="{message}"/>'
+    return f'<testcase name="{name}"><properties>{body}</properties>{fails}</testcase>'
 
 
 class _ImpostorRunner(_SuiteRunner):
-    """Reports by what the clone holds: the stub, `return None` or `return True`."""
+    """Reports by what the clone holds (the stub or a constant) and, when the impostor of the
+    interface runs over the stubs, by its mode (`interfaz-<mode>`)."""
 
     def __init__(self, reports: dict[str, tuple[str, int]]) -> None:
         super().__init__("", 1)
         self.reports = reports
         self.sources: list[str] = []
+        self.told: list[dict[str, Any]] = []
 
     def run(
         self,
@@ -947,7 +958,13 @@ class _ImpostorRunner(_SuiteRunner):
         self.sources.append(source)
         driver = (cwd / "tests" / "acceptance" / "test_iva.py").read_text(encoding="utf-8")
         assert "raise NotImplementedError" in driver, "el driver no se toca"
-        key = next(k for k in self.reports if k in source)
+        raw = (env or {}).get("LICTOR_IMPOSTOR")
+        if raw:
+            told = json.loads(raw)
+            self.told.append(told)
+            key = f"interfaz-{told['mode']}"
+        else:
+            key = next(k for k in self.reports if k in source)
         self.report, self.code = self.reports[key]
         return super().run(cmd, cwd, timeout_s, env)
 
@@ -1012,9 +1029,15 @@ def test_check_red_seals_a_driver_whose_new_tests_fail_with_some_impostor(tmp_pa
     assert (step / "impostor-2" / "acceptance.xml").is_file()
 
 
-def test_check_red_rejects_a_new_test_that_passes_with_every_impostor(tmp_path: Path) -> None:
-    passing = (_suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")), 1)
-    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": passing}
+_PASSES = (_suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002")), 1)
+
+
+def test_check_red_without_an_interface_impostor_a_test_that_passes_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A profile that can't judge what doesn't depend on the stubs rejects it, asking for nothing
+    in a Given (F64)."""
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": _PASSES}
     use_case, request, event_log, spec_source, _ = _impostor_check(tmp_path, reports)
 
     result = use_case.execute(request)
@@ -1022,10 +1045,176 @@ def test_check_red_rejects_a_new_test_that_passes_with_every_impostor(tmp_path: 
     assert result.ok is False
     rejection = _rejection(event_log)
     assert rejection.data["reason"] == "impostor"
-    assert "Los tests de IVA-002 pasan aunque la interfaz devuelva siempre" in str(
-        rejection.data["error"]
-    )
+    error = str(rejection.data["error"])
+    assert "El test test_iva_002 del escenario IVA-002 pasa aunque los stubs devuelvan" in error
+    assert "este perfil no puede comprobar" in error
+    assert "Dado" not in error
     spec_source.write_seal.assert_not_called()
+
+
+def _via_reports(menos: str, mas: str | None = None) -> dict[str, tuple[str, int]]:
+    """IVA-002 passes with every constant: the interface judges it over the stubs at None."""
+    red = _iface_xml("test_iva_001", "assertion")
+    return {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return": _PASSES,
+        "interfaz-control": (_suite(red, _iface_xml("test_iva_002", altered=0)), 1),
+        "interfaz-mas": (_suite(red, mas or menos), 1),
+        "interfaz-menos": (_suite(red, menos), 1),
+    }
+
+
+def test_check_red_a_test_that_doesn_t_depend_on_the_stubs_goes_to_the_interface(
+    tmp_path: Path,
+) -> None:
+    caught = _iface_xml("test_iva_002", "assertion")
+    use_case, request, event_log, spec_source, runner = _impostor_check(
+        tmp_path, _via_reports(caught), interface_impostor=_INTERFACE
+    )
+
+    result = use_case.execute(request)
+
+    assert result.ok is True
+    spec_source.write_seal.assert_called_once()
+    assert [told["mode"] for told in runner.told] == ["control", "mas", "menos"]
+    stub_at_none = _STUB.replace("raise NotImplementedError", "return None")
+    assert runner.sources[-3:] == [stub_at_none] * 3
+    for told in runner.told:
+        [(path, lines)] = told["stubs"].items()
+        assert (path.endswith("/src/iva.py"), lines) == (True, [2])
+    step = runner.paths[0].parent
+    assert (step / "stubs-interfaz-menos" / "acceptance.xml").is_file()
+    [sealed] = _events(event_log, "lictor.driver.sealed.v1")
+    assert sealed.data["stub_unchecked"] == []
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    assert measured.data["stubs"]["IVA-002"] == {
+        "by_constant": {"None": "pasa", "True": "pasa"},
+        "outcome": "a_la_interfaz",
+        "interface": "probado",
+        "verdict": "aceptado",
+    }
+
+
+def test_check_red_seals_unchecked_what_the_interface_finds_nothing_to_alter_in(
+    tmp_path: Path,
+) -> None:
+    unaltered = _iface_xml("test_iva_002", altered=0)
+    use_case, request, event_log, spec_source, _ = _impostor_check(
+        tmp_path, _via_reports(unaltered), interface_impostor=_INTERFACE
+    )
+
+    assert use_case.execute(request).ok is True
+
+    spec_source.write_seal.assert_called_once()
+    [sealed] = _events(event_log, "lictor.driver.sealed.v1")
+    assert sealed.data["stub_unchecked"] == ["IVA-002"]
+
+
+def test_check_red_rejects_what_the_interface_finds_unchecked(tmp_path: Path) -> None:
+    survives = _iface_xml("test_iva_002")
+    use_case, request, event_log, spec_source, _ = _impostor_check(
+        tmp_path, _via_reports(survives), interface_impostor=_INTERFACE
+    )
+
+    assert use_case.execute(request).ok is False
+
+    error = str(_rejection(event_log).data["error"])
+    assert "IVA-002 pasa aunque los stubs no estén implementados y sigue pasando" in error
+    spec_source.write_seal.assert_not_called()
+
+
+def test_check_red_a_test_that_passes_with_none_and_true_goes_to_the_interface(
+    tmp_path: Path,
+) -> None:
+    """A double would catch `r in (None, True)`: that proves nothing of the test."""
+    reports = {
+        **_via_reports(_iface_xml("test_iva_002")),
+        "return ONE": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, event_log, _, runner = _impostor_check(
+        tmp_path, reports, impostors=_WITH_A_DOUBLE, interface_impostor=_INTERFACE
+    )
+
+    assert use_case.execute(request).ok is False
+
+    assert [told["mode"] for told in runner.told] == ["control", "mas", "menos"]
+    assert "IVA-002 pasa aunque los stubs no estén implementados" in str(
+        _rejection(event_log).data["error"]
+    )
+
+
+def test_check_red_a_double_lets_a_test_reach_its_assertion(tmp_path: Path) -> None:
+    error = _case_xml("test_iva_002", "error", message="AttributeError: 'NoneType' object")
+    failing = (_suite(_case_xml("test_iva_001", "assertion"), error), 1)
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": failing,
+        "return True": failing,
+        "return ONE": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, _, spec_source, runner = _impostor_check(
+        tmp_path, reports, impostors=_WITH_A_DOUBLE
+    )
+
+    assert use_case.execute(request).ok is True
+    spec_source.write_seal.assert_called_once()
+    assert runner.told == []
+
+
+def test_check_red_rejects_a_test_that_never_reaches_an_assertion(tmp_path: Path) -> None:
+    error = _case_xml("test_iva_002", "error", message="TypeError: cannot unpack")
+    failing = (_suite(_case_xml("test_iva_001", "assertion"), error), 1)
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": failing}
+    use_case, request, event_log, _, _ = _impostor_check(
+        tmp_path, reports, impostors=_WITH_A_DOUBLE
+    )
+
+    use_case.execute(request)
+
+    error_text = str(_rejection(event_log).data["error"])
+    assert (
+        "El test test_iva_002 del escenario IVA-002, cuando los stubs devuelven un valor en lugar "
+        "de lanzar NotImplementedError, falla, pero con error de un Entonces, en "
+        "tests/acceptance/test_iva.py (devolviendo un doble de Lictor: TypeError: cannot unpack)"
+    ) in error_text
+    assert "tal cual, sin convertirlo" in error_text
+    assert "no los trates aparte" in error_text
+
+
+def test_check_red_rejects_a_test_that_checks_outside_a_then(tmp_path: Path) -> None:
+    given = _case_xml("test_iva_002", "assertion", step="given", message="assert True is None")
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": (_suite(_case_xml("test_iva_001", "assertion"), given), 1),
+        "return True": (_suite(_case_xml("test_iva_001", "assertion"), given), 1),
+    }
+    use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
+
+    use_case.execute(request)
+
+    error = str(_rejection(event_log).data["error"])
+    assert "falla por una aserción de un Dado (devolviendo None: assert True is None)" in error
+    assert "guárdalo en el Cuando y compáralo en el Entonces" in error
+
+
+def test_check_red_once_the_attempts_run_out_the_person_reads_the_known_limits(
+    tmp_path: Path,
+) -> None:
+    error = _case_xml("test_iva_002", "error", message="TypeError")
+    failing = (_suite(_case_xml("test_iva_001", "assertion"), error), 1)
+    reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": failing}
+    use_case, request, _, _, _ = _impostor_check(tmp_path, reports, driver_attempts=3)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    assert "reescríbelo a mano" in str(raised.value)
 
 
 def test_check_red_an_impostor_that_keeps_a_stub_proves_nothing(tmp_path: Path) -> None:
@@ -1035,17 +1224,71 @@ def test_check_red_an_impostor_that_keeps_a_stub_proves_nothing(tmp_path: Path) 
     use_case.execute(request)
 
     error = str(_rejection(event_log).data["error"])
-    assert "No se pudo construir el impostor" in error
+    assert "No se pudo construir el impostor 'None'" in error
     assert "una sola línea" in error
 
 
-def test_check_red_an_impostor_that_crashes_proves_nothing(tmp_path: Path) -> None:
+def test_check_red_a_constant_whose_run_crashes_counts_for_nothing(tmp_path: Path) -> None:
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": ("", 2),
+        "return True": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, _, spec_source, _ = _impostor_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is True
+    spec_source.write_seal.assert_called_once()
+
+
+def test_check_red_a_constant_whose_run_doesn_t_map_counts_for_nothing(tmp_path: Path) -> None:
+    reports = {
+        "raise NotImplementedError": (_suite(_RED), 1),
+        "return None": (_suite(_case_xml("test_iva_001", "assertion")), 1),
+        "return True": (
+            _suite(_case_xml("test_iva_001", "assertion"), _case_xml("test_iva_002", "assertion")),
+            1,
+        ),
+    }
+    use_case, request, _, spec_source, _ = _impostor_check(tmp_path, reports)
+
+    assert use_case.execute(request).ok is True
+    spec_source.write_seal.assert_called_once()
+
+
+def test_check_red_a_file_that_isn_t_text_holds_no_stub(tmp_path: Path) -> None:
+    caught = _iface_xml("test_iva_002", "assertion")
+    use_case, request, _, spec_source, runner = _impostor_check(
+        tmp_path, _via_reports(caught), interface_impostor=_INTERFACE
+    )
+    assert isinstance(use_case.vcs, MagicMock)
+    export = use_case.vcs.export_tree.side_effect
+
+    def with_a_binary(rev: str, dest: Path) -> None:
+        export(rev, dest)
+        (dest / "src" / "logo.bin").write_bytes(b"\xff\xfe raise NotImplementedError")
+
+    use_case.vcs.export_tree.side_effect = with_a_binary
+
+    assert use_case.execute(request).ok is True
+    spec_source.write_seal.assert_called_once()
+    for told in runner.told:
+        assert [Path(path).name for path in told["stubs"]] == ["iva.py"]
+
+
+def test_check_red_rejects_the_driver_when_every_constant_s_run_crashes(tmp_path: Path) -> None:
     reports = {"raise NotImplementedError": (_suite(_RED), 1), "return": ("", 2)}
     use_case, request, event_log, _, _ = _impostor_check(tmp_path, reports)
 
     use_case.execute(request)
 
-    assert "No se pudo construir el impostor" in str(_rejection(event_log).data["error"])
+    rejection = _rejection(event_log)
+    assert rejection.data["reason"] == "impostor"
+    assert "Ninguna ejecución con los stubs sustituidos dio resultado: con None" in str(
+        rejection.data["error"]
+    )
 
 
 def test_check_red_runs_no_impostor_for_a_sealed_driver(tmp_path: Path) -> None:
@@ -1115,6 +1358,8 @@ def _linked_xml(name: str, sid: str, feature: str, failure: str = "") -> str:
     if failure:
         props += f'<property name="lictor.failure" value="{failure}"/>'
         props += '<property name="lictor.origin" value="src/iva.py"/>'
+        props += '<property name="lictor.frame" value="tests/acceptance/test_iva.py"/>'
+        props += '<property name="lictor.step" value="then"/>'
     verdict = '<failure message="m"/>' if failure else ""
     return f'<testcase name="{name}"><properties>{props}</properties>{verdict}</testcase>'
 
@@ -1747,18 +1992,21 @@ def test_check_red_measures_how_each_new_test_fared_with_each_stub_constant(
     assert use_case.execute(request).ok is True
 
     [measured] = _events(event_log, "lictor.driver.measured.v1")
-    # `_case_xml` reports no frame in the driver: none of them is an assertion of the driver.
     assert measured.data["stubs"] == {
         "IVA-001": {
-            "by_constant": {"return None": "no_aserta", "return True": "pasa"},
-            "rule_c": "no_aserta",
+            "by_constant": {"None": "entonces", "True": "pasa"},
+            "outcome": "probado",
+            "interface": None,
+            "verdict": "aceptado",
         },
         "IVA-002": {
-            "by_constant": {"return None": "no_aserta", "return True": "no_aserta"},
-            "rule_c": "no_aserta",
+            "by_constant": {"None": "no_aserta", "True": "entonces"},
+            "outcome": "probado",
+            "interface": None,
+            "verdict": "aceptado",
         },
     }
-    assert measured.data["red"]["IVA-001"] == {"step": None, "caught": "sin_implementar"}
+    assert measured.data["red"]["IVA-001"] == {"step": "then", "caught": "sin_implementar"}
 
 
 def test_check_red_measures_the_stub_runs_of_a_driver_they_reject(tmp_path: Path) -> None:
@@ -1769,7 +2017,8 @@ def test_check_red_measures_the_stub_runs_of_a_driver_they_reject(tmp_path: Path
     assert use_case.execute(request).ok is False
 
     [measured] = _events(event_log, "lictor.driver.measured.v1")
-    assert measured.data["stubs"]["IVA-002"]["rule_c"] == "pasa"
+    assert measured.data["stubs"]["IVA-002"]["outcome"] == "a_la_interfaz"
+    assert measured.data["stubs"]["IVA-002"]["verdict"] == "rechazado"
     assert _rejection(event_log).data["reason"] == "impostor"
 
 

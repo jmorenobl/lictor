@@ -32,7 +32,7 @@ from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.errors import ConfigError
 from lictor.domain.interface_proof import InterfaceImpostor
-from lictor.domain.rules import Impostors, MapLink
+from lictor.domain.rules import Impostors, MapLink, StubConstant
 
 CONFIG_FILENAME = "lictor.json"
 DEFAULT_PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
@@ -662,7 +662,10 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(
-            Impostors(imp.pattern, tuple(imp.replacements))
+            Impostors(
+                imp.pattern,
+                tuple(StubConstant(r.code, r.name, r.double) for r in imp.replacements),
+            )
             if (imp := profile.oracle.impostors) is not None
             else None
         ),

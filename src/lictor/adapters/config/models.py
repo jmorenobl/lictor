@@ -216,18 +216,38 @@ class ProfileVerification(BaseModel):
         return self
 
 
+class StubConstantConfig(BaseModel):
+    """One constant a stub returns in a run of the stubs' impostors (ADR-0012)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str = Field(min_length=1)  # what replaces the stub's line; may name the pattern's groups
+    name: str = Field(min_length=1)  # how messages, measures and the report name it
+    double: bool = False  # it answers what a test does with a result with another double
+
+
 class ImpostorConfig(BaseModel):
     """Lines that mark a stub, and the constants that replace them to prove a test asserts."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     pattern: str = Field(min_length=1)
-    replacements: list[str] = Field(min_length=1)
+    replacements: list[StubConstantConfig] = Field(min_length=1)
 
     @field_validator("pattern")
     @classmethod
     def _check_pattern(cls, pattern: str) -> str:
         return _validate_regexes([pattern])[0]
+
+    @model_validator(mode="after")
+    def _check_replacements(self) -> Self:
+        names = [r.name for r in self.replacements]
+        if len(set(names)) != len(names):
+            raise ValueError("oracle.impostors.replacements repite un nombre")
+        if self.replacements[0].double:
+            # The first one is the no-op the stubs keep when the interface judges a test.
+            raise ValueError("la primera de oracle.impostors.replacements no puede ser un doble")
+        return self
 
 
 _MODE_NAME = r"^[a-z][a-z0-9_-]*$"

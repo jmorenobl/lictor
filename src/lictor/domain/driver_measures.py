@@ -1,35 +1,25 @@
-"""What a fresh driver's red check saw, and what a rule not applied yet would say: no verdict.
+"""What a fresh driver's red check saw, scenario by scenario, for the journal and the report.
 
 The red, the stubs' impostors and the interface's report in which kind of Gherkin step each test
 failed, and the interface's how many calls each step made and how many it altered. These functions
-keep those facts for each scenario, and say what C would make of the stubs' runs (a Then's
-assertion of the driver must catch a constant). They decide nothing: what the run does is still
-`judge_red`, `impostor_survivors` and `interface_proofs`.
+keep those facts, with what each rule decided of them: C for the stubs (`stub_proof`, ADR-0012)
+and the proof of the interface. They decide nothing themselves.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-from lictor.domain.interface_proof import ASSERTION_KIND, InterfaceProof, ProofOutcome
+from lictor.domain.interface_proof import InterfaceProof, ProofOutcome
 from lictor.domain.model import STEPS, InterfaceCount, Step, StepCounts, TestCaseResult
-from lictor.domain.rules import NOT_IMPLEMENTED, path_within
-
-Caught = Literal[
-    "entonces",  # an assertion of the driver, in a Then
-    "otro_paso",  # an assertion of the driver, in another step or outside one
-    "no_aserta",  # it failed, but not by an assertion of the driver
-    "sin_implementar",  # a stub was still there
-    "pasa",  # it passed
-    "sin_resultado",  # the run has no result for it
-]
-
-RuleC = Literal[
-    "entonces",  # some constant made a Then's assertion of the driver fail
-    "otro_paso",  # some constant made an assertion of the driver fail, never in a Then
-    "no_aserta",  # it failed with some constant, never by an assertion of the driver
-    "pasa",  # it passed with every constant
-]
+from lictor.domain.stub_proof import (
+    Caught,
+    StubOutcome,
+    StubProof,
+    StubVerdict,
+    caught,
+    stub_verdict,
+)
 
 
 @dataclass(frozen=True)
@@ -42,19 +32,17 @@ class RedMeasure:
 
 @dataclass(frozen=True)
 class StubMeasure:
-    """How a pending scenario's test fared with each constant in place of the stubs."""
+    """How a pending scenario's test fared with each constant in place of the stubs, what C made
+    of it and, if it went there, what the interface proved of it."""
 
     by_constant: Mapping[str, Caught]
+    outcome: StubOutcome
+    interface: ProofOutcome | None = None
 
     @property
-    def rule_c(self) -> RuleC:
-        found = set(self.by_constant.values())
-        if "entonces" in found:
-            return "entonces"
-        if "otro_paso" in found:
-            return "otro_paso"
-        failed = found - {"pasa", "sin_resultado"}
-        return "no_aserta" if failed else "pasa"
+    def verdict(self) -> StubVerdict:
+        proof = None if self.interface is None else InterfaceProof(self.interface)
+        return stub_verdict(StubProof(self.outcome), proof)
 
 
 @dataclass(frozen=True)
@@ -76,20 +64,6 @@ class DriverMeasures:
     interface: Mapping[str, InterfaceMeasure] | None = None
 
 
-def caught(case: TestCaseResult | None, driver: Sequence[str]) -> Caught:
-    """How a test ended, as the stricter rules of the red and the stubs read it."""
-    if case is None or case.status == "skipped":
-        return "sin_resultado"
-    if case.status == "passed":
-        return "pasa"
-    kind = case.failure_kind
-    if kind == NOT_IMPLEMENTED:
-        return "sin_implementar"
-    if kind == ASSERTION_KIND and path_within(case.frame, driver):
-        return "entonces" if case.failed_step == "then" else "otro_paso"
-    return "no_aserta"
-
-
 def red_measures(
     pending: Sequence[str], mapped: Mapping[str, TestCaseResult], driver: Sequence[str]
 ) -> dict[str, RedMeasure]:
@@ -106,11 +80,19 @@ def stub_measures(
     pending: Sequence[str],
     runs: Sequence[tuple[str, Mapping[str, TestCaseResult]]],
     driver: Sequence[str],
+    proofs: Mapping[str, StubProof],
+    interface: Mapping[str, InterfaceProof],
 ) -> dict[str, StubMeasure]:
-    """How each pending scenario's test fared with each constant (`runs`: constant, results)."""
+    """How each pending scenario's test fared with each constant (`runs`: name, results), with
+    what C and the interface decided of it."""
     return {
-        sid: StubMeasure({constant: caught(cases.get(sid), driver) for constant, cases in runs})
+        sid: StubMeasure(
+            {name: caught(cases.get(sid), driver) for name, cases in runs},
+            proofs[sid].outcome,
+            interface[sid].outcome if sid in interface else None,
+        )
         for sid in pending
+        if sid in proofs
     }
 
 
@@ -159,7 +141,12 @@ def measures_record(measures: DriverMeasures) -> dict[str, object]:
         "stubs": None
         if measures.stubs is None
         else {
-            sid: {"by_constant": dict(m.by_constant), "rule_c": m.rule_c}
+            sid: {
+                "by_constant": dict(m.by_constant),
+                "outcome": m.outcome,
+                "interface": m.interface,
+                "verdict": m.verdict,
+            }
             for sid, m in sorted(measures.stubs.items())
         },
         "interface": None
@@ -218,6 +205,7 @@ def _by_key[T](raw: object, read: Callable[[object], T | None]) -> dict[str, T] 
 
 _CAUGHT: tuple[Caught, ...] = get_args(Caught)
 _PROOF_OUTCOMES: tuple[ProofOutcome, ...] = get_args(ProofOutcome)
+_STUB_OUTCOMES: tuple[StubOutcome, ...] = get_args(StubOutcome)
 
 
 def _one_of[T](value: object, values: tuple[T, ...]) -> T | None:
@@ -240,7 +228,12 @@ def _red_from(raw: Mapping[str, object]) -> RedMeasure | None:
 
 def _stub_from(raw: Mapping[str, object]) -> StubMeasure | None:
     by_constant: dict[str, Caught] | None = _by_key(raw.get("by_constant"), _caught)
-    return None if by_constant is None else StubMeasure(by_constant)
+    outcome = _one_of(raw.get("outcome"), _STUB_OUTCOMES)
+    interface = raw.get("interface")
+    proof = None if interface is None else _one_of(interface, _PROOF_OUTCOMES)
+    if by_constant is None or outcome is None or (interface is not None and proof is None):
+        return None
+    return StubMeasure(by_constant, outcome, proof)
 
 
 def _counts_from(raw: object) -> StepCounts | None:

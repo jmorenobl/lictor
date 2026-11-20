@@ -37,10 +37,8 @@ from lictor.domain.rules import (
     describe_suppressions,
     error_for_agent,
     forbidden_paths,
-    impostor_name,
     impostor_problem,
     impostor_source,
-    impostor_survivors,
     is_agent_unavailable,
     judge_red,
     keeps_attempt,
@@ -61,6 +59,7 @@ from lictor.domain.rules import (
     run_outcome,
     runs_to_prune,
     score_meets,
+    stub_lines,
     suppression_matches,
     suspicious_driver,
     unmapped_cases,
@@ -940,20 +939,11 @@ def test_judge_red_rejects_a_pending_that_fails_with_an_error(cls: ScenarioClass
     assert verdict.pending == ()
 
 
-@pytest.mark.parametrize(
-    ("replacement", "name"),
-    [
-        (r"\1return None", "return None"),
-        (r"\g<sangria>return True", "return True"),
-        (r"\12return 0 ", "return 0"),
-        ("return x", "return x"),
-        (r"\1", r"\1"),
-    ],
-)
-def test_an_impostor_is_named_by_the_code_it_puts_in_place_of_a_stub(
-    replacement: str, name: str
-) -> None:
-    assert impostor_name(replacement) == name
+def test_stub_lines_are_the_ones_impostor_source_replaces() -> None:
+    pattern = r"^(\s*)raise NotImplementedError\b.*$"
+    text = "def f():\n    raise NotImplementedError\n    # raise NotImplementedError\r\nx\n"
+    assert stub_lines(text, pattern) == [2]
+    assert stub_lines("", pattern) == []
 
 
 def test_impostor_source_replaces_whole_matching_lines_only() -> None:
@@ -995,12 +985,6 @@ def test_impostor_problem_needs_a_run_that_maps_and_lost_every_stub() -> None:
     assert problem.startswith("t1 siguen lanzando NotImplementedError")
     assert "una sola línea" in problem
     assert impostor_problem(None, None, [fine, TestCaseResult(name="t3")]) is None
-
-
-def test_impostor_survivors_passed_every_impostor() -> None:
-    runs = [{"A": "passed", "B": "passed", "C": "failure"}, {"A": "passed", "B": "error"}]
-    assert impostor_survivors(["A", "B", "C"], runs) == ["A"]
-    assert impostor_survivors(["A"], []) == ["A"]
 
 
 def test_collateral_greens_are_other_pendings_that_pass() -> None:

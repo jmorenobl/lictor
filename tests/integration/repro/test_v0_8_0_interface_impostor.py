@@ -99,8 +99,15 @@ def test_the_red_check_records_in_which_step_each_impostor_caught_each_test(
     assert data["red"] == {"IVA-003": {"step": "then", "caught": "sin_implementar"}}
     assert data["stubs"] == {
         "IVA-003": {
-            "by_constant": {"return None": "entonces", "return True": "pasa"},
-            "rule_c": "entonces",
+            "by_constant": {
+                "None": "entonces",
+                "True": "pasa",
+                "un doble de Lictor": "entonces",
+                "un doble vacío de Lictor": "entonces",
+            },
+            "outcome": "probado",
+            "interface": None,
+            "verdict": "aceptado",
         }
     }
     for sid in ("IVA-001", "IVA-002"):

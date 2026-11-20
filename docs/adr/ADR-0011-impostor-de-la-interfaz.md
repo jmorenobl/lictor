@@ -7,7 +7,8 @@ versión adopta su diseño (punto 2) con una corrección (el gancho de importaci
 
 Enmendada en la 0.10.0 (2026-11-20, «B»): la prueba tiene que venir de un Entonces, y lo que
 devuelve un Dado no se altera. Cambian los puntos 2, 4 y 5; lo que motiva la enmienda está en
-«Enmienda B», al final.
+«Enmienda B», al final. Enmendada otra vez en la 0.11.0 (las colecciones) y con la ADR-0012 (las
+fechas, y el punto 7, que pasa a ella).
 
 ## Contexto
 Con un driver nuevo, un escenario nuevo que pasa a la primera es `unproven` (ADR-0004, punto 3):
@@ -57,8 +58,8 @@ Hay además tres defectos en lo que existe:
    | Ejecución | Qué hace |
    |:--|:--|
    | Control | Envuelve y cuenta, sin alterar nada. Tiene que pasar como el rojo. |
-   | Modo `mas` | Número + 1, `bool` al contrario, texto con un carácter de más, colección con un elemento de más (una lista o tupla, al principio y de su forma: enmienda de las colecciones), `None` por un centinela; una excepción se traga y devuelve `None`. |
-   | Modo `menos` | Número − 1, `bool` al contrario, texto o colección con uno de menos (de una lista o tupla, el primero), o el centinela si estaba vacía, `None` por un centinela; una excepción se cambia por `ImpostorError`. |
+   | Modo `mas` | Número + 1, fecha + 1 día (ADR-0012), `bool` al contrario, texto con un carácter de más, colección con un elemento de más (una lista o tupla, al principio y de su forma: enmienda de las colecciones), `None` por un centinela; una excepción se traga y devuelve `None`. |
+   | Modo `menos` | Número − 1, fecha − 1 día, `bool` al contrario, texto o colección con uno de menos (de una lista o tupla, el primero), o el centinela si estaba vacía, `None` por un centinela; una excepción se cambia por `ImpostorError`. |
 
    Cualquier otro objeto no se altera. Una alteración que deja el valor igual al real (un `inf`, un
    número enorme) no cuenta como alteración.
@@ -130,7 +131,7 @@ Hay además tres defectos en lo que existe:
    ejecutan y `driver.sealed` lo dice (`stub_impostors: 0`), en lugar de darlos por superados.
    Exigirles una aserción del driver, como al de la interfaz, cerraría el falso verde que la
    ADR-0004 admite (un test sin assert que lee `.total` de `None`), pero rechazaría drivers que hoy
-   pasan: va en su propio cambio, medido aparte.
+   pasan: va en su propio cambio, medido aparte. Es la ADR-0012.
 
 8. **El perfil lo declara todo.** `python-uv` añade `oracle.interface_impostor` (variable
    `LICTOR_IMPOSTOR`, modo de control y modos), el plugin `python_uv/lictor_impostor.py` en
@@ -222,3 +223,15 @@ dejaba de probarse. Y pidió que el centinela tuviera un nombre que se explique 
 
 **Lo que no cambia:** las reglas del dominio (qué prueba un test y qué es final), los números, los
 textos y los booleanos, y el `None`, que sigue cambiándose por el centinela.
+
+## Enmienda de las fechas (ADR-0012, 2026-11-20)
+
+El impostor altera un `date` o un `datetime`, un día más o menos. Sale de la ADR-0012: el test de
+una orden llamada desde un Dado (MUL-006, F64) se juzga con este impostor, y su Entonces compara una
+fecha, que antes daba `sin_alterar`. Con la fecha alterada sale probado. Los escenarios que ya se
+cumplían y cuyo Entonces solo compara una fecha (PRE-004 de la biblioteca) también. El resto de
+F62 (objetos) sigue abierto.
+
+Para la ADR-0012, la variable lleva también `stubs`: las líneas de los stubs que Lictor sustituyó.
+El plugin no envuelve esas funciones, porque lo que devuelven es una constante de Lictor y no
+código que ya exista. Sin stubs, la lista va vacía.

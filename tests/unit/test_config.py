@@ -45,6 +45,7 @@ from lictor.adapters.config.models import (
     domain_controls,
 )
 from lictor.adapters.config.profiles.python_uv import (
+    lictor_doubles,
     lictor_impostor,
     lictor_outcome,
     lictor_project_path,
@@ -54,7 +55,7 @@ from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
 )
 from lictor.domain.errors import ConfigError, ExitCode
 from lictor.domain.interface_proof import InterfaceImpostor
-from lictor.domain.rules import banned_matches
+from lictor.domain.rules import StubConstant, banned_matches
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -532,6 +533,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_project_path.py",
         "lictor_outcome.py",
         "lictor_impostor.py",
+        "lictor_doubles.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -558,6 +560,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
             lictor_impostor.__file__,
             {
                 "collections",
+                "datetime",
                 "decimal",
                 "fractions",
                 "functools",
@@ -572,6 +575,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
                 "typing",
             },
         ),
+        (lictor_doubles.__file__, {"collections", "math", "pytest"}),
     ],
 )
 def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> None:
@@ -862,6 +866,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_project_path.__file__,
         lictor_outcome.__file__,
         lictor_impostor.__file__,
+        lictor_doubles.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
@@ -900,7 +905,12 @@ def test_demo_declares_nothing_of_its_own() -> None:
 def test_profile_no_longer_assumes_a_project_dependency() -> None:
     verification = load_profile("python-uv").verification
 
-    assert verification.plugins == ["lictor_project_path", "lictor_outcome", "lictor_impostor"]
+    assert verification.plugins == [
+        "lictor_project_path",
+        "lictor_outcome",
+        "lictor_impostor",
+        "lictor_doubles",
+    ]
     assert "PYTEST_PLUGINS" not in verification.env
 
 
@@ -1090,7 +1100,14 @@ def test_the_oracle_comes_from_the_profile_only(tmp_path: Path) -> None:
     assert defences.map_link == "scenario"
     assert defences.red_kinds == ("assertion", "not_implemented")
     assert defences.impostors is not None
-    assert defences.impostors.replacements == (r"\1return None", r"\1return True")
+    assert defences.impostors.replacements == (
+        StubConstant(r"\1return None", "None"),
+        StubConstant(r"\1return True", "True"),
+        StubConstant(r'\1return __import__("lictor_doubles").ONE', "un doble de Lictor", True),
+        StubConstant(
+            r'\1return __import__("lictor_doubles").EMPTY', "un doble vacío de Lictor", True
+        ),
+    )
     config = json.loads((REPO_ROOT / "lictor.json").read_text(encoding="utf-8"))
     config["oracle"] = {"red_kinds": []}
     (tmp_path / "lictor.json").write_text(json.dumps(config), encoding="utf-8")
