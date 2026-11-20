@@ -4,10 +4,12 @@ Lictor copies this file into the verification environment, so it runs where Lict
 and must import nothing of it. Without its variable it does nothing. With it, it wraps, as each one
 is imported, the functions and methods of the modules under the writable paths, outside the driver:
 a call from a file of the driver runs the real function, and in every mode but the control one its
-result is altered. It reports, for each test, how many calls crossed that boundary and how many of
-their results it altered, in all and by the kind of Gherkin step that made them, as JUnit
-properties, and decides nothing. In the control it alters nothing, and counts instead the results
-every mode could alter.
+result is altered, but only when the call was made from a step of a kind the variable names
+(`steps`: Lictor alters the When and the Then, never what a Given or a fixture prepares). A fixture
+counts as outside any step even when a step requests it. It reports, for each test, how many calls
+crossed that boundary and how many of their results it altered, in all and by the kind of Gherkin
+step that made them, and how many of those altered results were None, as JUnit properties, and
+decides nothing.
 
 It runs in the same process as the code under test, which could see it and behave otherwise, as it
 could forge the whole report.
@@ -35,7 +37,7 @@ if TYPE_CHECKING:
 VARIABLE = "LICTOR_IMPOSTOR"
 CALLS = "lictor.interface.calls"
 ALTERED = "lictor.interface.altered"
-ALTERABLE = "lictor.interface.alterable"  # only in the control: what every mode could alter
+ALTERED_NONE = "lictor.interface.altered_none"  # altered results that were None: an order's
 STEPS = ("given", "when", "then")
 CONTROL = "control"
 MORE = "mas"  # one more: number + 1, one element more, the exception swallowed
@@ -115,23 +117,33 @@ def alter(value: Any, mode: str) -> Any:
 class _Impostor:
     """What one run of the acceptance was told: the mode, and where the boundary lies."""
 
-    def __init__(self, mode: str, writable: Sequence[str], driver: Sequence[str]) -> None:
+    def __init__(
+        self, mode: str, writable: Sequence[str], driver: Sequence[str], steps: Sequence[str]
+    ) -> None:
         self.mode = mode
         self.writable = [_real(root) for root in writable]
         self.driver = [_real(root) for root in driver]
+        self.steps = frozenset(steps)
+        self.fixtures = 0  # how many fixtures are being set up right now
         self.reset()
 
     def reset(self) -> None:
         """Count a new test from nothing, outside any step."""
         self.calls = 0
         self.altered = 0
+        self.altered_none = 0
         self.step: str | None = None
-        self.by_step = {name: dict.fromkeys(STEPS, 0) for name in (CALLS, ALTERED, ALTERABLE)}
+        self.by_step = {name: dict.fromkeys(STEPS, 0) for name in (CALLS, ALTERED)}
+
+    def where(self) -> str | None:
+        """The kind of step a call is made from; a fixture's setup is outside any step."""
+        return self.step if self.fixtures == 0 and self.step in STEPS else None
 
     def count(self, name: str) -> None:
         """Count one more `name` in the step in progress; outside a step only the total holds it."""
-        if self.step in STEPS:
-            self.by_step[name][self.step] += 1
+        step = self.where()
+        if step is not None:
+            self.by_step[name][step] += 1
 
     def wraps(self, path: str) -> bool:
         return _under(path, self.writable) and not _under(path, self.driver)
@@ -143,22 +155,11 @@ class _Impostor:
                 return func(*args, **kwargs)
             self.calls += 1
             self.count(CALLS)
-            if self.mode == CONTROL:
-                return self._counted(func, args, kwargs)
+            if self.mode == CONTROL or self.where() not in self.steps:
+                return func(*args, **kwargs)
             return self._altered(func, args, kwargs)
 
         return wrapper
-
-    def _counted(self, func: Callable[..., Any], args: Any, kwargs: Any) -> Any:
-        """Run the real function, and count its result if every mode could alter it."""
-        try:
-            result = func(*args, **kwargs)
-        except Exception:
-            self.count(ALTERABLE)
-            raise
-        if _alterable(result):
-            self.count(ALTERABLE)
-        return result
 
     def _altered(self, func: Callable[..., Any], args: Any, kwargs: Any) -> Any:
         try:
@@ -174,17 +175,9 @@ class _Impostor:
             return result
         self.altered += 1
         self.count(ALTERED)
+        if result is None:
+            self.altered_none += 1
         return changed
-
-
-def _alterable(value: Any) -> bool:
-    """Whether every mode would alter `value`. The control must pass as the red did, so a value
-    whose own arithmetic or comparison raises counts as one no mode could alter, and raises
-    nothing."""
-    try:
-        return all(alter(value, mode) is not _UNALTERED for mode in (MORE, LESS))
-    except Exception:
-        return False
 
 
 def _plain(func: object) -> TypeGuard[types.FunctionType]:
@@ -278,7 +271,10 @@ def _from_environment() -> _Impostor | None:
     if not told:
         return None
     data = json.loads(told)
-    return _Impostor(str(data["mode"]), list(data["writable"]), list(data["driver"]))
+    # No default for `steps`: what Lictor doesn't say it alters, it mustn't be guessed here.
+    return _Impostor(
+        str(data["mode"]), list(data["writable"]), list(data["driver"]), list(data["steps"])
+    )
 
 
 IMPOSTOR = _from_environment()
@@ -304,6 +300,19 @@ def pytest_bdd_before_step(step: Any) -> None:
         IMPOSTOR.step = str(getattr(step, "type", ""))
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup() -> "Generator[None, Any, None]":
+    """A fixture prepares, as a Given does, even when a step requests it: nothing it gets is
+    altered. pytest-bdd resolves a step's fixtures after telling which step is in progress."""
+    if IMPOSTOR is not None:
+        IMPOSTOR.fixtures += 1
+    try:
+        yield
+    finally:
+        if IMPOSTOR is not None:
+            IMPOSTOR.fixtures -= 1
+
+
 @pytest.hookimpl(optionalhook=True)
 def pytest_bdd_after_step() -> None:
     if IMPOSTOR is not None:
@@ -325,7 +334,7 @@ def pytest_runtest_makereport(
     if IMPOSTOR is not None and call.when == "call":
         item.user_properties.append((CALLS, str(IMPOSTOR.calls)))
         item.user_properties.append((ALTERED, str(IMPOSTOR.altered)))
-        counted = (CALLS, ALTERED, ALTERABLE) if IMPOSTOR.mode == CONTROL else (CALLS, ALTERED)
-        for name in counted:
+        item.user_properties.append((ALTERED_NONE, str(IMPOSTOR.altered_none)))
+        for name in (CALLS, ALTERED):
             for step in STEPS:
                 item.user_properties.append((f"{name}.{step}", str(IMPOSTOR.by_step[name][step])))

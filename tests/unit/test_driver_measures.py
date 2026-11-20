@@ -1,4 +1,4 @@
-"""What the stricter rules B and C would say of a fresh driver, measured over today's runs."""
+"""What a fresh driver's red check saw, and what C would say of the stubs' runs."""
 
 import pytest
 
@@ -11,9 +11,7 @@ from lictor.domain.driver_measures import (
     interface_measures,
     measures_from_record,
     measures_record,
-    mode_caught,
     red_measures,
-    rule_b,
     stub_measures,
 )
 from lictor.domain.interface_proof import InterfaceProof
@@ -28,13 +26,10 @@ def _failed(kind: str, step: str = "then", frame: str = OWN) -> TestCaseResult:
     return TestCaseResult("test_x", status="failure", properties=properties)
 
 
-def _control(
-    calls: dict[str, int], alterable: dict[str, int], *, status: str = "passed"
-) -> TestCaseResult:
+def _control(calls: dict[str, int]) -> TestCaseResult:
     properties = {"lictor.interface.calls": str(sum(calls.values()))}
     properties |= {f"lictor.interface.calls.{step}": str(n) for step, n in calls.items()}
-    properties |= {f"lictor.interface.alterable.{step}": str(n) for step, n in alterable.items()}
-    return TestCaseResult("test_x", status=status, properties=properties)
+    return TestCaseResult("test_x", properties=properties)
 
 
 PASSED = TestCaseResult("test_x")
@@ -58,28 +53,6 @@ PASSED = TestCaseResult("test_x")
 )
 def test_how_the_red_and_the_stubs_read_a_test(case: TestCaseResult | None, expected: str) -> None:
     assert caught(case, DRIVER) == expected
-
-
-@pytest.mark.parametrize(
-    ("case", "expected"),
-    [
-        (None, "sin_resultado"),
-        (TestCaseResult("test_x", status="skipped"), "sin_resultado"),
-        (PASSED, "pasa"),
-        (_failed("assertion"), "entonces"),
-        (_failed("impostor", "when"), "entonces"),
-        (_failed("impostor", "then"), "entonces"),
-        (_failed("assertion", "given"), "dado"),
-        (_failed("impostor", "given"), "dado"),
-        (_failed("error", "given"), "dado"),
-        (_failed("assertion", "when"), "otro"),
-        (_failed("impostor", ""), "otro"),
-        (_failed("assertion", "then", "src/x.py"), "otro"),
-        (_failed("error", "then"), "otro"),
-    ],
-)
-def test_how_b_reads_one_mode_of_the_impostor(case: TestCaseResult | None, expected: str) -> None:
-    assert mode_caught(case, DRIVER) == expected
 
 
 def test_the_red_says_where_each_pending_test_failed() -> None:
@@ -124,92 +97,31 @@ def test_c_asks_some_constant_to_fail_a_then_s_assertion(
 
 
 PROVED = InterfaceProof("probado")
-THEN_ONLY = _control({"given": 2, "when": 1, "then": 1}, {"given": 2, "when": 0, "then": 1})
+THEN_ONLY = _control({"given": 2, "when": 1, "then": 1})
 
 
-@pytest.mark.parametrize(
-    ("today", "control", "caught_by", "expected"),
-    [
-        (PROVED, THEN_ONLY, {"mas": "entonces", "menos": "entonces"}, "probado"),
-        (PROVED, THEN_ONLY, {"mas": "dado", "menos": "entonces"}, "fuera_del_entonces"),
-        (PROVED, THEN_ONLY, {"mas": "otro", "menos": "entonces"}, "fuera_del_entonces"),
-        (PROVED, THEN_ONLY, {}, "fuera_del_entonces"),
-        # A Given returns None, which counts as altered today; from the When on, nothing can be.
-        (
-            PROVED,
-            _control({"given": 3, "when": 1, "then": 0}, {"given": 3, "when": 0, "then": 0}),
-            {"mas": "dado", "menos": "dado"},
-            "sin_alterar",
-        ),
-        (
-            InterfaceProof("sobrevive", "mas"),
-            _control({"given": 1, "then": 1}, {"given": 1}),
-            {"mas": "pasa", "menos": "pasa"},
-            "sin_alterar",
-        ),
-        # One call is enough to tell that nothing from the When on can be altered.
-        (
-            InterfaceProof("sobrevive", "mas"),
-            _control({"then": 1}, {}),
-            {"mas": "pasa"},
-            "sin_alterar",
-        ),
-        (InterfaceProof("sobrevive", "mas"), THEN_ONLY, {"mas": "pasa"}, "no_probado"),
-        (InterfaceProof("no_llama"), _control({}, {}), {"mas": "pasa"}, "no_probado"),
-        (
-            InterfaceProof("no_concluyente", "x"),
-            _control({"then": 1}, {}, status="failure"),
-            {},
-            "no_probado",
-        ),
-        (InterfaceProof("no_concluyente", "x"), None, {}, "no_probado"),
-    ],
-)
-def test_what_b_would_make_of_a_scenario(
-    today: InterfaceProof,
-    control: TestCaseResult | None,
-    caught_by: dict[str, str],
-    expected: str,
-) -> None:
-    assert rule_b(today, control, caught_by) == expected
+def test_the_interface_measure_keeps_what_was_proved_and_the_facts_of_every_run() -> None:
+    then = _failed("assertion", "then")
+    altered = {"lictor.interface.altered": "2", "lictor.interface.altered.when": "1"}
+    mas = TestCaseResult("test_x", status="failure", properties={**then.properties, **altered})
+    proofs = {"A-1": PROVED, "A-2": InterfaceProof("no_concluyente", "roto")}
+    control = {"A-1": THEN_ONLY}
+    modes = {"mas": {"A-1": mas}}
 
-
-def test_the_interface_measure_keeps_the_facts_of_every_run() -> None:
-    given = _failed("assertion", "given")
-    altered = {"lictor.interface.altered": "2", "lictor.interface.altered.given": "1"}
-    mas = TestCaseResult("test_x", status="failure", properties={**given.properties, **altered})
-    proofs = {
-        "A-1": PROVED,
-        "A-2": InterfaceProof("no_concluyente", "roto"),
-        "A-3": PROVED,
-        "A-4": InterfaceProof("sobrevive", "mas"),
-    }
-    control = {"A-1": THEN_ONLY, "A-3": THEN_ONLY, "A-4": _control({"when": 1}, {})}
-    modes = {"mas": {"A-1": mas, "A-3": _failed("assertion")}}
-
-    found = interface_measures(proofs, control, modes, DRIVER)
+    found = interface_measures(proofs, control, modes)
 
     assert found["A-1"] == InterfaceMeasure(
-        today="probado",
-        rule_b="fuera_del_entonces",
+        outcome="probado",
         calls=StepCounts(given=2, when=1, then=1),
-        alterable=StepCounts(given=2, when=0, then=1),
-        altered={"mas": StepCounts(given=1, outside=1)},
-        failed_step={"mas": "given"},
-        caught={"mas": "dado"},
+        altered={"mas": StepCounts(when=1, outside=1)},
+        failed_step={"mas": "then"},
     )
     assert found["A-2"] == InterfaceMeasure(
-        today="no_concluyente",
-        rule_b="no_probado",
+        outcome="no_concluyente",
         calls=StepCounts(),
-        alterable=StepCounts(),
         altered={"mas": StepCounts()},
         failed_step={"mas": None},
-        caught={"mas": "sin_resultado"},
     )
-    # The driver tells a Then's own assertion; the control, that A-4 has nothing to alter.
-    assert (found["A-3"].rule_b, found["A-3"].caught) == ("probado", {"mas": "entonces"})
-    assert found["A-4"].rule_b == "sin_alterar"
 
 
 FULL = DriverMeasures(
@@ -217,13 +129,10 @@ FULL = DriverMeasures(
     stubs={"A-1": StubMeasure({"return None": "entonces", "return True": "pasa"})},
     interface={
         "A-3": InterfaceMeasure(
-            today="probado",
-            rule_b="probado",
+            outcome="sin_alterar",
             calls=StepCounts(1, 2, 3, 4),
-            alterable=StepCounts(0, 1, 1, 0),
-            altered={"mas": StepCounts(0, 1, 0, 0), "menos": StepCounts(1, 0, 0, 0)},
+            altered={"mas": StepCounts(0, 1, 0, 0), "menos": StepCounts(0, 0, 1, 0)},
             failed_step={"mas": "then", "menos": None},
-            caught={"mas": "entonces", "menos": "entonces"},
         )
     },
 )
@@ -271,17 +180,14 @@ def _broken(path: tuple[str, ...], value: object) -> dict[str, object]:
         _broken(("stubs", "A-1", "by_constant"), []),
         _broken(("stubs", "A-1", "by_constant", "return None"), "cazado"),
         _broken(("interface",), 3),
-        _broken(("interface", "A-3", "today"), "cazado"),
-        _broken(("interface", "A-3", "rule_b"), "cazado"),
+        _broken(("interface", "A-3", "outcome"), "cazado"),
         _broken(("interface", "A-3", "calls"), None),
         _broken(("interface", "A-3", "calls", "then"), -1),
         _broken(("interface", "A-3", "calls", "then"), True),
         _broken(("interface", "A-3", "calls", "outside"), "4"),
-        _broken(("interface", "A-3", "alterable"), {}),
+        _broken(("interface", "A-3", "calls"), {}),
         _broken(("interface", "A-3", "altered"), None),
         _broken(("interface", "A-3", "altered", "mas"), None),
-        _broken(("interface", "A-3", "caught"), None),
-        _broken(("interface", "A-3", "caught", "mas"), "dados"),
         _broken(("interface", "A-3", "failed_step"), None),
         _broken(("interface", "A-3", "failed_step", "mas"), "luego"),
     ],

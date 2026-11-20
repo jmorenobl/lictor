@@ -133,8 +133,9 @@ ejecutar, y el run lo salta.
    `lictor check` ejecuta los controles en un clon limpio, como haría un run, y además los que
    un run deja para `check`, marcados «(solo en check)».
 4. Si ya hay código que cumple escenarios, Lictor lo prueba alterando lo que devuelve la
-   interfaz: si el test lo nota, el escenario sale en verde sin llamar al agente. Lo que devuelve
-   objetos o estado no lo puede alterar: para eso, `lictor register <ID>…`, antes del primer run
+   interfaz desde el Cuando y el Entonces: si una aserción del Entonces lo nota, el escenario sale
+   en verde sin llamar al agente. Lo que devuelve objetos, fechas o estado no lo puede alterar:
+   para eso, `lictor register <ID>…`, antes del primer run
    y lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
 5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.

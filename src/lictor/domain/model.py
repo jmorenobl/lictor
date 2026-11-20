@@ -271,8 +271,8 @@ ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to
 FRAME_PROPERTY = "lictor.frame"  # last frame of the failure inside the project, relative to it
 INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to the interface
 INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
-# In the control, those whose result every mode could alter; it alters none of them there.
-INTERFACE_ALTERABLE_PROPERTY = "lictor.interface.alterable"
+# Of those, the ones whose real result was None, as an order that only changes the state returns.
+INTERFACE_ALTERED_NONE_PROPERTY = "lictor.interface.altered_none"
 SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
 FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
 STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised in
@@ -280,11 +280,10 @@ STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised
 # The kinds of a Gherkin step, as the runner names them: «And» and «But» take the one before.
 Step = Literal["given", "when", "then"]
 STEPS: tuple[Step, ...] = ("given", "when", "then")
-InterfaceCount = Literal["calls", "altered", "alterable"]
+InterfaceCount = Literal["calls", "altered"]
 _INTERFACE_PROPERTIES: Mapping[InterfaceCount, str] = {
     "calls": INTERFACE_CALLS_PROPERTY,
     "altered": INTERFACE_ALTERED_PROPERTY,
-    "alterable": INTERFACE_ALTERABLE_PROPERTY,
 }
 
 
@@ -354,16 +353,18 @@ class TestCaseResult:
         return _count(self.properties.get(INTERFACE_ALTERED_PROPERTY, ""))
 
     @property
+    def interface_altered_none(self) -> int:
+        """How many of the altered results were None: telling them apart says nothing of a test."""
+        return _count(self.properties.get(INTERFACE_ALTERED_NONE_PROPERTY, ""))
+
+    @property
     def failed_step(self) -> Step | None:
         """The kind of step the failure was raised in, or None outside a step or not reported."""
         value = self.properties.get(STEP_PROPERTY, "")
         return next((step for step in STEPS if step == value), None)
 
     def interface_by_step(self, count: InterfaceCount) -> StepCounts:
-        """What the impostor counted for this test, by step; `outside` is what no step holds.
-
-        The total of `alterable` isn't reported: what falls outside a step is then unknown, and 0.
-        """
+        """What the impostor counted for this test, by step; `outside` is what no step holds."""
         name = _INTERFACE_PROPERTIES[count]
         given, when, then = (
             _count(self.properties.get(step_property(name, step), "")) for step in STEPS

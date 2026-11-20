@@ -33,9 +33,11 @@ from lictor.domain.driver_measures import (
 )
 from lictor.domain.errors import DriverError
 from lictor.domain.interface_proof import (
+    ALTERED_STEPS,
     InterfaceImpostor,
     InterfaceProof,
     interface_proofs,
+    unalterable_note,
     unproved_reason,
     without_impostor_reason,
 )
@@ -70,11 +72,12 @@ _REGISTER_HINT = (
     "en un proyecto con código, hazlo antes de la primera ejecución."
 )
 
-# What no retry of the driver can change: the impostor can't alter what the interface returns.
+# What no retry of the driver can change: the impostor can't alter what the interface returns, or
+# a run of it told nothing. Neither says the test is wrong, so this doesn't either.
 _UNDECIDED_HINT = (
     "Otro intento del driver no lo cambiaría. Si el código ya cumplía estos escenarios, "
-    "regístralos tú y relanza: `lictor register {ids}`. Si no, su test no comprueba el "
-    "resultado: corrígelo."
+    "regístralos tú y relanza: `lictor register {ids}`. Si no, revisa antes su test: nada ha "
+    "probado que compruebe el resultado."
 )
 
 PROOF_TRAILER = "Lictor-Proof"
@@ -311,7 +314,7 @@ class CheckRed:
             return ran, registration, None
         measures = registration.measures
         if measures is not None:
-            found = interface_measures(ran.proofs, ran.control, ran.modes, request.oracle.driver)
+            found = interface_measures(ran.proofs, ran.control, ran.modes)
             measures = replace(measures, interface=found)
         return None, replace(registration, measures=measures), ran.proofs
 
@@ -546,16 +549,19 @@ class CheckRed:
         ]
         ids = " ".join(failed)
         cases = tuple(unproven[sid] for sid in failed)
+        # Why the impostor couldn't judge some, only for the person: the agent never reads it.
+        unalterable = [sid for sid in failed if proofs and proofs[sid].outcome == "sin_alterar"]
+        note = [unalterable_note(unalterable)] if unalterable else []
         if proofs is not None and not any(proofs[sid].fixable for sid in failed):
             # No retry of the driver changes what the impostor can tell: a person decides.
-            reason = "\n".join([*lines, _UNDECIDED_HINT.format(ids=ids)])
+            reason = "\n".join([*lines, *note, _UNDECIDED_HINT.format(ids=ids)])
             rejection = _Rejection(
                 "sin_prueba", reason, cases, registration.red_cases, registration.red_output
             )
             self._reject(request, step_dir, rejection, final=True)
             raise DriverError(reason)
         if request.driver_attempts >= request.max_driver_attempts:
-            lines.append(_REGISTER_HINT.format(ids=ids))
+            lines.extend([*note, _REGISTER_HINT.format(ids=ids)])
         rejection = _Rejection(
             "sin_prueba", "\n".join(lines), cases, registration.red_cases, registration.red_output
         )
@@ -579,6 +585,7 @@ class CheckRed:
                     "mode": mode,
                     "writable": [str(clone / root.strip("/")) for root in request.oracle.writable],
                     "driver": [str(clone / root.strip("/")) for root in request.oracle.driver],
+                    "steps": list(ALTERED_STEPS),
                 }
                 command, output, tampered = self._run_acceptance_suite(
                     request,

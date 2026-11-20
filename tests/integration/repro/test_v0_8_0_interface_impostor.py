@@ -105,13 +105,12 @@ def test_the_red_check_records_in_which_step_each_impostor_caught_each_test(
     }
     for sid in ("IVA-001", "IVA-002"):
         found = data["interface"][sid]
-        assert (found["today"], found["rule_b"]) == ("probado", "probado")
+        assert found["outcome"] == "probado"
         assert found["calls"] == {"given": 0, "when": 0, "then": 1, "outside": 0}
-        assert found["alterable"]["then"] == 1
         assert found["failed_step"] == {"mas": "then", "menos": "then"}
-        assert found["altered"]["mas"]["then"] == 1
+        assert found["altered"]["mas"] == {"given": 0, "when": 0, "then": 1, "outside": 0}
     report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
-    assert "- **Con B**: 2 probado" in report
+    assert "- **Interfaz**: 2 `probado`" in report
 
 
 _CHECKS_THAT_IGNORE_THE_RESULT = [
