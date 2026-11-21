@@ -107,7 +107,7 @@ def refactor_duplication_text(
     return RefactorBlock(
         "Código repetido, medido en la verificación del verde "
         f"({_definition(duplication.min_tokens)}):",
-        named_clones(ordered, duplication.count) if duplication.count else [],
+        named_clones(ordered, duplication.count),
         "Quita al menos uno, empezando por los de los ficheros que cambió este escenario; no hace "
         "falta quitarlos todos ahora.",
         "- Ningún clon.",

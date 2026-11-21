@@ -274,23 +274,23 @@ def test_what_is_in_a_clone_is_where_the_clones_are_merged() -> None:
     )
 
 
-@pytest.mark.parametrize("minimum", [1, 60])
-def test_places_at_the_edges_are_valid(minimum: int) -> None:
+@pytest.mark.parametrize(("minimum", "later_first"), [(1, True), (60, True), (60, False)])
+def test_places_at_the_edges_are_valid(minimum: int, later_first: bool) -> None:
     """A place may be one line, as long as the minimum, end at the last token of its file, and
     start where another ends, in either order."""
+    later = _occurrence(start=60, end=120, first_line=4, last_line=4)
+    places = (later, _occurrence()) if later_first else (_occurrence(), later)
     data = _raw(
         min_tokens=minimum,
         files=_files(("a.py", 120, [[0, 120]]), ("b.py", 100, [[10, 70]])),
-        families=_families(
-            _occurrence(start=60, end=120, first_line=4, last_line=4), _occurrence(), _B
-        ),
+        families=_families(*places, _B),
     )
 
     report = duplication_report(data)
 
     assert isinstance(report, DuplicationReport)
     [clone] = report.clones
-    assert clone.occurrences[0] == CloneOccurrence("a.py", 4, 4, 60, 120)
+    assert CloneOccurrence("a.py", 4, 4, 60, 120) in clone.occurrences
     assert [o.tokens for o in clone.occurrences] == [60, 60, 60]
 
 
