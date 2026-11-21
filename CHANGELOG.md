@@ -8,7 +8,8 @@ en su significado se anota en «Cambiado».
 ## [Sin publicar]
 
 Un control de duplicación que mide en cada verificación sin bloquear, dice al refactor qué clones
-dejó su verde y le impide dejar más código repetido (ADR-0014, F65).
+dejó su verde y le impide dejar más código repetido (ADR-0014, F65). En tres pasadas de la calculadora acaba
+sin ningún clon, y los dos que aparecieron los quitó el refactor a la primera.
 
 ### Al actualizar desde la 0.13.0
 

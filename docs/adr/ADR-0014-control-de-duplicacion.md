@@ -167,6 +167,14 @@ descartado por este control sin haber empeorado; el coste del refactor no más d
 de F60 (~0,040 $ por refactor). Por clon listado: si lo quita y cómo (extraer o rediseñar); cuántos
 «sin cambios» citan el riesgo con la lista delante; si se ejecutan las dos medidas.
 
+**Resultado (2026-11-21, `.audits/qa/f65/analisis.md`):** en las tres pasadas, ningún clon al
+final (0,0 % también con jscpd), CC máxima 9–10 sin ninguna por encima, 0 falsos verdes y 0
+descartes en 46 refactors. Solo dos verdes dejaron un clon, los dos el del recorrido paralelo, y sus
+refactors lo quitaron a la primera compartiendo el recorrido (una función común en un caso, un
+árbol que el evaluador recorre en el otro). El coste por refactor sube a 0,049–0,055 $: un «sin
+cambios» cuesta lo mismo que antes, y lo que sube es que hay más aplicados y más grandes. El miedo
+al descarte con la lista vacía sigue, como fricción aparte.
+
 ## Revisión independiente (Fable, 2026-11-21)
 Comprobado aquí ejecutándolo, e incorporado arriba:
 
