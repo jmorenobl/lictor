@@ -11,6 +11,7 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.complexity import describe_over
 from lictor.domain.driver_measures import DriverMeasures, StubMeasure, measures_from_record
+from lictor.domain.duplication import describe_duplication
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
@@ -182,6 +183,9 @@ def _judged_score(judged: RecordedJudged) -> str:
     if judged.complexity is not None:
         c = judged.complexity
         return f", {describe_over(c.over, c.limit, c.peak)}"
+    if judged.duplication is not None:
+        d = judged.duplication
+        return f", {describe_duplication(d.clones, d.in_clones, d.code_tokens)}"
     return f", {describe_score(judged.score)}" if judged.score else ""
 
 

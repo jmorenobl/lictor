@@ -24,8 +24,9 @@ from lictor.domain.controls import (
     agent_measures,
     agent_measures_text,
     agent_tools_with_files,
-    complexity_controls,
+    code_controls,
 )
+from lictor.domain.duplication import implementer_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
 from lictor.domain.rules import error_for_agent
@@ -119,8 +120,8 @@ class ImplementScenario:
         )
         prompt_sha = f"sha256:{hashlib.sha256(raw_template.encode('utf-8')).hexdigest()}"
 
-        # Only a complexity control that blocks is the implementer's to meet (ADR-0013).
-        blocking = tuple(c for c in complexity_controls(request.controls) if c.mode == "block")
+        # Only a control of the code that blocks is the implementer's to meet (ADR-0013, 0014).
+        blocking = tuple(c for c in code_controls(request.controls) if c.mode == "block")
         sources = request.agent_files if blocking else ()
         with agent_files_dir(request.project_root, sources) as files_dir:
             files = str(files_dir) if files_dir is not None else None
@@ -231,11 +232,12 @@ def _error_block(request: ImplementScenarioRequest) -> str:
 def _measures_text(
     measures: Sequence[AgentMeasure], blocking: Sequence[CommandControl], files: str | None
 ) -> str:
-    """Each minimum to meet with its command, and the limit of a complexity control that blocks."""
+    """Each minimum to meet with its command, and what a control of the code that blocks asks."""
     lines = [agent_measures_text(measures)] if measures else []
-    lines.extend(
-        implementer_complexity_text(c.limit, agent_command(c, files))
-        for c in blocking
-        if c.limit is not None
-    )
+    for control in blocking:
+        command = agent_command(control, files)
+        if control.report == "duplication":
+            lines.append(implementer_duplication_text(command))
+        elif control.limit is not None:
+            lines.append(implementer_complexity_text(control.limit, command))
     return "\n".join(lines)

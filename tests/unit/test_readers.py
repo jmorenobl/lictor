@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
+from lictor.adapters.readers.duplication import DuplicationReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.domain.model import CoverageScore, MutationScore
@@ -133,17 +135,23 @@ def test_junit_that_cannot_be_read_is_invalid(tmp_path: Path, raw: bytes, reason
     assert reason in report.reason
 
 
-@pytest.mark.parametrize("reader", [JUnitReader(), CoverageReader(), MutationReader()])
-def test_nothing_at_the_path_is_a_missing_report(
-    tmp_path: Path, reader: JUnitReader | CoverageReader | MutationReader
-) -> None:
+_READERS = [
+    JUnitReader(),
+    CoverageReader(),
+    MutationReader(),
+    ComplexityReader(),
+    DuplicationReader(),
+]
+type _Reader = JUnitReader | CoverageReader | MutationReader | ComplexityReader | DuplicationReader
+
+
+@pytest.mark.parametrize("reader", _READERS)
+def test_nothing_at_the_path_is_a_missing_report(tmp_path: Path, reader: _Reader) -> None:
     assert reader.read(tmp_path / "nada") == MissingReport()
 
 
-@pytest.mark.parametrize("reader", [JUnitReader(), CoverageReader(), MutationReader()])
-def test_what_is_there_and_isnt_a_file_is_invalid(
-    tmp_path: Path, reader: JUnitReader | CoverageReader | MutationReader
-) -> None:
+@pytest.mark.parametrize("reader", _READERS)
+def test_what_is_there_and_isnt_a_file_is_invalid(tmp_path: Path, reader: _Reader) -> None:
     directory = tmp_path / "dir"
     directory.mkdir()
     broken = tmp_path / "broken"

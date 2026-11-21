@@ -123,7 +123,8 @@
             "junit",
             "mutation",
             "coverage",
-            "complexity"
+            "complexity",
+            "duplication"
           ],
           "title": "Report",
           "type": "string"

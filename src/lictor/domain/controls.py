@@ -12,7 +12,7 @@ import shlex
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 from lictor.domain.errors import ConfigError
 from lictor.domain.reports import ReportFormat
@@ -144,14 +144,14 @@ def refactor_measures(
 
     A refactor must not measure less than its green, with or without a minimum, so every
     `agent_run` whose plugin the environment loads counts, not only those with a `min_score`.
-    A complexity control has its own lines (`refactor_complexity_text`): what it measures isn't
-    what is left untested.
+    A control that measures the code has its own lines (`refactor_complexity_text`,
+    `refactor_duplication_text`): what it measures isn't what is left untested.
     """
     return tuple(
         (control.id, control.agent_run)
         for control in controls
         if control.agent_run
-        and control.report != "complexity"
+        and control.report not in CODE_REPORTS
         and missing_plugin(control.when_plugin, installed) is None
     )
 
@@ -511,9 +511,14 @@ def agent_tools_with_files(tools: Sequence[str], files_dir: str | None) -> tuple
     return tuple(with_agent_files(tool, files_dir) for tool in tools)
 
 
-def complexity_controls(controls: Sequence[Control]) -> tuple[CommandControl, ...]:
-    """The controls that measure complexity (ADR-0013), in the order they were declared."""
-    return tuple(c for c in command_controls(controls) if c.report == "complexity")
+# The reports of a control that measures the code itself, whose findings the refactor's prompt
+# names: the functions above a limit (ADR-0013) and the clones (ADR-0014).
+CODE_REPORTS: Final[frozenset[str]] = frozenset({"complexity", "duplication"})
+
+
+def code_controls(controls: Sequence[Control]) -> tuple[CommandControl, ...]:
+    """The controls that measure the code itself, in the order they were declared."""
+    return tuple(c for c in command_controls(controls) if c.report in CODE_REPORTS)
 
 
 def agent_command(control: Control, files_dir: str | None) -> str | None:

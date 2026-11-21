@@ -66,6 +66,7 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
         "unit",
         "coverage",
         "complexity",
+        "duplication",
         "c1",
     ]
 
@@ -111,7 +112,13 @@ def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path:
     runtime = bootstrap_runtime(tmp_path)
 
     context = runtime.graph_context
-    assert [c.id for c in context.controls] == ["lint", "types", "audit", "complexity"]
+    assert [c.id for c in context.controls] == [
+        "lint",
+        "types",
+        "audit",
+        "complexity",
+        "duplication",
+    ]
     assert [c.id for c in context.check_controls] == ["unit", "coverage", "mutation"]
     checks = runtime.preconditions
     assert "del control 'unit'" not in checks.commands

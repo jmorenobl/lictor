@@ -17,7 +17,7 @@ from lictor.domain.controls import (
     ReaderControl,
     agent_command,
     agent_tools_with_files,
-    complexity_controls,
+    code_controls,
     refactor_measures,
 )
 from lictor.domain.errors import ConfigError
@@ -135,7 +135,7 @@ def test_the_measure_keeps_the_functions_for_the_prompt() -> None:
     [measure] = _measured(12, 3).values()
 
     assert measure.misses == (("excess", 2), ("peak", 2))
-    assert measure.over == OverLimit(10, (_f(12, "f1", line=1),))
+    assert measure.findings == OverLimit(10, (_f(12, "f1", line=1),))
 
 
 def test_the_measure_goes_through_the_checkpoint_and_back() -> None:
@@ -148,17 +148,27 @@ def test_the_measure_goes_through_the_checkpoint_and_back() -> None:
     "over",
     [
         "no",
-        {"limit": "10", "functions": []},
-        {"limit": 10, "functions": {}},
-        {"limit": 10, "functions": [1]},
-        {"limit": 10, "functions": [{"file": 1, "function": "f", "line": 1, "complexity": 1}]},
-        {"limit": 10, "functions": [{"file": "a", "function": "f", "line": "1", "complexity": 1}]},
+        {"limit": 10, "functions": []},
+        {"kind": "otra", "limit": 10, "functions": []},
+        {"kind": "complexity", "limit": "10", "functions": []},
+        {"kind": "complexity", "limit": 10, "functions": {}},
+        {"kind": "complexity", "limit": 10, "functions": [1]},
+        {
+            "kind": "complexity",
+            "limit": 10,
+            "functions": [{"file": 1, "function": "f", "line": 1, "complexity": 1}],
+        },
+        {
+            "kind": "complexity",
+            "limit": 10,
+            "functions": [{"file": "a", "function": "f", "line": "1", "complexity": 1}],
+        },
     ],
 )
 def test_a_checkpoint_with_a_bad_list_keeps_no_list(over: object) -> None:
-    record = {"complexity": {"passed": None, "misses": {"excess": 0, "peak": 0}, "over": over}}
+    record = {"complexity": {"passed": None, "misses": {"excess": 0, "peak": 0}, "findings": over}}
 
-    assert measures_from_record(record)["complexity"].over is None
+    assert measures_from_record(record)["complexity"].findings is None
 
 
 def test_a_report_of_another_control_or_without_limit_is_no_complexity_measure() -> None:
@@ -329,7 +339,7 @@ def test_complexity_has_its_own_lines_in_the_refactor_prompt() -> None:
     unit = CommandControl(id="unit", level="L2", run="u {out}", report="junit", agent_run="u")
     reader = ReaderControl(id="cov", level="L2", reads="unit", adds="--cov {out}")
 
-    assert complexity_controls([unit, reader, _CONTROL]) == (_CONTROL,)
+    assert code_controls([unit, reader, _CONTROL]) == (_CONTROL,)
     assert refactor_measures([unit, _CONTROL], ()) == (("unit", "u"),)
 
 

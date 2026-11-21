@@ -1,11 +1,10 @@
 """Coverage report reader: the totals coverage.py exports as JSON (`--cov-report=json:{out}`)."""
 
-import json
 from pathlib import Path
 
-from lictor.adapters.readers.files import json_text, report_bytes
+from lictor.adapters.readers.files import json_report
 from lictor.application.ports import ReportReader
-from lictor.domain.reports import CoverageReport, InvalidReport, ReportOf, coverage_report
+from lictor.domain.reports import CoverageReport, ReportOf, coverage_report
 
 
 class CoverageReader(ReportReader[CoverageReport]):
@@ -16,14 +15,4 @@ class CoverageReader(ReportReader[CoverageReport]):
     """
 
     def read(self, path: Path) -> ReportOf[CoverageReport]:
-        raw = report_bytes(path)
-        if not isinstance(raw, bytes):
-            return raw
-        text = json_text(raw)
-        if isinstance(text, InvalidReport):
-            return text
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            return InvalidReport(f"no es JSON: {exc}")
-        return coverage_report(data)
+        return json_report(path, coverage_report)

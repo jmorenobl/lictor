@@ -20,6 +20,7 @@ from lictor.adapters.config.loader import (
 from lictor.adapters.config.models import LictorConfig, domain_controls
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
+from lictor.adapters.readers.duplication import DuplicationReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
@@ -180,6 +181,7 @@ def bootstrap_runtime(
         coverage=CoverageReader(),
         mutation=MutationReader(),
         complexity=ComplexityReader(),
+        duplication=DuplicationReader(),
     )
     spec_source = GherkinSource()
 

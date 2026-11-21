@@ -45,6 +45,7 @@ from lictor.domain.verdicts import (
     VerdictRule,
     complexity_verdict,
     coverage_verdict,
+    duplication_verdict,
     enforce_min_score,
     exit_code_verdict,
     junit_verdict,
@@ -75,6 +76,9 @@ def read_and_judge(
                 raise InternalLictorError("Un control de complejidad sin límite")
             complexity = readers.complexity.read(report_path)
             return Judged(complexity, complexity_verdict(complexity, run, rule.limit))
+        case "duplication":
+            duplication = readers.duplication.read(report_path)
+            return Judged(duplication, duplication_verdict(duplication, run))
         case _:
             assert_never(rule.report)
 
