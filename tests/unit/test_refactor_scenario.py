@@ -188,7 +188,7 @@ def test_the_refactor_hears_what_its_green_left_above_the_limit(tmp_path: Path) 
     assert "Complejidad, con un límite de 10 por función" in task.prompt
     assert "{lictor_files}" not in task.prompt
     command = next(line for line in task.prompt.splitlines() if line.startswith("Mídela tú"))
-    assert "/medir.py src`." in command
+    assert "/medir.py src`, sola" in command
     assert "Bash solo admite: pruebas, uv run python " in task.prompt
     assert seen == {"copy": "print('mide')\n", "outside": True}
 

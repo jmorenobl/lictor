@@ -344,7 +344,8 @@ def test_the_refactor_hears_which_functions_go_above_and_how_to_measure() -> Non
         "La verificación descarta el refactor si deja por encima del límite más que el verde, en "
         "total o en la peor función. Por debajo del límite la complejidad no cuenta, y mejorar una "
         "función sin llegar al límite no se descarta.",
-        "Mídela tú, antes y después de cambiar nada, con `medir src`.",
+        "Mídela tú con `medir src`, sola y no detrás de otras órdenes con `&&`: una vez antes de "
+        "editar y otra al terminar.",
     ]
 
 

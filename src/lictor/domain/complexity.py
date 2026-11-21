@@ -92,7 +92,12 @@ def refactor_complexity_text(over: OverLimit | None, command: str | None) -> str
         "función sin llegar al límite no se descarta."
     )
     if command:
-        lines.append(f"Mídela tú, antes y después de cambiar nada, con `{command}`.")
+        # Chained with `&&` after the acceptance, which fails while scenarios are pending, the
+        # measure never ran (F60, the pass of the 0.13.0).
+        lines.append(
+            f"Mídela tú con `{command}`, sola y no detrás de otras órdenes con `&&`: una vez antes "
+            "de editar y otra al terminar."
+        )
     return "\n".join(lines)
 
 

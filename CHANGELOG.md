@@ -7,6 +7,13 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Cambiado
+
+- **El refactor mide la complejidad con la orden sola, antes de editar y al terminar.** En la
+  pasada de la 0.13.0, dos refactors la encadenaron con `&&` tras la aceptación, que falla con
+  escenarios pendientes, y no llegó a ejecutarse. Con la línea nueva, en dos pasadas más, ninguno la
+  encadenó y 6 de los 7 aplicados midieron antes y después.
+
 ## [0.13.0] - 2026-11-21
 
 Un control de complejidad que mide en cada verificación sin bloquear, dice al refactor qué
