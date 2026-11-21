@@ -7,6 +7,8 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.13.0] - 2026-11-21
+
 Un control de complejidad que mide en cada verificación sin bloquear, dice al refactor qué
 funciones dejó su verde por encima del límite y le impide dejar más (ADR-0013, F60).
 
@@ -816,7 +818,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.12.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/jmorenobl/lictor/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jmorenobl/lictor/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jmorenobl/lictor/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jmorenobl/lictor/compare/v0.9.0...v0.10.0
