@@ -61,7 +61,7 @@
       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
     },
     "plugin_variable": "PYTEST_PLUGINS",
-    "plugins": ["lictor_project_path", "lictor_outcome", "lictor_impostor"],
+    "plugins": ["lictor_project_path", "lictor_outcome", "lictor_impostor", "lictor_doubles"],
     "plugins_command": "{env_dir}/bin/python -I -B -c 'from importlib.metadata import entry_points; print(*(e.value for e in entry_points(group=\"pytest11\")), sep=\"\\n\")'",
     "inherit": ["PATH", "TMPDIR"],
     "reserved": [
@@ -69,14 +69,19 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV", "LICTOR_*"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_doubles.py"]
   },
   "oracle": {
     "link": "scenario",
     "red_kinds": ["assertion", "not_implemented"],
     "impostors": {
       "pattern": "^(\\s*)raise NotImplementedError\\b.*$",
-      "replacements": ["\\1return None", "\\1return True"]
+      "replacements": [
+        {"code": "\\1return None", "name": "None"},
+        {"code": "\\1return True", "name": "True"},
+        {"code": "\\1return __import__(\"lictor_doubles\").ONE", "name": "un doble de Lictor", "double": true},
+        {"code": "\\1return __import__(\"lictor_doubles\").EMPTY", "name": "un doble vacío de Lictor", "double": true}
+      ]
     },
     "interface_impostor": {"variable": "LICTOR_IMPOSTOR", "control": "control", "modes": ["mas", "menos"]}
   },

@@ -9,12 +9,14 @@ result is altered, but only when the call was made from a step of a kind the var
 counts as outside any step even when a step requests it. It reports, for each test, how many calls
 crossed that boundary and how many of their results it altered, in all and by the kind of Gherkin
 step that made them, and how many of those altered results were None, as JUnit properties, and
-decides nothing.
+decides nothing. A function whose stub Lictor replaced (`stubs`, by file and line) isn't wrapped:
+what it returns is a constant of Lictor's, not code that already exists (ADR-0012).
 
 It runs in the same process as the code under test, which could see it and behave otherwise, as it
 could forge the whole report.
 """
 
+import datetime
 import functools
 import importlib.abc
 import importlib.machinery
@@ -24,7 +26,7 @@ import math
 import os
 import sys
 import types
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any, TypeGuard
@@ -119,6 +121,8 @@ def alter(value: Any, mode: str) -> Any:
         return _UNALTERED
     if isinstance(value, int | float | Fraction | Decimal):
         changed: Any = value + step
+    elif isinstance(value, datetime.date):  # a datetime too: a day more or less
+        changed = value + datetime.timedelta(days=step)
     elif type(value) in (str, bytes, list, tuple, dict, set, frozenset):
         changed = _longer(value) if mode == MORE else _shorter(value)
     else:
@@ -134,12 +138,19 @@ class _Impostor:
     """What one run of the acceptance was told: the mode, and where the boundary lies."""
 
     def __init__(
-        self, mode: str, writable: Sequence[str], driver: Sequence[str], steps: Sequence[str]
+        self,
+        mode: str,
+        writable: Sequence[str],
+        driver: Sequence[str],
+        steps: Sequence[str],
+        stubs: Mapping[str, Sequence[int]],
     ) -> None:
         self.mode = mode
         self.writable = [_real(root) for root in writable]
         self.driver = [_real(root) for root in driver]
         self.steps = frozenset(steps)
+        # The lines Lictor put in place of a stub, by file: no code that already exists.
+        self.stubs = {_real(path): frozenset(lines) for path, lines in stubs.items()}
         self.fixtures = 0  # how many fixtures are being set up right now
         self.reset()
 
@@ -164,7 +175,18 @@ class _Impostor:
     def wraps(self, path: str) -> bool:
         return _under(path, self.writable) and not _under(path, self.driver)
 
+    def is_stub(self, func: Callable[..., Any]) -> bool:
+        """Whether Lictor replaced this function's stub: what it returns proves nothing."""
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return False
+        lines = self.stubs.get(_real(code.co_filename), frozenset())
+        return any(line in lines for _, _, line in code.co_lines())
+
     def wrap(self, func: Callable[..., Any]) -> Callable[..., Any]:
+        if self.is_stub(func):
+            return func
+
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not _under(sys._getframe(1).f_code.co_filename, self.driver):
@@ -287,9 +309,13 @@ def _from_environment() -> _Impostor | None:
     if not told:
         return None
     data = json.loads(told)
-    # No default for `steps`: what Lictor doesn't say it alters, it mustn't be guessed here.
+    # No default for `steps` nor `stubs`: what Lictor doesn't say, it mustn't be guessed here.
     return _Impostor(
-        str(data["mode"]), list(data["writable"]), list(data["driver"]), list(data["steps"])
+        str(data["mode"]),
+        list(data["writable"]),
+        list(data["driver"]),
+        list(data["steps"]),
+        {str(path): list(lines) for path, lines in dict(data["stubs"]).items()},
     )
 
 

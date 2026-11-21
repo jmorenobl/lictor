@@ -304,19 +304,24 @@ def judge_red(
 
 
 @dataclass(frozen=True)
+class StubConstant:
+    """What a stub returns in one run of the stubs' impostors, and its name in what Lictor says.
+
+    A double answers what a test does with a result with another double; a plain constant is the
+    language's own value. The first constant of a profile is plain: a no-op, like `return None`.
+    """
+
+    code: str
+    name: str
+    double: bool = False
+
+
+@dataclass(frozen=True)
 class Impostors:
     """How to turn a stub into a constant: the profile knows its language's stubs."""
 
     pattern: str
-    replacements: tuple[str, ...]
-
-
-_GROUP_REFERENCE = re.compile(r"\\(?:\d+|g<\w+>)")
-
-
-def impostor_name(replacement: str) -> str:
-    """The code a replacement puts in place of a stub, without the groups it keeps: its name."""
-    return _GROUP_REFERENCE.sub("", replacement).strip() or replacement
+    replacements: tuple[StubConstant, ...]
 
 
 def impostor_source(text: str, pattern: str, replacement: str) -> tuple[str, int]:
@@ -330,6 +335,12 @@ def impostor_source(text: str, pattern: str, replacement: str) -> tuple[str, int
             lines[index] = regex.sub(replacement, body) + line[len(body) :]
             replaced += 1
     return "".join(lines), replaced
+
+
+def stub_lines(text: str, pattern: str) -> list[int]:
+    """The lines, counted from 1, that `impostor_source` replaces."""
+    regex = re.compile(pattern)
+    return [n for n, line in enumerate(text.splitlines(), start=1) if regex.fullmatch(line)]
 
 
 def impostor_problem(
@@ -347,11 +358,6 @@ def impostor_problem(
             "`raise NotImplementedError` en una sola línea"
         )
     return None
-
-
-def impostor_survivors(scenario_ids: Sequence[str], runs: Sequence[Mapping[str, str]]) -> list[str]:
-    """Return the scenarios whose test passed with every impostor: nothing it asserts can fail."""
-    return [sid for sid in scenario_ids if all(results.get(sid) == "passed" for results in runs)]
 
 
 def collateral_greens(

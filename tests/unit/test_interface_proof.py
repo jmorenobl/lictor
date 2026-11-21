@@ -451,8 +451,9 @@ def test_what_the_agent_reads_of_a_test_it_mustn_t_change_says_nothing_of_the_im
 def test_the_person_is_told_why_the_impostor_couldn_t_judge_them() -> None:
     assert unalterable_note(["PRE-004", "REN-001"]) == (
         "Lictor no pudo comprobar PRE-004, REN-001: lo que la interfaz les devuelve desde el "
-        "Cuando y el Entonces no es un número, un texto, una colección, un booleano ni una "
-        "excepción, o solo es el None de una orden. Lo que devuelve en los Dados no se altera."
+        "Cuando y el Entonces no es un número, un texto, una fecha, una colección, un booleano "
+        "ni una excepción, o solo es el None de una orden. Lo que devuelve en los Dados no se "
+        "altera."
     )
 
 

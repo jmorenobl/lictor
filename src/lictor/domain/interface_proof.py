@@ -23,7 +23,7 @@ IMPOSTOR_KIND = "impostor"  # the impostor raised its own error in place of the 
 # Given or a fixture gets stays real, so a check there proves nothing of the scenario's result.
 ALTERED_STEPS: tuple[Step, ...] = ("when", "then")
 CHECKING_STEP: Step = "then"  # the only step whose assertion proves the test checks the result
-_STEP_PLACE: Mapping[Step | None, str] = {
+STEP_PLACE: Mapping[Step | None, str] = {
     "given": "de un Dado",
     "when": "de un Cuando",
     "then": "de un Entonces",
@@ -151,17 +151,17 @@ def _failure_objection(
         return None
     if own:
         return InterfaceProof("fuera_del_entonces", _outside_the_then(mode, step, case.message))
-    said = _said(mode, case.message)
+    seen = said(f"modo {mode}", case.message)
     if kind == IMPOSTOR_KIND:
-        return InterfaceProof("no_aserta", f"el error del impostor {_STEP_PLACE[step]} {said}")
-    place = _place(case)
+        return InterfaceProof("no_aserta", f"el error del impostor {STEP_PLACE[step]} {seen}")
+    place = failure_place(case)
     if kind == ASSERTION_KIND:
-        return InterfaceProof("no_aserta", f"una aserción {place}, que no es del driver {said}")
+        return InterfaceProof("no_aserta", f"una aserción {place}, que no es del driver {seen}")
     what = kind or "un fallo sin clasificar"
-    return InterfaceProof("no_aserta", f"{what} {_STEP_PLACE[step]}, {place} {said}")
+    return InterfaceProof("no_aserta", f"{what} {STEP_PLACE[step]}, {place} {seen}")
 
 
-def _place(case: TestCaseResult) -> str:
+def failure_place(case: TestCaseResult) -> str:
     """Where a failure was raised: the test's own line when the project holds it."""
     if case.frame:
         line = case.frame_line
@@ -169,17 +169,17 @@ def _place(case: TestCaseResult) -> str:
     return f"en {case.origin}" if case.origin else "fuera del proyecto"
 
 
-def _said(mode: str, message: str | None) -> str:
-    """The mode a failure was seen in, and what it said, cut to one short line."""
-    said = " ".join((message or "").split())
-    if len(said) > _MESSAGE_LIMIT:
-        said = said[: _MESSAGE_LIMIT - 1] + "…"
-    return f"(modo {mode}" + (f": {said})" if said else ")")
+def said(where: str, message: str | None) -> str:
+    """Where a failure was seen (`modo mas`), and what it said, cut to one short line."""
+    text = " ".join((message or "").split())
+    if len(text) > _MESSAGE_LIMIT:
+        text = text[: _MESSAGE_LIMIT - 1] + "…"
+    return f"({where}" + (f": {text})" if text else ")")
 
 
 def _outside_the_then(mode: str, step: Step | None, message: str | None) -> str:
     """Where the test's own assertion failed, and what it said."""
-    return f"una aserción {_STEP_PLACE[step]} {_said(mode, message)}"
+    return f"una aserción {STEP_PLACE[step]} {said(f'modo {mode}', message)}"
 
 
 def interface_proofs(
@@ -246,12 +246,19 @@ _REASONS: Mapping[str, str] = {
 
 
 def unproved_reason(
-    sid: str, test_name: str, proof: InterfaceProof, writable: Sequence[str]
+    sid: str,
+    test_name: str,
+    proof: InterfaceProof,
+    writable: Sequence[str],
+    passes: str = "pasa con un driver nuevo",
 ) -> str:
-    """Say what the impostor saw of a test it couldn't prove, without claiming more."""
+    """Say what the impostor saw of a test it couldn't prove, without claiming more.
+
+    `passes` says when the test passed: with a fresh driver, or with the stubs not implemented.
+    """
     key = ONLY_FROM_A_GIVEN if proof.detail == ONLY_FROM_A_GIVEN else proof.outcome
     return _REASONS[key].format(
-        head=f"El test {test_name} del escenario {sid} pasa con un driver nuevo",
+        head=f"El test {test_name} del escenario {sid} {passes}",
         interface=", ".join(writable) or "el código del proyecto",
         detail=proof.detail,
     )
@@ -261,8 +268,9 @@ def unalterable_note(ids: Sequence[str]) -> str:
     """Why the impostor couldn't judge these, for the person who decides: never for the agent."""
     return (
         f"Lictor no pudo comprobar {', '.join(ids)}: lo que la interfaz les devuelve desde el "
-        "Cuando y el Entonces no es un número, un texto, una colección, un booleano ni una "
-        "excepción, o solo es el None de una orden. Lo que devuelve en los Dados no se altera."
+        "Cuando y el Entonces no es un número, un texto, una fecha, una colección, un booleano "
+        "ni una excepción, o solo es el None de una orden. Lo que devuelve en los Dados no se "
+        "altera."
     )
 
 

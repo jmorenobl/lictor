@@ -7,6 +7,45 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Los impostores de stubs exigen una aserción de un Entonces, con dos dobles que dejan llegar al test
+a ella (ADR-0012). El impostor de la interfaz altera fechas. Cambian veredictos y mensajes.
+
+### Al actualizar desde la 0.11.0
+
+- **Un run empezado con la 0.11.0 no se reanuda:** el perfil y sus plugins cambian y entran en la
+  huella. Empieza uno nuevo con `lictor run --new`.
+
+### Cambiado
+
+- **Un test pendiente nuevo se acepta solo si alguna constante le hace fallar una aserción del
+  driver en un Entonces.** Antes bastaba con que fallara de cualquier forma, y un test sin `assert`
+  que leía `.total` de lo que devolvía un stub se sellaba (falla con `None` por `AttributeError`).
+- **Dos dobles se añaden a `None` y `True`** (`python_uv/lictor_doubles.py`): a un atributo, un
+  índice, una llamada o una operación responden con otro doble, y no son iguales a nada. `ONE` es
+  verdadero y se itera una vez; `EMPTY` es falso y vacío. Son finitos: pasado cierto nivel, o
+  demasiadas operaciones en un test, lanzan su propio error. En 347 tests pendientes de 37 drivers
+  reales, sin ellos la regla nueva rechazaba 9 correctos; con ellos, ninguno.
+- **Un test que no depende de lo que devuelven los stubs lo juzga el impostor de la interfaz**,
+  sobre el árbol con los stubs en `return None` y sin envolverlos. Es el de una orden llamada desde
+  un Dado (F64), que antes rechazaba el driver con un mensaje que empujaba a comprobar tipos en los
+  Dados. Va también ahí un test que pasa con `None` y con `True`, que ningún doble distingue de
+  `r in (None, True)`. Si la interfaz no encuentra nada que alterar, se acepta y se anota
+  (`stub_unchecked` en `driver.sealed`, «Tests aceptados sin comprobar» en `report.md`).
+- **Los mensajes de rechazo nombran cada test** y dicen qué pasó: una aserción fuera del Entonces,
+  un valor con el que pasa, o el error que no le deja llegar a su aserción, con su paso y su línea.
+  Ninguno pide comprobaciones en los Dados.
+- **Formas correctas que ahora se rechazan, y se pueden reescribir:** convertir lo que devuelve la
+  interfaz a otro tipo (`Decimal()`, `asdict`, `json.dumps`, una expresión regular), `x not in r`
+  y desempaquetar el resultado. Al agotarse los intentos, el mensaje se lo dice a la persona.
+- **Una ejecución de una constante que se cae no cuenta**, en lugar de rechazar el driver. Si se
+  caen todas, sí lo rechaza.
+- **El impostor de la interfaz altera fechas**, un día más o menos (parte de F62). Un escenario
+  que ya se cumplía y cuyo Entonces compara una fecha deja de ir a la persona.
+- **`oracle.impostors.replacements`** pasa a una lista de `{code, name, double}`, y la variable del
+  impostor de la interfaz lleva `stubs`.
+- **`lictor.driver.measured.v1`**: la medida de cada stub lleva su desenlace, lo que dijo la
+  interfaz y el veredicto, en lugar de `rule_c`.
+
 ## [0.11.0] - 2026-11-20
 
 El impostor de la interfaz altera las colecciones con elementos de su forma y por el principio

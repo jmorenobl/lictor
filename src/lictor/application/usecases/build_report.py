@@ -9,7 +9,7 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
-from lictor.domain.driver_measures import DriverMeasures, measures_from_record
+from lictor.domain.driver_measures import DriverMeasures, StubMeasure, measures_from_record
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
@@ -37,6 +37,7 @@ from lictor.domain.results import (
     recorded_from_failed_run,
 )
 from lictor.domain.rules import describe_score, minimum_text
+from lictor.domain.stub_proof import unchecked_note
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -300,15 +301,35 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
             sorted(info["already_met"])
             or ["- *Ningún escenario nuevo que el código ya cumpliera.*"]
         ),
+        "",
+        "## Tests aceptados sin comprobar",
+        *(
+            [unchecked_note(info["stub_unchecked"])]
+            if info["stub_unchecked"]
+            else ["- *Ninguno: cada test pendiente del driver se comprobó.*"]
+        ),
     ]
 
 
 _MEASURES_NOTE = (
-    "*Lo que vio el rojo de cada driver nuevo, y lo que diría C de los impostores de stubs, que "
-    "aún no se aplica: alguna constante tiene que hacer fallar una aserción del driver en un "
-    "Entonces. C no decide nada; la columna «Interfaz» es lo que el impostor de la interfaz "
-    "probó.*"
+    "*Lo que vio el rojo de cada driver nuevo. «Con C» es lo que decidieron los impostores de "
+    "stubs (ADR-0012): alguna constante tiene que hacer fallar una aserción del driver en un "
+    "Entonces, y lo que no depende de los stubs lo juzga el impostor de la interfaz. La columna "
+    "«Interfaz» es lo que el impostor de la interfaz probó de lo que ya pasaba.*"
 )
+_STUB_WORDS = {
+    "probado": "aceptado",
+    "a_la_interfaz": "a la interfaz",
+    "fuera_del_entonces": "rechazado: aserción fuera del Entonces",
+    "sobrevive": "rechazado: pasa con una constante",
+    "no_aserta": "rechazado: falla sin una aserción del driver",
+    "no_concluyente": "rechazado: sin resultado",
+}
+_STUB_VERDICT_WORDS = {
+    "aceptado": "aceptado",
+    "sin_comprobar": "aceptado sin comprobar",
+    "rechazado": "rechazado",
+}
 _STEP_WORDS = {"given": "Dado", "when": "Cuando", "then": "Entonces"}
 _CAUGHT_WORDS = {
     "entonces": "aserción de un Entonces",
@@ -351,8 +372,8 @@ def _measure_totals(measures: DriverMeasures) -> list[str]:
     """How many scenarios fall in each answer of C and of the interface, to compare passes."""
     lines: list[str] = []
     if measures.stubs is not None:
-        by_c = Counter[str](m.rule_c for m in measures.stubs.values())
-        lines.append(f"- **Con C**: {_counted(by_c, _CAUGHT_WORDS)}")
+        by_c = Counter[str](m.verdict for m in measures.stubs.values())
+        lines.append(f"- **Con C**: {_counted(by_c, _STUB_VERDICT_WORDS)}")
     if measures.interface is not None:
         by_proof = Counter[str](m.outcome for m in measures.interface.values())
         lines.append(
@@ -375,7 +396,7 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
         if stub
         else "-"
     )
-    rule_c = _CAUGHT_WORDS[stub.rule_c] if stub else "-"
+    rule_c = _stub_text(stub) if stub else "-"
     found = (measures.interface or {}).get(sid)
     if found is None:
         return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - |"
@@ -388,6 +409,13 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
         f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.outcome}` | {failed or '-'} | "
         f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} |"
     )
+
+
+def _stub_text(stub: StubMeasure) -> str:
+    """What C decided of one test, and what the interface said of one that went to it."""
+    if stub.interface is None:
+        return _STUB_WORDS[stub.outcome]
+    return f"{_STUB_VERDICT_WORDS[stub.verdict]} (interfaz: `{stub.interface}`)"
 
 
 def _evidence_lines(info: Mapping[str, Any]) -> list[str]:
@@ -528,6 +556,7 @@ class BuildReport:
             "by_hand": [],
             "collateral": [],
             "already_met": [],
+            "stub_unchecked": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -648,6 +677,9 @@ class BuildReport:
         info["driver_seen"] = True
         info["driver"]["status"] = "sellado"
         info["driver"]["commit"] = str(ev.data.get("commit", "-"))
+        unchecked = ev.data.get("stub_unchecked")
+        if isinstance(unchecked, list) and unchecked:
+            info["stub_unchecked"] = [str(sid) for sid in unchecked]
 
     def _on_driver_checked(self, _: Event, info: dict[str, Any]) -> None:
         info["driver_seen"] = True

@@ -1078,6 +1078,16 @@ def test_report_lists_the_scenarios_the_code_already_met(tmp_path: Path) -> None
     assert "*Ningún escenario nuevo que el código ya cumpliera.*" in _report(tmp_path, [])
 
 
+def test_report_names_the_tests_the_stubs_accepted_unchecked(tmp_path: Path) -> None:
+    sealed = _event("lictor.driver.sealed.v1", {"commit": "d" * 40, "stub_unchecked": ["MUL-006"]})
+
+    report = _report(tmp_path, [sealed])
+
+    section = report.split("## Tests aceptados sin comprobar")[1].split("##")[0]
+    assert "Lictor aceptó MUL-006 sin comprobarlos" in section
+    assert "*Ninguno: cada test pendiente del driver se comprobó.*" in _report(tmp_path, [])
+
+
 def _measured(attempt: int, step: str, measures: DriverMeasures) -> Event:
     data: dict[str, object] = {"attempt": attempt, "step": step, **measures_record(measures)}
     return _event("lictor.driver.measured.v1", data)
@@ -1085,7 +1095,10 @@ def _measured(attempt: int, step: str, measures: DriverMeasures) -> Event:
 
 _MEASURES = DriverMeasures(
     red={"PRE-008": RedMeasure("then", "sin_implementar")},
-    stubs={"PRE-008": StubMeasure({"return None": "entonces", "return True": "no_aserta"})},
+    stubs={
+        "PRE-008": StubMeasure({"None": "entonces", "True": "no_aserta"}, "probado"),
+        "MUL-006": StubMeasure({"None": "pasa", "True": "pasa"}, "a_la_interfaz", "sin_alterar"),
+    },
     interface={
         "PRE-004": InterfaceMeasure(
             outcome="sin_alterar",
@@ -1109,7 +1122,7 @@ _MEASURES = DriverMeasures(
 )
 
 
-def test_report_shows_what_the_red_saw_and_c_would_say_of_each_driver_measured(
+def test_report_shows_what_the_red_saw_and_what_c_decided_of_each_driver_measured(
     tmp_path: Path,
 ) -> None:
     events = [
@@ -1120,10 +1133,10 @@ def test_report_shows_what_the_red_saw_and_c_would_say_of_each_driver_measured(
     report = _report(tmp_path, events)
 
     section = report.split("## Medidas del driver")[1].split("\n## ")[0]
-    assert "C no decide nada" in section
+    assert "ADR-0012" in section
     first, second = section.split("### Intento 2")
     assert "### Intento 1 (`.lictor/runs/run-1/driver/001-red`)" in first
-    assert "- **Con C**: 1 aserción de un Entonces" in first
+    assert "- **Con C**: 1 aceptado, 1 aceptado sin comprobar" in first
     assert "- **Interfaz**: 1 `fuera_del_entonces`, 1 `probado`, 1 `sin_alterar`" in first
     assert "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 |" in (
         first
@@ -1134,8 +1147,12 @@ def test_report_shows_what_the_red_saw_and_c_would_say_of_each_driver_measured(
         "un paso | 3 / 1 / 1 / 0 |" in first
     )
     assert (
-        "| PRE-008 | sin implementar (Entonces) | `return None`: aserción de un Entonces; "
-        "`return True`: falla sin una aserción del driver | aserción de un Entonces | - |" in first
+        "| PRE-008 | sin implementar (Entonces) | `None`: aserción de un Entonces; "
+        "`True`: falla sin una aserción del driver | aceptado | - |" in first
+    )
+    assert (
+        "| MUL-006 | - | `None`: pasa; `True`: pasa | aceptado sin comprobar (interfaz: "
+        "`sin_alterar`) | - |" in first
     )
     assert "- *Solo el rojo: ningún impostor corrió.*" in second
 

@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import date, datetime
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -33,6 +34,9 @@ from lictor.domain.model import StepCounts, TestCaseResult
 from lictor.domain.reports import JUnitReport
 
 CODE = """
+from datetime import date
+
+
 class ErrorDeCalculo(Exception):
     pass
 
@@ -66,6 +70,14 @@ def nada():
 
 def contar():
     yield 1
+
+
+def vence():
+    return date(2026, 12, 18)
+
+
+def sustituido():
+    return 5
 
 
 class Resultado:
@@ -121,6 +133,8 @@ from calc import (
     nada,
     nombre,
     resultado,
+    sustituido,
+    vence,
 )
 
 
@@ -216,6 +230,16 @@ def test_generador():
 
 def test_sin_llamar():
     assert 6 == 6
+
+
+def test_fecha():
+    import datetime
+
+    assert vence() == datetime.date(2026, 12, 18)
+
+
+def test_stub_sustituido():
+    assert sustituido() == 5
 """
 
 # What pytest-bdd does around a step, for each test of test_calc.py: one Then, the whole test.
@@ -313,6 +337,8 @@ EXPECTED = {
     "test_de_clase": "sin_alterar",
     "test_generador": "no_llama",
     "test_sin_llamar": "no_llama",
+    "test_fecha": "probado",
+    "test_stub_sustituido": "probado",
 }
 
 
@@ -323,6 +349,7 @@ def _told(project: Path, mode: str) -> dict[str, Any]:
         "writable": [str(project / "src")],
         "driver": [str(project / "tests" / "acceptance")],
         "steps": list(ALTERED_STEPS),
+        "stubs": {},
     }
 
 
@@ -458,18 +485,48 @@ def test_the_real_result_reaches_a_test_in_the_control(
     assert case.interface_by_step("calls") == StepCounts(then=1)
 
 
-def test_without_the_steps_to_alter_the_impostor_runs_no_test(
+def test_a_function_whose_stub_lictor_replaced_is_left_unwrapped(
     runs: dict[str | None, dict[str, TestCaseResult]], tmp_path: Path
 ) -> None:
-    """What Lictor doesn't say it alters isn't guessed: the run tells nothing, and proves none."""
+    """What a replaced stub returns is Lictor's constant: altering it would prove nothing."""
+    project = Path(runs["proyecto"][""].name)
+    source = project / "src" / "calc" / "__init__.py"
+    lines = source.read_text(encoding="utf-8").splitlines()
+    stub = lines.index("def sustituido():") + 2  # its body, counted from 1
+    results = {}
+    for mode in ("control", MORE, LESS):
+        told = {**_told(project, mode), "stubs": {str(source): [stub]}}
+        report = tmp_path / f"{mode}.xml"
+        _pytest(project, told, report)
+        read = JUnitReader().read(report)
+        assert isinstance(read, JUnitReport), read
+        results[mode] = {case.name: case for case in read.cases}
+
+    assert results["control"]["test_stub_sustituido"].interface_calls == 0
+    assert results[MORE]["test_stub_sustituido"].status == "passed"
+    assert results[MORE]["test_igual"].status == "failure"  # the rest is still wrapped
+    proofs = interface_proofs(
+        ["test_stub_sustituido"],
+        results["control"],
+        {MORE: results[MORE], LESS: results[LESS]},
+        ["tests/acceptance/"],
+    )
+    assert proofs["test_stub_sustituido"].outcome == "no_llama"
+
+
+@pytest.mark.parametrize("key", ["steps", "stubs"])
+def test_without_the_steps_to_alter_or_the_stubs_the_impostor_runs_no_test(
+    runs: dict[str | None, dict[str, TestCaseResult]], tmp_path: Path, key: str
+) -> None:
+    """What Lictor doesn't say isn't guessed: the run tells nothing, and proves none."""
     project = Path(runs["proyecto"][""].name)
     told = _told(project, MORE)
-    del told["steps"]
+    del told[key]
 
     done = _pytest(project, told, tmp_path / "out.xml")
 
     assert done.returncode != 0
-    assert b"KeyError: 'steps'" in done.stderr + done.stdout
+    assert f"KeyError: '{key}'".encode() in done.stderr + done.stdout
     assert not (tmp_path / "out.xml").exists()
 
 
@@ -497,6 +554,10 @@ def test_the_impostor_s_error_is_classified_by_its_class(
         (6.0, 7.0, 5.0),
         (Decimal("1.5"), Decimal("2.5"), Decimal("0.5")),
         (Fraction(1, 3), Fraction(4, 3), Fraction(-2, 3)),
+        # A date or a datetime, a day more or less (ADR-0012, part of F62).
+        (date(2026, 12, 18), date(2026, 12, 19), date(2026, 12, 17)),
+        (datetime(2026, 1, 1, 9), datetime(2026, 1, 2, 9), datetime(2025, 12, 31, 9)),
+        ([date(2026, 1, 1)], [date(2026, 1, 2), date(2026, 1, 1)], []),
         (True, False, False),
         (False, True, True),
         ("ab", "ab·", "a"),

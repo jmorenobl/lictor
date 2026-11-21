@@ -49,18 +49,25 @@ from lictor.domain.rules import (
     MapLink,
     RedOracle,
     RedVerdict,
+    StubConstant,
     condense_error,
     describe_suppressions,
-    impostor_name,
     impostor_problem,
     impostor_source,
-    impostor_survivors,
     judge_red,
     map_test_cases_to_scenarios,
     registration_subject,
     render_full_error,
+    stub_lines,
     suppression_matches,
     unmapped_cases,
+)
+from lictor.domain.stub_proof import (
+    STUB_LIMITS_NOTE,
+    StubProof,
+    stub_proof,
+    stub_reason,
+    stub_verdict,
 )
 from lictor.domain.verdicts import Crashed, Execution, report_cases, trust
 
@@ -144,12 +151,15 @@ class _Registration:
     collateral: tuple[str, ...] = ()
     new_pending: tuple[str, ...] = ()  # nothing has proved their tests yet
     pending_kinds: Mapping[str, str] = field(default_factory=dict)  # how each pending one failed
+    pending_names: Mapping[str, str] = field(default_factory=dict)  # the test of each, to name it
     # New, passing with a fresh driver: the impostor of the interface may prove them (ADR-0011).
     unproven: Mapping[str, TestCaseResult] = field(default_factory=dict)
     already_met: tuple[str, ...] = ()  # those it proved: the code already met them
     red_cases: tuple[TestCaseResult, ...] = ()  # every case of the red, for the full error
     red_output: str = ""
     stub_impostors: int | None = None  # stubs the impostors replaced; None if they didn't run
+    # Accepted without a proof: the interface found nothing it could alter (ADR-0012).
+    stub_unchecked: tuple[str, ...] = ()
     measures: DriverMeasures | None = None  # what the stricter rules would say; a fresh driver's
 
     @property
@@ -170,6 +180,15 @@ class _InterfaceRuns:
     proofs: dict[str, InterfaceProof]
     control: Mapping[str, TestCaseResult]  # empty when the run told nothing
     modes: Mapping[str, Mapping[str, TestCaseResult]]
+
+
+@dataclass(frozen=True)
+class _ToProve:
+    """What the impostor of the interface judges: these tests, over the stubs at a constant or,
+    without one, over the code as it is."""
+
+    scenario_ids: Sequence[str]
+    stubs_at: StubConstant | None = None
 
 
 # Each run of the stubs' impostors: the constant, and what it reported of each scenario.
@@ -289,11 +308,85 @@ class CheckRed:
         if not (request.driver_fresh and request.impostors and registration.new_pending):
             return None, registration
         rejection, stubs, runs = self._check_impostors(request, step_dir, rev, tree, registration)
+        if rejection is not None or not runs or request.impostors is None:
+            return rejection, replace(registration, stub_impostors=stubs)
+        judged = self._judge_stubs(request, step_dir, rev, registration, runs)
+        if isinstance(judged, _Rejection):
+            return judged, replace(registration, stub_impostors=stubs)
+        proofs, interface, unchecked = judged
         measures = registration.measures
-        if runs and measures is not None:
-            found = stub_measures(registration.new_pending, runs, request.oracle.driver)
+        if measures is not None:
+            found = stub_measures(
+                registration.new_pending, runs, request.oracle.driver, proofs, interface
+            )
             measures = replace(measures, stubs=found)
-        return rejection, replace(registration, stub_impostors=stubs, measures=measures)
+        registration = replace(
+            registration, stub_impostors=stubs, measures=measures, stub_unchecked=unchecked
+        )
+        return self._stub_rejection(request, registration, proofs, interface), registration
+
+    def _judge_stubs(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        registration: _Registration,
+        runs: _StubRuns,
+    ) -> tuple[dict[str, StubProof], dict[str, InterfaceProof], tuple[str, ...]] | _Rejection:
+        """Apply C to each new pending test, and send to the interface what doesn't depend on the
+        stubs: over the tree with the stubs at their first constant, leaving the stubs unwrapped."""
+        constants = request.impostors.replacements if request.impostors else ()
+        proofs = {
+            sid: stub_proof(
+                {name: cases.get(sid) for name, cases in runs}, constants, request.oracle.driver
+            )
+            for sid in registration.new_pending
+        }
+        to_interface = [sid for sid, p in proofs.items() if p.outcome == "a_la_interfaz"]
+        interface: dict[str, InterfaceProof] = {}
+        face = request.interface_impostor
+        if to_interface and face is not None:
+            ran = self._prove_interface(
+                request, step_dir, rev, face, _ToProve(to_interface, stubs_at=constants[0])
+            )
+            if isinstance(ran, _Rejection):
+                return ran
+            interface = ran.proofs
+        unchecked = tuple(
+            sid
+            for sid, proof in proofs.items()
+            if stub_verdict(proof, interface.get(sid)) == "sin_comprobar"
+        )
+        return proofs, interface, unchecked
+
+    def _stub_rejection(
+        self,
+        request: CheckRedRequest,
+        registration: _Registration,
+        proofs: Mapping[str, StubProof],
+        interface: Mapping[str, InterfaceProof],
+    ) -> _Rejection | None:
+        """Reject the driver for every test C rejected, each with what the agent can change."""
+        rejected = [
+            sid
+            for sid, proof in proofs.items()
+            if stub_verdict(proof, interface.get(sid)) == "rechazado"
+        ]
+        if not rejected:
+            return None
+        lines = [
+            stub_reason(
+                sid,
+                registration.pending_names.get(sid, sid),
+                proofs[sid],
+                interface.get(sid),
+                request.oracle.writable,
+            )
+            for sid in rejected
+        ]
+        if request.driver_attempts >= request.max_driver_attempts:
+            lines.append(STUB_LIMITS_NOTE)
+        return _Rejection("impostor", "\n".join(lines))
 
     def _interface_step(
         self,
@@ -309,7 +402,9 @@ class CheckRed:
         impostor = request.interface_impostor
         if not registration.unproven or impostor is None:
             return None, registration, None
-        ran = self._prove_interface(request, step_dir, rev, impostor, list(registration.unproven))
+        ran = self._prove_interface(
+            request, step_dir, rev, impostor, _ToProve(list(registration.unproven))
+        )
         if isinstance(ran, _Rejection):
             return ran, registration, None
         measures = registration.measures
@@ -446,6 +541,7 @@ class CheckRed:
             collateral=tuple(sid for sid in verdict.register if classes[sid] == "new"),
             new_pending=new_pending,
             pending_kinds={sid: mapped[sid].failure_kind for sid in new_pending},
+            pending_names={sid: mapped[sid].name for sid in new_pending},
             unproven={sid: mapped[sid] for sid in verdict.unproven},
             red_cases=tuple(cases),
             red_output=raw_output,
@@ -488,17 +584,18 @@ class CheckRed:
         impostors: Impostors,
         new_pending: Sequence[str],
     ) -> tuple[_Rejection | None, _StubRuns]:
-        """Run the acceptance with each constant in place of the stubs; some must fail each test.
+        """Run the acceptance with each constant in place of the stubs (ADR-0012).
 
-        Two opposite constants, because a legitimate test may pass with one of them. A run that
-        crashed, didn't map or kept a stub proves nothing, and doesn't count.
+        A run that crashed or didn't map tells nothing and counts for no test; if every one did,
+        the driver is rejected. A run that kept a stub is the driver's to fix, as before.
         """
         runs: _StubRuns = []
-        for index, replacement in enumerate(impostors.replacements, start=1):
+        problems: list[str] = []
+        for index, constant in enumerate(impostors.replacements, start=1):
             run_dir = step_dir / f"impostor-{index}"
             run_dir.mkdir()
             with verification_tree(self.vcs, rev, request.project_root) as clone:
-                self._impersonate(clone, request.oracle, impostors.pattern, replacement)
+                self._impersonate(clone, request.oracle, impostors.pattern, constant.code)
                 command, output, tampered = self._run_acceptance_suite(
                     request, run_dir / "acceptance.xml", clone
                 )
@@ -508,21 +605,20 @@ class CheckRed:
             env_problem = self.environment.ensure(request.run_id)
             if env_problem:
                 return _Rejection("L0-entorno", env_problem), runs
-            results, problem = self._impostor_results(request, run_dir, output)
-            if problem is not None:
-                reason = f"No se pudo construir el impostor {replacement!r}: {problem}"
+            results, problem, kept = self._impostor_results(request, run_dir, output)
+            if kept is not None:
+                reason = f"No se pudo construir el impostor {constant.name!r}: {kept}"
                 return _Rejection("impostor", reason, output=format_output(output)), runs
-            runs.append((impostor_name(replacement), results))
-        statuses = [{sid: str(case.status) for sid, case in run.items()} for _, run in runs]
-        survivors = impostor_survivors(list(new_pending), statuses)
-        if not survivors:
-            return None, runs
-        constants = ", ".join(repr(r) for r in impostors.replacements)
-        return _Rejection(
-            "impostor",
-            f"Los tests de {', '.join(survivors)} pasan aunque la interfaz devuelva siempre "
-            f"una constante ({constants}): ignoran el valor que devuelve la interfaz.",
-        ), runs
+            if problem is not None:
+                problems.append(f"con {constant.name}: {problem}")
+                continue
+            runs.append((constant.name, results))
+        if not runs:
+            reason = "Ninguna ejecución con los stubs sustituidos dio resultado: " + "; ".join(
+                problems
+            )
+            return _Rejection("impostor", reason), runs
+        return None, runs
 
     def _prove_or_reject(
         self,
@@ -573,19 +669,27 @@ class CheckRed:
         step_dir: Path,
         rev: str,
         impostor: InterfaceImpostor,
-        scenario_ids: Sequence[str],
+        judged: "_ToProve",
     ) -> _InterfaceRuns | _Rejection:
-        """Run the acceptance once per mode of the impostor, each in a clean clone of `rev`."""
+        """Run the acceptance once per mode of the impostor, each in a clean clone of `rev`.
+
+        With `stubs_at`, each clone has its stubs at that constant, and the impostor is told
+        their lines so that it leaves them unwrapped (ADR-0012).
+        """
+        scenario_ids, stubs_at = judged.scenario_ids, judged.stubs_at
+        prefix = "interfaz" if stubs_at is None else "stubs-interfaz"
         runs: dict[str, Mapping[str, TestCaseResult] | str] = {}
         for mode in (impostor.control, *impostor.modes):
-            run_dir = step_dir / f"interfaz-{mode}"
+            run_dir = step_dir / f"{prefix}-{mode}"
             run_dir.mkdir()
             with verification_tree(self.vcs, rev, request.project_root) as clone:
+                stubs = self._stubs_at(clone, request, stubs_at)
                 told = {
                     "mode": mode,
                     "writable": [str(clone / root.strip("/")) for root in request.oracle.writable],
                     "driver": [str(clone / root.strip("/")) for root in request.oracle.driver],
                     "steps": list(ALTERED_STEPS),
+                    "stubs": {str(clone / rel): lines for rel, lines in stubs.items()},
                 }
                 command, output, tampered = self._run_acceptance_suite(
                     request,
@@ -637,29 +741,47 @@ class CheckRed:
         Return how many lines matched; with no replacement, only count them.
         """
         total = 0
-        for root in oracle.writable:
-            for path in sorted((clone / root).rglob("*")):
-                rel = path.relative_to(clone).as_posix()
-                if not path.is_file() or path.is_symlink() or _inside(rel, oracle.driver):
-                    continue
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    continue
-                changed, count = impostor_source(text, pattern, replacement or "")
-                total += count
-                if count and replacement is not None:
-                    path.write_text(changed, encoding="utf-8")
+        for path, _ in _writable_files(clone, oracle):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            changed, count = impostor_source(text, pattern, replacement or "")
+            total += count
+            if count and replacement is not None:
+                path.write_text(changed, encoding="utf-8")
         return total
+
+    def _stubs_at(
+        self, clone: Path, request: CheckRedRequest, constant: StubConstant | None
+    ) -> dict[str, list[int]]:
+        """Put the stubs at `constant`, and say which lines they are, by path in the project."""
+        if constant is None or request.impostors is None:
+            return {}
+        pattern = request.impostors.pattern
+        found: dict[str, list[int]] = {}
+        for path, rel in _writable_files(clone, request.oracle):
+            try:
+                lines = stub_lines(path.read_text(encoding="utf-8"), pattern)
+            except UnicodeDecodeError:
+                continue
+            if lines:
+                found[rel] = lines
+        self._impersonate(clone, request.oracle, pattern, constant.code)
+        return found
 
     def _impostor_results(
         self, request: CheckRedRequest, run_dir: Path, output: CommandOutput
-    ) -> tuple[Mapping[str, TestCaseResult], str | None]:
+    ) -> tuple[Mapping[str, TestCaseResult], str | None, str | None]:
+        """What one run of a constant reported, why it tells nothing, and a stub it kept."""
         junit = self.reader.read(run_dir / "acceptance.xml")
         cases = report_cases(junit)
         execution = Execution.of(output, request.acceptance_timeout_s)
         trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
         crash = trusted.reason if isinstance(trusted, Crashed) else None
+        if crash is not None:
+            return {}, crash, None
+        kept = impostor_problem(None, None, cases)
         try:
             mapped = map_test_cases_to_scenarios(
                 cases,
@@ -668,9 +790,8 @@ class CheckRed:
                 request.scenario_files,
             )
         except DriverError as exc:
-            return {}, impostor_problem(crash, str(exc), cases)
-        problem = impostor_problem(crash, None, cases)
-        return mapped, problem
+            return {}, str(exc), kept
+        return mapped, None, kept
 
     def _run_acceptance_suite(
         self,
@@ -831,6 +952,7 @@ class CheckRed:
                 "commit": commit_sha,
                 "files": seal_data.get("files", {}),
                 "stub_impostors": registration.stub_impostors,
+                "stub_unchecked": list(registration.stub_unchecked),
                 "already_met": list(registration.already_met),
                 "evidence": step_evidence(step_dir, request.project_root),
             },
@@ -882,6 +1004,17 @@ def _respecified_reason(scenarios: Sequence[str]) -> str:
 
 def _scenario_str(sid: ScenarioId | str) -> str:
     return str(sid.value if isinstance(sid, ScenarioId) else sid)
+
+
+def _writable_files(tree: Path, oracle: RedOracle) -> list[tuple[Path, str]]:
+    """The files the agent may write, outside the driver, with their path in the project."""
+    found: list[tuple[Path, str]] = []
+    for root in oracle.writable:
+        for path in sorted((tree / root).rglob("*")):
+            rel = path.relative_to(tree).as_posix()
+            if path.is_file() and not path.is_symlink() and not _inside(rel, oracle.driver):
+                found.append((path, rel))
+    return found
 
 
 def _inside(path: str, roots: Sequence[str]) -> bool:
