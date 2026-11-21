@@ -80,9 +80,9 @@
       "pattern": "^(\\s*)raise NotImplementedError\\b.*$",
       "replacements": [
         {"code": "\\1return None", "name": "None"},
-        {"code": "\\1return True", "name": "True"},
-        {"code": "\\1return __import__(\"lictor_doubles\").ONE", "name": "un doble de Lictor", "double": true},
-        {"code": "\\1return __import__(\"lictor_doubles\").EMPTY", "name": "un doble vacío de Lictor", "double": true}
+        {"code": "\\1return __import__(\"lictor_doubles\").stub(\"True\")", "name": "True"},
+        {"code": "\\1return __import__(\"lictor_doubles\").stub(\"ONE\")", "name": "un doble de Lictor", "double": true},
+        {"code": "\\1return __import__(\"lictor_doubles\").stub(\"EMPTY\")", "name": "un doble vacío de Lictor", "double": true}
       ]
     },
     "interface_impostor": {"variable": "LICTOR_IMPOSTOR", "control": "control", "modes": ["mas", "menos"]}

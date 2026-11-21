@@ -6,6 +6,7 @@ su propio cambio, medido aparte») y de F64. Se midió antes de diseñarla, fuer
 drivers de todas las pasadas y dos tablas sintéticas. La revisó por su cuenta un revisor
 independiente, que ejecutó las medidas y un proyecto mínimo con pytest-bdd, y esta versión recoge
 sus hallazgos. Trae una enmienda pequeña de la ADR-0011: el impostor de la interfaz altera fechas.
+Enmendada el 2026-11-21 por F68: un stub en `__init__` devuelve None con cada constante.
 
 ## Contexto
 Con un driver nuevo, cada test pendiente se ejecuta una vez por constante en lugar de los stubs
@@ -137,8 +138,8 @@ débil que hoy se caza pasa a aceptarse.
 - **Coste:** de 2 a 4 ejecuciones de la aceptación por driver con stubs. Solo si algún test va a
   la vía, 3 más.
 - **Límites que siguen:**
-  - Un stub en un método especial (`__init__`, `__str__`, `__iter__`) no tiene constante que
-    valga.
+  - Un stub en un método especial (`__str__`, `__iter__`) no tiene constante que valga. El de
+    `__init__` sí, desde la enmienda de F68 (abajo).
   - El código bajo test puede ver el doble y portarse distinto, como con el centinela (`c6`).
 
 ## Revisión independiente (2026-11-20), comprobada
@@ -156,3 +157,28 @@ débil que hoy se caza pasa a aceptarse.
 | H9 · un rechazo sin arreglo agota los intentos sin salida | Razonado | Punto 7 |
 | H10 · la caída de una ejecución no estaba definida | Razonado | Punto 6 |
 | Alterar fechas lleva los dos MUL-006 a `probado` | Sí, con su plugin | Punto 4 |
+
+## Enmienda F68 (2026-11-21): un stub en `__init__`
+
+En la primera pasada de adopción (`pyverifactu`, fase 4a), el driver declaró una clase con
+`__init__` a `raise NotImplementedError`, construida en un Dado o un Cuando. Con `True` o un doble
+en su lugar, Python lanza `TypeError: __init__() should return None` al construir el objeto; con
+`None` el objeto se construye, pero el Entonces lee un atributo de lo que devuelve un método y falla
+por error. Ninguna constante llegaba al assert: los 8 tests salieron `fuera_del_entonces` y el driver
+se rechazó, fuera cual fuera el test. El segundo intento renunció a las clases (funciones sobre
+`object`, con `assert isinstance` en la implementación), y esa interfaz quedó sellada.
+
+**Decisión:** cada constante salvo la primera pasa por `lictor_doubles.stub(nombre)`, que mira desde
+qué función se la llama y devuelve None si es un `__init__`, el único valor que Python admite ahí.
+El objeto se construye sin atributos, y sus métodos, stubs también, devuelven la constante. La
+primera sigue siendo `return None`. El dominio no cambia: lo que es un constructor lo sabe el
+lenguaje, y la regla vive en el perfil.
+
+**Medido:** ninguno de los drivers de las pasadas anteriores (todos los proyectos de
+`~/sandbox/lictor-pasada`, todo su historial) tenía un stub en `__init__`, así que ningún veredicto
+de antes cambia. `test_lictor_doubles.py` aplica las constantes del perfil a una clase con stubs y
+`test_v0_14_1_init_stub.py` reproduce el driver de la pasada: sin la enmienda se rechaza dos veces;
+con ella se sella al primer intento.
+
+**Límite:** los otros métodos especiales siguen sin constante que valga.
+

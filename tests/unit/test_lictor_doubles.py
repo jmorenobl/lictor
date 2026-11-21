@@ -10,16 +10,19 @@ or of the rule.
 
 import copy
 import dataclasses
+import importlib.util
 import json
 import math
 import operator
 import re
+import sys
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,10 +36,14 @@ from lictor.adapters.config.profiles.python_uv.lictor_doubles import (
     LictorDoubleExhaustedError,
 )
 from lictor.domain.model import TestCaseResult
-from lictor.domain.rules import StubConstant
+from lictor.domain.rules import StubConstant, impostor_source
 from lictor.domain.stub_proof import stub_proof
 
 D = Decimal
+_PROFILE = Path(lictor_doubles.__file__).parent.parent / "python-uv.json"
+_PROFILE_IMPOSTORS: dict[str, Any] = json.loads(_PROFILE.read_text(encoding="utf-8"))["oracle"][
+    "impostors"
+]
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +112,52 @@ def _follow(steps: int) -> None:
 def _loop() -> None:
     while ONE.pendiente:
         pass
+
+
+def test_a_stub_returns_its_constant() -> None:
+    def interfaz() -> object:
+        return lictor_doubles.stub("ONE")
+
+    assert interfaz() is ONE
+    assert lictor_doubles.stub("EMPTY") is EMPTY
+    assert lictor_doubles.stub("True") is True
+
+
+_CLASS_STUB = """
+class Registro:
+    def __init__(self, nif: str) -> None:
+        raise NotImplementedError
+
+    def huella(self) -> str:
+        raise NotImplementedError
+"""
+
+
+@pytest.mark.parametrize("constant", _PROFILE_IMPOSTORS["replacements"], ids=lambda c: c["name"])
+def test_a_stub_in_an_init_returns_none_so_its_object_is_built(
+    constant: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With `return True` there, building the object raised TypeError before any Then (F68)."""
+    monkeypatch.setitem(sys.modules, "lictor_doubles", lictor_doubles)
+    source, replaced = impostor_source(_CLASS_STUB, _PROFILE_IMPOSTORS["pattern"], constant["code"])
+    assert replaced == 2
+    module = tmp_path / "registros.py"  # the stubs as an impostor's clone leaves them
+    module.write_text(source, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("registros", module)
+    assert spec is not None
+    assert spec.loader is not None
+    registros = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(registros)
+
+    registro = registros.Registro("89890001K")
+
+    expected = {"None": None, "True": True, "un doble de Lictor": ONE}
+    assert registro.huella() is expected.get(constant["name"], EMPTY)
+
+
+def test_an_unknown_constant_is_a_mistake_of_the_profile() -> None:
+    with pytest.raises(KeyError):
+        lictor_doubles.stub("ninguno")
 
 
 def test_a_chain_of_attributes_ends() -> None:
