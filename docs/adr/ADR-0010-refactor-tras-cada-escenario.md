@@ -89,6 +89,10 @@ oráculo.
    No hay un control de complejidad. Primero se mide si el prompt basta; si no, el siguiente paso
    es un control con puntuación y `min_score`, porque solo así `agent_measures` se lo dice al
    agente.
+   Enmienda de la 0.13.0 (ADR-0013, F60): el prompt no bastó, y el control no es de puntuación ni
+   de `min_score`, porque la complejidad es un máximo por función. Es un control `complexity` que
+   mide sin bloquear, nombra al refactor las funciones que su verde dejó por encima del límite y le
+   impide dejar más (`L0-regresión`).
 
 7. **Configuración: `"refactor": {"enabled": true}`** en `lictor.json`, activado por defecto.
    `lictor init` no lo escribe: el valor por defecto sale del modelo. Entra en
@@ -163,7 +167,8 @@ oráculo.
   `git log --grep Scenario:` sigue dando los verdes.
 - **Un refactor descartado no le cuesta nada al escenario,** solo la llamada.
 - **Nada protege de un refactor que empeore el código** y pase los controles. Para eso sería el
-  control con puntuación del punto 6.
+  control con puntuación del punto 6. Desde la ADR-0013, la complejidad por encima del límite sí:
+  un refactor no puede dejar más que su verde.
 
 ## Cómo se comprueba
 Se repite la pasada de la calculadora con las mismas entradas y se compara con la referencia de la

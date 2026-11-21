@@ -17,11 +17,17 @@ from pydantic import (
 )
 from pydantic.config import JsonDict
 
-from lictor.domain.controls import CommandControl, Control, ReaderControl, reader_problems
+from lictor.domain.controls import (
+    CommandControl,
+    Control,
+    ReaderControl,
+    complexity_limit_message,
+    reader_problems,
+)
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation", "coverage"]
+ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity"]
 ControlMode = Literal["block", "measure"]
 # When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
 ProfileStatus = Literal["stable", "beta", "alpha"]
@@ -343,6 +349,11 @@ def _check_min_score(control_id: str, report: str, min_score: float | None) -> N
         raise ValueError(msg)
 
 
+LIMIT_DESCRIPTION = (
+    "La complejidad ciclomática que ninguna función puede superar; solo, y siempre, con "
+    "report='complexity' (ADR-0013)."
+)
+
 AGENT_RUN_DESCRIPTION = (
     "La orden con la que el agente mide este control por su cuenta, tal como la ejecutaría: "
     "con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, "
@@ -369,6 +380,7 @@ class CommandControlConfig(BaseModel):
     # The lowest score that passes, in percent; only a mutation or a coverage report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
     agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
+    limit: int | None = Field(default=None, gt=0, description=LIMIT_DESCRIPTION)
 
     @model_validator(mode="before")
     @classmethod
@@ -382,6 +394,8 @@ class CommandControlConfig(BaseModel):
             msg = f"El control '{self.id}' con report='{self.report}' debe incluir '{{out}}' en run"
             raise ValueError(msg)
         _check_min_score(self.id, self.report, self.min_score)
+        if (self.report == "complexity") != (self.limit is not None):
+            raise ValueError(complexity_limit_message(self.id, self.report))
         return self
 
     @field_validator("when_exists")
@@ -503,6 +517,7 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
         when_plugin=control.when_plugin,
         min_score=control.min_score,
         agent_run=control.agent_run,
+        limit=control.limit,
     )
 
 
@@ -587,6 +602,7 @@ class ControlChange(BaseModel):
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
     agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
+    limit: int | None = Field(default=None, gt=0, description=LIMIT_DESCRIPTION)
 
     @model_validator(mode="before")
     @classmethod

@@ -18,7 +18,13 @@ from lictor.domain.model import (
     Scenario,
     TreeChange,
 )
-from lictor.domain.reports import CoverageReport, JUnitReport, MutationReport, ReportOf
+from lictor.domain.reports import (
+    ComplexityReport,
+    CoverageReport,
+    JUnitReport,
+    MutationReport,
+    ReportOf,
+)
 from lictor.domain.spec_rules import SpecProblem
 
 
@@ -260,6 +266,7 @@ class ReportReaders:
     junit: ReportReader[JUnitReport]
     coverage: ReportReader[CoverageReport]
     mutation: ReportReader[MutationReport]
+    complexity: ReportReader[ComplexityReport]
 
 
 @runtime_checkable

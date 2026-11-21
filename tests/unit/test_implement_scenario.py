@@ -11,7 +11,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
     ImplementScenarioResult,
 )
-from lictor.domain.controls import ReaderControl
+from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
     AgentResult,
@@ -672,3 +672,55 @@ def test_a_minimum_the_run_skips_is_not_told(tmp_path: Path) -> None:
     assert "puntuación mínima" not in prompt
     assert "tests --cov" not in prompt
     assert "{medidas}" not in prompt
+
+
+def _complexity(mode: ControlMode) -> CommandControl:
+    return CommandControl(
+        id="complexity",
+        level="L1",
+        run="medir {out}",
+        report="complexity",
+        mode=mode,
+        limit=10,
+        agent_run="uv run python {lictor_files}/medir.py src",
+    )
+
+
+def test_a_complexity_control_that_measures_is_not_the_implementers(tmp_path: Path) -> None:
+    """ADR-0013, point 4: blocking the implementer would repeat F55 for the refactor's work."""
+    tool = tmp_path / "medir.py"
+    tool.write_text("", encoding="utf-8")
+
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_complexity("measure")],
+        agent_files=[tool],
+        allowed_tools=["Bash(uv run python {lictor_files}/medir.py:*)"],
+    )
+
+    task = executor.run.call_args.args[0]
+    assert "complejidad" not in task.prompt
+    assert list(task.allowed_tools) == []
+
+
+def test_one_that_blocks_tells_the_implementer_its_limit_and_how_to_measure(
+    tmp_path: Path,
+) -> None:
+    tool = tmp_path / "medir.py"
+    tool.write_text("", encoding="utf-8")
+
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[_complexity("block")],
+        agent_files=[tool],
+        allowed_tools=["Bash(uv run python {lictor_files}/medir.py:*)"],
+    )
+
+    task = executor.run.call_args.args[0]
+    assert "ninguna función supere una complejidad ciclomática de 10. Mídela con `" in task.prompt
+    [rule] = task.allowed_tools
+    assert "{lictor_files}" not in rule
+    assert "Bash solo admite: tests, uv run python " in task.prompt

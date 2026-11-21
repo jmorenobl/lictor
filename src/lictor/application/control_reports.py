@@ -43,6 +43,7 @@ from lictor.domain.rules import plugin_skip_reason
 from lictor.domain.verdicts import (
     Execution,
     VerdictRule,
+    complexity_verdict,
     coverage_verdict,
     enforce_min_score,
     exit_code_verdict,
@@ -69,6 +70,11 @@ def read_and_judge(
         case "mutation":
             mutation = readers.mutation.read(report_path)
             return Judged(mutation, mutation_verdict(mutation, run))
+        case "complexity":
+            if rule.limit is None:  # a CommandControl can't be built so
+                raise InternalLictorError("Un control de complejidad sin límite")
+            complexity = readers.complexity.read(report_path)
+            return Judged(complexity, complexity_verdict(complexity, run, rule.limit))
         case _:
             assert_never(rule.report)
 

@@ -9,6 +9,7 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
+from lictor.domain.complexity import describe_over
 from lictor.domain.driver_measures import DriverMeasures, StubMeasure, measures_from_record
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
@@ -174,6 +175,14 @@ def _new_owner() -> dict[str, Any]:
         "collateral": False,
         "already_met": False,
     }
+
+
+def _judged_score(judged: RecordedJudged) -> str:
+    """What a judged control measured, as the report shows it beside its verdict."""
+    if judged.complexity is not None:
+        c = judged.complexity
+        return f", {describe_over(c.over, c.limit, c.peak)}"
+    return f", {describe_score(judged.score)}" if judged.score else ""
 
 
 @dataclass(frozen=True)
@@ -807,7 +816,7 @@ class BuildReport:
                 result, score = "manipuló el estado; sin veredicto", ""
             case RecordedExecuted(judgement=RecordedJudged() as judged):
                 result = "correcto" if judged.passed else "fallo"
-                score = f", {describe_score(judged.score)}" if judged.score else ""
+                score = _judged_score(judged)
                 if score:
                     info["scores"].append(f"- {where}: {result}{score}")
             case RecordedRead(reads=reads) as read:

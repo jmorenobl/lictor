@@ -6,12 +6,13 @@ A reader turns a file into one of these and decides nothing: the verdict is a ru
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal
 
 from lictor.domain.model import CoverageScore, MutationScore, TestCaseResult
 from lictor.domain.rules import coverage_score, mutation_score
 
-ReportFormat = Literal["exit-code", "junit", "coverage", "mutation"]
+ReportFormat = Literal["exit-code", "junit", "coverage", "mutation", "complexity"]
 
 
 @dataclass(frozen=True)
@@ -79,8 +80,27 @@ class MutationReport:
         return mutation_score(self.counts)
 
 
+@dataclass(frozen=True)
+class FunctionComplexity:
+    """One function and its complexity, where the code under test has it (ADR-0013)."""
+
+    file: str  # relative to the tree that was measured
+    function: str  # qualified by its class or its enclosing function: `Clase.metodo`
+    line: int
+    complexity: int
+
+
+@dataclass(frozen=True)
+class ComplexityReport:
+    """Every function the complexity command measured, with its value: facts, no limit."""
+
+    functions: tuple[FunctionComplexity, ...] = ()
+
+
 type ReportOf[R] = R | MissingReport | InvalidReport
-type Report = JUnitReport | CoverageReport | MutationReport | MissingReport | InvalidReport
+type Report = (
+    JUnitReport | CoverageReport | MutationReport | ComplexityReport | MissingReport | InvalidReport
+)
 
 _COVERAGE_TOTALS = ("covered_lines", "num_statements", "covered_branches", "num_branches")
 _COVERAGE_REQUIRED = ("covered_lines", "num_statements")
@@ -136,3 +156,48 @@ def mutation_report(data: object) -> MutationReport | InvalidReport:
     if summed > total:
         return InvalidReport(f"los mutantes por resultado ({summed}) son más que 'total' ({total})")
     return MutationReport(counts)
+
+
+def _function_complexity(index: int, raw: object) -> FunctionComplexity | InvalidReport:
+    if not isinstance(raw, dict):
+        return InvalidReport(f"la función {index} no es un objeto")
+    where = _function_place(index, raw)
+    if isinstance(where, InvalidReport):
+        return where
+    line, value = _count(raw.get("line")), _count(raw.get("complexity"))
+    if line is None or line < 1:
+        return InvalidReport(f"la línea de la función {index} no es válida: {raw.get('line')!r}")
+    if value is None or value < 1:
+        return InvalidReport(
+            f"la complejidad de la función {index} no es válida: {raw.get('complexity')!r}"
+        )
+    return FunctionComplexity(where[0], where[1], line, value)
+
+
+def _function_place(index: int, raw: dict[str, object]) -> tuple[str, str] | InvalidReport:
+    """The file and the name of a function, or why they can't be where the tree has code."""
+    file, name = raw.get("file"), raw.get("function")
+    if not isinstance(file, str) or not file or not isinstance(name, str) or not name:
+        return InvalidReport(f"la función {index} no tiene 'file' y 'function'")
+    path = PurePosixPath(file)
+    if path.is_absolute() or ".." in path.parts:
+        return InvalidReport(f"la función {index} está fuera del árbol medido: {file!r}")
+    return path.as_posix(), name
+
+
+def complexity_report(data: object) -> ComplexityReport | InvalidReport:
+    """The functions of a complexity export, or why they can't be what a real command measured.
+
+    Every function has at least one path, so a complexity below 1 is no measure; a file outside
+    the measured tree names code nobody verified.
+    """
+    functions = data.get("functions") if isinstance(data, dict) else None
+    if not isinstance(functions, list):
+        return InvalidReport("no tiene 'functions'")
+    found: list[FunctionComplexity] = []
+    for index, raw in enumerate(functions, start=1):
+        function = _function_complexity(index, raw)
+        if isinstance(function, InvalidReport):
+            return function
+        found.append(function)
+    return ComplexityReport(tuple(found))

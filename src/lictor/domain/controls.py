@@ -8,6 +8,7 @@ controls a reader may read, what command the read control runs, what `lictor che
 selection, and the steps a verification follows.
 """
 
+import shlex
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -46,11 +47,27 @@ class CommandControl:
     min_score: float | None = None
     # How the agent measures this control by itself: verification never runs it (F55).
     agent_run: str | None = None
+    # The complexity no function may exceed; only, and always, with a complexity report.
+    limit: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.report == "complexity") != (self.limit is not None):
+            raise ConfigError(complexity_limit_message(self.id, self.report))
 
     @property
     def verdict_rule(self) -> VerdictRule:
         """What of this control decides its verdict."""
-        return VerdictRule(self.report, self.timeout_s, self.empty_exit_codes)
+        return VerdictRule(self.report, self.timeout_s, self.empty_exit_codes, self.limit)
+
+
+def complexity_limit_message(control_id: str, report: str) -> str:
+    """What a control is told when `limit` and a complexity report don't come together."""
+    if report == "complexity":
+        return (
+            f"El control '{control_id}' con report='complexity' necesita limit: la complejidad "
+            "que ninguna función puede superar"
+        )
+    return f"El control '{control_id}' declara limit, que solo vale con report='complexity'"
 
 
 @dataclass(frozen=True)
@@ -127,11 +144,15 @@ def refactor_measures(
 
     A refactor must not measure less than its green, with or without a minimum, so every
     `agent_run` whose plugin the environment loads counts, not only those with a `min_score`.
+    A complexity control has its own lines (`refactor_complexity_text`): what it measures isn't
+    what is left untested.
     """
     return tuple(
         (control.id, control.agent_run)
         for control in controls
-        if control.agent_run and missing_plugin(control.when_plugin, installed) is None
+        if control.agent_run
+        and control.report != "complexity"
+        and missing_plugin(control.when_plugin, installed) is None
     )
 
 
@@ -467,3 +488,39 @@ def check_selection(
         acceptance,
         tuple(added[c.id] for c in controls if c.id in added),
     )
+
+
+# Where the files of the profile are copied for an agent call, outside the project and the copy
+# (ADR-0013): an `agent_run` and a rule of `agent_tools` may name it.
+AGENT_FILES = "{lictor_files}"
+
+
+def with_agent_files(text: str, files_dir: str) -> str:
+    """A command or a rule with the directory of the profile's files written in, quoted once."""
+    return text.replace(AGENT_FILES, shlex.quote(files_dir))
+
+
+def agent_tools_with_files(tools: Sequence[str], files_dir: str | None) -> tuple[str, ...]:
+    """The agent's rules for one call: a rule naming the profile's files only when they're there.
+
+    A call without the copy drops it: a rule for a path that doesn't exist allows nothing, and a
+    literal placeholder in a rule would say nothing to whoever reads the call.
+    """
+    if files_dir is None:
+        return tuple(tool for tool in tools if AGENT_FILES not in tool)
+    return tuple(with_agent_files(tool, files_dir) for tool in tools)
+
+
+def complexity_controls(controls: Sequence[Control]) -> tuple[CommandControl, ...]:
+    """The controls that measure complexity (ADR-0013), in the order they were declared."""
+    return tuple(c for c in command_controls(controls) if c.report == "complexity")
+
+
+def agent_command(control: Control, files_dir: str | None) -> str | None:
+    """A control's `agent_run` as the agent can run it in this call, or None if it can't."""
+    command = control.agent_run
+    if command is None:
+        return None
+    if AGENT_FILES in command:
+        return None if files_dir is None else with_agent_files(command, files_dir)
+    return command

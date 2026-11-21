@@ -23,7 +23,7 @@ from lictor.domain.errors import ConfigError, ExitCode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
-PROFILE_IDS = ["lint", "types", "unit", "coverage"]
+PROFILE_IDS = ["lint", "types", "unit", "coverage", "complexity"]
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -177,7 +177,7 @@ def test_the_stage_of_a_control_enters_the_fingerprint(tmp_path: Path) -> None:
 def test_enabled_false_drops_a_control_of_the_profile(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "types", "enabled": False}])
 
-    assert _ids(path) == ["lint", "unit", "coverage"]
+    assert _ids(path) == ["lint", "unit", "coverage", "complexity"]
 
 
 def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> None:
@@ -189,7 +189,7 @@ def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> No
 def test_an_added_control_goes_after_the_one_written_before_it(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "lint"}, {**ADDED, "id": "format"}, {"id": "unit"}])
 
-    assert _ids(path) == ["lint", "format", "types", "unit", "coverage"]
+    assert _ids(path) == ["lint", "format", "types", "unit", "coverage", "complexity"]
 
 
 def test_the_repository_resolves_its_controls_in_its_own_order() -> None:
@@ -247,3 +247,35 @@ def test_the_schema_describes_the_file_a_person_writes() -> None:
     control = defs["ControlChange"]
     assert control["required"] == ["id"]
     assert "enabled" in control["properties"]
+
+
+def test_the_complexity_limit_is_the_projects_by_id(tmp_path: Path) -> None:
+    """ADR-0013: the profile puts 10; a project writes another, as it writes a `min_score`."""
+    path = _with_controls(tmp_path, [{"id": "complexity", "limit": 15}])
+    (tmp_path / "b").mkdir()
+
+    [complexity] = [c for c in load_config(path).controls if c.id == "complexity"]
+
+    assert isinstance(complexity, CommandControlConfig)
+    assert (complexity.limit, complexity.mode) == (15, "measure")
+    assert _fingerprint(path) != _fingerprint(_with_controls(tmp_path / "b", []))
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"id": "complexity", "limit": None}, "necesita limit"),
+        ({"id": "complexity", "limit": 0}, "greater than 0"),
+        ({"id": "lint", "limit": 10}, "solo vale con report='complexity'"),
+        ({"id": "coverage", "limit": 10}, "solo vale con report=.complexity."),
+        (
+            {"id": "c", "level": "L1", "run": "medir {out}", "report": "complexity"},
+            "necesita limit",
+        ),
+    ],
+)
+def test_a_limit_goes_with_a_complexity_report_and_nothing_else(
+    tmp_path: Path, change: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ConfigError, match=message):
+        load_config(_with_controls(tmp_path, [change]))
