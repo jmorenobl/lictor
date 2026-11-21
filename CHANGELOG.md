@@ -7,6 +7,41 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Un control de complejidad que mide en cada verificación sin bloquear, dice al refactor qué
+funciones dejó su verde por encima del límite y le impide dejar más (ADR-0013, F60).
+
+### Al actualizar desde la 0.12.0
+
+- **Un run empezado con la 0.12.0 no se reanuda:** el perfil cambia (un control, un fichero en el
+  entorno de verificación, una regla de `agent_tools` y `refactor_hints`) y entra en la huella.
+  Empieza uno nuevo con `lictor run --new`.
+
+### Añadido
+
+- **Control `complexity` en `python-uv`** (L1, `measure`, `limit: 10`). Lo mide un módulo del
+  perfil, `lictor_complexity.py`, que lee `src` sin importarlo ni ejecutarlo: no hay dependencia
+  nueva y existe en todo proyecto. La definición es fija y está en `refactor_hints`: 1, más cada
+  `if`, `elif`, ternario, `for`, `while`, `except`, `case` (salvo un `case _` final), `for` o `if`
+  de una comprensión y operando de un `and`/`or` tras el primero; las funciones anidadas cuentan
+  aparte. Da lo mismo que radon y lizard en el código de las pasadas, y más que ruff `C901`, que no
+  cuenta `and`/`or` ni ternarios. `report: "complexity"` y `limit` (el máximo por función, que un
+  proyecto cambia por `id`) son nuevos en `lictor.json`.
+- **El refactor recibe las funciones que su verde dejó por encima del límite**, estén en el fichero
+  que estén, con su valor, o que no hay ninguna, y una orden para medirlo él
+  (`{lictor_files}`, una copia del módulo fuera del proyecto durante la llamada).
+- **`verify.finished` guarda `complexity`** (`limit`, `over`, `excess`, `peak`), y `report.md` y
+  `lictor check` lo dicen en una frase («1 función supera 10 (la peor, 12)»).
+
+### Cambiado
+
+- **Un refactor que deja más complejidad por encima del límite que su verde se descarta** en
+  `L0-regresión`: ni la suma de lo que superan el límite ni lo que lo supera la peor función pueden
+  subir. Mejorar sin llegar al límite se acepta.
+- **El prompt del refactor ya no dice «tienes un solo intento»:** dice qué descarta un refactor y
+  que un descarte no le cuesta nada al escenario. El motivo de `L0-regresión` pasa a «El refactor
+  deja peor que el verde lo que miden los controles».
+- **Con `mode: block`, el implementador recibe el límite y la orden para medirlo.**
+
 ## [0.12.0] - 2026-11-21
 
 Los impostores de stubs exigen una aserción de un Entonces, con dos dobles que dejan llegar al test

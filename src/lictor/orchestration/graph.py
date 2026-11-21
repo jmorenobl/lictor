@@ -64,6 +64,7 @@ from lictor.domain.errors import (
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.refactor import (
+    Measure,
     RefactorRecord,
     measures_from_record,
     measures_record,
@@ -228,11 +229,18 @@ class GraphContext:
     refactor_scenario: RefactorScenario | None = None
     commit_refactor: CommitRefactor | None = None
     refactor_hints: str = ""
+    # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
+    agent_files: Sequence[Path] = ()
 
     @property
     def refactor(self) -> bool:
         """Whether every implemented green goes through a refactor."""
         return self.refactor_scenario is not None and self.commit_refactor is not None
+
+
+def _baseline(state: GraphState) -> dict[str, Measure]:
+    """What the current green's verification measured, for its refactor to compare with."""
+    return measures_from_record(state.get("refactor_baseline") or {})
 
 
 # Each step is on disk before the next one starts. With the default, a background thread writes the
@@ -570,6 +578,7 @@ class _GraphNodes:
                     installed_plugins=(
                         self.ctx.environment.installed_plugins if self.ctx.environment else ()
                     ),
+                    agent_files=self.ctx.agent_files,
                 )
             )
         except SealTamperedError as exc:
@@ -755,6 +764,8 @@ class _GraphNodes:
                         self.ctx.environment.installed_plugins if self.ctx.environment else ()
                     ),
                     agent_failures=state.get("agent_failures", 0),
+                    baseline=_baseline(state),
+                    agent_files=self.ctx.agent_files,
                 )
             )
         except SealTamperedError as exc:
@@ -817,7 +828,7 @@ class _GraphNodes:
                 tree=state.get("attempt_tree"),
                 link=self.ctx.map_link,
                 refactor_of=state.get("refactor_of") or "",
-                baseline=measures_from_record(state.get("refactor_baseline") or {}),
+                baseline=_baseline(state),
             )
         )
         self._verified(state, current_id, "refactor", self._green_slot(state), res)

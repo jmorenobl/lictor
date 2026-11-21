@@ -18,6 +18,7 @@ from lictor.adapters.config.loader import (
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig, domain_controls
+from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
@@ -175,7 +176,10 @@ def bootstrap_runtime(
     vcs = GitCli(resolved_root, ignored=active_config.gitignore)
     runner = SubprocessRunner()
     readers = ReportReaders(
-        junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader()
+        junit=JUnitReader(),
+        coverage=CoverageReader(),
+        mutation=MutationReader(),
+        complexity=ComplexityReader(),
     )
     spec_source = GherkinSource()
 
@@ -347,6 +351,7 @@ def bootstrap_runtime(
             else None
         ),
         refactor_hints=defences.refactor_hints,
+        agent_files=tuple(defences.verification.files),
     )
 
     return BootstrapResult(

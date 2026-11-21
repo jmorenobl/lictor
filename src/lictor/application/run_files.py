@@ -228,6 +228,22 @@ def agent_workspace(vcs: Vcs, project_root: Path) -> Iterator[Path]:
         yield workspace
 
 
+@contextlib.contextmanager
+def agent_files_dir(project_root: Path, sources: Sequence[Path]) -> Iterator[Path | None]:
+    """Yield a copy of the profile's files for one agent call, outside the project and the copy.
+
+    The agent measures with them (ADR-0013) without reaching the verification environment, whose
+    path it never learns. None without files: then no rule or command names them.
+    """
+    if not sources:
+        yield None
+        return
+    with scratch_dir(project_root, "files-") as tmp:
+        for source in sources:
+            shutil.copyfile(source, tmp / source.name)
+        yield tmp
+
+
 def fill_report_paths(parts: Sequence[tuple[str, Path]]) -> list[str]:
     """Compose a command of its parts, by tokens, each `{out}` with the report of its own part.
 

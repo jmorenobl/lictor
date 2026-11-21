@@ -60,7 +60,14 @@ def test_bootstrap_runtime_with_existing_config(tmp_path: Path) -> None:
     assert res.executor is fake_exec
     assert res.graph_context.project_root == tmp_path
     assert res.graph_context.model == "claude-3-5-sonnet"
-    assert [c.id for c in res.graph_context.controls] == ["lint", "types", "unit", "coverage", "c1"]
+    assert [c.id for c in res.graph_context.controls] == [
+        "lint",
+        "types",
+        "unit",
+        "coverage",
+        "complexity",
+        "c1",
+    ]
 
 
 def test_bootstrap_hands_the_acceptance_failure_codes_to_the_graph(tmp_path: Path) -> None:
@@ -104,7 +111,7 @@ def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path:
     runtime = bootstrap_runtime(tmp_path)
 
     context = runtime.graph_context
-    assert [c.id for c in context.controls] == ["lint", "types", "audit"]
+    assert [c.id for c in context.controls] == ["lint", "types", "audit", "complexity"]
     assert [c.id for c in context.check_controls] == ["unit", "coverage", "mutation"]
     checks = runtime.preconditions
     assert "del control 'unit'" not in checks.commands

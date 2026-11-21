@@ -53,6 +53,8 @@ from lictor.bootstrap import (
     skill_content,
     unconfigured_preconditions,
 )
+from lictor.domain.complexity import describe_over, over_limit
+from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.errors import (
     CandidateError,
     ConfigError,
@@ -62,6 +64,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
+from lictor.domain.reports import ComplexityReport
 from lictor.domain.results import (
     ControlEntry,
     Executed,
@@ -480,20 +483,26 @@ def _check_lines(
         case NotExecuted(reason=reason):
             return [f"✗ {name}{stage}: {reason}"]
         case Executed() as executed:
-            return _executed_lines(name, stage, executed)
+            return _executed_lines(name, stage, executed, entry.control)
         case Read() as read:
             return _read_lines(name, stage, read, entries)
         case _:
             assert_never(entry.outcome)
 
 
-def _executed_lines(name: str, stage: str, executed: Executed) -> list[str]:
+def _executed_lines(
+    name: str, stage: str, executed: Executed, control: CommandControl | ReaderControl
+) -> list[str]:
     ran, judgement = executed.ran, executed.judgement
     took = f"({ran.execution.duration_ms}ms)"
     if isinstance(judgement, Unjudged):
         verdict_line = f"✗ {name}{stage} {took}: manipuló el estado; sin veredicto"
         return [verdict_line, f"  salida: {ran.log}"]
     score = f": {describe_score(judgement.score)}" if judgement.score else ""
+    limit = control.limit if isinstance(control, CommandControl) else None
+    if isinstance(judgement.report, ComplexityReport) and limit is not None:
+        over = over_limit(judgement.report, limit)
+        score = f": {describe_over(len(over.functions), limit, over.peak)}"
     if isinstance(judgement.verdict, Passed):
         return [f"✓ {name}{stage} {took}{score}"]
     return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]

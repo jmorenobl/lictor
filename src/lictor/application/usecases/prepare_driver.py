@@ -22,6 +22,7 @@ from lictor.application.usecases.agent_events import (
     tamper_event,
 )
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
+from lictor.domain.controls import agent_tools_with_files
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.rules import (
@@ -193,7 +194,8 @@ class PrepareDriver:
             prompt_sha=prompt_sha,
             cwd=request.project_root,
             model=request.model,
-            allowed_tools=request.allowed_tools,
+            # The driver measures nothing: a rule for the profile's files would allow nothing.
+            allowed_tools=agent_tools_with_files(request.allowed_tools, None),
             max_turns=request.max_turns,
             timeout_s=request.timeout_s,
             raw_path=raw_path,

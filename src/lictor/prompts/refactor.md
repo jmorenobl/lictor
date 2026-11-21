@@ -28,7 +28,11 @@ Reglas:
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
 {medidas}
 
+{complejidad}
+
 Contexto del proyecto: {hints}
 
-Si el código ya está bien, no cambies nada: dejarlo como está es un resultado válido. Tienes un
-solo intento; si no pasa la verificación, se descarta y el escenario sigue en verde.
+Si la verificación no pasa, Lictor descarta tu cambio y el escenario sigue en verde: un descarte no
+le cuesta nada al escenario. Se descarta un refactor que cambie el comportamiento, toque lo que no
+puedes tocar o deje más sin probar que el verde; quitar código probado no cuenta en contra. Si el
+código ya cumple los objetivos, dejarlo como está es un resultado válido.

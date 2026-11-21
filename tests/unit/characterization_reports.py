@@ -22,14 +22,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.application.control_reports import read_and_judge
 from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
+from lictor.domain.complexity import over_limit
 from lictor.domain.model import CommandOutput, CoverageScore, MutationScore, Score
-from lictor.domain.reports import ReportFormat
+from lictor.domain.reports import ComplexityReport, ReportFormat
 from lictor.domain.results import Judged
 from lictor.domain.verdicts import (
     Crashed,
@@ -44,7 +46,12 @@ from lictor.domain.verdicts import (
     trust,
 )
 
-READERS = ReportReaders(junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader())
+READERS = ReportReaders(
+    junit=JUnitReader(),
+    coverage=CoverageReader(),
+    mutation=MutationReader(),
+    complexity=ComplexityReader(),
+)
 
 RAISES = "raises"
 
@@ -74,7 +81,13 @@ def _seen(call: Callable[[], Judged]) -> Seen:
         return Seen(RAISES, type(exc).__name__)
     verdict = judged.verdict
     error = verdict.reason if isinstance(verdict, Failed) else None
-    return Seen(isinstance(verdict, Passed), error, len(judged.cases), _score(judged.score))
+    score = _score(judged.score)
+    if isinstance(judged.report, ComplexityReport):
+        over = over_limit(judged.report, COMPLEXITY_LIMIT)
+        score = (
+            f"complexity {len(over.functions)} sobre {COMPLEXITY_LIMIT}, {over.excess}/{over.peak}"
+        )
+    return Seen(isinstance(verdict, Passed), error, len(judged.cases), score)
 
 
 PASS1 = b'<testsuite><testcase name="a" classname="c"/></testsuite>'
@@ -213,8 +226,13 @@ def acceptance_of_the_red(report: Path, stdout: str, code: int) -> SeenRed:
 TIMEOUT_S = 600
 
 
+# The limit of every complexity row, as the profile declares it (ADR-0013).
+COMPLEXITY_LIMIT = 10
+
+
 def _rule(report_format: ReportFormat, empty: tuple[int, ...] = ()) -> VerdictRule:
-    return VerdictRule(report_format, TIMEOUT_S, empty)
+    limit = COMPLEXITY_LIMIT if report_format == "complexity" else None
+    return VerdictRule(report_format, TIMEOUT_S, empty, limit)
 
 
 def _ran(code: int) -> Execution:
@@ -301,6 +319,51 @@ def mutation_control(report: Path, code: int) -> Seen:
     return _seen(lambda: read_and_judge(READERS, _rule("mutation"), report, _output(code)))
 
 
+def _functions(*values: int) -> bytes:
+    functions = [
+        {"file": "src/p/m.py", "function": f"f{i}", "line": i, "complexity": v}
+        for i, v in enumerate(values, start=1)
+    ]
+    return json.dumps({"functions": functions}).encode()
+
+
+# New with ADR-0013: a complexity control reads every function and its value.
+COMPLEXITY_REPORTS: dict[str, bytes | str] = {
+    "ausente": ABSENT,
+    "directorio": DIRECTORY,
+    "vacío": b"",
+    "no es JSON": b"{x",
+    "lista JSON": b"[]",
+    "sin functions": b"{}",
+    "functions no es lista": b'{"functions": {}}',
+    "función que no es objeto": b'{"functions": [1]}',
+    "sin fichero": b'{"functions": [{"function": "f", "line": 1, "complexity": 1}]}',
+    "ruta absoluta": json.dumps(
+        {"functions": [{"file": "/x.py", "function": "f", "line": 1, "complexity": 1}]}
+    ).encode(),
+    "ruta que sale del árbol": json.dumps(
+        {"functions": [{"file": "../x.py", "function": "f", "line": 1, "complexity": 1}]}
+    ).encode(),
+    "línea 0": json.dumps(
+        {"functions": [{"file": "x.py", "function": "f", "line": 0, "complexity": 1}]}
+    ).encode(),
+    "complejidad 0": _functions(0),
+    "complejidad float": json.dumps(
+        {"functions": [{"file": "x.py", "function": "f", "line": 1, "complexity": 2.0}]}
+    ).encode(),
+    "UTF-8 con BOM": b"\xef\xbb\xbf" + _functions(1),
+    "bytes no UTF-8": b'{"functions": [], "x": "\xff"}',
+    "sin funciones": _functions(),
+    "todas en el límite": _functions(10, 3),
+    "una por encima": _functions(12, 3),
+    "tres por encima": _functions(14, 11, 11, 2),
+}
+
+
+def complexity_control(report: Path, code: int) -> Seen:
+    return _seen(lambda: read_and_judge(READERS, _rule("complexity"), report, _output(code)))
+
+
 def _coverage_score(percent: float | None) -> CoverageScore | None:
     if percent is None:
         return None
@@ -332,11 +395,18 @@ def min_score_case(label: str) -> Seen:
 # A command cut by its timeout, with a report it managed to leave (ADR-0009, change 10). These rows
 # are new: before that change a cut command was judged as its code -9, as in the other tables.
 _CUT = CommandOutput(returncode=-9, stdout="algo", stderr="", timed_out=True)
-TIMED_OUT_FORMATS: tuple[ReportFormat, ...] = ("exit-code", "junit", "coverage", "mutation")
+TIMED_OUT_FORMATS: tuple[ReportFormat, ...] = (
+    "exit-code",
+    "junit",
+    "coverage",
+    "mutation",
+    "complexity",
+)
 _LEFT_BEHIND: dict[ReportFormat, bytes] = {
     "junit": PASS1,
     "coverage": _coverage({"covered_lines": 1, "num_statements": 2}),
     "mutation": json.dumps({"killed": 1, "total": 2}).encode(),
+    "complexity": _functions(12),
 }
 
 

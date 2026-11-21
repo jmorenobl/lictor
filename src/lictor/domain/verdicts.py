@@ -8,8 +8,10 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import assert_never
 
+from lictor.domain.complexity import over_limit, over_limit_reason
 from lictor.domain.model import CommandOutput, CoverageScore, Score, TestCaseResult
 from lictor.domain.reports import (
+    ComplexityReport,
     CoverageReport,
     InvalidReport,
     JUnitReport,
@@ -67,12 +69,14 @@ class Execution:
 class VerdictRule:
     """What of a control decides its verdict: the format of its report, its timeout and its codes.
 
-    `empty_exit_codes` are the codes that mean a run with nothing to run, which may pass.
+    `empty_exit_codes` are the codes that mean a run with nothing to run, which may pass;
+    `limit`, the complexity no function may exceed, only with a complexity report (ADR-0013).
     """
 
     report: ReportFormat
     timeout_s: int
     empty_exit_codes: tuple[int, ...] = ()
+    limit: int | None = None
 
 
 def exit_code_verdict(
@@ -184,6 +188,30 @@ def mutation_verdict(report: ReportOf[MutationReport], execution: Execution) -> 
             if report.tried == 0:
                 return Failed("El informe de mutación no tiene mutantes probados")
             return Passed()
+        case _:
+            assert_never(report)
+
+
+def complexity_verdict(
+    report: ReportOf[ComplexityReport], execution: Execution, limit: int
+) -> Verdict:
+    """A complexity control: a report, a command that ended well, and no function above `limit`.
+
+    A file that can't be parsed fails the command and leaves no report, so it is never a pass.
+    """
+    if execution.timed_out:
+        return Failed(execution.cut_reason)
+    exit_code = execution.exit_code
+    match report:
+        case MissingReport():
+            return Failed(f"Sin informe de complejidad (código de salida {exit_code})")
+        case InvalidReport(reason=reason):
+            return Failed(f"El informe de complejidad no es válido: {reason}")
+        case ComplexityReport():
+            if exit_code != 0:
+                return Failed(f"El comando de complejidad falló con el código {exit_code}")
+            over = over_limit(report, limit)
+            return Failed(over_limit_reason(over)) if over.functions else Passed()
         case _:
             assert_never(report)
 

@@ -30,6 +30,7 @@ from lictor.adapters.config.models import (
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
+from lictor.domain.controls import complexity_limit_message
 from lictor.domain.errors import ConfigError
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.rules import Impostors, MapLink, StubConstant
@@ -340,7 +341,7 @@ def _merge_profile_defaults(
 
 
 # The fields of a run of its own, which a reader doesn't have (ADR-0008, point 2).
-RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists")
+RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit")
 
 
 def _resolve_controls(
@@ -487,6 +488,9 @@ def _check_reader_report(control_id: str, written: dict[str, object]) -> None:
 
 
 def _run_fields_message(control_id: str, run_fields: Sequence[str], reads: str) -> str:
+    if "limit" in run_fields:
+        # A limit is no field of a run: it only goes with a complexity report (ADR-0013).
+        return complexity_limit_message(control_id, "coverage")
     if len(run_fields) == 1:
         what = f"{run_fields[0]} es de una ejecución y no se aplicaría. Quítalo, o escríbelo"
     else:

@@ -12,9 +12,12 @@ from lictor.application.usecases.refactor_scenario import (
     RefactorScenarioRequest,
     RefactorScenarioResult,
 )
-from lictor.domain.controls import ReaderControl
+from lictor.domain.complexity import OverLimit
+from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
+from lictor.domain.refactor import Measure
+from lictor.domain.reports import FunctionComplexity
 
 SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
 
@@ -24,6 +27,8 @@ def _execute(
 ) -> tuple[RefactorScenarioResult, MagicMock, MagicMock, MagicMock]:
     executor = MagicMock(spec=Executor)
     executor.run.return_value = result
+    if (run := overrides.pop("run", None)) is not None:
+        executor.run.side_effect = run
     spec_source = MagicMock(spec=SpecSource)
     spec_source.scenario_text.return_value = SCENARIO_TEXT
     spec_source.verify_seal.return_value = overrides.pop("sealed", True)
@@ -132,3 +137,78 @@ def test_a_failed_backend_keeps_the_attempt_and_counts_the_failure(tmp_path: Pat
 def test_a_tampered_seal_stops_before_the_agent(tmp_path: Path) -> None:
     with pytest.raises(SealTamperedError):
         _execute(tmp_path, AgentResult(status="ok"), sealed=False)
+
+
+_COMPLEXITY = CommandControl(
+    id="complexity",
+    level="L1",
+    run="medir {out}",
+    report="complexity",
+    mode="measure",
+    limit=10,
+    agent_run="uv run python {lictor_files}/medir.py src",
+)
+_RULE = "Bash(uv run python {lictor_files}/medir.py:*)"
+
+
+def _over(*values: int) -> dict[str, Measure]:
+    functions = tuple(
+        FunctionComplexity("src/iva.py", f"f{i}", i, v) for i, v in enumerate(values, 1)
+    )
+    over = OverLimit(10, functions)
+    return {"complexity": Measure(misses=(("excess", over.excess), ("peak", over.peak)), over=over)}
+
+
+def test_the_refactor_hears_what_its_green_left_above_the_limit(tmp_path: Path) -> None:
+    """ADR-0013, point 6: the functions, wherever they are, and the command to measure them."""
+    tool = tmp_path / "perfil" / "medir.py"
+    tool.parent.mkdir()
+    tool.write_text("print('mide')\n", encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    def run(task: AgentTask) -> AgentResult:
+        [rule] = [t for t in task.allowed_tools if "medir.py" in t]
+        files = rule.removeprefix("Bash(uv run python ").removesuffix("/medir.py:*)")
+        seen["copy"] = (Path(files) / "medir.py").read_text(encoding="utf-8")
+        seen["outside"] = not Path(files).is_relative_to(tmp_path)
+        return AgentResult(status="ok")
+
+    _, executor, _, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_COMPLEXITY],
+        baseline=_over(12, 3),
+        agent_files=[tool],
+        allowed_tools=["Bash(pruebas:*)", _RULE],
+        run=run,
+    )
+
+    task = _task(executor)
+    assert "- src/iva.py:1 `f1`: 12" in task.prompt
+    assert "Complejidad, con un límite de 10 por función" in task.prompt
+    assert "{lictor_files}" not in task.prompt
+    command = next(line for line in task.prompt.splitlines() if line.startswith("Mídela tú"))
+    assert "/medir.py src`." in command
+    assert "Bash solo admite: pruebas, uv run python " in task.prompt
+    assert seen == {"copy": "print('mide')\n", "outside": True}
+
+
+def test_without_the_profiles_files_the_rule_and_the_command_go(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_COMPLEXITY],
+        baseline=_over(),
+        allowed_tools=["Bash(pruebas:*)", _RULE],
+    )
+
+    task = _task(executor)
+    assert list(task.allowed_tools) == ["Bash(pruebas:*)"]
+    assert "- Ninguna función supera el límite." in task.prompt
+    assert "Mídela tú" not in task.prompt
+
+
+def test_a_green_without_a_measure_of_complexity_says_nothing_of_it(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[_COMPLEXITY])
+
+    assert "Complejidad, con un límite" not in _task(executor).prompt

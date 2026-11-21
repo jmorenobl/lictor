@@ -708,6 +708,46 @@
 {"table": "mutation", "report": "más muertos que el total", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'killed' (9) es mayor que 'total' (3)", "cases": 0, "score": null}}
 {"table": "mutation", "report": "más omitidos que el total", "code": 0, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'skipped' (4) es mayor que 'total' (1)", "cases": 0, "score": null}}
 {"table": "mutation", "report": "más omitidos que el total", "code": 1, "expected": {"ok": false, "error": "El informe de mutación no es válido: 'skipped' (4) es mayor que 'total' (1)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ausente", "code": 0, "expected": {"ok": false, "error": "Sin informe de complejidad (código de salida 0)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ausente", "code": 2, "expected": {"ok": false, "error": "Sin informe de complejidad (código de salida 2)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "directorio", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: es un directorio", "cases": 0, "score": null}}
+{"table": "complexity", "report": "directorio", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: es un directorio", "cases": 0, "score": null}}
+{"table": "complexity", "report": "vacío", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Expecting value: line 1 column 1 (char 0)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "vacío", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Expecting value: line 1 column 1 (char 0)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "no es JSON", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "no es JSON", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "lista JSON", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "lista JSON", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "sin functions", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "sin functions", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "functions no es lista", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "functions no es lista", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no tiene 'functions'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "función que no es objeto", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 no es un objeto", "cases": 0, "score": null}}
+{"table": "complexity", "report": "función que no es objeto", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 no es un objeto", "cases": 0, "score": null}}
+{"table": "complexity", "report": "sin fichero", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 no tiene 'file' y 'function'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "sin fichero", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 no tiene 'file' y 'function'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ruta absoluta", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 está fuera del árbol medido: '/x.py'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ruta absoluta", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 está fuera del árbol medido: '/x.py'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ruta que sale del árbol", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 está fuera del árbol medido: '../x.py'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "ruta que sale del árbol", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la función 1 está fuera del árbol medido: '../x.py'", "cases": 0, "score": null}}
+{"table": "complexity", "report": "línea 0", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la línea de la función 1 no es válida: 0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "línea 0", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la línea de la función 1 no es válida: 0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "complejidad 0", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la complejidad de la función 1 no es válida: 0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "complejidad 0", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la complejidad de la función 1 no es válida: 0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "complejidad float", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la complejidad de la función 1 no es válida: 2.0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "complejidad float", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: la complejidad de la función 1 no es válida: 2.0", "cases": 0, "score": null}}
+{"table": "complexity", "report": "UTF-8 con BOM", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "UTF-8 con BOM", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es JSON: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)", "cases": 0, "score": null}}
+{"table": "complexity", "report": "bytes no UTF-8", "code": 0, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es UTF-8", "cases": 0, "score": null}}
+{"table": "complexity", "report": "bytes no UTF-8", "code": 2, "expected": {"ok": false, "error": "El informe de complejidad no es válido: no es UTF-8", "cases": 0, "score": null}}
+{"table": "complexity", "report": "sin funciones", "code": 0, "expected": {"ok": true, "error": null, "cases": 0, "score": "complexity 0 sobre 10, 0/0"}}
+{"table": "complexity", "report": "sin funciones", "code": 2, "expected": {"ok": false, "error": "El comando de complejidad falló con el código 2", "cases": 0, "score": "complexity 0 sobre 10, 0/0"}}
+{"table": "complexity", "report": "todas en el límite", "code": 0, "expected": {"ok": true, "error": null, "cases": 0, "score": "complexity 0 sobre 10, 0/0"}}
+{"table": "complexity", "report": "todas en el límite", "code": 2, "expected": {"ok": false, "error": "El comando de complejidad falló con el código 2", "cases": 0, "score": "complexity 0 sobre 10, 0/0"}}
+{"table": "complexity", "report": "una por encima", "code": 0, "expected": {"ok": false, "error": "Una función supera la complejidad de 10:\n- src/p/m.py:1 `f1`: 12", "cases": 0, "score": "complexity 1 sobre 10, 2/2"}}
+{"table": "complexity", "report": "una por encima", "code": 2, "expected": {"ok": false, "error": "El comando de complejidad falló con el código 2", "cases": 0, "score": "complexity 1 sobre 10, 2/2"}}
+{"table": "complexity", "report": "tres por encima", "code": 0, "expected": {"ok": false, "error": "3 funciones superan la complejidad de 10:\n- src/p/m.py:1 `f1`: 14\n- src/p/m.py:2 `f2`: 11\n- src/p/m.py:3 `f3`: 11", "cases": 0, "score": "complexity 3 sobre 10, 6/4"}}
+{"table": "complexity", "report": "tres por encima", "code": 2, "expected": {"ok": false, "error": "El comando de complejidad falló con el código 2", "cases": 0, "score": "complexity 3 sobre 10, 6/4"}}
 {"table": "min_score", "case": "pasó sin puntuación, sin mínimo", "expected": {"ok": true, "error": null, "cases": 0, "score": null}}
 {"table": "min_score", "case": "pasó sin puntuación, mínimo 90", "expected": {"ok": false, "error": "El control no midió nada y declara un mínimo de 90 %", "cases": 0, "score": null}}
 {"table": "min_score", "case": "pasó con 50, mínimo 90", "expected": {"ok": false, "error": "La cobertura, 50,0 % (5000 de 10000 líneas), no llega al mínimo de 90 %", "cases": 0, "score": "coverage 50.0"}}
@@ -721,4 +761,5 @@
 {"table": "timed_out", "site": "junit", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 1, "score": null}}
 {"table": "timed_out", "site": "coverage", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": "coverage 50.0"}}
 {"table": "timed_out", "site": "mutation", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": "mutation 50.0 (1 de 2)"}}
+{"table": "timed_out", "site": "complexity", "expected": {"ok": false, "error": "Se cortó a los 600 s, su tiempo límite", "cases": 0, "score": "complexity 1 sobre 10, 2/2"}}
 {"table": "timed_out", "site": "aceptación", "expected": {"cases": 1, "crash": "La suite se cortó a los 600 s, su tiempo límite: su informe no es fiable"}}

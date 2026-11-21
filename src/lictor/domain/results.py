@@ -15,9 +15,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Literal, assert_never
 
+from lictor.domain.complexity import over_limit
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.model import Candidate, Score, TestCaseResult
 from lictor.domain.reports import (
+    ComplexityReport,
     CoverageReport,
     InvalidReport,
     JUnitReport,
@@ -365,11 +367,22 @@ class RecordedRun:
 
 
 @dataclass(frozen=True)
+class RecordedComplexity:
+    """What the journal keeps of a complexity report: its limit and what is above it."""
+
+    limit: int
+    over: int  # functions above the limit
+    excess: int
+    peak: int
+
+
+@dataclass(frozen=True)
 class RecordedJudged:
     passed: bool
     reason: str | None
     score: Score | None
     cases: Mapping[str, int]
+    complexity: RecordedComplexity | None = None
 
 
 @dataclass(frozen=True)
@@ -440,6 +453,7 @@ def control_record(entry: ControlEntry) -> dict[str, object]:
                 "reason": verdict.reason if isinstance(verdict, Failed) else None,
                 "score": asdict(judged.score) if judged.score else None,
                 "cases": _case_counts(judged.cases),
+                **_complexity_record(entry.control, judged.report),
             }
         case Read(reads=reads, verdict=verdict) as read:
             return {
@@ -452,6 +466,34 @@ def control_record(entry: ControlEntry) -> dict[str, object]:
             }
         case _:
             assert_never(entry.outcome)
+
+
+def _complexity_record(
+    control: CommandControl | ReaderControl, report: Report | None
+) -> dict[str, object]:
+    if not isinstance(report, ComplexityReport) or not isinstance(control, CommandControl):
+        return {}
+    if control.limit is None:
+        return {}
+    over = over_limit(report, control.limit)
+    return {
+        "complexity": {
+            "limit": over.limit,
+            "over": len(over.functions),
+            "excess": over.excess,
+            "peak": over.peak,
+        }
+    }
+
+
+def _complexity_from(raw: object) -> RecordedComplexity | None:
+    if not isinstance(raw, dict):
+        return None
+    limit, over = _int(raw, "limit"), _int(raw, "over")
+    excess, peak = _int(raw, "excess"), _int(raw, "peak")
+    if limit is None or over is None or excess is None or peak is None:
+        return None
+    return RecordedComplexity(limit, over, excess, peak)
 
 
 def acceptance_record(acceptance: AcceptanceRun | None) -> dict[str, object] | None:
@@ -553,11 +595,23 @@ def _judgement_from(raw: Mapping[str, object]) -> RecordedJudged | RecordedUnjud
     was_passed, cases = raw.get("passed"), _counts(raw.get("cases"))
     if not isinstance(was_passed, bool) or cases is None:
         return None
-    score_raw = raw.get("score")
-    score = score_from_record(score_raw) if score_raw is not None else None
-    if score_raw is not None and score is None:
+    measured = _measured_from(raw)
+    if measured is None:
         return None
-    return RecordedJudged(was_passed, _text(raw, "reason"), score, cases)
+    score, complexity = measured
+    return RecordedJudged(was_passed, _text(raw, "reason"), score, cases, complexity)
+
+
+def _measured_from(
+    raw: Mapping[str, object],
+) -> tuple[Score | None, RecordedComplexity | None] | None:
+    """The score and the complexity a judged record keeps; None if one is there and unreadable."""
+    score_raw, complexity_raw = raw.get("score"), raw.get("complexity")
+    score = score_from_record(score_raw) if score_raw is not None else None
+    complexity = _complexity_from(complexity_raw)
+    if (score_raw is None) != (score is None) or (complexity_raw is None) != (complexity is None):
+        return None
+    return score, complexity
 
 
 def recorded_from_failed_run(read: RecordedRead, recorded: Mapping[str, RecordedControl]) -> bool:

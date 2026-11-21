@@ -2,18 +2,21 @@
 
 A refactor changes no behaviour, so what the oracle measured when the scenario turned green must
 not go down: no JUnit control may pass fewer cases, and no scored control may leave more untested
-than it did (lines and branches not covered, mutants not killed). Without that, a refactor could
-delete the agent's unit tests and pass: a control that runs no case may pass, and a coverage that
-only measures doesn't block. The percentage is no guard: removing covered code lowers it while
-leaving untested exactly what was (F61), and that is the simplification a refactor is for.
+than it did (lines and branches not covered, mutants not killed), and no complexity control may
+leave more above its limit (ADR-0013). Without that, a refactor could delete the agent's unit
+tests and pass: a control that runs no case may pass, and a coverage that only measures doesn't
+block. The percentage is no guard: removing covered code lowers it while leaving untested exactly
+what was (F61), and that is the simplification a refactor is for.
 """
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from lictor.domain.complexity import OverLimit, over_limit
+from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.model import AgentSignal, AgentStatus, CoverageScore, Score
-from lictor.domain.reports import JUnitReport
+from lictor.domain.reports import ComplexityReport, FunctionComplexity, JUnitReport
 from lictor.domain.results import ControlEntry, Executed, Judged, Read
 
 RefactorOutcome = Literal["applied", "discarded", "unchanged"]
@@ -51,21 +54,34 @@ def refactor_subject(scenario_id: str) -> str:
     return f"refactor({scenario_id}): mejorar el código sin cambiar el comportamiento"
 
 
-# What a score leaves untested, by kind: the checkpoint keeps the kind, a message its words.
-MissKind = Literal["lines", "branches", "mutants"]
+# What a control leaves undone, by kind: what a score leaves untested, or what a complexity
+# report leaves above its limit. The checkpoint keeps the kind, a message its words.
+MissKind = Literal["lines", "branches", "mutants", "excess", "peak"]
 _MISS_WORDS: Final[Mapping[MissKind, str]] = {
     "lines": "líneas sin cubrir",
     "branches": "ramas sin cubrir",
     "mutants": "mutantes sin matar",
+    "excess": "complejidad por encima del límite, sumada",
+    "peak": "complejidad por encima del límite en la peor función",
 }
 
 
 @dataclass(frozen=True)
 class Measure:
-    """What one control measured: cases that passed, and what its score left untested."""
+    """What one control measured: cases that passed, and what it left undone.
+
+    A complexity control also keeps which functions were above its limit, which the refactor's
+    prompt names (ADR-0013).
+    """
 
     passed: int | None = None
     misses: tuple[tuple[MissKind, int], ...] | None = None
+    over: OverLimit | None = None
+
+
+def complexity_misses(over: OverLimit) -> tuple[tuple[MissKind, int], ...]:
+    """What a complexity report leaves above its limit: two counts a refactor may not raise."""
+    return (("excess", over.excess), ("peak", over.peak))
 
 
 def score_misses(score: Score) -> tuple[tuple[MissKind, int], ...]:
@@ -96,6 +112,13 @@ def _measure_of(entry: ControlEntry) -> Measure | None:
     if not isinstance(outcome, Executed) or not isinstance(outcome.judgement, Judged):
         return None
     judged = outcome.judgement
+    if isinstance(judged.report, ComplexityReport):
+        return _complexity_measure(entry.control, judged.report)
+    return _judged_measure(judged)
+
+
+def _judged_measure(judged: Judged) -> Measure | None:
+    """The cases a JUnit report passed and what a score left untested, if either is there."""
     passed = (
         sum(1 for case in judged.cases if case.status == "passed")
         if isinstance(judged.report, JUnitReport)
@@ -107,20 +130,68 @@ def _measure_of(entry: ControlEntry) -> Measure | None:
     return Measure(passed=passed, misses=misses)
 
 
+def _complexity_measure(
+    control: CommandControl | ReaderControl, report: ComplexityReport
+) -> Measure | None:
+    """What a complexity report leaves above its control's limit, and which functions."""
+    if not isinstance(control, CommandControl) or control.limit is None:
+        return None
+    over = over_limit(report, control.limit)
+    return Measure(misses=complexity_misses(over), over=over)
+
+
 def measures_record(measures: Mapping[str, Measure]) -> dict[str, dict[str, object]]:
     """The measures as the checkpoint keeps them."""
     return {
-        cid: {"passed": m.passed, "misses": None if m.misses is None else dict(m.misses)}
+        cid: {
+            "passed": m.passed,
+            "misses": None if m.misses is None else dict(m.misses),
+            **({} if m.over is None else {"over": _over_record(m.over)}),
+        }
         for cid, m in measures.items()
+    }
+
+
+def _over_record(over: OverLimit) -> dict[str, object]:
+    return {
+        "limit": over.limit,
+        "functions": [
+            {"file": f.file, "function": f.function, "line": f.line, "complexity": f.complexity}
+            for f in over.functions
+        ],
     }
 
 
 def measures_from_record(record: Mapping[str, Mapping[str, object]]) -> dict[str, Measure]:
     """Read back what `measures_record` wrote; a field of another type counts as absent."""
     return {
-        cid: Measure(passed=_int_or_none(fields.get("passed")), misses=_misses_or_none(fields))
+        cid: Measure(
+            passed=_int_or_none(fields.get("passed")),
+            misses=_misses_or_none(fields),
+            over=_over_or_none(fields.get("over")),
+        )
         for cid, fields in record.items()
     }
+
+
+def _over_or_none(value: object) -> OverLimit | None:
+    if not isinstance(value, Mapping):
+        return None
+    limit, raw = _int_or_none(value.get("limit")), value.get("functions")
+    if limit is None or not isinstance(raw, list):
+        return None
+    functions: list[FunctionComplexity] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return None
+        file, name = item.get("file"), item.get("function")
+        line, complexity = _int_or_none(item.get("line")), _int_or_none(item.get("complexity"))
+        if not isinstance(file, str) or not isinstance(name, str):
+            return None
+        if line is None or complexity is None:
+            return None
+        functions.append(FunctionComplexity(file, name, line, complexity))
+    return OverLimit(limit, tuple(functions))
 
 
 def _int_or_none(value: object) -> int | None:
@@ -159,7 +230,7 @@ def _more_untested(
     after: tuple[tuple[MissKind, int], ...] | None,
 ) -> list[str]:
     if after is None:
-        return [f"{cid}: sin puntuación, y en el verde la tenía"]
+        return [f"{cid}: sin medida, y en el verde la tenía"]
     now = dict(after)
     found: list[str] = []
     for kind, count in before:
@@ -172,8 +243,8 @@ def _more_untested(
 
 
 def regression_reason(regressions: Sequence[str]) -> str:
-    """The reason of a refactor that measures less than its green."""
-    return "El refactor deja sin probar más de lo que dejaba el verde:\n" + "\n".join(
+    """The reason of a refactor that measures worse than its green."""
+    return "El refactor deja peor que el verde lo que miden los controles:\n" + "\n".join(
         f"- {line}" for line in regressions
     )
 

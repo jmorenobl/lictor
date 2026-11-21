@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
@@ -14,7 +15,12 @@ from lictor.domain.model import CommandOutput
 
 
 def all_readers() -> ReportReaders:
-    return ReportReaders(junit=JUnitReader(), coverage=CoverageReader(), mutation=MutationReader())
+    return ReportReaders(
+        junit=JUnitReader(),
+        coverage=CoverageReader(),
+        mutation=MutationReader(),
+        complexity=ComplexityReader(),
+    )
 
 
 def coverage_json(covered: int, statements: int) -> str:

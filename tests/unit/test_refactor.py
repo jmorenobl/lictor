@@ -185,9 +185,7 @@ def test_deleting_the_unit_tests_leaves_everything_uncovered() -> None:
 
 def test_no_score_at_all_or_a_kind_it_no_longer_counts_is_a_regression() -> None:
     baseline = {"coverage": Measure(misses=_COVERED)}
-    assert refactor_regressions(baseline, {}) == [
-        "coverage: sin puntuación, y en el verde la tenía"
-    ]
+    assert refactor_regressions(baseline, {}) == ["coverage: sin medida, y en el verde la tenía"]
     assert refactor_regressions(baseline, {"coverage": Measure(misses=(("lines", 2),))}) == [
         "coverage: no cuenta ramas sin cubrir, y en el verde sí"
     ]
@@ -215,7 +213,7 @@ def test_a_control_gone_counts_as_zero_cases() -> None:
 
 def test_the_reason_lists_each_regression() -> None:
     assert regression_reason(["a", "b"]) == (
-        "El refactor deja sin probar más de lo que dejaba el verde:\n- a\n- b"
+        "El refactor deja peor que el verde lo que miden los controles:\n- a\n- b"
     )
 
 
