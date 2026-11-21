@@ -1177,3 +1177,23 @@ def test_report_keeps_each_red_check_of_one_attempt_and_skips_what_doesn_t_follo
 
     assert report.count("### Intento 1") == 2
     assert "### Intento 3" not in report
+
+
+def test_report_shows_how_much_code_is_repeated(tmp_path: Path) -> None:
+    """ADR-0014: the measure of duplication, in one phrase beside its result."""
+    controls: dict[str, object] = {
+        "duplication": _executed(
+            mode="measure",
+            passed=False,
+            output="r/d.log",
+            duplication={"clones": 2, "in_clones": 250, "code_tokens": 1800},
+        ),
+    }
+
+    report = _report(tmp_path, [_verify_event(controls)])
+
+    section = report.split("## Puntuaciones")[1].split("##")[0]
+    assert (
+        "**duplication** (IVA-001, intento 1): fallo, 2 clones, 250 de 1800 tokens en clones"
+        in (section)
+    )

@@ -27,7 +27,7 @@ from lictor.domain.controls import (
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity"]
+ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity", "duplication"]
 ControlMode = Literal["block", "measure"]
 # When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
 ProfileStatus = Literal["stable", "beta", "alpha"]

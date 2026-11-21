@@ -3,7 +3,13 @@
 from lictor.application.usecases.check_project import CheckProjectResult
 from lictor.cli import _check_lines, _check_output
 from lictor.domain.controls import Added, CommandControl, ReaderControl
-from lictor.domain.reports import CoverageReport, JUnitReport, MissingReport
+from lictor.domain.reports import (
+    CodeFile,
+    CoverageReport,
+    DuplicationReport,
+    JUnitReport,
+    MissingReport,
+)
 from lictor.domain.results import (
     CommandEntry,
     ControlEntry,
@@ -68,3 +74,12 @@ def test_check_says_what_it_added_and_marks_what_ran_with_a_check_readers_argume
         "✓ unit (con los argumentos de coverage, que solo corre en check) (7ms)",
         "✓ coverage (solo en check) lee unit: 75,0 % (3 de 4 líneas)",
     ]
+
+
+def test_check_says_how_much_code_is_repeated() -> None:
+    """ADR-0014: `check` shows the measure of duplication beside its result."""
+    control = CommandControl("duplication", "L1", "medir {out}", "duplication", mode="measure")
+    report = DuplicationReport(50, (CodeFile("src/a.py", 900),))
+    entry = CommandEntry(control, Executed(_RAN, Judged(report, Passed())))
+
+    assert _check_lines("duplication", "", entry, [entry]) == ["✓ duplication (7ms): ningún clon"]

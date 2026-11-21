@@ -7,8 +7,38 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+Un control de duplicación que mide en cada verificación sin bloquear, dice al refactor qué clones
+dejó su verde y le impide dejar más código repetido (ADR-0014, F65). En tres pasadas de la calculadora acaba
+sin ningún clon, y los dos que aparecieron los quitó el refactor a la primera.
+
+### Al actualizar desde la 0.13.0
+
+- **Un run empezado con la 0.13.0 no se reanuda:** el perfil cambia (un control, un fichero en el
+  entorno de verificación, una regla de `agent_tools` y `refactor_hints`) y entra en la huella.
+  Empieza uno nuevo con `lictor run --new`.
+
+### Añadido
+
+- **Control `duplication` en `python-uv`** (L1, `measure`). Lo mide un módulo del perfil,
+  `lictor_duplication.py`, que lee `src` sin importarlo ni ejecutarlo y vale con Python 3.9 o
+  posterior: no hay dependencia nueva. Un clon es un trozo de 50 tokens o más que se repite en dos
+  sitios, con los nombres y los literales cambiados de forma coherente dentro de cada función; no
+  cuentan los comentarios, el formato, las importaciones, las firmas, los docstrings ni las tablas
+  (entradas de un `dict`, listas de campos o de argumentos). `report: "duplication"` es nuevo en
+  `lictor.json`.
+- **El refactor recibe los clones que dejó su verde**, estén en el fichero que estén, primero los de
+  los ficheros que cambió el escenario, con los tokens en clones que no puede superar, o que no hay
+  ninguno, y una orden para medirlo él.
+- **`verify.finished` guarda `duplication`** (`clones`, `in_clones`, `code_tokens`), y `report.md`
+  y `lictor check` lo dicen en una frase («2 clones, 250 de 1800 tokens en clones»).
+
 ### Cambiado
 
+- **Un refactor que deja más tokens en clones que su verde se descarta** en `L0-regresión`. Ni el
+  formato ni cambiar el nombre de una variable dentro de una función mueven el número.
+- **`refactor_hints` pide compartir un recorrido repetido** (que una parte use el resultado de la
+  otra, o una base común) en lugar de extraer trozos sueltos.
+- **Con `mode: block`, el implementador sabe que no puede haber código repetido** y cómo medirlo.
 - **El refactor mide la complejidad con la orden sola, antes de editar y al terminar.** En la
   pasada de la 0.13.0, dos refactors la encadenaron con `&&` tras la aceptación, que falla con
   escenarios pendientes, y no llegó a ejecutarse. Con la línea nueva, en dos pasadas más, ninguno la

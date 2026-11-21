@@ -2,8 +2,9 @@
 
 A refactor changes no behaviour, so what the oracle measured when the scenario turned green must
 not go down: no JUnit control may pass fewer cases, and no scored control may leave more untested
-than it did (lines and branches not covered, mutants not killed), and no complexity control may
-leave more above its limit (ADR-0013). Without that, a refactor could delete the agent's unit
+than it did (lines and branches not covered, mutants not killed), no complexity control may
+leave more above its limit (ADR-0013), and no duplication control more tokens in clones
+(ADR-0014). Without that, a refactor could delete the agent's unit
 tests and pass: a control that runs no case may pass, and a coverage that only measures doesn't
 block. The percentage is no guard: removing covered code lowers it while leaving untested exactly
 what was (F61), and that is the simplification a refactor is for.
@@ -15,8 +16,16 @@ from typing import Final, Literal
 
 from lictor.domain.complexity import OverLimit, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.duplication import Duplication, duplication_of, kept
 from lictor.domain.model import AgentSignal, AgentStatus, CoverageScore, Score
-from lictor.domain.reports import ComplexityReport, FunctionComplexity, JUnitReport
+from lictor.domain.reports import (
+    Clone,
+    CloneOccurrence,
+    ComplexityReport,
+    DuplicationReport,
+    FunctionComplexity,
+    JUnitReport,
+)
 from lictor.domain.results import ControlEntry, Executed, Judged, Read
 
 RefactorOutcome = Literal["applied", "discarded", "unchanged"]
@@ -54,34 +63,45 @@ def refactor_subject(scenario_id: str) -> str:
     return f"refactor({scenario_id}): mejorar el código sin cambiar el comportamiento"
 
 
-# What a control leaves undone, by kind: what a score leaves untested, or what a complexity
-# report leaves above its limit. The checkpoint keeps the kind, a message its words.
-MissKind = Literal["lines", "branches", "mutants", "excess", "peak"]
+# What a control leaves undone, by kind: what a score leaves untested, what a complexity report
+# leaves above its limit, or what a duplication report leaves repeated. The checkpoint keeps the
+# kind, a message its words.
+MissKind = Literal["lines", "branches", "mutants", "excess", "peak", "duplicated"]
 _MISS_WORDS: Final[Mapping[MissKind, str]] = {
     "lines": "líneas sin cubrir",
     "branches": "ramas sin cubrir",
     "mutants": "mutantes sin matar",
     "excess": "complejidad por encima del límite, sumada",
     "peak": "complejidad por encima del límite en la peor función",
+    "duplicated": "tokens en clones",
 }
+
+# What a measure of the code names for the refactor's prompt: the functions above a limit, or the
+# clones (ADR-0013, ADR-0014).
+type Findings = OverLimit | Duplication
 
 
 @dataclass(frozen=True)
 class Measure:
     """What one control measured: cases that passed, and what it left undone.
 
-    A complexity control also keeps which functions were above its limit, which the refactor's
-    prompt names (ADR-0013).
+    A control that measures the code also keeps what it found, which the refactor's prompt names:
+    the functions above a limit (ADR-0013) or the clones (ADR-0014).
     """
 
     passed: int | None = None
     misses: tuple[tuple[MissKind, int], ...] | None = None
-    over: OverLimit | None = None
+    findings: Findings | None = None
 
 
 def complexity_misses(over: OverLimit) -> tuple[tuple[MissKind, int], ...]:
     """What a complexity report leaves above its limit: two counts a refactor may not raise."""
     return (("excess", over.excess), ("peak", over.peak))
+
+
+def duplication_misses(duplication: Duplication) -> tuple[tuple[MissKind, int], ...]:
+    """What a duplication report leaves repeated: one count a refactor may not raise."""
+    return (("duplicated", duplication.in_clones),)
 
 
 def score_misses(score: Score) -> tuple[tuple[MissKind, int], ...]:
@@ -114,6 +134,9 @@ def _measure_of(entry: ControlEntry) -> Measure | None:
     judged = outcome.judgement
     if isinstance(judged.report, ComplexityReport):
         return _complexity_measure(entry.control, judged.report)
+    if isinstance(judged.report, DuplicationReport):
+        duplication = duplication_of(judged.report)
+        return Measure(misses=duplication_misses(duplication), findings=duplication)
     return _judged_measure(judged)
 
 
@@ -137,7 +160,7 @@ def _complexity_measure(
     if not isinstance(control, CommandControl) or control.limit is None:
         return None
     over = over_limit(report, control.limit)
-    return Measure(misses=complexity_misses(over), over=over)
+    return Measure(misses=complexity_misses(over), findings=over)
 
 
 def measures_record(measures: Mapping[str, Measure]) -> dict[str, dict[str, object]]:
@@ -146,18 +169,34 @@ def measures_record(measures: Mapping[str, Measure]) -> dict[str, dict[str, obje
         cid: {
             "passed": m.passed,
             "misses": None if m.misses is None else dict(m.misses),
-            **({} if m.over is None else {"over": _over_record(m.over)}),
+            **({} if m.findings is None else {"findings": _findings_record(m.findings)}),
         }
         for cid, m in measures.items()
     }
 
 
-def _over_record(over: OverLimit) -> dict[str, object]:
+def _findings_record(findings: Findings) -> dict[str, object]:
+    if isinstance(findings, Duplication):
+        return _duplication_record(kept(findings))
     return {
-        "limit": over.limit,
+        "kind": "complexity",
+        "limit": findings.limit,
         "functions": [
             {"file": f.file, "function": f.function, "line": f.line, "complexity": f.complexity}
-            for f in over.functions
+            for f in findings.functions
+        ],
+    }
+
+
+def _duplication_record(duplication: Duplication) -> dict[str, object]:
+    return {
+        "kind": "duplication",
+        "min_tokens": duplication.min_tokens,
+        "in_clones": duplication.in_clones,
+        "count": duplication.count,
+        "clones": [
+            [[o.file, o.first_line, o.last_line, o.start, o.end] for o in clone.occurrences]
+            for clone in duplication.clones
         ],
     }
 
@@ -168,15 +207,64 @@ def measures_from_record(record: Mapping[str, Mapping[str, object]]) -> dict[str
         cid: Measure(
             passed=_int_or_none(fields.get("passed")),
             misses=_misses_or_none(fields),
-            over=_over_or_none(fields.get("over")),
+            findings=_findings_or_none(fields.get("findings")),
         )
         for cid, fields in record.items()
     }
 
 
-def _over_or_none(value: object) -> OverLimit | None:
+def _findings_or_none(value: object) -> Findings | None:
     if not isinstance(value, Mapping):
         return None
+    if value.get("kind") == "duplication":
+        return _duplication_or_none(value)
+    if value.get("kind") == "complexity":
+        return _over_or_none(value)
+    return None
+
+
+def _duplication_or_none(value: Mapping[str, object]) -> Duplication | None:
+    min_tokens, in_clones = (
+        _int_or_none(value.get("min_tokens")),
+        _int_or_none(value.get("in_clones")),
+    )
+    count, raw = _int_or_none(value.get("count")), value.get("clones")
+    if min_tokens is None or in_clones is None or count is None or not isinstance(raw, list):
+        return None
+    clones: list[Clone] = []
+    for item in raw:
+        occurrences = _occurrences_or_none(item)
+        if occurrences is None:
+            return None
+        clones.append(Clone(occurrences))
+    return Duplication(min_tokens, in_clones, tuple(clones), count)
+
+
+def _occurrences_or_none(item: object) -> tuple[CloneOccurrence, ...] | None:
+    if not isinstance(item, list) or len(item) < _PLACES:
+        return None
+    found = [_place_or_none(place) for place in item]
+    if any(place is None for place in found):
+        return None
+    return tuple(place for place in found if place is not None)
+
+
+def _place_or_none(place: object) -> CloneOccurrence | None:
+    if not isinstance(place, list) or len(place) != _PLACE_FIELDS:
+        return None
+    file, *numbers = place
+    values = [_int_or_none(n) for n in numbers]
+    if not isinstance(file, str) or any(v is None for v in values):
+        return None
+    first, last, start, end = (v for v in values if v is not None)
+    return CloneOccurrence(file, first, last, start, end)
+
+
+_PLACE_FIELDS: Final[int] = 5  # file, first line, last line, start, end
+_PLACES: Final[int] = 2  # a clone has two places at least
+
+
+def _over_or_none(value: Mapping[str, object]) -> OverLimit | None:
     limit, raw = _int_or_none(value.get("limit")), value.get("functions")
     if limit is None or not isinstance(raw, list):
         return None

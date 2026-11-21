@@ -47,6 +47,7 @@ from lictor.adapters.config.models import (
 from lictor.adapters.config.profiles.python_uv import (
     lictor_complexity,
     lictor_doubles,
+    lictor_duplication,
     lictor_impostor,
     lictor_outcome,
     lictor_project_path,
@@ -69,7 +70,14 @@ def test_load_python_uv_profile() -> None:
     assert profile.detect == ["pyproject.toml"]
     assert "tests/acceptance/" in profile.paths.driver
     assert "tests/acceptance/" in profile.paths.protected
-    assert [c.id for c in profile.controls] == ["lint", "types", "unit", "coverage", "complexity"]
+    assert [c.id for c in profile.controls] == [
+        "lint",
+        "types",
+        "unit",
+        "coverage",
+        "complexity",
+        "duplication",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -536,6 +544,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_impostor.py",
         "lictor_doubles.py",
         "lictor_complexity.py",
+        "lictor_duplication.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -579,6 +588,24 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
         ),
         (lictor_doubles.__file__, {"collections", "math", "pytest"}),
         (lictor_complexity.__file__, {"ast", "collections", "json", "pathlib", "sys"}),
+        (
+            lictor_duplication.__file__,
+            {
+                "__future__",
+                "argparse",
+                "ast",
+                "bisect",
+                "collections",
+                "dataclasses",
+                "io",
+                "json",
+                "keyword",
+                "pathlib",
+                "sys",
+                "tokenize",
+                "typing",
+            },
+        ),
     ],
 )
 def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> None:
@@ -871,6 +898,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_impostor.__file__,
         lictor_doubles.__file__,
         lictor_complexity.__file__,
+        lictor_duplication.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 

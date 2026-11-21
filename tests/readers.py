@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
+from lictor.adapters.readers.duplication import DuplicationReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.adapters.runner.fake import FakeRunner
@@ -20,6 +21,7 @@ def all_readers() -> ReportReaders:
         coverage=CoverageReader(),
         mutation=MutationReader(),
         complexity=ComplexityReader(),
+        duplication=DuplicationReader(),
     )
 
 

@@ -24,6 +24,7 @@ from pathlib import Path
 
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
+from lictor.adapters.readers.duplication import DuplicationReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
 from lictor.application.control_reports import read_and_judge
@@ -31,7 +32,7 @@ from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
 from lictor.domain.complexity import over_limit
 from lictor.domain.model import CommandOutput, CoverageScore, MutationScore, Score
-from lictor.domain.reports import ComplexityReport, ReportFormat
+from lictor.domain.reports import ComplexityReport, DuplicationReport, ReportFormat
 from lictor.domain.results import Judged
 from lictor.domain.verdicts import (
     Crashed,
@@ -51,6 +52,7 @@ READERS = ReportReaders(
     coverage=CoverageReader(),
     mutation=MutationReader(),
     complexity=ComplexityReader(),
+    duplication=DuplicationReader(),
 )
 
 RAISES = "raises"
@@ -86,6 +88,12 @@ def _seen(call: Callable[[], Judged]) -> Seen:
         over = over_limit(judged.report, COMPLEXITY_LIMIT)
         score = (
             f"complexity {len(over.functions)} sobre {COMPLEXITY_LIMIT}, {over.excess}/{over.peak}"
+        )
+    if isinstance(judged.report, DuplicationReport):
+        report = judged.report
+        score = (
+            f"duplication {len(report.clones)} clones, {report.in_clones} de "
+            f"{report.code_tokens} tokens"
         )
     return Seen(isinstance(verdict, Passed), error, len(judged.cases), score)
 
@@ -364,6 +372,75 @@ def complexity_control(report: Path, code: int) -> Seen:
     return _seen(lambda: read_and_judge(READERS, _rule("complexity"), report, _output(code)))
 
 
+def _duplication(*clones: tuple[int, int], tokens: int = 100) -> bytes:
+    """A duplication report with one clone per (start, end), between `a.py` and `b.py`."""
+    families = [
+        {
+            "occurrences": [
+                {"file": f, "first_line": 1, "last_line": 9, "start": start, "end": end}
+                for f in ("src/a.py", "src/b.py")
+            ]
+        }
+        for start, end in clones
+    ]
+    covered = [[start, end] for start, end in sorted(clones)]
+    files = [{"file": f, "tokens": tokens, "covered": covered} for f in ("src/a.py", "src/b.py")]
+    return json.dumps({"min_tokens": 50, "files": files, "families": families}).encode()
+
+
+def _one_clone(**place: object) -> bytes:
+    occurrence = {"file": "src/a.py", "first_line": 1, "last_line": 9, "start": 0, "end": 60}
+    other = {**occurrence, "file": "src/b.py"}
+    files = [{"file": f, "tokens": 100, "covered": [[0, 60]]} for f in ("src/a.py", "src/b.py")]
+    family = {"occurrences": [{**occurrence, **place}, other]}
+    return json.dumps({"min_tokens": 50, "files": files, "families": [family]}).encode()
+
+
+# New with ADR-0014: a duplication control reads every file and every clone.
+DUPLICATION_REPORTS: dict[str, bytes | str] = {
+    "ausente": ABSENT,
+    "directorio": DIRECTORY,
+    "vacío": b"",
+    "no es JSON": b"{x",
+    "lista JSON": b"[]",
+    "sin min_tokens": b'{"files": [], "families": []}',
+    "sin families": b'{"min_tokens": 50, "files": []}',
+    "fichero fuera del árbol": json.dumps(
+        {
+            "min_tokens": 50,
+            "files": [{"file": "../x.py", "tokens": 1, "covered": []}],
+            "families": [],
+        }
+    ).encode(),
+    "una sola aparición": json.dumps(
+        {
+            "min_tokens": 50,
+            "files": [{"file": "a.py", "tokens": 99, "covered": [[0, 60]]}],
+            "families": [
+                {
+                    "occurrences": [
+                        {"file": "a.py", "first_line": 1, "last_line": 9, "start": 0, "end": 60}
+                    ]
+                }
+            ],
+        }
+    ).encode(),
+    "aparición bajo el mínimo": _one_clone(end=40),
+    "tramos que no son los de los clones": _duplication((0, 60)).replace(
+        b"[[0, 60]]", b"[[0, 61]]"
+    ),
+    "UTF-8 con BOM": b"\xef\xbb\xbf" + _duplication(),
+    "bytes no UTF-8": b'{"min_tokens": 50, "files": [], "families": [], "x": "\xff"}',
+    "sin clones": _duplication(),
+    "un clon": _duplication((0, 60)),
+    "dos clones": _duplication((0, 60), (70, 130), tokens=200),
+}
+
+
+def duplication_control(report: Path, code: int) -> Seen:
+    return _seen(lambda: read_and_judge(READERS, _rule("duplication"), report, _output(code)))
+
+
 def _coverage_score(percent: float | None) -> CoverageScore | None:
     if percent is None:
         return None
@@ -401,12 +478,14 @@ TIMED_OUT_FORMATS: tuple[ReportFormat, ...] = (
     "coverage",
     "mutation",
     "complexity",
+    "duplication",
 )
 _LEFT_BEHIND: dict[ReportFormat, bytes] = {
     "junit": PASS1,
     "coverage": _coverage({"covered_lines": 1, "num_statements": 2}),
     "mutation": json.dumps({"killed": 1, "total": 2}).encode(),
     "complexity": _functions(12),
+    "duplication": _duplication((0, 60)),
 }
 
 

@@ -724,3 +724,35 @@ def test_one_that_blocks_tells_the_implementer_its_limit_and_how_to_measure(
     [rule] = task.allowed_tools
     assert "{lictor_files}" not in rule
     assert "Bash solo admite: tests, uv run python " in task.prompt
+
+
+def _duplication(mode: ControlMode) -> CommandControl:
+    return CommandControl(
+        id="duplication",
+        level="L1",
+        run="repetido {out}",
+        report="duplication",
+        mode=mode,
+        agent_run="uv run python {lictor_files}/repetido.py src",
+    )
+
+
+@pytest.mark.parametrize(("mode", "told"), [("measure", False), ("block", True)])
+def test_the_implementer_hears_of_duplication_only_when_it_blocks(
+    tmp_path: Path, mode: ControlMode, told: bool
+) -> None:
+    """ADR-0014, point 4, as ADR-0013 for complexity."""
+    tool = tmp_path / "repetido.py"
+    tool.write_text("", encoding="utf-8")
+
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_duplication(mode)],
+        agent_files=[tool],
+        allowed_tools=["Bash(uv run python {lictor_files}/repetido.py:*)"],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert ("no haya código repetido" in prompt) is told
+    assert ("/repetido.py src`, que dice en su primera línea" in prompt) is told

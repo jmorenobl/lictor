@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from lictor.domain.code_measures import ALONE, RefactorBlock
 from lictor.domain.reports import ComplexityReport, FunctionComplexity
 
 # How many functions a message names before it only counts the rest.
@@ -74,31 +75,18 @@ def refactor_complexity_text(over: OverLimit | None, command: str | None) -> str
     """
     if over is None:
         return ""
-    lines = [
+    return RefactorBlock(
         f"Complejidad, con un límite de {over.limit} por función, medida en la verificación del "
-        "verde:"
-    ]
-    if over.functions:
-        lines.extend(named_functions(over.functions))
-        lines.append(
-            "Baja al menos una, empezando por las de los ficheros que cambió este escenario; no "
-            "hace falta arreglarlas todas ahora."
-        )
-    else:
-        lines.append("- Ninguna función supera el límite.")
-    lines.append(
+        "verde:",
+        named_functions(over.functions),
+        "Baja al menos una, empezando por las de los ficheros que cambió este escenario; no hace "
+        "falta arreglarlas todas ahora.",
+        "- Ninguna función supera el límite.",
         "La verificación descarta el refactor si deja por encima del límite más que el verde, en "
         "total o en la peor función. Por debajo del límite la complejidad no cuenta, y mejorar una "
-        "función sin llegar al límite no se descarta."
-    )
-    if command:
-        # Chained with `&&` after the acceptance, which fails while scenarios are pending, the
-        # measure never ran (F60, the pass of the 0.13.0).
-        lines.append(
-            f"Mídela tú con `{command}`, sola y no detrás de otras órdenes con `&&`: una vez antes "
-            "de editar y otra al terminar."
-        )
-    return "\n".join(lines)
+        "función sin llegar al límite no se descarta.",
+        f"Mídela tú con `{command}`, {ALONE}" if command else None,
+    ).text()
 
 
 def implementer_complexity_text(limit: int, command: str | None) -> str:

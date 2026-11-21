@@ -23,7 +23,7 @@ from lictor.domain.errors import ConfigError, ExitCode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
-PROFILE_IDS = ["lint", "types", "unit", "coverage", "complexity"]
+PROFILE_IDS = ["lint", "types", "unit", "coverage", "complexity", "duplication"]
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -177,7 +177,7 @@ def test_the_stage_of_a_control_enters_the_fingerprint(tmp_path: Path) -> None:
 def test_enabled_false_drops_a_control_of_the_profile(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "types", "enabled": False}])
 
-    assert _ids(path) == ["lint", "unit", "coverage", "complexity"]
+    assert _ids(path) == ["lint", "unit", "coverage", "complexity", "duplication"]
 
 
 def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> None:
@@ -189,7 +189,15 @@ def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> No
 def test_an_added_control_goes_after_the_one_written_before_it(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "lint"}, {**ADDED, "id": "format"}, {"id": "unit"}])
 
-    assert _ids(path) == ["lint", "format", "types", "unit", "coverage", "complexity"]
+    assert _ids(path) == [
+        "lint",
+        "format",
+        "types",
+        "unit",
+        "coverage",
+        "complexity",
+        "duplication",
+    ]
 
 
 def test_the_repository_resolves_its_controls_in_its_own_order() -> None:
