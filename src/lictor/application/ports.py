@@ -21,6 +21,7 @@ from lictor.domain.model import (
 from lictor.domain.reports import (
     ComplexityReport,
     CoverageReport,
+    DuplicationReport,
     JUnitReport,
     MutationReport,
     ReportOf,
@@ -267,6 +268,7 @@ class ReportReaders:
     coverage: ReportReader[CoverageReport]
     mutation: ReportReader[MutationReport]
     complexity: ReportReader[ComplexityReport]
+    duplication: ReportReader[DuplicationReport]
 
 
 @runtime_checkable

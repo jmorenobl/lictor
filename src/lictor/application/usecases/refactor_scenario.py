@@ -21,15 +21,17 @@ from lictor.application.run_files import (
 )
 from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
-from lictor.domain.complexity import refactor_complexity_text
+from lictor.domain.complexity import OverLimit, refactor_complexity_text
 from lictor.domain.controls import (
+    CommandControl,
     Control,
     agent_command,
     agent_tools_with_files,
-    complexity_controls,
+    code_controls,
     refactor_measures,
     refactor_measures_text,
 )
+from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
 from lictor.domain.refactor import Measure
@@ -63,8 +65,8 @@ class RefactorScenarioRequest:
     installed_plugins: Sequence[str] = ()
     agent_failures: int = 0
     prompt_template: str | None = None
-    # What the green's verification measured: its complexity names what the refactor should
-    # lower (ADR-0013), as the guard compares with it.
+    # What the green's verification measured: its complexity and its clones name what the
+    # refactor should lower (ADR-0013, ADR-0014), as the guard compares with it.
     baseline: Mapping[str, Measure] = field(default_factory=dict)
     # The profile's files, copied next to the call for an `agent_run` that names them.
     agent_files: Sequence[Path] = ()
@@ -171,8 +173,8 @@ class RefactorScenario:
 
     def _prompt(self, request: RefactorScenarioRequest, template: str, files: str | None) -> str:
         measures = refactor_measures(request.controls, request.installed_plugins)
-        complexity = complexity_controls(request.controls)
-        own = [cmd for c in complexity if (cmd := agent_command(c, files)) is not None]
+        code = code_controls(request.controls)
+        own = [cmd for c in code if (cmd := agent_command(c, files)) is not None]
         commands = list(
             dict.fromkeys([*request.check_commands, *(cmd for _, cmd in measures), *own])
         )
@@ -193,7 +195,7 @@ class RefactorScenario:
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{check_commands}": ", ".join(commands) or "los tests del proyecto",
             "{medidas}": refactor_measures_text(measures),
-            "{complejidad}": _complexity_text(request, complexity, files),
+            "{medidas_del_codigo}": _code_text(request, code, files, changed),
             "{hints}": request.hints,
         }
         prompt = template
@@ -202,16 +204,28 @@ class RefactorScenario:
         return prompt
 
 
-def _complexity_text(
-    request: RefactorScenarioRequest, controls: Sequence[Control], files: str | None
+def _code_text(
+    request: RefactorScenarioRequest,
+    controls: Sequence[CommandControl],
+    files: str | None,
+    changed: Sequence[str],
 ) -> str:
-    """What the green left above each complexity control's limit, and how to measure it."""
+    """What the green left of each control that measures the code, and how to measure it.
+
+    One block per control, in the order they were declared: the functions above a complexity
+    limit (ADR-0013) and the clones (ADR-0014).
+    """
     texts = []
     for control in controls:
         measure = request.baseline.get(control.id)
-        text = refactor_complexity_text(
-            measure.over if measure else None, agent_command(control, files)
-        )
+        findings = measure.findings if measure else None
+        command = agent_command(control, files)
+        if control.report == "duplication":
+            repeated = findings if isinstance(findings, Duplication) else None
+            text = refactor_duplication_text(repeated, command, changed)
+        else:
+            over = findings if isinstance(findings, OverLimit) else None
+            text = refactor_complexity_text(over, command)
         if text:
             texts.append(text)
     return "\n\n".join(texts)

@@ -21,6 +21,7 @@ from lictor.domain.model import Candidate, Score, TestCaseResult
 from lictor.domain.reports import (
     ComplexityReport,
     CoverageReport,
+    DuplicationReport,
     InvalidReport,
     JUnitReport,
     MissingReport,
@@ -377,12 +378,22 @@ class RecordedComplexity:
 
 
 @dataclass(frozen=True)
+class RecordedDuplication:
+    """What the journal keeps of a duplication report: how much is repeated (ADR-0014)."""
+
+    clones: int
+    in_clones: int  # tokens in a clone, every copy counted
+    code_tokens: int
+
+
+@dataclass(frozen=True)
 class RecordedJudged:
     passed: bool
     reason: str | None
     score: Score | None
     cases: Mapping[str, int]
     complexity: RecordedComplexity | None = None
+    duplication: RecordedDuplication | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +465,7 @@ def control_record(entry: ControlEntry) -> dict[str, object]:
                 "score": asdict(judged.score) if judged.score else None,
                 "cases": _case_counts(judged.cases),
                 **_complexity_record(entry.control, judged.report),
+                **_duplication_record(judged.report),
             }
         case Read(reads=reads, verdict=verdict) as read:
             return {
@@ -484,6 +496,28 @@ def _complexity_record(
             "peak": over.peak,
         }
     }
+
+
+def _duplication_record(report: Report | None) -> dict[str, object]:
+    if not isinstance(report, DuplicationReport):
+        return {}
+    return {
+        "duplication": {
+            "clones": len(report.clones),
+            "in_clones": report.in_clones,
+            "code_tokens": report.code_tokens,
+        }
+    }
+
+
+def _duplication_from(raw: object) -> RecordedDuplication | None:
+    if not isinstance(raw, dict):
+        return None
+    clones, in_clones = _int(raw, "clones"), _int(raw, "in_clones")
+    code_tokens = _int(raw, "code_tokens")
+    if clones is None or in_clones is None or code_tokens is None:
+        return None
+    return RecordedDuplication(clones, in_clones, code_tokens)
 
 
 def _complexity_from(raw: object) -> RecordedComplexity | None:
@@ -598,20 +632,23 @@ def _judgement_from(raw: Mapping[str, object]) -> RecordedJudged | RecordedUnjud
     measured = _measured_from(raw)
     if measured is None:
         return None
-    score, complexity = measured
-    return RecordedJudged(was_passed, _text(raw, "reason"), score, cases, complexity)
+    score, complexity, duplication = measured
+    return RecordedJudged(was_passed, _text(raw, "reason"), score, cases, complexity, duplication)
 
 
 def _measured_from(
     raw: Mapping[str, object],
-) -> tuple[Score | None, RecordedComplexity | None] | None:
-    """The score and the complexity a judged record keeps; None if one is there and unreadable."""
-    score_raw, complexity_raw = raw.get("score"), raw.get("complexity")
+) -> tuple[Score | None, RecordedComplexity | None, RecordedDuplication | None] | None:
+    """What a judged record keeps of what it measured; None if one is there and unreadable."""
+    score_raw = raw.get("score")
+    complexity_raw, duplication_raw = raw.get("complexity"), raw.get("duplication")
     score = score_from_record(score_raw) if score_raw is not None else None
     complexity = _complexity_from(complexity_raw)
-    if (score_raw is None) != (score is None) or (complexity_raw is None) != (complexity is None):
+    duplication = _duplication_from(duplication_raw)
+    found = ((score_raw, score), (complexity_raw, complexity), (duplication_raw, duplication))
+    if any((written is None) != (read is None) for written, read in found):
         return None
-    return score, complexity
+    return score, complexity, duplication
 
 
 def recorded_from_failed_run(read: RecordedRead, recorded: Mapping[str, RecordedControl]) -> bool:

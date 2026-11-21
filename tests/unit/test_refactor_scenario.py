@@ -14,10 +14,11 @@ from lictor.application.usecases.refactor_scenario import (
 )
 from lictor.domain.complexity import OverLimit
 from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.duplication import Duplication
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
 from lictor.domain.refactor import Measure
-from lictor.domain.reports import FunctionComplexity
+from lictor.domain.reports import Clone, CloneOccurrence, FunctionComplexity
 
 SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
 
@@ -156,7 +157,9 @@ def _over(*values: int) -> dict[str, Measure]:
         FunctionComplexity("src/iva.py", f"f{i}", i, v) for i, v in enumerate(values, 1)
     )
     over = OverLimit(10, functions)
-    return {"complexity": Measure(misses=(("excess", over.excess), ("peak", over.peak)), over=over)}
+    return {
+        "complexity": Measure(misses=(("excess", over.excess), ("peak", over.peak)), findings=over)
+    }
 
 
 def test_the_refactor_hears_what_its_green_left_above_the_limit(tmp_path: Path) -> None:
@@ -212,3 +215,70 @@ def test_a_green_without_a_measure_of_complexity_says_nothing_of_it(tmp_path: Pa
     _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[_COMPLEXITY])
 
     assert "Complejidad, con un límite" not in _task(executor).prompt
+
+
+_DUPLICATION = CommandControl(
+    id="duplication",
+    level="L1",
+    run="repetido {out}",
+    report="duplication",
+    mode="measure",
+    agent_run="uv run python {lictor_files}/repetido.py src",
+)
+
+
+def _clone(*files: str, tokens: int = 60) -> Clone:
+    return Clone(tuple(CloneOccurrence(f, 1, 9, 0, tokens) for f in files))
+
+
+def _repeated(*clones: Clone) -> dict[str, Measure]:
+    in_clones = sum(o.tokens for c in clones for o in c.occurrences)
+    duplication = Duplication(50, in_clones, clones, len(clones))
+    return {"duplication": Measure(misses=(("duplicated", in_clones),), findings=duplication)}
+
+
+def test_the_refactor_hears_both_measures_of_the_code_in_their_order(tmp_path: Path) -> None:
+    """ADR-0014, points 6 and 7: one block per control, the clones of its files first."""
+    tools = []
+    for name in ("medir.py", "repetido.py"):
+        tool = tmp_path / "perfil" / name
+        tool.parent.mkdir(exist_ok=True)
+        tool.write_text("", encoding="utf-8")
+        tools.append(tool)
+
+    _, executor, _, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_COMPLEXITY, _DUPLICATION],
+        baseline={
+            **_over(12),
+            **_repeated(
+                _clone("src/otro.py", "src/mas.py", tokens=90), _clone("src/iva.py", "src/b.py")
+            ),
+        },
+        agent_files=tools,
+        allowed_tools=[
+            "Bash(pruebas:*)",
+            _RULE,
+            "Bash(uv run python {lictor_files}/repetido.py:*)",
+        ],
+    )
+
+    prompt = _task(executor).prompt
+    assert prompt.index("Complejidad, con un límite") < prompt.index("Código repetido")
+    lines = prompt.splitlines()
+    first = lines.index(next(line for line in lines if line.startswith("Código repetido"))) + 1
+    assert lines[first : first + 2] == [
+        "- src/iva.py:1-9 y src/b.py:1-9: 60 tokens",
+        "- src/otro.py:1-9 y src/mas.py:1-9: 90 tokens",
+    ]
+    assert "más tokens en clones que el verde (300)" in prompt
+    assert sum(line.startswith("Mídel") for line in lines) == 2
+    assert "{medidas_del_codigo}" not in prompt
+    assert "/repetido.py src" in prompt.split("Bash solo admite:")[1].splitlines()[0]
+
+
+def test_a_green_without_a_measure_of_duplication_says_nothing_of_it(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[_DUPLICATION])
+
+    assert "Código repetido" not in _task(executor).prompt

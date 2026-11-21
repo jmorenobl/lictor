@@ -55,6 +55,7 @@ from lictor.bootstrap import (
 )
 from lictor.domain.complexity import describe_over, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.duplication import describe_duplication
 from lictor.domain.errors import (
     CandidateError,
     ConfigError,
@@ -64,7 +65,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
-from lictor.domain.reports import ComplexityReport
+from lictor.domain.reports import ComplexityReport, DuplicationReport
 from lictor.domain.results import (
     ControlEntry,
     Executed,
@@ -503,6 +504,11 @@ def _executed_lines(
     if isinstance(judgement.report, ComplexityReport) and limit is not None:
         over = over_limit(judgement.report, limit)
         score = f": {describe_over(len(over.functions), limit, over.peak)}"
+    if isinstance(judgement.report, DuplicationReport):
+        report = judgement.report
+        score = (
+            f": {describe_duplication(len(report.clones), report.in_clones, report.code_tokens)}"
+        )
     if isinstance(judgement.verdict, Passed):
         return [f"✓ {name}{stage} {took}{score}"]
     return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]

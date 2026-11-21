@@ -68,6 +68,10 @@ line-length = 100
 target-version = "py312"
 extend-exclude = ["examples", ".audits"]
 
+[tool.ruff.per-file-target-version]
+# The profile's modules run in the project's own interpreter, which may be older than Lictor's.
+"src/lictor/adapters/config/profiles/python_uv/*.py" = "py39"
+
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "N", "PT", "PL", "C90"]
 
@@ -162,4 +166,5 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_controls.py",
     "tests/unit/test_results.py",
     "tests/unit/test_complexity.py",
+    "tests/unit/test_duplication.py",
 ]

@@ -28,7 +28,7 @@ Reglas:
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
 {medidas}
 
-{complejidad}
+{medidas_del_codigo}
 
 Contexto del proyecto: {hints}
 

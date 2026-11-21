@@ -1,9 +1,11 @@
 """What is left at a report's path: its bytes, nothing, or what isn't a file (ADR-0009)."""
 
+import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 
-from lictor.domain.reports import InvalidReport, MissingReport
+from lictor.domain.reports import InvalidReport, MissingReport, ReportOf
 
 
 def report_bytes(path: Path) -> bytes | MissingReport | InvalidReport:
@@ -26,3 +28,18 @@ def json_text(raw: bytes) -> str | InvalidReport:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return InvalidReport("no es UTF-8")
+
+
+def json_report[R](path: Path, parse: Callable[[object], R | InvalidReport]) -> ReportOf[R]:
+    """A JSON report at `path`, as `parse` makes it of the data; what it can't be is invalid."""
+    raw = report_bytes(path)
+    if not isinstance(raw, bytes):
+        return raw
+    text = json_text(raw)
+    if isinstance(text, InvalidReport):
+        return text
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return InvalidReport(f"no es JSON: {exc}")
+    return parse(data)

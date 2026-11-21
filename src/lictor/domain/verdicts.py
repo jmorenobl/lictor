@@ -9,10 +9,12 @@ from dataclasses import dataclass
 from typing import assert_never
 
 from lictor.domain.complexity import over_limit, over_limit_reason
+from lictor.domain.duplication import clones_reason, duplication_of
 from lictor.domain.model import CommandOutput, CoverageScore, Score, TestCaseResult
 from lictor.domain.reports import (
     ComplexityReport,
     CoverageReport,
+    DuplicationReport,
     InvalidReport,
     JUnitReport,
     MissingReport,
@@ -172,24 +174,35 @@ def _nothing_to_score(exit_code: int, empty_exit_codes: Collection[int], reason:
     return Passed() if exit_code in empty_exit_codes else Failed(reason)
 
 
-def mutation_verdict(report: ReportOf[MutationReport], execution: Execution) -> Verdict:
-    """A mutation pass: a report, a pass that ended well, and mutants in it."""
+def _own_report[R](
+    report: ReportOf[R], execution: Execution, kind: str, missing: str, command: str
+) -> R | Failed:
+    """What a command that writes its own report must show before its report is judged.
+
+    It wasn't cut by its timeout, it left a report that can be read, and it ended with 0. `kind`
+    names the report in a message, and `command` the command that failed.
+    """
     if execution.timed_out:
         return Failed(execution.cut_reason)
-    exit_code = execution.exit_code
-    match report:
-        case MissingReport():
-            return Failed("Sin informe de mutación")
-        case InvalidReport(reason=reason):
-            return Failed(f"El informe de mutación no es válido: {reason}")
-        case MutationReport():
-            if exit_code != 0:
-                return Failed(f"La pasada de mutación falló con el código {exit_code}")
-            if report.tried == 0:
-                return Failed("El informe de mutación no tiene mutantes probados")
-            return Passed()
-        case _:
-            assert_never(report)
+    if isinstance(report, MissingReport):
+        return Failed(missing)
+    if isinstance(report, InvalidReport):
+        return Failed(f"El informe de {kind} no es válido: {report.reason}")
+    if execution.exit_code != 0:
+        return Failed(f"{command} falló con el código {execution.exit_code}")
+    return report
+
+
+def mutation_verdict(report: ReportOf[MutationReport], execution: Execution) -> Verdict:
+    """A mutation pass: a report, a pass that ended well, and mutants in it."""
+    found = _own_report(
+        report, execution, "mutación", "Sin informe de mutación", "La pasada de mutación"
+    )
+    if isinstance(found, Failed):
+        return found
+    if found.tried == 0:
+        return Failed("El informe de mutación no tiene mutantes probados")
+    return Passed()
 
 
 def complexity_verdict(
@@ -199,21 +212,25 @@ def complexity_verdict(
 
     A file that can't be parsed fails the command and leaves no report, so it is never a pass.
     """
-    if execution.timed_out:
-        return Failed(execution.cut_reason)
-    exit_code = execution.exit_code
-    match report:
-        case MissingReport():
-            return Failed(f"Sin informe de complejidad (código de salida {exit_code})")
-        case InvalidReport(reason=reason):
-            return Failed(f"El informe de complejidad no es válido: {reason}")
-        case ComplexityReport():
-            if exit_code != 0:
-                return Failed(f"El comando de complejidad falló con el código {exit_code}")
-            over = over_limit(report, limit)
-            return Failed(over_limit_reason(over)) if over.functions else Passed()
-        case _:
-            assert_never(report)
+    missing = f"Sin informe de complejidad (código de salida {execution.exit_code})"
+    found = _own_report(report, execution, "complejidad", missing, "El comando de complejidad")
+    if isinstance(found, Failed):
+        return found
+    over = over_limit(found, limit)
+    return Failed(over_limit_reason(over)) if over.functions else Passed()
+
+
+def duplication_verdict(report: ReportOf[DuplicationReport], execution: Execution) -> Verdict:
+    """A duplication control: a report, a command that ended well, and no clone (ADR-0014).
+
+    A file that can't be parsed fails the command and leaves no report, so it is never a pass.
+    """
+    missing = f"Sin informe de duplicación (código de salida {execution.exit_code})"
+    found = _own_report(report, execution, "duplicación", missing, "El comando de duplicación")
+    if isinstance(found, Failed):
+        return found
+    duplication = duplication_of(found)
+    return Failed(clones_reason(duplication)) if duplication.count else Passed()
 
 
 def report_cases(report: Report | None) -> tuple[TestCaseResult, ...]:
