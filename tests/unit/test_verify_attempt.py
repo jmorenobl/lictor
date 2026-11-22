@@ -16,6 +16,7 @@ from lictor.application.run_files import fill_report_paths
 from lictor.application.seal import hash_tree
 from lictor.application.usecases.verify_attempt import (
     IntegritySnapshot,
+    RoleKind,
     VerifyAttempt,
     VerifyAttemptRequest,
     control_summaries,
@@ -37,10 +38,14 @@ class FakeVcs(Vcs):
     """In-memory VCS fake for testing VerifyAttempt."""
 
     def __init__(
-        self, changed_files: list[str] | None = None, added: list[str] | None = None
+        self,
+        changed_files: list[str] | None = None,
+        added: list[str] | None = None,
+        removed: list[str] | None = None,
     ) -> None:
         self._changed_files = list(changed_files or [])
         self._added = list(added or [])
+        self._removed = list(removed or [])
         self.links: list[str] = []
         self.moved: list[str] = []
         self.exported: list[str] = []
@@ -70,6 +75,9 @@ class FakeVcs(Vcs):
 
     def added_lines(self, tree: str) -> list[str]:
         return list(self._added)
+
+    def removed_lines(self, tree: str) -> list[str]:
+        return list(self._removed)
 
     def commit_tree(
         self,
@@ -282,6 +290,53 @@ def test_verify_attempt_l0_suppressions_detected(tmp_path: Path) -> None:
     result = verifier.execute(req)
     assert result.ok is False
     assert result.failed_at == "L0-supresiones"
+
+
+def _suppressions_of(
+    tmp_path: Path, role: RoleKind, added: list[str], removed: list[str]
+) -> str | None:
+    """Where a verification of `role` stops when its change adds and removes those lines."""
+    project_root, run_id = _setup_project(tmp_path)
+    vcs = FakeVcs(changed_files=["src/code.py"], added=added, removed=removed)
+    verifier = VerifyAttempt(
+        vcs=vcs,
+        environment=PlainEnvironment(FakeRunner()),
+        readers=all_readers(),
+        project_root=project_root,
+    )
+    req = VerifyAttemptRequest(
+        tree="agent-tree",
+        scenario_id="IVA-001",
+        run_id=run_id,
+        role=role,
+        paths_writable=("src/",),
+        suppressions=("# noqa",),
+        all_scenario_ids=("IVA-001",),
+        paths_driver=("tests/acceptance/",),
+    )
+    return verifier.execute(req).failed_at
+
+
+_JOINED = (
+    ["    from x import y  # noqa: PLC0415"],
+    ["        from x import y  # noqa: PLC0415"] * 3,
+)
+
+
+@pytest.mark.parametrize("role", ["implement", "refactor"])
+def test_moving_or_joining_suppressions_that_were_there_passes_l0(
+    tmp_path: Path, role: RoleKind
+) -> None:
+    """F72: three equal `noqa` joined into one, as a refactor of the adoption pass did."""
+    assert _suppressions_of(tmp_path, role, *_JOINED) != "L0-supresiones"
+
+
+@pytest.mark.parametrize("role", ["implement", "refactor"])
+def test_a_suppression_more_than_the_change_removes_fails_l0(
+    tmp_path: Path, role: RoleKind
+) -> None:
+    added = ["a  # noqa: E501", "b  # noqa: E501"]
+    assert _suppressions_of(tmp_path, role, added, ["a  # noqa: E501"]) == "L0-supresiones"
 
 
 def test_verify_attempt_control_block_stops_pipeline(tmp_path: Path) -> None:
@@ -1014,7 +1069,7 @@ def test_verify_banned_pattern_reports_itself(tmp_path: Path) -> None:
     result = verifier.execute(req)
 
     assert result.failed_at == "L0-supresiones"
-    assert r"#\s*noqa" in (result.condensed_error or "")
+    assert "# NOQA" in (result.condensed_error or "")
 
 
 def _spied_environment(problems: list[str | None], runner: FakeRunner | None = None) -> MagicMock:

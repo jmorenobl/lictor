@@ -46,6 +46,7 @@ from lictor.adapters.config.models import (
 )
 from lictor.adapters.config.profiles.python_uv import (
     lictor_complexity,
+    lictor_coverage,
     lictor_doubles,
     lictor_duplication,
     lictor_impostor,
@@ -545,6 +546,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_doubles.py",
         "lictor_complexity.py",
         "lictor_duplication.py",
+        "lictor_coverage.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -899,6 +901,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_doubles.__file__,
         lictor_complexity.__file__,
         lictor_duplication.__file__,
+        lictor_coverage.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
@@ -1379,10 +1382,11 @@ def test_the_profile_tells_the_agent_how_to_measure_its_coverage() -> None:
     [coverage] = [c for c in profile.controls if c.id == "coverage"]
 
     assert coverage.agent_run is not None
-    # The same measure as verification: the source, with branches; a table, to read the misses.
-    assert "--cov=src" in coverage.agent_run
-    assert "--cov-branch" in coverage.agent_run
-    assert "{" not in coverage.agent_run
+    # The profile's module, which measures `src` with branches as verification counts (F71).
+    assert coverage.agent_run == (
+        "uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q"
+    )
+    assert "python_uv/lictor_coverage.py" in [str(f) for f in profile.verification.files]
     assert agent_run_problems(profile.controls, profile.agent_tools) == []
 
 

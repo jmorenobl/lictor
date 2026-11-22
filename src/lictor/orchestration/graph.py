@@ -170,6 +170,9 @@ class GraphState(TypedDict, total=False):
     # verification measured, and how the refactor ended once settled.
     refactor_of: str | None
     refactor_baseline: dict[str, dict[str, Any]]
+    # Where that verification left its evidence: the refactor compares its coverage with the
+    # green's own report there (F71).
+    refactor_baseline_step: str | None
     refactor_outcome: str | None
 
 
@@ -236,6 +239,22 @@ class GraphContext:
     def refactor(self) -> bool:
         """Whether every implemented green goes through a refactor."""
         return self.refactor_scenario is not None and self.commit_refactor is not None
+
+
+def _baseline_of(res: VerifyResult) -> dict[str, Any]:
+    """What a green's verification leaves for its refactor: what it measured, and where (F71)."""
+    if not res.ok:
+        return {"refactor_baseline": {}, "refactor_baseline_step": None}
+    return {
+        "refactor_baseline": measures_record(oracle_measures(res.controls)),
+        "refactor_baseline_step": res.evidence.get("path"),
+    }
+
+
+def _baseline_step(project_root: Path, state: GraphState) -> Path | None:
+    """The directory of the current green's verification, where its reports are."""
+    step = state.get("refactor_baseline_step")
+    return project_root / step if step else None
 
 
 def _baseline(state: GraphState) -> dict[str, Measure]:
@@ -695,7 +714,7 @@ class _GraphNodes:
             "last_error": res.condensed_error,
             "last_failed_at": res.failed_at,
             "failures": [*state.get("failures", []), list(res.failure) if res.failure else None],
-            "refactor_baseline": measures_record(oracle_measures(res.controls)) if res.ok else {},
+            **_baseline_of(res),
             "totals": _verify_totals(verify_duration),
         }
 
@@ -765,6 +784,7 @@ class _GraphNodes:
                     ),
                     agent_failures=state.get("agent_failures", 0),
                     baseline=_baseline(state),
+                    baseline_step=_baseline_step(self.ctx.project_root, state),
                     agent_files=self.ctx.agent_files,
                 )
             )

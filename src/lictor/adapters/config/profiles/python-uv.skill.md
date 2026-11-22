@@ -55,9 +55,11 @@ mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
   añade: `{"id": "coverage", "adds": "--cov=src/mipaquete --cov-branch --cov-fail-under=0
   --cov-report=json:{out}"}`. Quitar `--cov-fail-under=0` vuelve a aplicar el `fail_under` del
   proyecto.
-  Con un mínimo, el agente mide la cobertura con el `agent_run` de `coverage`: si se cambia
-  `adds`, se cambia también `agent_run` (por ejemplo, `"uv run pytest tests/unit -q
-  --cov=src/mipaquete --cov-branch --cov-report=term-missing"`), para que mida lo mismo.
+  El agente mide la cobertura con el `agent_run` de `coverage`, que usa el módulo del perfil
+  `lictor_coverage.py`: cuenta lo que queda sin cubrir como Lictor y, en un refactor, dice dónde
+  sube frente al verde. Si se cambia `adds`, se cambia también `agent_run` (por ejemplo,
+  `"uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q --cov=src/mipaquete"`), para
+  que mida lo mismo.
 - **Medir solo en `lictor check`:** `{"id": "coverage", "stage": "check"}`. El run ejecuta `unit`
   tal cual y `check` con los argumentos de cobertura, así que un test que solo falla bajo
   cobertura pasa en el run y falla en `check`, en la línea de `unit`, que lo marca. Al revés no

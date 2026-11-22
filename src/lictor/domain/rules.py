@@ -3,6 +3,7 @@
 import fnmatch
 import re
 import shlex
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -643,6 +644,45 @@ def suppression_matches(
     """
     literal = [s for s in suppressions if any(s in line for line in lines)]
     return sorted({*banned_matches(lines, patterns), *literal})
+
+
+def _suppression_keys(
+    lines: Sequence[str], suppressions: Sequence[str], patterns: Sequence[str]
+) -> Counter[str]:
+    """Each suppression the lines carry, by its exact text: from where it matches to the line's end.
+
+    The spaces are normalized, so reindenting or reflowing a line keeps its key; changing the code
+    of a `noqa`, or widening it, changes the key.
+    """
+    keys: Counter[str] = Counter()
+    for line in lines:
+        starts = [line.index(literal) for literal in suppressions if literal in line]
+        starts.extend(
+            found.start()
+            for pattern in patterns
+            if (found := re.search(pattern, line, re.IGNORECASE)) is not None
+        )
+        keys.update({" ".join(line[start:].split()) for start in starts})
+    return keys
+
+
+def suppressions_not_moved(
+    added: Sequence[str],
+    removed: Sequence[str],
+    suppressions: Sequence[str],
+    patterns: Sequence[str],
+) -> list[str]:
+    """The suppressions a change adds beyond those it removes, anywhere in the change (F72).
+
+    Moving a function with a `noqa` to another module, renaming a file, reindenting or joining
+    several equal suppressions into one passes; adding one, or changing its text, doesn't. The
+    implementer and the refactor are judged so; a fresh driver, which only adds, by
+    `suppression_matches`.
+    """
+    left = _suppression_keys(added, suppressions, patterns) - _suppression_keys(
+        removed, suppressions, patterns
+    )
+    return sorted(left)
 
 
 def describe_suppressions(found: Sequence[str]) -> str:

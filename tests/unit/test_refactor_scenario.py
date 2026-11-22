@@ -13,7 +13,7 @@ from lictor.application.usecases.refactor_scenario import (
     RefactorScenarioResult,
 )
 from lictor.domain.complexity import OverLimit
-from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.controls import GREEN_COVERAGE, CommandControl, ReaderControl
 from lictor.domain.duplication import Duplication
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
@@ -282,3 +282,64 @@ def test_a_green_without_a_measure_of_duplication_says_nothing_of_it(tmp_path: P
     _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[_DUPLICATION])
 
     assert "Código repetido" not in _task(executor).prompt
+
+
+_COVERAGE = ReaderControl(
+    id="coverage",
+    level="L2",
+    reads="unit",
+    adds="--cov=src --cov-report=json:{out}",
+    report="coverage",
+    agent_run="uv run python {lictor_files}/cobertura.py tests",
+)
+
+
+def test_the_refactor_hears_what_its_green_left_untested_and_measures_with_its_report(
+    tmp_path: Path,
+) -> None:
+    """F71: the green's counts in the prompt, and its report next to the profile's module."""
+    tool = tmp_path / "perfil" / "cobertura.py"
+    tool.parent.mkdir()
+    tool.write_text("print('mide')\n", encoding="utf-8")
+    step = tmp_path / ".lictor" / "runs" / "run" / "IVA-001" / "002-verify"
+    step.mkdir(parents=True)
+    (step / "control_coverage.xml").write_text('{"totals": {}}', encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    def run(task: AgentTask) -> AgentResult:
+        [rule] = [t for t in task.allowed_tools if "cobertura.py" in t]
+        files = Path(rule.removeprefix("Bash(uv run python ").removesuffix("/cobertura.py:*)"))
+        seen["verde"] = (files / GREEN_COVERAGE).read_text(encoding="utf-8")
+        return AgentResult(status="ok")
+
+    _, executor, _, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_COVERAGE],
+        installed_plugins=[],
+        baseline={"coverage": Measure(misses=(("lines", 712), ("branches", 327)))},
+        baseline_step=step,
+        agent_files=[tool],
+        allowed_tools=["Bash(uv run python {lictor_files}/cobertura.py:*)"],
+        run=run,
+    )
+
+    task = _task(executor)
+    line = next(line for line in task.prompt.splitlines() if line.startswith("  - coverage:"))
+    assert "/cobertura.py tests`. El verde dejaba 712 líneas y 327 ramas sin cubrir" in line
+    assert "{lictor_files}" not in task.prompt
+    assert "cúbrelo con un test unitario o no lo partas" in task.prompt
+    assert seen == {"verde": '{"totals": {}}'}
+
+
+def test_without_the_profiles_files_a_measure_that_needs_them_is_not_offered(
+    tmp_path: Path,
+) -> None:
+    _, executor, _, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        controls=[_COVERAGE],
+        baseline={"coverage": Measure(misses=(("lines", 712), ("branches", 327)))},
+    )
+
+    assert "  - coverage:" not in _task(executor).prompt

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -657,6 +658,33 @@ def test_the_prompt_tells_each_minimum_and_lets_the_agent_measure_it(tmp_path: P
     prompt = executor.run.call_args.args[0].prompt
     assert "  - coverage: al menos 80 %, con `tests --cov --table`." in prompt
     assert "Bash solo admite: tests, tests --cov --table." in prompt
+
+
+def test_a_minimum_measured_with_a_profile_module_gets_the_profiles_files(
+    tmp_path: Path,
+) -> None:
+    """F71: the coverage command names the profile's module, which the call needs next to it."""
+    tool = tmp_path / "cobertura.py"
+    tool.write_text("", encoding="utf-8")
+    module = replace(_COVERAGE, agent_run="uv run python {lictor_files}/cobertura.py tests")
+
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["tests"],
+        controls=[module],
+        installed_plugins=["cov.plugin"],
+        agent_files=[tool],
+        allowed_tools=["Bash(uv run python {lictor_files}/cobertura.py:*)"],
+    )
+
+    task = executor.run.call_args.args[0]
+    [rule] = task.allowed_tools
+    files = rule.removeprefix("Bash(uv run python ").removesuffix("/cobertura.py:*)")
+    assert f"  - coverage: al menos 80 %, con `uv run python {files}/cobertura.py tests`." in (
+        task.prompt
+    )
+    assert "{lictor_files}" not in task.prompt
 
 
 def test_a_minimum_the_run_skips_is_not_told(tmp_path: Path) -> None:

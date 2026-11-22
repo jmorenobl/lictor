@@ -260,6 +260,14 @@ class GitCli(Vcs, Worktrees):
 
     def added_lines(self, tree: str) -> list[str]:
         """Read the added lines of the diff, binary files included: a NUL must not hide them."""
+        return self._diff_lines(tree, "+")
+
+    def removed_lines(self, tree: str) -> list[str]:
+        """Read the removed lines of the diff, as `added_lines` reads the added ones."""
+        return self._diff_lines(tree, "-")
+
+    def _diff_lines(self, tree: str, sign: str) -> list[str]:
+        """The lines of the diff from HEAD to `tree` that start with `sign`, inside its hunks."""
         patch = self._run_git(
             [
                 "diff-tree",
@@ -275,16 +283,16 @@ class GitCli(Vcs, Worktrees):
                 tree,
             ]
         ).stdout
-        added: list[str] = []
+        found: list[str] = []
         in_hunk = False
         for line in patch.splitlines():
             if line.startswith("diff --git "):
                 in_hunk = False
             elif line.startswith("@@"):
                 in_hunk = True
-            elif in_hunk and line.startswith("+"):
-                added.append(line[1:])
-        return added
+            elif in_hunk and line.startswith(sign):
+                found.append(line[1:])
+        return found
 
     def commit_tree(
         self,

@@ -229,11 +229,15 @@ def agent_workspace(vcs: Vcs, project_root: Path) -> Iterator[Path]:
 
 
 @contextlib.contextmanager
-def agent_files_dir(project_root: Path, sources: Sequence[Path]) -> Iterator[Path | None]:
+def agent_files_dir(
+    project_root: Path, sources: Sequence[Path], extra: Sequence[tuple[Path, str]] = ()
+) -> Iterator[Path | None]:
     """Yield a copy of the profile's files for one agent call, outside the project and the copy.
 
     The agent measures with them (ADR-0013) without reaching the verification environment, whose
-    path it never learns. None without files: then no rule or command names them.
+    path it never learns. None without files: then no rule or command names them. `extra` adds
+    files under a name of their own, as the green's coverage report for a refactor (F71), only if
+    they are there: a measure without them still counts, without comparing.
     """
     if not sources:
         yield None
@@ -241,6 +245,9 @@ def agent_files_dir(project_root: Path, sources: Sequence[Path]) -> Iterator[Pat
     with scratch_dir(project_root, "files-") as tmp:
         for source in sources:
             shutil.copyfile(source, tmp / source.name)
+        for source, name in extra:
+            if source.is_file() and not source.is_symlink():
+                shutil.copyfile(source, tmp / name)
         yield tmp
 
 

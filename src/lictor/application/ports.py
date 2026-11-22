@@ -125,6 +125,10 @@ class Vcs(Protocol):
         """Return the lines that `tree` adds over HEAD."""
         ...
 
+    def removed_lines(self, tree: str) -> list[str]:
+        """Return the lines that `tree` removes from HEAD."""
+        ...
+
     def changed_paths(self, base: str, head: str) -> list[str]:
         """Return the paths that differ between two commits, deleted ones included."""
         ...
