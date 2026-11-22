@@ -7,6 +7,14 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.15.0] - 2026-11-22
+
+Lo que la primera adopción de un proyecto real (pyverifactu, 45 escenarios) mostró que fallaba: un
+stub en `__init__` rechazaba el driver entero, y el refactor se descartaba por subir una o dos líneas
+sin cubrir que no podía ver o por juntar supresiones que ya había. En la tanda siguiente, de cinco
+refactors no se descartó ninguno (antes, 5 de 16): todos midieron con la medida nueva y dos
+corrigieron a mitad una subida de cobertura.
+
 ### Corregido
 
 - **Un stub en `__init__` ya no rechaza el driver entero** (F68, enmienda de la ADR-0012). Los
@@ -884,7 +892,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.14.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/jmorenobl/lictor/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/jmorenobl/lictor/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/jmorenobl/lictor/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jmorenobl/lictor/compare/v0.11.0...v0.12.0
