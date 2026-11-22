@@ -21,7 +21,7 @@ Reglas:
   ni dejes más código sin probar: un refactor que pase menos tests, o deje más sin probar que el
   verde, se descarta. Quitar código que ya estaba probado no cuenta en contra.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
-- No añadas supresiones: {suppressions}.
+- No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
 - Bash solo admite: {check_commands}. Cualquier otra orden, un intérprete o un script incluidos,
   se deniega y te cuesta turnos.

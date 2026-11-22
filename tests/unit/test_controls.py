@@ -373,6 +373,23 @@ def test_the_refactor_is_told_to_measure_before_and_after() -> None:
     assert refactor_measures_text([]) == ""
 
 
+def test_the_refactor_is_told_what_the_green_left_untested_and_what_to_do_if_it_rises() -> None:
+    """F71: one measure after editing is enough to see a rise, as with the clones."""
+    text = refactor_measures_text(
+        [("coverage", "cov"), ("mutation", "mut"), ("otra", "x")],
+        {"coverage": {"lines": 712, "branches": 327}, "mutation": {"mutants": 4}},
+    )
+
+    assert (
+        "  - coverage: `cov`. El verde dejaba 712 líneas y 327 ramas sin cubrir: el refactor no "
+        "puede dejar más." in text
+    )
+    assert "  - mutation: `mut`. El verde dejaba 4 mutantes sin matar" in text
+    assert "  - otra: `x`.\n" in text
+    assert "cúbrelo con un test unitario o no lo partas" in text
+    assert "no lo partas" not in refactor_measures_text([("coverage", "cov")])
+
+
 def test_the_refactor_measures_read_whole() -> None:
     assert refactor_measures_text([("a", "x"), ("b", "y")]) == (
         "- La verificación compara lo que estos controles dejan sin probar con lo que dejaban en "

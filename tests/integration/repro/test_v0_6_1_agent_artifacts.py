@@ -12,7 +12,9 @@ import shlex
 from pathlib import Path
 
 from lictor.adapters.config.loader import load_config
+from lictor.adapters.config.profiles.python_uv import lictor_coverage
 from lictor.application.ports import AgentTask
+from lictor.domain.controls import with_agent_files
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
@@ -80,11 +82,20 @@ def test_the_agents_commands_leave_nothing_init_doesnt_ignore(
     root = make_project(sync=False, config_changes={"controls": [COVERAGE]})
     _with_pytest_cov(root)
     config = load_config(root)
+    # As each call gets them: `{lictor_files}` names the copy of the profile's modules (F71).
+    files = str(Path(lictor_coverage.__file__).parent)
     commands = [
         *config.agent_commands,
-        *(control.agent_run for control in config.controls if control.agent_run),
+        *(
+            with_agent_files(control.agent_run, files)
+            for control in config.controls
+            if control.agent_run
+        ),
     ]
-    require(any("--cov" in command for command in commands), "ningún comando mide la cobertura")
+    require(
+        any("lictor_coverage.py" in command for command in commands),
+        "ningún comando mide la cobertura",
+    )
 
     for command in commands:
         shell(shlex.split(command), root)

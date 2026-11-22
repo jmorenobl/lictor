@@ -84,6 +84,7 @@ from lictor.domain.rules import (
     render_full_error,
     routes_rejected,
     suppression_matches,
+    suppressions_not_moved,
 )
 from lictor.domain.verdicts import (
     Crashed,
@@ -510,8 +511,15 @@ class VerifyAttempt:
         if not req.suppressions and not req.banned_patterns:
             return VerifyResult(ok=True)
 
-        added_lines = self.vcs.added_lines(self._tree(req))
-        detected = suppression_matches(added_lines, req.suppressions, req.banned_patterns)
+        tree = self._tree(req)
+        added_lines = self.vcs.added_lines(tree)
+        if req.role == "driver":
+            detected = suppression_matches(added_lines, req.suppressions, req.banned_patterns)
+        else:
+            # The implementer and the refactor move code that already had its suppressions (F72).
+            detected = suppressions_not_moved(
+                added_lines, self.vcs.removed_lines(tree), req.suppressions, req.banned_patterns
+            )
         if detected:
             return self._fail(req, _Failure("L0-supresiones", describe_suppressions(detected)))
 

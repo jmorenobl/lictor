@@ -14,7 +14,7 @@ Reglas:
   dependencia: haz el cambio que haría falta. Se descartará y Lictor se lo pedirá a una persona.
   Los tests de aceptación y los features no entran aquí: no se tocan nunca.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
-- No añadas supresiones: {suppressions}.
+- No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
 - Bash solo admite: {check_commands}. Cualquier otra orden, un intérprete o un script incluidos,
   se deniega y te cuesta turnos.

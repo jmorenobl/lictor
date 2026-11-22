@@ -241,6 +241,22 @@ def test_added_lines_come_only_from_what_the_tree_adds(git_repo: Path, tmp_path:
     assert sorted(added) == ["++ con signos", "añadida", "del nuevo"]
 
 
+def test_removed_lines_are_what_the_tree_removes_or_moves_away(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """A renamed file is a deletion and an addition: its lines are removed and added (F72)."""
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    readme = (workdir / "README.md").read_text(encoding="utf-8")
+    (workdir / "README.md").unlink()
+    (workdir / "LEEME.md").write_text(readme + "-- con signos\n", encoding="utf-8")
+
+    tree = cli.capture(workdir)
+
+    assert cli.removed_lines(tree) == readme.splitlines()
+    assert cli.added_lines(tree) == [*readme.splitlines(), "-- con signos"]
+
+
 def test_added_lines_see_through_binary_files(git_repo: Path, tmp_path: Path) -> None:
     """A NUL or invalid UTF-8 must neither hide a banned line nor break the run."""
     cli = GitCli(repo_dir=git_repo)

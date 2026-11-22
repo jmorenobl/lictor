@@ -16,10 +16,23 @@ en su significado se anota en «Cambiado».
   `__init__` devuelve None. En la primera pasada de adopción el agente había renunciado a las
   clases para esquivarlo.
 
+- **El refactor sabe cuánto dejaba sin cubrir el verde** (F71, enmienda de la ADR-0010). En la
+  primera adopción de un proyecto, 4 de 16 refactors se descartaron por una o dos líneas o ramas sin
+  cubrir de más, sin poder verlo. El prompt da ahora las del verde y qué hacer si suben, y
+  `python-uv` mide con `lictor_coverage.py`, que cuenta como Lictor y dice en qué funciones sube.
+  La guarda no cambia.
+- **Mover o juntar supresiones ya no descarta** (F72). `L0-supresiones` exige, al implementador y al
+  refactor, que las supresiones de lo añadido quepan en las de lo quitado, por su texto exacto: un
+  refactor que juntó tres `# noqa` en uno se descartaba. El driver fresco sigue igual.
+
 ### Al actualizar desde la 0.14.0
 
-- **Un run empezado con la 0.14.0 no se reanuda:** cambian las constantes del perfil y un fichero
-  del entorno de verificación, que entran en la huella. Empieza uno nuevo con `lictor run --new`.
+- **Un run empezado con la 0.14.0 no se reanuda:** cambian las constantes del perfil, el
+  `agent_run` de `coverage`, una regla de `agent_tools` y dos ficheros del entorno de verificación,
+  que entran en la huella. Empieza uno nuevo con `lictor run --new`.
+- **Un `lictor.json` que reescribe el `agent_run` de `coverage`** sigue con su orden, que no cuenta
+  las ramas ni compara con el verde: pásala al módulo, por ejemplo
+  `"uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q"`.
 
 ## [0.14.0] - 2026-11-21
 
