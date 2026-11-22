@@ -3,7 +3,7 @@
 ## Estado
 Aceptada (2026-11-18). Sale del roadmap tras la 0.4.0 (fase 2) y de la pasada de referencia de la
 fase 1. Un revisor independiente comprobó el borrador contra el código, y esta versión recoge sus
-hallazgos (punto 12).
+hallazgos (punto 12). Enmendada el 2026-11-22 por F71 y F72 (al final).
 
 ## Contexto
 Lictor lleva cada escenario a verde con la llamada más corta que lo consigue. El agente implementa
@@ -175,3 +175,35 @@ Se repite la pasada de la calculadora con las mismas entradas y se compara con l
 0.6.1, para que la diferencia sea solo del refactor. Metas: CC máxima ≤ 10 y ninguna función con
 CC > 10, ninguna de más de 30 NLOC, duplicación < 3 %, un módulo por etapa, 0 falsos verdes y
 cobertura ≥ 80 %.
+
+## Enmienda F71 y F72 (2026-11-22): las guardas en código adoptado
+
+En la primera adopción de un proyecto real (`pyverifactu`, fase 4a), 5 de 16 refactors se
+descartaron sin empeorar nada: 4 en `L0-regresión` por 1 o 2 líneas o ramas sin cubrir más que el
+verde (F71) y 1 en `L0-supresiones` por juntar tres `# noqa` en uno (F72). Los 4 de F71 midieron la
+cobertura solo después de editar, sin un número del verde con que comparar (el prompt lo daba para
+los clones y no para la cobertura), y los 4 reorganizaban código que el verde no cubría: partirlo o
+moverlo añade sentencias sin cubrir. La orden que tenía el agente, además, no mostraba las ramas sin
+cubrir. Revisado por Fable, que comprobó las medidas contra los informes de cada descarte.
+
+**F71.** La guarda no cambia: un refactor sigue sin poder dejar ni una línea ni una rama más sin
+cubrir que su verde (F61). Cambia lo que se le dice:
+- el prompt da, por cada control con puntuación, lo que el verde dejaba sin probar («El verde dejaba
+  712 líneas y 327 ramas sin cubrir»), de `refactor_baseline`, y qué hacer si sube: es código que el
+  verde no cubría y que se ha partido o movido; cubrirlo con un test unitario o no partirlo;
+- `python-uv` mide con un módulo propio, `lictor_coverage.py`: ejecuta pytest con branch coverage,
+  cuenta como `score_misses` y, con el informe del verde junto a él (`coverage-del-verde.json`, que
+  Lictor copia de la evidencia de la verificación del verde), dice en qué funciones sube y baja lo
+  que queda sin cubrir, y termina con las dos cuentas y las del verde. El estado guarda la carpeta
+  de esa verificación (`refactor_baseline_step`).
+
+**F72.** Para el implementador y el refactor, `L0-supresiones` exige que las supresiones de las
+líneas añadidas quepan en las de las quitadas, en todo el cambio (`suppressions_not_moved`, con
+`Vcs.removed_lines`). Cada supresión se cuenta por su texto exacto, desde donde coincide el literal
+o el patrón hasta el fin de línea, con los espacios normalizados: mover una función con su `noqa` a
+otro módulo, renombrar un fichero, reindentar o juntar varias iguales pasa; añadir una, cambiar su
+código o ampliarla, no. El driver fresco sigue con las líneas añadidas (F12): solo añade. Límites
+conocidos, con un agente que no es adversario: quitar una supresión y poner la misma sobre otro
+código suma cero; mover `# pragma: no cover` a un `def` excluye el bloque y baja lo que queda sin
+cubrir; un patrón al principio de una llamada partida en varias líneas solo cuenta esa línea.
+

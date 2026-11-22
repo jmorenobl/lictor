@@ -3,7 +3,7 @@
 import hashlib
 import importlib.resources
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
@@ -17,6 +17,7 @@ from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
 from lictor.domain.complexity import implementer_complexity_text
 from lictor.domain.controls import (
+    AGENT_FILES,
     AgentMeasure,
     CommandControl,
     Control,
@@ -25,6 +26,7 @@ from lictor.domain.controls import (
     agent_measures_text,
     agent_tools_with_files,
     code_controls,
+    runnable_command,
 )
 from lictor.domain.duplication import implementer_duplication_text
 from lictor.domain.errors import SealTamperedError
@@ -122,8 +124,7 @@ class ImplementScenario:
 
         # Only a control of the code that blocks is the implementer's to meet (ADR-0013, 0014).
         blocking = tuple(c for c in code_controls(request.controls) if c.mode == "block")
-        sources = request.agent_files if blocking else ()
-        with agent_files_dir(request.project_root, sources) as files_dir:
+        with agent_files_dir(request.project_root, _profile_files(request, blocking)) as files_dir:
             files = str(files_dir) if files_dir is not None else None
             prompt = self._prompt(request, raw_template, blocking, files)
 
@@ -190,7 +191,11 @@ class ImplementScenario:
         blocking: Sequence[CommandControl],
         files: str | None,
     ) -> str:
-        measures = agent_measures(request.controls, request.installed_plugins)
+        measures = [
+            replace(measure, command=command)
+            for measure in agent_measures(request.controls, request.installed_plugins)
+            if (command := runnable_command(measure.command, files)) is not None
+        ]
         own = [cmd for c in blocking if (cmd := agent_command(c, files)) is not None]
         commands = list(
             dict.fromkeys([*request.check_commands, *(m.command for m in measures), *own])
@@ -241,3 +246,14 @@ def _measures_text(
         elif control.limit is not None:
             lines.append(implementer_complexity_text(control.limit, command))
     return "\n".join(lines)
+
+
+def _profile_files(
+    request: ImplementScenarioRequest, blocking: Sequence[CommandControl]
+) -> Sequence[Path]:
+    """The profile's files the call needs: a control of the code that blocks, or a minimum whose
+    command is one of the profile's modules (F71)."""
+    measures = agent_measures(request.controls, request.installed_plugins)
+    if blocking or any(AGENT_FILES in measure.command for measure in measures):
+        return request.agent_files
+    return ()

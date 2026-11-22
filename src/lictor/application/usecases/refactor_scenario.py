@@ -23,6 +23,7 @@ from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
 from lictor.domain.complexity import OverLimit, refactor_complexity_text
 from lictor.domain.controls import (
+    GREEN_COVERAGE,
     CommandControl,
     Control,
     agent_command,
@@ -30,6 +31,7 @@ from lictor.domain.controls import (
     code_controls,
     refactor_measures,
     refactor_measures_text,
+    runnable_command,
 )
 from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
@@ -70,6 +72,9 @@ class RefactorScenarioRequest:
     baseline: Mapping[str, Measure] = field(default_factory=dict)
     # The profile's files, copied next to the call for an `agent_run` that names them.
     agent_files: Sequence[Path] = ()
+    # The directory of that verification: the refactor's coverage measure compares with the
+    # green's report there (F71). None leaves it to the counts in the prompt.
+    baseline_step: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,7 @@ class RefactorScenario:
                 "La especificación o el driver cambiaron fuera de Lictor. "
                 "Edición manual detectada; ejecución terminada."
             )
+        green = _green_reports(request)
         template = (
             request.prompt_template
             if request.prompt_template is not None
@@ -118,7 +124,7 @@ class RefactorScenario:
             .read_text(encoding="utf-8")
         )
         prompt_sha = f"sha256:{hashlib.sha256(template.encode('utf-8')).hexdigest()}"
-        with agent_files_dir(request.project_root, request.agent_files) as files_dir:
+        with agent_files_dir(request.project_root, request.agent_files, green) as files_dir:
             files = str(files_dir) if files_dir is not None else None
             prompt = self._prompt(request, template, files)
 
@@ -172,7 +178,7 @@ class RefactorScenario:
         )
 
     def _prompt(self, request: RefactorScenarioRequest, template: str, files: str | None) -> str:
-        measures = refactor_measures(request.controls, request.installed_plugins)
+        measures = _runnable_measures(request, files)
         code = code_controls(request.controls)
         own = [cmd for c in code if (cmd := agent_command(c, files)) is not None]
         commands = list(
@@ -194,7 +200,7 @@ class RefactorScenario:
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{check_commands}": ", ".join(commands) or "los tests del proyecto",
-            "{medidas}": refactor_measures_text(measures),
+            "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
             "{medidas_del_codigo}": _code_text(request, code, files, changed),
             "{hints}": request.hints,
         }
@@ -229,3 +235,34 @@ def _code_text(
         if text:
             texts.append(text)
     return "\n\n".join(texts)
+
+
+def _green_left(baseline: Mapping[str, Measure]) -> dict[str, dict[str, int]]:
+    """What the green left untested, by control and kind, for the refactor's prompt (F71)."""
+    return {
+        control_id: {str(kind): count for kind, count in measure.misses}
+        for control_id, measure in baseline.items()
+        if measure.misses is not None and measure.findings is None
+    }
+
+
+def _green_reports(request: RefactorScenarioRequest) -> list[tuple[Path, str]]:
+    """The green's coverage report, for the profile's coverage measure to compare with (F71)."""
+    if request.baseline_step is None:
+        return []
+    return [
+        (request.baseline_step / f"control_{control.id}.xml", GREEN_COVERAGE)
+        for control in request.controls
+        if control.report == "coverage"
+    ][:1]
+
+
+def _runnable_measures(
+    request: RefactorScenarioRequest, files: str | None
+) -> list[tuple[str, str]]:
+    """Each control the refactor can measure, with its command as this call can run it."""
+    return [
+        (control_id, command)
+        for control_id, raw in refactor_measures(request.controls, request.installed_plugins)
+        if (command := runnable_command(raw, files)) is not None
+    ]

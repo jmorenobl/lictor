@@ -61,6 +61,7 @@ from lictor.domain.rules import (
     score_meets,
     stub_lines,
     suppression_matches,
+    suppressions_not_moved,
     suspicious_driver,
     unmapped_cases,
 )
@@ -535,6 +536,58 @@ def test_suppression_matches_joins_literals_and_patterns_once_and_sorted() -> No
 
     assert found == ["# noqa", r"\bsys\.path\b"]
     assert suppression_matches(["x = 1"], ["# noqa"], [r"\bsys\.path\b"]) == []
+
+
+_LITERALS = ["# noqa", "# type: ignore"]
+_PATTERNS = [r"#\s*noqa", r"\bsys\.path\.(insert|append)\b"]
+_IMPORT = "            from verifactu_py.services.xml_validator import (  # noqa: PLC0415"
+
+# F72: what a change adds and removes, and what the suppressions rule refuses of it.
+_MOVES: list[tuple[str, list[str], list[str], list[str]]] = [
+    ("juntar tres en una", [_IMPORT.strip()], [_IMPORT] * 3, []),
+    ("mover a otro módulo", ["    def f(x):  # noqa: ARG001"], ["def f(x):  # noqa: ARG001"], []),
+    ("reindentar", ["        y = g()  # noqa: E501"], ["    y = g()  # noqa: E501"], []),
+    ("sin supresiones", ["x = 1"], ["y = 2"], []),
+    ("quitar una", [], ["x = 1  # noqa"], []),
+    ("añadir una", ["x = 1  # noqa: E501"], [], ["# noqa: E501"]),
+    (
+        "una más de las que había",
+        ["a  # noqa: E501", "b  # noqa: E501"],
+        ["a  # noqa: E501"],
+        ["# noqa: E501"],
+    ),
+    ("cambiar su código", ["x = 1  # noqa: F401"], ["x = 1  # noqa: E501"], ["# noqa: F401"]),
+    ("ampliarla", ["x = 1  # noqa"], ["x = 1  # noqa: E501"], ["# noqa"]),
+    (
+        "type: ignore con código",
+        ["x = f()  # type: ignore[arg-type]"],
+        ["x = f()  # type: ignore"],
+        ["# type: ignore[arg-type]"],
+    ),
+    (
+        "un patrón con otro argumento",
+        ["sys.path.insert(0, 'otro')"],
+        ["sys.path.insert(0, 'src')"],
+        ["sys.path.insert(0, 'otro')"],
+    ),
+    ("un patrón movido", ["    sys.path.append(p)"], ["sys.path.append(p)"], []),
+]
+
+
+@pytest.mark.parametrize(
+    ("added", "removed", "found"), [m[1:] for m in _MOVES], ids=[m[0] for m in _MOVES]
+)
+def test_suppressions_not_moved_refuses_only_what_the_change_adds(
+    added: list[str], removed: list[str], found: list[str]
+) -> None:
+    assert suppressions_not_moved(added, removed, _LITERALS, _PATTERNS) == found
+
+
+def test_suppressions_not_moved_counts_literal_and_pattern_of_one_line_once_each() -> None:
+    """`# noqa` is both a literal and a pattern of the profile: both keys are its same text."""
+    assert suppressions_not_moved(
+        ["x  # noqa", "y  # noqa"], ["x  # noqa"], _LITERALS, _PATTERNS
+    ) == ["# noqa"]
 
 
 def test_describe_suppressions_names_each_finding_once() -> None:

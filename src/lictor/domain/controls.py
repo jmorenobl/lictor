@@ -156,8 +156,14 @@ def refactor_measures(
     )
 
 
-def refactor_measures_text(measures: Sequence[tuple[str, str]]) -> str:
-    """The lines of the refactor's prompt that say how to check it leaves no more untested."""
+def refactor_measures_text(
+    measures: Sequence[tuple[str, str]], left: Mapping[str, Mapping[str, int]] | None = None
+) -> str:
+    """The lines of the refactor's prompt that say how to check it leaves no more untested.
+
+    `left` is what the green left untested, by control and kind (`score_misses`): with it the
+    refactor can tell a rise from one measure after editing (F71), as with `in_clones`.
+    """
     if not measures:
         return ""
     lines = [
@@ -165,8 +171,33 @@ def refactor_measures_text(measures: Sequence[tuple[str, str]]) -> str:
         "el verde, y descarta el refactor si deja más. Quitar código que ya estaba probado no "
         "cuenta. Mídelo antes y después de cambiar nada:"
     ]
-    lines.extend(f"  - {control_id}: `{command}`." for control_id, command in measures)
+    counted = False
+    for control_id, command in measures:
+        counts = (left or {}).get(control_id)
+        green = _green_left(counts) if counts else ""
+        counted = counted or bool(green)
+        lines.append(f"  - {control_id}: `{command}`.{green}")
+    if counted:
+        lines.append(
+            "  Si sube, es código que el verde no cubría y que has partido o movido (cada función "
+            "nueva es una línea más sin cubrir): cúbrelo con un test unitario o no lo partas."
+        )
     return "\n".join(lines)
+
+
+def _green_left(counts: Mapping[str, int]) -> str:
+    """What the green left untested, in the words of the refactor's prompt."""
+    if "lines" in counts or "branches" in counts:
+        return (
+            f" El verde dejaba {counts.get('lines', 0)} líneas y {counts.get('branches', 0)} "
+            "ramas sin cubrir: el refactor no puede dejar más."
+        )
+    if "mutants" in counts:
+        return (
+            f" El verde dejaba {counts['mutants']} mutantes sin matar: el refactor no puede "
+            "dejar más."
+        )
+    return ""
 
 
 def controls_of_stage[C: CommandControl | ReaderControl](
@@ -523,9 +554,18 @@ def code_controls(controls: Sequence[Control]) -> tuple[CommandControl, ...]:
 
 def agent_command(control: Control, files_dir: str | None) -> str | None:
     """A control's `agent_run` as the agent can run it in this call, or None if it can't."""
-    command = control.agent_run
+    return runnable_command(control.agent_run, files_dir)
+
+
+def runnable_command(command: str | None, files_dir: str | None) -> str | None:
+    """A command as the agent can run it in this call: one naming the profile's files needs them."""
     if command is None:
         return None
     if AGENT_FILES in command:
         return None if files_dir is None else with_agent_files(command, files_dir)
     return command
+
+
+# The green's coverage report, next to the profile's files for a refactor call (F71): the
+# profile's coverage measure compares with it.
+GREEN_COVERAGE: Final = "coverage-del-verde.json"

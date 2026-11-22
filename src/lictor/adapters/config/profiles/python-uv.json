@@ -18,7 +18,7 @@
     {"id": "lint",  "level": "L1", "run": "uv run ruff check src", "report": "exit-code", "mode": "block"},
     {"id": "types", "level": "L1", "run": "uv run mypy src", "report": "exit-code", "mode": "block"},
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"},
-    {"id": "coverage", "level": "L2", "reads": "unit", "adds": "--cov=src --cov-branch --cov-fail-under=0 --cov-report=json:{out}", "report": "coverage", "mode": "measure", "when_plugin": "pytest_cov.plugin", "agent_run": "uv run pytest tests/unit -q --cov=src --cov-branch --cov-report=term-missing"},
+    {"id": "coverage", "level": "L2", "reads": "unit", "adds": "--cov=src --cov-branch --cov-fail-under=0 --cov-report=json:{out}", "report": "coverage", "mode": "measure", "when_plugin": "pytest_cov.plugin", "agent_run": "uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q"},
     {"id": "complexity", "level": "L1", "run": "uv run python -I -B -m lictor_complexity src --out {out}", "report": "complexity", "mode": "measure", "limit": 10, "agent_run": "uv run python -I -B {lictor_files}/lictor_complexity.py src"},
     {"id": "duplication", "level": "L1", "run": "uv run python -I -B -m lictor_duplication src --out {out}", "report": "duplication", "mode": "measure", "agent_run": "uv run python -I -B {lictor_files}/lictor_duplication.py src"}
   ],
@@ -71,7 +71,7 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV", "LICTOR_*"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py"]
   },
   "oracle": {
     "link": "scenario",
@@ -87,7 +87,7 @@
     },
     "interface_impostor": {"variable": "LICTOR_IMPOSTOR", "control": "control", "modes": ["mas", "menos"]}
   },
-  "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)", "Bash(uv run python -I -B {lictor_files}/lictor_complexity.py:*)", "Bash(uv run python -I -B {lictor_files}/lictor_duplication.py:*)"],
+  "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)", "Bash(uv run python -I -B {lictor_files}/lictor_complexity.py:*)", "Bash(uv run python -I -B {lictor_files}/lictor_coverage.py:*)", "Bash(uv run python -I -B {lictor_files}/lictor_duplication.py:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],
   "hints": "Python {requires-python}, gestor uv, tests con pytest. El código va en src/<paquete>/.",
   "refactor_hints": "- Funciones cortas: ninguna de más de 30 líneas de código.\n- Complejidad ciclomática baja, contada así: 1, más 1 por cada if, elif, ternario, for, while, except, case (salvo un `case _` final), for o if de una comprensión, y operando de un and/or tras el primero; una función anidada o un método cuentan aparte. Divide las que superen el límite que se indica abajo.\n- Sin código repetido: lo que se repite se escribe una vez. Si dos partes recorren lo mismo (dos clases que avanzan igual por los mismos datos), comparte el recorrido, que una use el resultado de la otra o una base común, en lugar de extraer trozos sueltos.\n- Un módulo por responsabilidad dentro de src/<paquete>/, en lugar de todo en __init__.py; __init__.py solo reexporta la interfaz pública que usan los tests.\n- Nombres que digan qué hace cada cosa, y tipos en todas las firmas.\n- No cambies la interfaz pública que llaman los tests de aceptación.",
