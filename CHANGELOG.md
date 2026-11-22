@@ -7,6 +7,20 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Corregido
+
+- **Un stub en `__init__` ya no rechaza el driver entero** (F68, enmienda de la ADR-0012). Los
+  impostores de stubs ponían `True` o un doble donde el stub lanzaba `NotImplementedError`, y un
+  `__init__` que devuelve algo distinto de None lanza `TypeError` al construir el objeto: ningún
+  test llegaba a su Entonces. Ahora cada constante pasa por `lictor_doubles.stub()`, que en un
+  `__init__` devuelve None. En la primera pasada de adopción el agente había renunciado a las
+  clases para esquivarlo.
+
+### Al actualizar desde la 0.14.0
+
+- **Un run empezado con la 0.14.0 no se reanuda:** cambian las constantes del perfil y un fichero
+  del entorno de verificación, que entran en la huella. Empieza uno nuevo con `lictor run --new`.
+
 ## [0.14.0] - 2026-11-21
 
 Un control de duplicación que mide en cada verificación sin bloquear, dice al refactor qué clones

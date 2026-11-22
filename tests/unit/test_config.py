@@ -586,7 +586,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
                 "typing",
             },
         ),
-        (lictor_doubles.__file__, {"collections", "math", "pytest"}),
+        (lictor_doubles.__file__, {"collections", "math", "pytest", "sys"}),
         (lictor_complexity.__file__, {"ast", "collections", "json", "pathlib", "sys"}),
         (
             lictor_duplication.__file__,
@@ -1134,10 +1134,12 @@ def test_the_oracle_comes_from_the_profile_only(tmp_path: Path) -> None:
     assert defences.impostors is not None
     assert defences.impostors.replacements == (
         StubConstant(r"\1return None", "None"),
-        StubConstant(r"\1return True", "True"),
-        StubConstant(r'\1return __import__("lictor_doubles").ONE', "un doble de Lictor", True),
+        StubConstant(r'\1return __import__("lictor_doubles").stub("True")', "True"),
         StubConstant(
-            r'\1return __import__("lictor_doubles").EMPTY', "un doble vacío de Lictor", True
+            r'\1return __import__("lictor_doubles").stub("ONE")', "un doble de Lictor", True
+        ),
+        StubConstant(
+            r'\1return __import__("lictor_doubles").stub("EMPTY")', "un doble vacío de Lictor", True
         ),
     )
     config = json.loads((REPO_ROOT / "lictor.json").read_text(encoding="utf-8"))

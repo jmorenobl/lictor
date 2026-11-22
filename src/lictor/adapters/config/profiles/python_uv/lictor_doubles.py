@@ -2,9 +2,11 @@
 
 Lictor copies this file into the verification environment, so it runs where Lictor isn't installed
 and must import nothing of it. A stub `raise NotImplementedError` becomes
-`return __import__("lictor_doubles").ONE` (or `EMPTY`), so that a test that reads an attribute, an
-index or each element of what the interface returns reaches its own assertion instead of failing on
-`None.vence`. It is also a pytest plugin, only to count each test's operations from nothing.
+`return __import__("lictor_doubles").stub("ONE")` (or `"EMPTY"`, or `"True"`), so that a test that
+reads an attribute, an index or each element of what the interface returns reaches its own
+assertion instead of failing on `None.vence`. In an `__init__` every constant is None, the only
+value Python lets it return (F68). It is also a pytest plugin, only to count each test's operations
+from nothing.
 
 - **What a test does with a double gives another double:** an attribute, an index, a call or an
   arithmetic operation gives a child of the same kind, one level deeper. Each name and each key
@@ -21,6 +23,7 @@ It runs in the same process as the code under test, which could see it and behav
 """
 
 import math
+import sys
 from collections.abc import Iterator
 
 import pytest
@@ -152,6 +155,21 @@ class ReturnedByLictor:
 
 ONE = ReturnedByLictor(empty=False)
 EMPTY = ReturnedByLictor(empty=True)
+
+
+_CONSTANTS: "dict[str, object]" = {"True": True, "ONE": ONE, "EMPTY": EMPTY}
+
+
+def stub(name: str) -> object:
+    """What a stub returns in this run: the constant `name`, or None from an `__init__`.
+
+    An `__init__` that returns anything but None raises `TypeError` where it is called, a Given or
+    a When, so no test could reach its Then: the driver was rejected whatever its tests (F68). Its
+    object then has no attributes, and its methods, stubs too, return the constant.
+    """
+    if sys._getframe(1).f_code.co_name == "__init__":
+        return None
+    return _CONSTANTS[name]
 
 
 def reset() -> None:
