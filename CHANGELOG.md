@@ -7,7 +7,23 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
-## [0.15.0] - 2026-11-22
+## [0.15.1] - 2026-11-23
+
+La 0.15.0 no llegó a publicarse: la suite completa, que la publicación exige antes de subir nada, se
+cortó dos veces en macOS a los 90 minutos sin ningún test fallado. Esta versión publica lo mismo que
+la 0.15.0 (su sección, más abajo, dice qué cambia) con la suite completa arreglada.
+
+### Corregido
+
+- **La suite completa vuelve a repartir los `repro` entre los procesos.** Con el reparto por defecto
+  de pytest-xdist cada proceso empieza con un bloque de tests seguidos, y los `repro` se recogen los
+  primeros: cuando crecieron los tests unitarios, el bloque del primer proceso los abarcó todos, y en
+  macOS se ejecutaban uno detrás de otro mientras los otros dos procesos esperaban. En diez días el
+  trabajo pasó de 36 a más de 90 minutos. Ahora corre con `--dist worksteal`, y la suite completa
+  tiene su propio `Presupuesto`, que avisa de un trabajo de más de 60 minutos: faltaba, y por eso no
+  avisó nada.
+
+## [0.15.0] - 2026-11-22 [NO PUBLICADA]
 
 Lo que la primera adopción de un proyecto real (pyverifactu, 45 escenarios) mostró que fallaba: un
 stub en `__init__` rechazaba el driver entero, y el refactor se descartaba por subir una o dos líneas
@@ -892,7 +908,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.15.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/jmorenobl/lictor/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/jmorenobl/lictor/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/jmorenobl/lictor/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/jmorenobl/lictor/compare/v0.12.0...v0.13.0

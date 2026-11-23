@@ -25,8 +25,12 @@ jobs:
   full:
     name: Suite completa (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    # The whole suite took 35-50 min on macOS, the slowest, in one job.
-    timeout-minutes: 90
+    # `--dist worksteal`: with the default (`load`) each worker starts with a run of consecutive
+    # tests, a quarter of its share, and the `repro` cases are collected first. Once that run held
+    # every one of them, macOS (3 workers) ran them all in one worker, one after another, while the
+    # other two were idle after 3 min: the job grew from 36 to over 90 min in ten days, with the
+    # unit tests and not the `repro` cases. With work stealing an idle worker takes from a busy one.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -45,16 +49,16 @@ jobs:
           version: "0.12.18"
       - run: uv sync --all-groups --frozen
       - if: env.MEASURES_COVERAGE != 'true' && env.KEEPS_DURATIONS != 'true'
-        run: uv run pytest tests -n auto -q
+        run: uv run pytest tests -n auto --dist worksteal -q
       - if: env.MEASURES_COVERAGE == 'true'
-        run: uv run pytest tests -n auto -q --cov=lictor --cov-branch --cov-report=term
+        run: uv run pytest tests -n auto --dist worksteal -q --cov=lictor --cov-branch --cov-report=term
       - if: always() && env.MEASURES_COVERAGE == 'true'
         run: >-
           echo "Cobertura completa, con repro: $(uv run coverage report --format=total) %"
           >> "$GITHUB_STEP_SUMMARY"
       - if: env.KEEPS_DURATIONS == 'true'
         run: >-
-          uv run pytest tests -n auto -q
+          uv run pytest tests -n auto --dist worksteal -q
           --store-durations --durations-path "$RUNNER_TEMP/all-durations.json"
       - if: env.KEEPS_DURATIONS == 'true'
         run: >-
@@ -66,3 +70,27 @@ jobs:
           name: test_durations
           path: ${{ runner.temp }}/test_durations
           retention-days: 30
+
+  budget:
+    name: Presupuesto
+    needs: [full]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # An alarm, never a gate: a failure of the script must not stop the release that waits on this.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+      # Each job against its budget, without the critical path of a pull request: these run apart.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          JOBS_ENDPOINT: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100
+        run: uv run --no-project --with defusedxml python scripts/ci_budget.py full-suite-jobs "$JOBS_ENDPOINT"

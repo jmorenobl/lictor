@@ -31,6 +31,10 @@ jobs:
   full-suite:
     name: Suite completa
     uses: ./.github/workflows/suite-completa.yml
+    # Its `Presupuesto` reads the jobs of this run from the API.
+    permissions:
+      actions: read
+      contents: read
 
   release:
     name: Publicar
