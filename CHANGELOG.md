@@ -7,6 +7,35 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.16.0] - 2026-11-23
+
+El contrato de arranque (ADR-0015): antes del primer run, `lictor doctor` dice lo que falta y lo que
+los controles no ven. En `pyverifactu`, lo que vio a mano la revisión de la fase 4a lo dice ahora
+`doctor`, más dos cosas que la pasada no vio.
+
+### Añadido
+
+- **`doctor` y cada run nuevo comprueban las dependencias de la verificación** (F66). La aceptación
+  del perfil `python-uv` necesita `pytest-bdd`: sin él, el run se paraba en el rojo o en `L0-rutas`
+  después de gastar la llamada del driver. Y cada programa que un control lanza con `uv run` tiene
+  que estar en el entorno: un `ruff` fuera del lock hacía fallar `lint` en cada intento, y un
+  `pytest` fuera del lock usaba el de la máquina, con otro intérprete.
+- **«Lo que los controles no ven»** (F67, F70), en `doctor`, al empezar cada run y en `report.md`:
+  tests que ningún control ejecuta, tests que solo ejecuta `lictor check`, tests o ficheros que
+  carga el run y que el agente no puede cambiar (un `conftest.py` que importa el código, con los
+  nombres que importa), y código que usa el proyecto y que ningún control lee. Lo lee un módulo del
+  perfil (`lictor_survey.py`) sin importar ni ejecutar nada del proyecto; cuando no se puede saber qué
+  ejecuta un control, lo dice en lugar de avisar en falso. No para nada.
+- **`blind_spots.accepted` en `lictor.json`**: las rutas que la persona acepta que no se vean. Sus
+  avisos solo se cuentan.
+- **La skill de `python-uv` explica cómo adoptar un proyecto con código**, aviso por aviso.
+
+### Cambiado
+
+- **`lictor doctor` y `lictor run` salen con 10 cuando falta una dependencia de la verificación.**
+  El código no es nuevo (es del proyecto), pero un proyecto así antes pasaba `doctor` con 0 y el run
+  fallaba más tarde.
+
 ## [0.15.1] - 2026-11-23
 
 La 0.15.0 no llegó a publicarse: la suite completa, que la publicación exige antes de subir nada, se

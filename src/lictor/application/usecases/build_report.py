@@ -9,6 +9,7 @@ from typing import Any, Final
 
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
+from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
 from lictor.domain.driver_measures import DriverMeasures, StubMeasure, measures_from_record
 from lictor.domain.duplication import describe_duplication
@@ -187,6 +188,16 @@ def _judged_score(judged: RecordedJudged) -> str:
         d = judged.duplication
         return f", {describe_duplication(d.clones, d.in_clones, d.code_tokens)}"
     return f", {describe_score(judged.score)}" if judged.score else ""
+
+
+def _blind_spot_section(info: dict[str, Any]) -> list[str]:
+    """What the run saw at its start that no control sees (ADR-0015), one line each."""
+    spots = info["blind_spots"]
+    if spots is None:
+        return ["- *No se miró al empezar el run.*"]
+    return [f"- {line}" for line in spots] or [
+        "- *Nada: algún control ve cada test y cada fichero que usa el código.*"
+    ]
 
 
 @dataclass(frozen=True)
@@ -559,6 +570,7 @@ class BuildReport:
             "failed_by_level": defaultdict(int),
             "attempts": [],
             "check_controls": [],
+            "blind_spots": None,
             "measures": [],
             "scores": [],
             "skipped_controls": [],
@@ -619,6 +631,7 @@ class BuildReport:
             for c in (listed if isinstance(listed, list) else [])
             if isinstance(c, dict)
         ]
+        info["blind_spots"] = blind_spot_lines(ev.data.get("blind_spots"))
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
         scens = ev.data.get("scenarios", [])
@@ -909,6 +922,8 @@ class BuildReport:
         lines.extend(
             info["check_controls"] or ["- *Ninguno: todos los controles corren en cada intento.*"]
         )
+
+        lines.extend(["", "## Lo que los controles no ven", *_blind_spot_section(info)])
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])

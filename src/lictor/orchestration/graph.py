@@ -53,6 +53,7 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.domain.blind_spots import blind_spots_record
 from lictor.domain.controls import Control
 from lictor.domain.errors import (
     CandidateError,
@@ -329,7 +330,10 @@ class _GraphNodes:
         if state.get("exit_code") is not None:
             return {}
         # The verification environment is built here, before any agent call can be spent.
-        report = self.ctx.preconditions.execute(PreconditionsRequest(run_id=state["run_id"]))
+        start_dir = self.ctx.project_root / ".lictor" / "runs" / state["run_id"] / "start"
+        report = self.ctx.preconditions.execute(
+            PreconditionsRequest(run_id=state["run_id"], survey_dir=start_dir)
+        )
         problems = report.problems
         if problems:
             reason = " ".join(problem.message for problem in problems)
@@ -353,6 +357,7 @@ class _GraphNodes:
                     }
                     for control in self.ctx.check_controls
                 ],
+                "blind_spots": blind_spots_record(report.blind_spots),
             },
         )
         self.ctx.event_log.append(event)

@@ -734,3 +734,15 @@ def test_status_tells_a_green_already_met_apart() -> None:
     assert "Verdes: 1 de 2 (1 ya se cumplía). En cuarentena: 0. Pendientes: 1." in lines
     assert "  - A-001: verde (ya se cumplía)" in lines
     assert progress.greens == ["A-001"]
+
+
+def test_the_start_tells_what_the_controls_dont_see() -> None:
+    spots = {"skipped": None, "spots": [], "lines": ["Tests sin control.", "Aceptados: 2."]}
+
+    lines = _lines(RunProgress(), _event("run.started", blind_spots=spots))
+
+    assert lines == [
+        "Entorno de verificación listo.",
+        "⚠ Lo que los controles no ven: Tests sin control.",
+        "⚠ Lo que los controles no ven: Aceptados: 2.",
+    ]

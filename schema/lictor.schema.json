@@ -76,6 +76,21 @@
       "title": "BackendConfig",
       "type": "object"
     },
+    "BlindSpotsConfig": {
+      "additionalProperties": false,
+      "description": "What the person accepts that no control sees: paths whose warnings are only counted.",
+      "properties": {
+        "accepted": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Accepted",
+          "type": "array"
+        }
+      },
+      "title": "BlindSpotsConfig",
+      "type": "object"
+    },
     "ControlChange": {
       "additionalProperties": false,
       "description": "Un control escrito en lictor.json: cambia, quita o añade uno sobre los del perfil.\n\nCon el `id` de un control del perfil, cambia solo los campos escritos, y `enabled: false` lo\nquita. Con otro `id`, añade un control: uno que ejecuta necesita `level`, `report` y `run`, y\nuno que lee la ejecución de otro, `level`, `report: \"coverage\"`, `reads` y `adds`. `run`,\n`reads` y `adds` se escriben o no, pero nunca con null.",
@@ -375,6 +390,9 @@
     },
     "refactor": {
       "$ref": "#/$defs/RefactorConfig"
+    },
+    "blind_spots": {
+      "$ref": "#/$defs/BlindSpotsConfig"
     },
     "paths": {
       "anyOf": [
