@@ -1,21 +1,24 @@
 """Warn, without failing, when the CI goes over its time budget.
 
-Two uses:
+Its uses:
 
-    ci_budget.py slow-tests <junit.xml>   tests outside `repro` slower than SLOW_TEST_S
-    ci_budget.py jobs <jobs.json>         each job, and the critical path, against its budget
-    ci_budget.py api-jobs <endpoint>      the same, asking GitHub's API for the jobs
+    ci_budget.py slow-tests <junit.xml>        tests outside `repro` slower than SLOW_TEST_S
+    ci_budget.py jobs <jobs.json>              each job, and the critical path, against its budget
+    ci_budget.py api-jobs <endpoint>           the same, asking GitHub's API for the jobs
+    ci_budget.py full-suite-jobs <endpoint>    each job of the full suite, with no critical path
 
 `jobs.json` is what `gh api repos/<repo>/actions/runs/<id>/attempts/<n>/jobs` returns, and
-`api-jobs` takes that endpoint. Each finding is a GitHub annotation (`::warning::`), and both job
-commands also append a table to `$GITHUB_STEP_SUMMARY`. They exit 0 whatever they find: a budget is
-an alarm, not a gate, and a timeout (the cut against a hung job) is set apart and much looser. A
-runner can be up to 1.8 times slower than another, so a gate set at the budget would fail work that
-didn't grow.
+`api-jobs` and `full-suite-jobs` take that endpoint. The critical path is a pull request's: the full
+suite's jobs run apart, each with its own budget, and nobody waits on the slowest.
 
-The API fails now and then (a 502 once failed the job): `api-jobs` asks again after a short wait,
-and if it never answers it says so with a warning and checks nothing. A failure of the script itself
-still fails the job.
+Each finding is a GitHub annotation (`::warning::`), and the job commands also append a table to
+`$GITHUB_STEP_SUMMARY`. They exit 0 whatever they find: a budget is an alarm, not a gate, and a
+timeout (the cut against a hung job) is set apart and much looser. A runner can be up to 1.8 times
+slower than another, so a gate set at the budget would fail work that didn't grow.
+
+The API fails now and then (a 502 once failed the job): the commands that ask it ask again after a
+short wait, and if it never answers they say so with a warning and check nothing. A failure of the
+script itself still fails the job.
 
 The queue is shown apart: `timeout-minutes` doesn't count it, and it depends on GitHub's capacity
 at that moment, not on the suite.
@@ -42,6 +45,9 @@ JOB_BUDGETS_MIN = (
     ("Repro", 10.0),
     ("Lictor se verifica", 8.0),
     ("Dependencias", 3.0),
+    # The full suite's, each night and before a release; called from release.yml its jobs are
+    # «Suite completa / Suite completa (...)», which starts the same.
+    ("Suite completa", 60.0),
 )
 CRITICAL_PATH_MIN = 12.0
 # Seconds to wait before each new question to the API: three questions in all, within a minute.
@@ -49,7 +55,7 @@ API_RETRY_WAITS_S = (5.0, 15.0)
 API_TIMEOUT_S = 60.0
 USAGE = (
     "Uso: ci_budget.py slow-tests <junit.xml> | ci_budget.py jobs <jobs.json> "
-    "| ci_budget.py api-jobs <endpoint>"
+    "| ci_budget.py api-jobs <endpoint> | ci_budget.py full-suite-jobs <endpoint>"
 )
 
 
@@ -110,7 +116,9 @@ def budget_of(name: str) -> float | None:
     return next((minutes for prefix, minutes in JOB_BUDGETS_MIN if name.startswith(prefix)), None)
 
 
-def job_warnings(jobs: Sequence[Job]) -> list[str]:
+def job_warnings(
+    jobs: Sequence[Job], critical_path_min: float | None = CRITICAL_PATH_MIN
+) -> list[str]:
     """Each job over its budget, and the critical path over its own; the queue never counts."""
     warnings = []
     for job in jobs:
@@ -121,9 +129,9 @@ def job_warnings(jobs: Sequence[Job]) -> list[str]:
                 f"(cola aparte: {job.queue_min:.1f} min)"
             )
     critical = max((job.run_min for job in jobs), default=0.0)
-    if critical > CRITICAL_PATH_MIN:
+    if critical_path_min is not None and critical > critical_path_min:
         warnings.append(
-            f"Camino crítico sin cola: {critical:.1f} min, presupuesto {CRITICAL_PATH_MIN:.0f} min"
+            f"Camino crítico sin cola: {critical:.1f} min, presupuesto {critical_path_min:.0f} min"
         )
     return warnings
 
@@ -194,8 +202,8 @@ def fetch_jobs(
     return ApiFailure(attempts=1 + len(API_RETRY_WAITS_S), reason=reason)
 
 
-def summary(jobs: Sequence[Job]) -> str:
-    """A table of every job, with the critical path with and without the queue."""
+def summary(jobs: Sequence[Job], critical_path_min: float | None = CRITICAL_PATH_MIN) -> str:
+    """A table of every job, with the critical path with and without the queue, if it has one."""
     lines = [
         "| Trabajo | Ejecución (min) | Cola (min) | Presupuesto (min) |",
         "|:--|--:|--:|--:|",
@@ -204,14 +212,14 @@ def summary(jobs: Sequence[Job]) -> str:
         budget = budget_of(job.name)
         shown = "—" if budget is None else f"{budget:.0f}"
         lines.append(f"| {job.name} | {job.run_min:.1f} | {job.queue_min:.1f} | {shown} |")
-    if jobs:
+    if jobs and critical_path_min is not None:
         without_queue = max(job.run_min for job in jobs)
         start = min(job.created for job in jobs)
         with_queue = (max(job.completed for job in jobs) - start).total_seconds() / 60
         lines.append("")
         lines.append(
             f"Camino crítico: {without_queue:.1f} min sin cola (presupuesto "
-            f"{CRITICAL_PATH_MIN:.0f}), {with_queue:.1f} min con ella."
+            f"{critical_path_min:.0f}), {with_queue:.1f} min con ella."
         )
     return "\n".join(lines) + "\n"
 
@@ -223,14 +231,16 @@ def _append_summary(text: str) -> None:
             out.write(text)
 
 
-def _budget_warnings(payload: dict[str, object]) -> list[str]:
+def _budget_warnings(
+    payload: dict[str, object], critical_path_min: float | None = CRITICAL_PATH_MIN
+) -> list[str]:
     jobs = finished_jobs(payload)
-    _append_summary(summary(jobs))
-    return job_warnings(jobs)
+    _append_summary(summary(jobs, critical_path_min))
+    return job_warnings(jobs, critical_path_min)
 
 
 def main(argv: Sequence[str]) -> int:
-    commands = ("slow-tests", "jobs", "api-jobs")
+    commands = ("slow-tests", "jobs", "api-jobs", "full-suite-jobs")
     if len(argv) != len(("command", "argument")) or argv[0] not in commands:
         print(USAGE, file=sys.stderr)
         return 2
@@ -245,7 +255,8 @@ def main(argv: Sequence[str]) -> int:
             _append_summary(f"{fetched.warning}\n")
             warnings = [fetched.warning]
         else:
-            warnings = _budget_warnings(fetched)
+            critical_path_min = None if command == "full-suite-jobs" else CRITICAL_PATH_MIN
+            warnings = _budget_warnings(fetched, critical_path_min)
     for warning in warnings:
         print(f"::warning::{warning}")
     return 0

@@ -307,8 +307,13 @@ def test_ci_budget_needs_a_known_command_and_a_path() -> None:
 
 def test_the_ci_names_match_the_budgets() -> None:
     """A renamed job would silently lose its budget."""
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    names = [line.split("name:", 1)[1].strip() for line in ci.splitlines() if "    name: " in line]
+    workflows = REPO_ROOT / ".github" / "workflows"
+    text = "".join(
+        (workflows / name).read_text(encoding="utf-8") for name in ("ci.yml", "suite-completa.yml")
+    )
+    names = [
+        line.split("name:", 1)[1].strip() for line in text.splitlines() if "    name: " in line
+    ]
     budgeted = [prefix for prefix, _ in _load("ci_budget").JOB_BUDGETS_MIN]
 
     assert all(any(name.startswith(prefix) for name in names) for prefix in budgeted), names
@@ -439,3 +444,56 @@ def test_the_ci_asks_the_api_through_the_script() -> None:
 
     assert "ci_budget.py api-jobs" in ci
     assert "gh api" not in ci
+
+
+def _long_job(name: str, started: str, completed: str | None) -> dict[str, object]:
+    """A job created at 10:00 that may run longer than an hour."""
+    return {
+        "name": name,
+        "created_at": "2026-11-12T10:00:00Z",
+        "started_at": f"2026-11-12T{started}:00Z",
+        "completed_at": f"2026-11-12T{completed}:00Z" if completed else None,
+    }
+
+
+FULL_SUITE = {
+    "jobs": [
+        _long_job("Suite completa / Suite completa (macos-15, Python 3.12)", "10:05", "11:35"),
+        _long_job("Suite completa / Suite completa (ubuntu-24.04, Python 3.13)", "10:01", "10:41"),
+        _long_job("Suite completa / Presupuesto", "11:36", None),
+    ]
+}
+
+
+def test_the_full_suite_has_a_budget_per_job_and_no_critical_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its jobs run apart: only the one over 60 min warns, and no path of a pull request."""
+    answer = tmp_path / "jobs.json"
+    answer.write_text(json.dumps(FULL_SUITE), encoding="utf-8")
+    _fake_gh(tmp_path, f'cat "{answer}"')
+    budget, step_summary = _api_jobs(tmp_path, monkeypatch)
+
+    assert budget.main(["full-suite-jobs", "repos/r/jobs"]) == 0
+
+    assert capsys.readouterr().out == (
+        "::warning::Suite completa / Suite completa (macos-15, Python 3.12): 90.0 min, "
+        "presupuesto 60 min (cola aparte: 5.0 min)\n"
+    )
+    text = step_summary.read_text(encoding="utf-8")
+    assert (
+        "| Suite completa / Suite completa (ubuntu-24.04, Python 3.13) | 40.0 | 1.0 | 60 |" in text
+    )
+    assert "Camino crítico" not in text
+
+
+def test_the_full_suite_steals_work_and_checks_its_budget() -> None:
+    """With the default distribution macOS ran every repro case in one worker, over 90 min."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "suite-completa.yml").read_text(
+        encoding="utf-8"
+    )
+    runs = [line for line in workflow.splitlines() if "uv run pytest" in line]
+
+    assert len(runs) == 3
+    assert all("-n auto --dist worksteal" in line for line in runs), runs
+    assert "ci_budget.py full-suite-jobs" in workflow
