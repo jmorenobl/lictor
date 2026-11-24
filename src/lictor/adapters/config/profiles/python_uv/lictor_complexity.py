@@ -23,6 +23,8 @@ It prints every function, most complex first; with `--out` it also writes them a
 the report the control reads. A file that can't be parsed fails the command and leaves no report.
 """
 
+from __future__ import annotations
+
 import ast
 import json
 import sys

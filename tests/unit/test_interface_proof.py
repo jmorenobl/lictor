@@ -10,6 +10,7 @@ from lictor.domain.interface_proof import (
     InterfaceProof,
     interface_proof,
     interface_proofs,
+    through_note,
     unalterable_note,
     unproved_reason,
     without_impostor_reason,
@@ -485,3 +486,83 @@ def test_what_an_assertion_said_is_cut_at_200_characters(length: int, kept: str)
     detail = interface_proof(PASSED, _modes(failed, failed), DRIVER).detail
 
     assert detail == f"una aserción de un Cuando (modo mas: {kept})"
+
+
+# Through a library (the amendment of coroutines and libraries): calls the impostor never alters.
+
+
+def _through(
+    kind: str, steps: dict[str, int], entries: str, calls: dict[str, int] | None = None
+) -> TestCaseResult:
+    """A test whose calls from the When on a library made, `via` or `handed`, through `entries`."""
+    case = _case(calls={"given": 1} if calls is None else calls)
+    properties = dict(case.properties)
+    properties[f"lictor.interface.{kind}"] = str(sum(steps.values()))
+    for step, n in steps.items():
+        properties[f"lictor.interface.{kind}.{step}"] = str(n)
+        properties[f"lictor.interface.entry.{step}"] = entries
+    return replace(case, properties=properties)
+
+
+def test_a_command_a_runner_invokes_can_t_be_proved_and_no_retry_changes_it() -> None:
+    """The project calls the interface after the driver entered it through the runner."""
+    control = _through("via", {"when": 3}, "typer.testing")
+
+    proof = interface_proof(control, _modes(PASSED, PASSED), DRIVER)
+
+    assert proof == InterfaceProof("a_traves", libraries=("typer.testing",))
+    assert proof.fixable is False
+
+
+def test_a_function_handed_to_a_library_is_retried_and_says_who_calls_it() -> None:
+    control = _through("handed", {"then": 1}, "anyio._core")
+
+    proof = interface_proof(control, _modes(PASSED, PASSED), DRIVER)
+
+    assert proof == InterfaceProof("no_llama", "entrega", ("anyio._core",))
+    assert proof.fixable is True
+    assert unproved_reason("CLI-001", "test_cli_001", proof, ["src/"]) == (
+        "El test test_cli_001 del escenario CLI-001 pasa con un driver nuevo, pero no llama a la "
+        "interfaz en src/ desde sus pasos: se la pasa a anyio._core, que es quien la llama. "
+        "Llámala desde el Cuando o el Entonces y comprueba con assert lo que devuelve, con el "
+        "valor que da su escenario."
+    )
+
+
+def test_what_a_library_called_from_a_given_says_nothing() -> None:
+    control = _through("via", {"given": 2}, "pydantic.main")
+
+    assert interface_proof(control, _modes(PASSED, PASSED), DRIVER) == InterfaceProof(
+        "no_llama", "dado"
+    )
+
+
+def test_a_test_that_also_calls_from_the_then_is_judged_by_its_modes() -> None:
+    control = _through("via", {"when": 3}, "typer.testing", calls={"then": 1})
+
+    assert interface_proof(control, _modes(ASSERTED, ASSERTED), DRIVER).proved
+
+
+def test_the_agent_is_told_not_to_change_a_test_it_can_t_fix() -> None:
+    reason = unproved_reason("CLI-001", "t", InterfaceProof("a_traves", libraries=("x",)), [])
+
+    assert reason == (
+        "El test t del escenario CLI-001 pasa con un driver nuevo. Este test no lo cambies: Lictor "
+        "no puede comprobarlo, y lo decidirá una persona."
+    )
+
+
+def test_the_person_is_told_which_library_each_one_went_through() -> None:
+    note = through_note(
+        {
+            "CLI-001": InterfaceProof("a_traves", libraries=("typer.testing",)),
+            "EXP-001": InterfaceProof("a_traves"),
+        }
+    )
+
+    assert note == (
+        "Lictor no pudo comprobar CLI-001, a través de typer.testing; EXP-001, a través de una "
+        "librería: desde el Cuando y el Entonces su test solo llega a la interfaz a través de esa "
+        "librería, que es la que llama al código (una orden que ejecuta un runner, por ejemplo), "
+        "y Lictor solo altera lo que la interfaz le devuelve al driver."
+    )

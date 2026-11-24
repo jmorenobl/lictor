@@ -195,7 +195,9 @@ def stub_reason(
     if proof.outcome == "a_la_interfaz":
         if interface is None:
             key = "sin_interfaz"
-        elif interface.outcome == "no_llama":
+        elif interface.outcome in ("no_llama", "a_traves"):
+            # Through a library or not at all, what it checks doesn't come from what the
+            # interface returns it: the command it runs passes without the stubs too.
             key = "sin_codigo"
         else:
             return unproved_reason(sid, test_name, interface, writable, _INTERFACE_PASSES)

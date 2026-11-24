@@ -11,7 +11,12 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
-from lictor.domain.driver_measures import DriverMeasures, StubMeasure, measures_from_record
+from lictor.domain.driver_measures import (
+    DriverMeasures,
+    InterfaceMeasure,
+    StubMeasure,
+    measures_from_record,
+)
 from lictor.domain.duplication import describe_duplication
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
@@ -380,8 +385,9 @@ def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> lis
         lines += [
             "| Escenario | Rojo | Stubs, por constante | Con C | Interfaz | "
             "Falla en, por modo | "
-            "Llamadas del control (Dado / Cuando / Entonces / fuera) |",
-            "|---|---|---|---|---|---|---|",
+            "Llamadas del control (Dado / Cuando / Entonces / fuera) | "
+            "Por una librería, desde el Cuando |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         lines += [_measure_row(sid, measures) for sid in _measured_ids(measures)]
     return lines
@@ -423,7 +429,7 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
     rule_c = _stub_text(stub) if stub else "-"
     found = (measures.interface or {}).get(sid)
     if found is None:
-        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - |"
+        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - | - |"
     failed = "; ".join(
         f"{mode}: {_step_word(step) if step else 'sin fallo en un paso'}"
         for mode, step in found.failed_step.items()
@@ -431,8 +437,22 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
     calls = found.calls
     return (
         f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.outcome}` | {failed or '-'} | "
-        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} |"
+        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} | "
+        f"{_library_text(found)} |"
     )
+
+
+def _library_text(found: InterfaceMeasure) -> str:
+    """What reached the interface for the test through a library, from the When on, and which."""
+    via, handed = found.via.from_when, found.handed.from_when
+    if not via and not handed:
+        return "-"
+    parts = [
+        f"{via} desde el código" if via else "",
+        f"{handed} de lo que entrega" if handed else "",
+    ]
+    names = f" ({', '.join(found.libraries)})" if found.libraries else ""
+    return ", ".join(part for part in parts if part) + names
 
 
 def _stub_text(stub: StubMeasure) -> str:

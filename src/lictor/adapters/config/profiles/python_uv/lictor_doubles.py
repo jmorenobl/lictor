@@ -22,6 +22,8 @@ from nothing.
 It runs in the same process as the code under test, which could see it and behave otherwise.
 """
 
+from __future__ import annotations
+
 import math
 import sys
 from collections.abc import Iterator
@@ -43,11 +45,11 @@ class LictorDoubleExhaustedError(Exception):
     """A test followed a double further than any real result goes."""
 
 
-def _the_one() -> "ReturnedByLictor":
+def _the_one() -> ReturnedByLictor:
     return ONE
 
 
-def _the_empty() -> "ReturnedByLictor":
+def _the_empty() -> ReturnedByLictor:
     return EMPTY
 
 
@@ -57,7 +59,7 @@ class ReturnedByLictor:
     __slots__ = ("_children", "_empty", "_level")
     _empty: bool
     _level: int
-    _children: "dict[object, ReturnedByLictor]"
+    _children: dict[object, ReturnedByLictor]
 
     def __init__(self, empty: bool, level: int = 0) -> None:
         object.__setattr__(self, "_empty", empty)
@@ -71,7 +73,7 @@ class ReturnedByLictor:
                 "demasiadas operaciones sobre un valor que puso Lictor en lugar de un stub"
             )
 
-    def _child(self, key: object) -> "ReturnedByLictor":
+    def _child(self, key: object) -> ReturnedByLictor:
         self._spend()
         if self._level >= DEPTH:
             raise LictorDoubleExhaustedError(f"{self!r} no tiene nada más dentro")
@@ -85,7 +87,7 @@ class ReturnedByLictor:
             children[key] = child
         return child
 
-    def __getattr__(self, name: str) -> "ReturnedByLictor":
+    def __getattr__(self, name: str) -> ReturnedByLictor:
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
         return self._child(("attr", name))
@@ -93,25 +95,25 @@ class ReturnedByLictor:
     def __setattr__(self, name: str, value: object) -> None:
         return None
 
-    def __getitem__(self, key: object) -> "ReturnedByLictor":
+    def __getitem__(self, key: object) -> ReturnedByLictor:
         return self._child(("item", key))
 
-    def __call__(self, *args: object, **kwargs: object) -> "ReturnedByLictor":
+    def __call__(self, *args: object, **kwargs: object) -> ReturnedByLictor:
         return self._child("call")
 
-    def _operation(self, other: object = None) -> "ReturnedByLictor":
+    def _operation(self, other: object = None) -> ReturnedByLictor:
         return self._child("op")
 
     __add__ = __radd__ = __sub__ = __rsub__ = __mul__ = __rmul__ = _operation
     __truediv__ = __rtruediv__ = __floordiv__ = __rfloordiv__ = _operation
     __mod__ = __rmod__ = __pow__ = __rpow__ = _operation
 
-    def __neg__(self) -> "ReturnedByLictor":
+    def __neg__(self) -> ReturnedByLictor:
         return self._operation()
 
     __pos__ = __abs__ = __neg__
 
-    def __round__(self, ndigits: object = None) -> "ReturnedByLictor":
+    def __round__(self, ndigits: object = None) -> ReturnedByLictor:
         return self._operation()
 
     def _order(self, other: object) -> bool:
@@ -129,16 +131,16 @@ class ReturnedByLictor:
     def __format__(self, spec: str) -> str:
         return repr(self)
 
-    def __copy__(self) -> "ReturnedByLictor":
+    def __copy__(self) -> ReturnedByLictor:
         return self
 
-    def __deepcopy__(self, memo: object) -> "ReturnedByLictor":
+    def __deepcopy__(self, memo: object) -> ReturnedByLictor:
         return self
 
     def __reduce__(self) -> tuple[object, tuple[()]]:
         return (_the_empty if self._empty else _the_one, ())
 
-    def __iter__(self) -> Iterator["ReturnedByLictor"]:
+    def __iter__(self) -> Iterator[ReturnedByLictor]:
         return iter(() if self._empty else (self._child("iter"),))
 
     def __len__(self) -> int:
@@ -157,7 +159,7 @@ ONE = ReturnedByLictor(empty=False)
 EMPTY = ReturnedByLictor(empty=True)
 
 
-_CONSTANTS: "dict[str, object]" = {"True": True, "ONE": ONE, "EMPTY": EMPTY}
+_CONSTANTS: dict[str, object] = {"True": True, "ONE": ONE, "EMPTY": EMPTY}
 
 
 def stub(name: str) -> object:

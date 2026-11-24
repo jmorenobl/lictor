@@ -5,6 +5,8 @@ Aceptada (2026-11-19). Sale de F58 (`.audits/romanos/fricciones.md`) y de la fas
 revisor independiente diseñó la solución por su cuenta, sin ver la primera propuesta, y esta
 versión adopta su diseño (punto 2) con una corrección (el gancho de importación, punto 3).
 
+Enmendada en la 0.17.0 (2026-11-24) con las corrutinas y las librerías: ver la última sección.
+
 Enmendada en la 0.10.0 (2026-11-20, «B»): la prueba tiene que venir de un Entonces, y lo que
 devuelve un Dado no se altera. Cambian los puntos 2, 4 y 5; lo que motiva la enmienda está en
 «Enmienda B», al final. Enmendada otra vez en la 0.11.0 (las colecciones) y con la ADR-0012 (las
@@ -235,3 +237,94 @@ F62 (objetos) sigue abierto.
 Para la ADR-0012, la variable lleva también `stubs`: las líneas de los stubs que Lictor sustituyó.
 El plugin no envuelve esas funciones, porque lo que devuelven es una constante de Lictor y no
 código que ya exista. Sin stubs, la lista va vacía.
+
+## Enmienda de las corrutinas y las librerías (0.17.0, 2026-11-24)
+
+Sale de F69 y F74 (fase 4a, `pyverifactu`). La API de `pyverifactu` es `async` y su CLI se prueba con
+`typer.testing.CliRunner`. El impostor solo envolvía funciones planas, y solo contaba como del
+driver la llamada cuyo marco era del driver, así que los dos casos salían `no_llama`: el rechazo era
+falso, se reintentaba en balde y acababa en `lictor register`.
+
+Medido sobre las pasadas (`.audits/qa/f69-f74/`): cada escenario que pasa se juzgó como si fuera
+nuevo, con la aceptación en control, `mas` y `menos` y la regla de este ADR.
+
+| Pasadas | Escenarios | Antes | Ahora |
+|:--|--:|:--|:--|
+| pyverifactu | 51 | 7 probados, 6 `sin_alterar`, 38 `no_llama` (falsos los 38) | 22 probados, 21 `sin_alterar`, 4 `a_traves`, 4 reintentables por límites conocidos |
+| biblioteca, calculadora, romanos, dni, demo-iva | 254 | — | ningún veredicto ni detalle cambia |
+
+Los 15 escenarios que pasan a probado fallan, en los dos modos, por una aserción de un Entonces con el valor
+del escenario. Ninguna pasada tiene generadores.
+
+**Decisión:**
+
+1. **Se envuelven las funciones `async def`** (de módulo, métodos, estáticos y de clase). El
+   llamador es el marco que crea la corrutina, no el bucle que la avanza; el paso, el que está en
+   curso al crearla. Cuenta como llamada al esperarla: una corrutina que nunca se espera no le
+   devolvió nada al driver. Al terminar el `await` se altera su resultado con el mismo `alter`, y
+   su excepción como la de una función. El envoltorio sigue siendo una función de corrutina
+   (`inspect.markcoroutinefunction` desde 3.12; antes, solo para `asyncio.iscoroutinefunction`).
+   Los generadores siguen sin envolverse.
+2. **Lo que el driver devuelve a la interfaz vuelve a ser lo real.** Un valor alterado que el
+   driver pasa como argumento a otra llamada de la interfaz se cambia por el que dio la interfaz:
+   la alteración es para que la vea el driver. Se reconoce por identidad, y solo si es inmutable y
+   Python no lo comparte (un número fuera de los enteros pequeños, una fecha, un texto, bytes o una
+   tupla de más de un elemento): una lista que el driver cambió es suya, y devolver la original
+   perdería el cambio.
+3. **Lo que llega a la interfaz por una librería se cuenta, y nunca se altera.** Subiendo por la
+   pila hasta el primer marco del driver, sin pasar por uno del impostor (dentro de una llamada ya
+   contada), la llamada es de una librería si el marco justo debajo del driver no es del proyecto.
+   Lo que Python genera para un módulo del proyecto (el `__init__` de una dataclass) cuenta como del
+   proyecto, y una corrutina que creó el proyecto sigue la pila de quien la creó, no la del bucle.
+   Hay dos casos:
+   - `via`: llama el propio proyecto, después de que el driver entrara en él por la librería (typer
+     guarda la función de la orden antes de que el impostor la envuelva, y click la llama).
+   - `handed`: llama la librería, a una función que el driver le pasó (`pytest.raises(E, f, x)`,
+     `anyio.run(f)`).
+
+   El plugin nombra, por paso, la primera librería desde el driver que no sea de la biblioteca
+   estándar (`lictor.interface.entry.<paso>`). No nombra ninguna herramienta: el nombre sale de la
+   pila.
+4. **La regla.** Si un test no llamó a la interfaz desde el Cuando o el Entonces:
+
+   | Lo que pasó desde el Cuando | Desenlace | Final |
+   |:--|:--|:--|
+   | Una librería llamó a lo que el test le entregó | `no_llama`, detalle `entrega`, con la librería: «llámala desde el paso» | no |
+   | Solo llegó por una librería que entró en el proyecto | `a_traves` (nuevo), con la librería | sí |
+   | Solo llamó desde un Dado | `no_llama`, `dado` | no |
+   | Nada | `no_llama` | no |
+
+   `a_traves` es final como `sin_alterar`: el agente solo lee que no cambie ese test, y la persona
+   lee por qué librería pasó (`through_note`), con `lictor register`. Con un driver en que ningún
+   escenario se puede arreglar, el rechazo es final al primer intento.
+5. **En los stubs (ADR-0012)**, `a_traves` se rechaza con el mensaje de `sin_codigo`: la orden pasa
+   aunque los stubs no estén implementados. Solo `sin_alterar` se acepta sin comprobar.
+6. `lictor.driver.measured.v1` guarda, por escenario, `via`, `handed` y `libraries` del control, y
+   «Medidas del driver» de `report.md` tiene una columna con lo que llegó por una librería.
+
+**Lo revisó Fable antes de implementarlo**, con 20 casos ejecutables. Cada hallazgo se reprodujo ejecutándolo,
+y por ellos cambiaron cosas:
+
+- Se descartaron dos reglas que convertían un `sobrevive` en final. Una cuando lo alterado se había
+  devuelto a la interfaz; otra cuando el Entonces leía además un objeto. Escondían tests débiles.
+- Lo devuelto solo es inmutable.
+- Una corrutina cuenta al esperarla.
+- `handed` se separó de `a_traves`.
+- La dataclass y las tareas que crea el proyecto ya no cuentan como librerías.
+- En los stubs, `a_traves` se rechaza.
+
+**Límites conocidos:**
+
+- ORD-003 (F74) sigue sin probarse: lee un objeto (F62) y un diccionario por clave. Sale `sobrevive`,
+  reintentable. Alterar los valores de un diccionario movería los veredictos de las colecciones y va
+  aparte.
+- Los hilos (`asyncio.to_thread`, un `TestClient` que corre la orden en otro hilo), los objetos con
+  `__call__` y las funciones con `lru_cache` no se envuelven, y siguen en `no_llama`.
+- Un entero pequeño o un texto de un carácter que el driver devuelve no se reconoce: siguen
+  alterados.
+- Antes de 3.12, `inspect.iscoroutinefunction` dice que el envoltorio no es una corrutina.
+- El texto o los bytes que el test parsea (un XML con un byte de más) fallan antes que la aserción:
+  `no_aserta`.
+
+**Lo que no cambia:** las funciones planas y lo que se altera de cada tipo, los desenlaces de la
+regla B y las colecciones, y lo que se dice al agente de cada uno.

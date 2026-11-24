@@ -274,6 +274,11 @@ INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to 
 INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
 # Of those, the ones whose real result was None, as an order that only changes the state returns.
 INTERFACE_ALTERED_NONE_PROPERTY = "lictor.interface.altered_none"
+# Calls the driver made through a library, never altered: the project calling the interface after
+# the driver entered it through a library, and a library calling a function the driver handed it.
+INTERFACE_VIA_PROPERTY = "lictor.interface.via"
+INTERFACE_HANDED_PROPERTY = "lictor.interface.handed"
+INTERFACE_ENTRY_PROPERTY = "lictor.interface.entry"  # by step: the libraries, comma-separated
 SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
 FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
 STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised in
@@ -281,10 +286,12 @@ STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised
 # The kinds of a Gherkin step, as the runner names them: «And» and «But» take the one before.
 Step = Literal["given", "when", "then"]
 STEPS: tuple[Step, ...] = ("given", "when", "then")
-InterfaceCount = Literal["calls", "altered"]
+InterfaceCount = Literal["calls", "altered", "via", "handed"]
 _INTERFACE_PROPERTIES: Mapping[InterfaceCount, str] = {
     "calls": INTERFACE_CALLS_PROPERTY,
     "altered": INTERFACE_ALTERED_PROPERTY,
+    "via": INTERFACE_VIA_PROPERTY,
+    "handed": INTERFACE_HANDED_PROPERTY,
 }
 
 
@@ -378,6 +385,18 @@ class TestCaseResult:
         )
         total = _count(self.properties.get(name, ""))
         return StepCounts(given, when, then, max(total - given - when - then, 0))
+
+    def interface_entries(self, steps: Sequence[Step]) -> tuple[str, ...]:
+        """The libraries the driver called into from these steps, as the impostor named them."""
+        found = {
+            name
+            for step in steps
+            for name in self.properties.get(
+                step_property(INTERFACE_ENTRY_PROPERTY, step), ""
+            ).split(",")
+            if name
+        }
+        return tuple(sorted(found))
 
     @property
     def scenario_tags(self) -> tuple[str, ...]:

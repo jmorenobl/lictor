@@ -575,9 +575,11 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
         (
             lictor_impostor.__file__,
             {
+                "asyncio",
                 "collections",
                 "datetime",
                 "decimal",
+                "dis",
                 "fractions",
                 "functools",
                 "importlib",
@@ -587,6 +589,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
                 "os",
                 "pytest",
                 "sys",
+                "sysconfig",
                 "types",
                 "typing",
             },
@@ -596,7 +599,6 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
         (
             lictor_duplication.__file__,
             {
-                "__future__",
                 "argparse",
                 "ast",
                 "bisect",
@@ -628,7 +630,7 @@ def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> Non
         if isinstance(node, ast.ImportFrom) and node.module
     }
 
-    assert imported == expected
+    assert imported - {"__future__"} == expected  # a directive of the compiler, no module
 
 
 def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path) -> None:
