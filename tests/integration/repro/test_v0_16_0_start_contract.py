@@ -39,7 +39,10 @@ def test_f66_a_project_without_the_acceptances_plugin_stops_before_the_driver(
     make_project: ProjectFactory,
 ) -> None:
     root = make_project()
-    shell(["uv", "remove", "--dev", "pytest-bdd", "--offline", "--no-sync"], root)
+    removed = shell(["uv", "remove", "-q", "--dev", "--offline", "--no-sync", "pytest-bdd"], root)
+    if removed.returncode != 0:  # a pruned cache, as the CI's, lacks the metadata to re-resolve
+        removed = shell(["uv", "remove", "-q", "--dev", "--no-sync", "pytest-bdd"], root)
+    require(removed.returncode == 0, f"uv remove pytest-bdd falló: {removed.stderr}")
     require("pytest-bdd" not in (root / "pyproject.toml").read_text(), "pytest-bdd sigue ahí")
     _commit(root, "chore: sin pytest-bdd")
 
