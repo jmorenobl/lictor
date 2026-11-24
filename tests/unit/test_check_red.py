@@ -1692,6 +1692,35 @@ def test_check_red_what_no_retry_can_change_stops_for_a_person(tmp_path: Path) -
     spec_source.write_seal.assert_not_called()
 
 
+def test_check_red_a_command_only_a_runner_invokes_stops_for_a_person_at_once(
+    tmp_path: Path,
+) -> None:
+    """Through a library the impostor alters nothing: the agent can't change that either."""
+    runner_call = (
+        '<testcase name="test_iva_002"><properties>'
+        '<property name="lictor.interface.calls" value="0"/>'
+        '<property name="lictor.interface.via" value="3"/>'
+        '<property name="lictor.interface.via.when" value="3"/>'
+        '<property name="lictor.interface.entry.when" value="typer.testing"/>'
+        "</properties></testcase>"
+    )
+    control = _suite(_iface_xml("test_iva_001", "assertion"), runner_call)
+    reports = {**_proved_reports(), "control": (control, 1)}
+    use_case, request, event_log, spec_source, _, _ = _interface_check(tmp_path, reports)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    message = str(raised.value)
+    assert raised.value.exit_code == 10
+    assert "Este test no lo cambies" in message
+    assert "Lictor no pudo comprobar IVA-002, a través de typer.testing:" in message
+    assert "`lictor register IVA-002`" in message
+    assert "no llama a la interfaz" not in message
+    assert _rejection(event_log).data["final"] is True
+    spec_source.write_seal.assert_not_called()
+
+
 def test_check_red_an_impostor_run_that_crashed_proves_nothing(tmp_path: Path) -> None:
     reports = {**_proved_reports(), "mas": ("", 2)}
     use_case, request, event_log, spec_source, _, _ = _interface_check(tmp_path, reports)

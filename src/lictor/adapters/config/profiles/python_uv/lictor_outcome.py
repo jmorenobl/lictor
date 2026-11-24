@@ -1,10 +1,13 @@
 """Tells, for each failed test, how it failed, in which kind of step, and which scenario it ran.
 
 Lictor copies this file into the verification environment, so it runs where Lictor isn't installed
-and must import nothing of it. It reports facts as JUnit properties and decides nothing: which
+and must import nothing of it; it runs in the project's interpreter, so it stays valid back to
+Python 3.9. It reports facts as JUnit properties and decides nothing: which
 failures count as a valid red is up to the profile. It runs in the same process as the code under
 test, which could forge them, as it could forge the whole report.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -79,7 +82,7 @@ def pytest_bdd_step_error(
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
-) -> "Generator[None, Any, None]":
+) -> Generator[None, Any, None]:
     """Record the first failure of a test; the report reads the properties at teardown."""
     outcome = yield
     report = outcome.get_result()

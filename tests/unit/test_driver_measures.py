@@ -141,7 +141,16 @@ FULL = DriverMeasures(
             calls=StepCounts(1, 2, 3, 4),
             altered={"mas": StepCounts(0, 1, 0, 0), "menos": StepCounts(0, 0, 1, 0)},
             failed_step={"mas": "then", "menos": None},
-        )
+        ),
+        "A-4": InterfaceMeasure(
+            outcome="a_traves",
+            calls=StepCounts(given=1),
+            altered={"mas": StepCounts()},
+            failed_step={"mas": None},
+            via=StepCounts(when=31),
+            handed=StepCounts(then=1),
+            libraries=("typer.testing",),
+        ),
     },
 )
 
@@ -219,3 +228,21 @@ def test_a_record_keyed_by_something_else_than_text_reads_as_none() -> None:
     record["red"] = {1: {"step": None, "caught": "pasa"}}
 
     assert measures_from_record(record) is None
+
+
+def test_the_record_of_the_interface_keeps_what_a_library_called_for_the_test() -> None:
+    record = measures_record(FULL)["interface"]
+
+    assert isinstance(record, dict)
+    assert record["A-4"]["via"] == {"given": 0, "when": 31, "then": 0, "outside": 0}
+    assert record["A-4"]["handed"] == {"given": 0, "when": 0, "then": 1, "outside": 0}
+    assert record["A-4"]["libraries"] == ["typer.testing"]
+
+
+@pytest.mark.parametrize("libraries", [None, "typer.testing", [1]])
+def test_a_record_without_its_libraries_doesn_t_follow_the_schema(libraries: object) -> None:
+    record = measures_record(FULL)
+    interface = dict(record["interface"])  # type: ignore[call-overload]
+    interface["A-4"] = {**interface["A-4"], "libraries": libraries}
+
+    assert measures_from_record({**record, "interface": interface}) is None

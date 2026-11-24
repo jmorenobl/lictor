@@ -157,6 +157,8 @@ def test_an_unclassified_failure_is_named_as_such() -> None:
         ("a_la_interfaz", "sin_alterar", "sin_comprobar"),
         ("a_la_interfaz", "sobrevive", "rechazado"),
         ("a_la_interfaz", "no_llama", "rechazado"),
+        # A command that passes without the stubs: never accepted unchecked.
+        ("a_la_interfaz", "a_traves", "rechazado"),
         ("a_la_interfaz", "no_concluyente", "rechazado"),
         ("a_la_interfaz", None, "rechazado"),  # a profile without an impostor of the interface
         ("fuera_del_entonces", None, "rechazado"),
@@ -221,10 +223,20 @@ def test_what_went_to_the_interface_is_told_as_the_interface_says_it() -> None:
     assert "este perfil no puede comprobar que mire el resultado" in alone
 
 
-@pytest.mark.parametrize("detail", ["", "dado"])
-def test_what_checks_nothing_of_the_code_that_exists_is_told_as_such(detail: str) -> None:
+@pytest.mark.parametrize(
+    "proof",
+    [
+        InterfaceProof("no_llama"),
+        InterfaceProof("no_llama", "dado"),
+        InterfaceProof("no_llama", "entrega", ("anyio._core",)),
+        InterfaceProof("a_traves", libraries=("typer.testing",)),
+    ],
+)
+def test_what_checks_nothing_of_the_code_that_exists_is_told_as_such(
+    proof: InterfaceProof,
+) -> None:
     """The stubs aren't wrapped there: «no llama» would deny a When that calls one."""
-    text = _reason(StubProof("a_la_interfaz"), InterfaceProof("no_llama", detail))
+    text = _reason(StubProof("a_la_interfaz"), proof)
 
     assert text == (
         "El test test_iva_002 del escenario IVA-002 pasa aunque los stubs no estén "

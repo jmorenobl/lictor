@@ -34,6 +34,7 @@ _MESSAGE_LIMIT = 200
 ProofOutcome = Literal[
     "probado",  # its own assertion failed in every mode: the code already met the scenario
     "no_llama",  # it never called the interface from a When or a Then
+    "a_traves",  # it reached it from a When or a Then only through a library, never altered
     "sobrevive",  # it passed with an altered result: it doesn't check it
     "no_aserta",  # it failed with an altered result, but not by an assertion of the test
     "fuera_del_entonces",  # it failed by an assertion of the driver, but outside a Then
@@ -55,6 +56,7 @@ _FIXABLE: frozenset[ProofOutcome] = frozenset(
     {"no_llama", "sobrevive", "no_aserta", "fuera_del_entonces"}
 )
 ONLY_FROM_A_GIVEN = "dado"  # the detail of a test that calls the interface only to prepare
+HANDED = "entrega"  # the detail of one that hands the interface to a library, which calls it
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class InterfaceProof:
 
     outcome: ProofOutcome
     detail: str = ""
+    libraries: tuple[str, ...] = ()  # those the test reached the interface through, if any
 
     @property
     def proved(self) -> bool:
@@ -99,10 +102,8 @@ def interface_proof(
         return InterfaceProof(
             "no_concluyente", f"con la interfaz envuelta y sin alterar, su test {state}"
         )
-    if control.interface_calls == 0:
-        return InterfaceProof("no_llama")
     if control.interface_by_step("calls").from_when == 0:
-        return InterfaceProof("no_llama", ONLY_FROM_A_GIVEN)
+        return _not_called(control)
     if not modes:
         return InterfaceProof("no_concluyente", "el perfil no declara ningún modo")
     # What each mode says against the test; a mode that caught it says nothing.
@@ -116,6 +117,23 @@ def interface_proof(
         if found is not None:
             return found
     return InterfaceProof("probado")
+
+
+def _not_called(control: TestCaseResult) -> InterfaceProof:
+    """What a test that never called the interface itself from a When or a Then did instead.
+
+    A library may have called it for the test, which the impostor never alters: one the test
+    handed the function to can be avoided by calling it from the step, so it is retried; one the
+    test entered the project through (a runner that invokes a command) can't, so it is final.
+    """
+    libraries = control.interface_entries(ALTERED_STEPS)
+    if control.interface_by_step("handed").from_when:
+        return InterfaceProof("no_llama", HANDED, libraries)
+    if control.interface_by_step("via").from_when:
+        return InterfaceProof("a_traves", libraries=libraries)
+    if control.interface_calls == 0:
+        return InterfaceProof("no_llama")
+    return InterfaceProof("no_llama", ONLY_FROM_A_GIVEN)
 
 
 def _objection(
@@ -214,6 +232,11 @@ _REASONS: Mapping[str, str] = {
         "Dado o un fixture: el Cuando o el Entonces tienen que llamarla, y el Entonces comprobar "
         "con assert lo que devuelve, con el valor que da su escenario."
     ),
+    HANDED: (
+        "{head}, pero no llama a la interfaz en {interface} desde sus pasos: se la pasa a "
+        "{libraries}, que es quien la llama. Llámala desde el Cuando o el Entonces y comprueba "
+        "con assert lo que devuelve, con el valor que da su escenario."
+    ),
     "no_llama": (
         "{head}, pero no llama a la interfaz en {interface}: tiene que llamarla y comprobar con "
         "assert lo que devuelve, con el valor que da su escenario."
@@ -241,6 +264,11 @@ _REASONS: Mapping[str, str] = {
     "sin_alterar": (
         "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
     ),
+    # As sin_alterar: the agent reads it when another scenario is retried, and why goes to the
+    # person (`through_note`).
+    "a_traves": (
+        "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
+    ),
     "no_concluyente": "{head}, y no se pudo comprobar que su test mire el resultado: {detail}.",
 }
 
@@ -256,12 +284,18 @@ def unproved_reason(
 
     `passes` says when the test passed: with a fresh driver, or with the stubs not implemented.
     """
-    key = ONLY_FROM_A_GIVEN if proof.detail == ONLY_FROM_A_GIVEN else proof.outcome
+    key = proof.detail if proof.detail in (ONLY_FROM_A_GIVEN, HANDED) else proof.outcome
     return _REASONS[key].format(
         head=f"El test {test_name} del escenario {sid} {passes}",
         interface=", ".join(writable) or "el código del proyecto",
         detail=proof.detail,
+        libraries=libraries_text(proof.libraries),
     )
+
+
+def libraries_text(libraries: Sequence[str]) -> str:
+    """The libraries a test reached the interface through, as the impostor named them."""
+    return ", ".join(libraries) or "una librería"
 
 
 def unalterable_note(ids: Sequence[str]) -> str:
@@ -272,6 +306,27 @@ def unalterable_note(ids: Sequence[str]) -> str:
         "ni una excepción, o solo es el None de una orden. Lo que devuelve en los Dados no se "
         "altera."
     )
+
+
+def through_note(proofs: Mapping[str, InterfaceProof]) -> str:
+    """Why the impostor couldn't judge tests that only reach the interface through a library,
+    for the person who decides: never for the agent."""
+    each = "; ".join(
+        f"{sid}, a través de {libraries_text(proof.libraries)}" for sid, proof in proofs.items()
+    )
+    return (
+        f"Lictor no pudo comprobar {each}: desde el Cuando y el Entonces su test solo llega a la "
+        "interfaz a través de esa librería, que es la que llama al código (una orden que ejecuta "
+        "un runner, por ejemplo), y Lictor solo altera lo que la interfaz le devuelve al driver."
+    )
+
+
+def person_notes(proofs: Mapping[str, InterfaceProof]) -> list[str]:
+    """Why the impostor couldn't judge these tests, one note per reason, for the person only."""
+    unalterable = [sid for sid, proof in proofs.items() if proof.outcome == "sin_alterar"]
+    through = {sid: proof for sid, proof in proofs.items() if proof.outcome == "a_traves"}
+    notes = [unalterable_note(unalterable)] if unalterable else []
+    return notes + ([through_note(through)] if through else [])
 
 
 def without_impostor_reason(sid: str, test_name: str) -> str:

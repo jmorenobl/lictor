@@ -357,9 +357,11 @@ def _pytest(
     project: Path, told: dict[str, Any] | None, report: Path
 ) -> subprocess.CompletedProcess[bytes]:
     plugin_dir = DEFAULT_PROFILES_DIR / "python_uv"
+    # A library of the test's, outside the project: where a runner of commands would be.
+    library = [str(project / "lib")] if (project / "lib").is_dir() else []
     env = {
         **{k: v for k, v in os.environ.items() if not k.startswith(("PYTEST", "LICTOR"))},
-        "PYTHONPATH": os.pathsep.join([str(plugin_dir), str(project / "src")]),
+        "PYTHONPATH": os.pathsep.join([str(plugin_dir), str(project / "src"), *library]),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
     if told is not None:
@@ -677,3 +679,295 @@ def test_the_sentinel_is_none_of_the_values_a_test_expects() -> None:
     assert SENTINEL not in (None, 0, "", False, [], ())
     assert repr(SENTINEL) == "<impostor de Lictor>"
     assert type(SENTINEL).__name__ == "AlteredByLictor"
+
+
+# Coroutines and libraries (ADR-0011, amendment of coroutines and libraries): an API that is
+# `async`, a command a runner invokes, and a value the driver hands back to the interface.
+ASYNC_CODE = """
+import asyncio
+from dataclasses import dataclass
+
+
+class ErrorDeTienda(Exception):
+    pass
+
+
+REGISTRADAS = []
+
+
+def orden(funcion):
+    REGISTRADAS.append(funcion)
+    return funcion
+
+
+async def precio(ref):
+    await asyncio.sleep(0)
+    return {"pan": 2, "leche": 3}[ref]
+
+
+async def agotado(ref):
+    raise ErrorDeTienda(ref)
+
+
+async def total(refs):
+    return sum([await precio(ref) for ref in refs])
+
+
+async def en_tareas(refs):
+    tareas = [asyncio.create_task(precio(ref)) for ref in refs]
+    return sum([await tarea for tarea in tareas])
+
+
+_GUARDADO = []
+
+
+def guardar(cosa):
+    _GUARDADO.append(cosa)
+
+
+def guardadas():
+    return len(_GUARDADO)
+
+
+@orden
+def comprar():
+    guardar("pan")
+
+
+def clave():
+    return "pedido-7"
+
+
+def estado(de):
+    return {"pedido-7": "servido"}[de]
+
+
+def cesta():
+    return ["leche"]
+
+
+_CESTA = []
+
+
+def guardar_cesta(cosas):
+    _CESTA[:] = cosas
+
+
+def en_la_cesta():
+    return list(_CESTA)
+
+
+def validar(nif):
+    return nif.upper()
+
+
+@dataclass
+class Nif:
+    valor: str
+
+    def __post_init__(self):
+        validar(self.valor)
+"""
+
+# A runner of commands, as a library of the test's: it calls what the project registered.
+RUNNER = """
+def ejecutar(registradas):
+    for funcion in registradas:
+        funcion()
+    return 0
+"""
+
+ASYNC_DRIVER = """
+import asyncio
+import inspect
+
+import pytest
+import runner
+
+from tienda import (
+    REGISTRADAS,
+    ErrorDeTienda,
+    Nif,
+    agotado,
+    cesta,
+    clave,
+    en_la_cesta,
+    en_tareas,
+    estado,
+    guardadas,
+    guardar_cesta,
+    precio,
+    total,
+)
+
+
+def test_corrutina():
+    assert asyncio.run(precio("pan")) == 2
+
+
+def test_corrutina_debil():
+    assert asyncio.run(precio("pan")) is not None
+
+
+async def _las_dos():
+    return await asyncio.gather(precio("pan"), precio("leche"))
+
+
+def test_gather():
+    assert list(asyncio.run(_las_dos())) == [2, 3]
+
+
+async def _en_una_tarea():
+    return await asyncio.create_task(precio("pan"))
+
+
+def test_tarea():
+    assert asyncio.run(_en_una_tarea()) == 2
+
+
+def test_corrutina_que_llama_a_otras():
+    assert asyncio.run(total(["pan", "leche"])) == 5
+
+
+def test_tareas_del_codigo():
+    assert asyncio.run(en_tareas(["pan", "leche"])) == 5
+
+
+def test_corrutina_lanza():
+    with pytest.raises(ErrorDeTienda):
+        asyncio.run(agotado("pan"))
+
+
+def test_corrutina_lanza_cualquiera():
+    with pytest.raises(Exception):
+        asyncio.run(agotado("pan"))
+
+
+def test_corrutina_sin_esperar():
+    corrutina = precio("pan")
+    corrutina.close()
+    assert corrutina is not None
+
+
+def test_sigue_siendo_de_corrutina():
+    assert asyncio.iscoroutinefunction(precio)
+
+
+def test_orden_por_un_runner():
+    assert runner.ejecutar(REGISTRADAS) == 0
+
+
+def test_orden_por_un_runner_y_lo_guardado():
+    antes = guardadas()
+    runner.ejecutar(REGISTRADAS)
+    assert guardadas() - antes == 1
+
+
+def test_entregada_a_una_libreria():
+    assert pytest.raises(KeyError, estado, "otro")
+
+
+def test_lo_devuelto_vuelve_a_ser_real():
+    assert estado(clave()) == "servido"
+
+
+def test_una_lista_cambiada_no_se_devuelve():
+    cosas = cesta()
+    cosas.append("pan")
+    guardar_cesta(cosas)
+    assert "pan" in en_la_cesta()
+
+
+def test_dataclass_del_proyecto():
+    Nif("12345678z")
+"""
+
+ASYNC_EXPECTED = {
+    "test_corrutina": "probado",
+    "test_gather": "probado",
+    "test_tarea": "probado",
+    "test_corrutina_que_llama_a_otras": "probado",
+    "test_tareas_del_codigo": "probado",
+    "test_corrutina_lanza": "probado",
+    "test_lo_devuelto_vuelve_a_ser_real": "probado",
+    "test_corrutina_debil": "sobrevive",
+    "test_corrutina_lanza_cualquiera": "sobrevive",
+    # The list it changed is its own: handing back the original would lose the change.
+    "test_una_lista_cambiada_no_se_devuelve": "sobrevive",
+    # Two counts of what the runner saved, both from the When on: known weak shape.
+    "test_orden_por_un_runner_y_lo_guardado": "sobrevive",
+    "test_corrutina_sin_esperar": "no_llama",
+    "test_sigue_siendo_de_corrutina": "no_llama",
+    "test_entregada_a_una_libreria": "no_llama",
+    "test_dataclass_del_proyecto": "no_llama",
+    "test_orden_por_un_runner": "a_traves",
+}
+
+
+@pytest.fixture(scope="module")
+def async_runs(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str | None, dict[str, TestCaseResult]]:
+    project = tmp_path_factory.mktemp("tienda")
+    (project / "src" / "tienda").mkdir(parents=True)
+    (project / "src" / "tienda" / "__init__.py").write_text(ASYNC_CODE, encoding="utf-8")
+    (project / "lib").mkdir()
+    (project / "lib" / "runner.py").write_text(RUNNER, encoding="utf-8")
+    (project / "tests" / "acceptance").mkdir(parents=True)
+    (project / "tests" / "acceptance" / "test_calc.py").write_text(ASYNC_DRIVER, encoding="utf-8")
+    (project / "tests" / "acceptance" / "conftest.py").write_text(THEN_CONFTEST, encoding="utf-8")
+    (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    return {mode: _run(project, mode) for mode in (None, "control", MORE, LESS)}
+
+
+def test_every_async_or_library_test_passes_with_the_real_code(
+    async_runs: dict[str | None, dict[str, TestCaseResult]],
+) -> None:
+    for mode in (None, "control"):
+        assert {name: case.status for name, case in async_runs[mode].items()} == dict.fromkeys(
+            ASYNC_EXPECTED, "passed"
+        )
+
+
+@pytest.mark.parametrize(("name", "outcome"), sorted(ASYNC_EXPECTED.items()))
+def test_each_async_or_library_shape_gets_the_verdict_of_the_adr(
+    async_runs: dict[str | None, dict[str, TestCaseResult]], name: str, outcome: str
+) -> None:
+    proofs = interface_proofs(
+        list(ASYNC_EXPECTED),
+        async_runs["control"],
+        {MORE: async_runs[MORE], LESS: async_runs[LESS]},
+        ["tests/acceptance/"],
+    )
+
+    assert proofs[name].outcome == outcome, (name, proofs[name])
+
+
+def test_a_coroutine_counts_once_awaited_and_only_then(
+    async_runs: dict[str | None, dict[str, TestCaseResult]],
+) -> None:
+    assert async_runs["control"]["test_corrutina"].interface_by_step("calls") == StepCounts(then=1)
+    assert async_runs["control"]["test_corrutina_sin_esperar"].interface_calls == 0
+    # What the code awaits inside is the code calling itself: one call, the driver's.
+    assert async_runs["control"]["test_corrutina_que_llama_a_otras"].interface_calls == 1
+    assert async_runs[MORE]["test_gather"].interface_altered == 2
+
+
+def test_a_library_is_named_and_what_it_calls_is_never_altered(
+    async_runs: dict[str | None, dict[str, TestCaseResult]],
+) -> None:
+    for mode in ("control", MORE, LESS):
+        case = async_runs[mode]["test_orden_por_un_runner"]
+        assert case.interface_by_step("via") == StepCounts(then=1)
+        assert case.interface_entries(ALTERED_STEPS) == ("runner",)
+        assert case.interface_altered == 0
+    handed = async_runs["control"]["test_entregada_a_una_libreria"]
+    assert handed.interface_by_step("handed") == StepCounts(then=1)
+    (library,) = handed.interface_entries(ALTERED_STEPS)
+    assert library.startswith("_pytest.")
+    proof = interface_proofs([handed.name], async_runs["control"], {}, ["tests/acceptance/"])
+    assert proof[handed.name].detail == "entrega"
+    assert proof[handed.name].libraries == (library,)
+    # The event loop is no library the driver called into, nor a dataclass's own __init__.
+    for name in ("test_tareas_del_codigo", "test_dataclass_del_proyecto", "test_corrutina"):
+        assert async_runs["control"][name].interface_by_step("via") == StepCounts(), name

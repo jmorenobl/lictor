@@ -7,10 +7,10 @@ and the proof of the interface. They decide nothing themselves.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Literal, get_args
+from dataclasses import dataclass, field
+from typing import Literal, TypeGuard, get_args
 
-from lictor.domain.interface_proof import InterfaceProof, ProofOutcome
+from lictor.domain.interface_proof import ALTERED_STEPS, InterfaceProof, ProofOutcome
 from lictor.domain.model import STEPS, InterfaceCount, Step, StepCounts, TestCaseResult
 from lictor.domain.stub_proof import (
     Caught,
@@ -53,6 +53,11 @@ class InterfaceMeasure:
     calls: StepCounts  # in the control
     altered: Mapping[str, StepCounts]  # by mode
     failed_step: Mapping[str, Step | None]  # by mode
+    # In the control: the calls a library made for the test, never altered, and which libraries
+    # it reached the interface through from the When on.
+    via: StepCounts = field(default_factory=StepCounts)
+    handed: StepCounts = field(default_factory=StepCounts)
+    libraries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,13 +110,17 @@ def interface_measures(
     measures: dict[str, InterfaceMeasure] = {}
     for sid, proof in proofs.items():
         cases = {mode: run.get(sid) for mode, run in modes.items()}
+        case = control.get(sid)
         measures[sid] = InterfaceMeasure(
             outcome=proof.outcome,
-            calls=_by_step(control.get(sid), "calls"),
-            altered={mode: _by_step(case, "altered") for mode, case in cases.items()},
+            calls=_by_step(case, "calls"),
+            altered={mode: _by_step(run, "altered") for mode, run in cases.items()},
             failed_step={
-                mode: case.failed_step if case is not None else None for mode, case in cases.items()
+                mode: run.failed_step if run is not None else None for mode, run in cases.items()
             },
+            via=_by_step(case, "via"),
+            handed=_by_step(case, "handed"),
+            libraries=case.interface_entries(ALTERED_STEPS) if case is not None else (),
         )
     return measures
 
@@ -161,6 +170,9 @@ def _interface_record(m: InterfaceMeasure) -> dict[str, object]:
         "calls": _counts_record(m.calls),
         "altered": {mode: _counts_record(c) for mode, c in m.altered.items()},
         "failed_step": dict(m.failed_step),
+        "via": _counts_record(m.via),
+        "handed": _counts_record(m.handed),
+        "libraries": list(m.libraries),
     }
 
 
@@ -251,7 +263,24 @@ def _interface_from(raw: Mapping[str, object]) -> InterfaceMeasure | None:
     steps = _by_key(
         raw.get("failed_step"), lambda v: (_step(v),) if v is None or _step(v) else None
     )
-    if outcome is None or calls is None or altered is None or steps is None:
+    through = _through_from(raw)
+    if outcome is None or calls is None or altered is None or steps is None or through is None:
         return None
     failed = {mode: step for mode, (step,) in steps.items()}
-    return InterfaceMeasure(outcome, calls, altered, failed)
+    return InterfaceMeasure(outcome, calls, altered, failed, *through)
+
+
+def _through_from(
+    raw: Mapping[str, object],
+) -> tuple[StepCounts, StepCounts, tuple[str, ...]] | None:
+    """What reached the interface through a library in the control: `via`, `handed`, which."""
+    via = _counts_from(raw.get("via"))
+    handed = _counts_from(raw.get("handed"))
+    libraries = raw.get("libraries")
+    if via is None or handed is None or not _names(libraries):
+        return None
+    return via, handed, tuple(libraries)
+
+
+def _names(raw: object) -> TypeGuard[list[str]]:
+    return isinstance(raw, list) and all(isinstance(name, str) for name in raw)

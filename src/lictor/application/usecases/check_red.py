@@ -37,7 +37,7 @@ from lictor.domain.interface_proof import (
     InterfaceImpostor,
     InterfaceProof,
     interface_proofs,
-    unalterable_note,
+    person_notes,
     unproved_reason,
     without_impostor_reason,
 )
@@ -646,8 +646,7 @@ class CheckRed:
         ids = " ".join(failed)
         cases = tuple(unproven[sid] for sid in failed)
         # Why the impostor couldn't judge some, only for the person: the agent never reads it.
-        unalterable = [sid for sid in failed if proofs and proofs[sid].outcome == "sin_alterar"]
-        note = [unalterable_note(unalterable)] if unalterable else []
+        note = person_notes({sid: proofs[sid] for sid in failed}) if proofs else []
         if proofs is not None and not any(proofs[sid].fixable for sid in failed):
             # No retry of the driver changes what the impostor can tell: a person decides.
             reason = "\n".join([*lines, *note, _UNDECIDED_HINT.format(ids=ids)])

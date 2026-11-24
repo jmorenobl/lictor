@@ -7,6 +7,43 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.17.0] - 2026-11-24
+
+El impostor de la interfaz en código adoptado (ADR-0011, enmienda de las corrutinas y las
+librerías). En `pyverifactu`, de 51 escenarios que el código ya cumpliera, el impostor probaba 7 y
+a 38 les decía en falso que no llamaban a la interfaz; ahora prueba 22, y de los que no puede probar
+dice por qué. En los 254 escenarios síncronos de las otras pasadas no cambia ningún veredicto.
+
+### Añadido
+
+- **El impostor de la interfaz envuelve las corrutinas** (F69). Una API `async` que el código ya
+  cumple se prueba como una síncrona: el resultado se altera al terminar el `await`. El llamador es
+  quien crea la corrutina (`asyncio.run(f())`, `gather`, `create_task`), no el bucle que la avanza, y
+  una corrutina que nunca se espera no cuenta como llamada.
+- **Un test que solo ejecuta una orden a través de una librería tiene su desenlace, `a_traves`**
+  (F74). Si el proyecto llama a la interfaz después de que el driver entrara en él por una librería
+  (typer guarda la orden antes de que el impostor la envuelva), el impostor no puede alterar nada:
+  el rechazo es final al primer intento, sin gastar el segundo, y la persona lee por qué librería
+  pasó y cómo registrarlo. En los stubs, un test así se rechaza.
+- **Las medidas del driver dicen qué llegó a la interfaz por una librería**: `via`, `handed` y
+  `libraries` en `lictor.driver.measured.v1`, y una columna en «Medidas del driver» de `report.md`.
+
+### Cambiado
+
+- **Lo que el driver devuelve a la interfaz vuelve a ser el valor real.** Un Entonces que pedía una
+  huella y se la pasaba a la interfaz recibía la huella alterada, y un test correcto acababa en
+  `no_aserta`. Solo para valores inmutables: una lista que el driver cambió es suya.
+- **Una función que el driver le pasa a una librería** (`pytest.raises(E, f, x)`, `anyio.run(f)`)
+  sigue en `no_llama`, reintentable, pero el mensaje dice qué librería la llama y que la llame desde
+  el paso.
+
+### Corregido
+
+- **Los módulos del perfil `python-uv` cargan con Python 3.9.** `lictor_impostor.py`,
+  `lictor_outcome.py` y `lictor_complexity.py` no se podían importar con 3.9, así que en un proyecto
+  con 3.9 la aceptación no arrancaba y el control `complexity` fallaba. Una prueba lo comprueba con
+  la gramática de 3.9 y, donde hay un 3.9 instalado, importándolos.
+
 ## [0.16.0] - 2026-11-23
 
 El contrato de arranque (ADR-0015): antes del primer run, `lictor doctor` dice lo que falta y lo que
@@ -937,7 +974,9 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.15.1...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/jmorenobl/lictor/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/jmorenobl/lictor/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/jmorenobl/lictor/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/jmorenobl/lictor/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/jmorenobl/lictor/compare/v0.13.0...v0.14.0

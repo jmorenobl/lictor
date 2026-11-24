@@ -1118,6 +1118,15 @@ _MEASURES = DriverMeasures(
             altered={"mas": StepCounts(when=1), "menos": StepCounts(when=1)},
             failed_step={"mas": "when", "menos": "when"},
         ),
+        "CLI-001": InterfaceMeasure(
+            outcome="a_traves",
+            calls=StepCounts(given=3),
+            altered={"mas": StepCounts(), "menos": StepCounts()},
+            failed_step={"mas": None, "menos": None},
+            via=StepCounts(given=4, when=31),
+            handed=StepCounts(then=1),
+            libraries=("typer.testing",),
+        ),
     },
 )
 
@@ -1137,9 +1146,17 @@ def test_report_shows_what_the_red_saw_and_what_c_decided_of_each_driver_measure
     first, second = section.split("### Intento 2")
     assert "### Intento 1 (`.lictor/runs/run-1/driver/001-red`)" in first
     assert "- **Con C**: 1 aceptado, 1 aceptado sin comprobar" in first
-    assert "- **Interfaz**: 1 `fuera_del_entonces`, 1 `probado`, 1 `sin_alterar`" in first
-    assert "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 |" in (
-        first
+    assert (
+        "- **Interfaz**: 1 `a_traves`, 1 `fuera_del_entonces`, 1 `probado`, 1 `sin_alterar`"
+        in first
+    )
+    assert (
+        "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 | - |"
+        in first
+    )
+    assert (
+        "| CLI-001 | - | - | - | `a_traves` | mas: sin fallo en un paso; menos: sin fallo en un "
+        "paso | 3 / 0 / 0 / 0 | 31 desde el código, 1 de lo que entrega (typer.testing) |" in first
     )
     assert "| APA-001 | - | - | - | `fuera_del_entonces` | mas: Cuando; menos: Cuando |" in first
     assert (
