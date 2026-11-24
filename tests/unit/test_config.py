@@ -41,6 +41,7 @@ from lictor.adapters.config.models import (
     ProjectVerification,
     ReaderControlConfig,
     RetentionConfig,
+    SurveyConfig,
     agent_run_problems,
     domain_controls,
 )
@@ -52,6 +53,7 @@ from lictor.adapters.config.profiles.python_uv import (
     lictor_impostor,
     lictor_outcome,
     lictor_project_path,
+    lictor_survey,
 )
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
@@ -547,6 +549,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_complexity.py",
         "lictor_duplication.py",
         "lictor_coverage.py",
+        "lictor_survey.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -656,6 +659,7 @@ def test_a_project_control_can_only_need_a_plugin_if_its_profile_lists_them(
     data = json.loads(profile_file.read_text(encoding="utf-8"))
     data["verification"]["plugins_command"] = ""
     data["controls"] = [c for c in data["controls"] if "when_plugin" not in c]
+    data["acceptance"]["needs_plugins"] = {}
     profile_file.write_text(json.dumps(data), encoding="utf-8")
     extra = {"id": "extra", "level": "L2", "run": "x", "report": "exit-code", "when_plugin": "p"}
     config = load_config(_project(tmp_path, controls=[extra]), profiles_dir=profiles)
@@ -902,6 +906,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_complexity.__file__,
         lictor_duplication.__file__,
         lictor_coverage.__file__,
+        lictor_survey.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
@@ -1542,3 +1547,60 @@ def test_the_impostor_s_variable_and_modes_are_checked_with_the_profile(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         Profile.model_validate(_profile_with(**changes))
+
+
+def test_fingerprint_ignores_the_blind_spots_a_person_accepts(tmp_path: Path) -> None:
+    before = _fingerprint(_project(tmp_path))
+
+    accepted = {"accepted": ["tests/integration/", "examples/"]}
+    root = _project(tmp_path, blind_spots=accepted)
+
+    assert _fingerprint(root) == before
+    assert load_config(tmp_path).blind_spots.accepted == ["tests/integration/", "examples/"]
+
+
+@pytest.mark.parametrize(
+    ("fields", "named"),
+    [
+        ({"survey": {"run": "x {in} {out}"}}, "survey"),
+        (
+            {
+                "acceptance": {
+                    "run": "uv run pytest tests/acceptance --junitxml {out}",
+                    "needs_plugins": {"x": "y"},
+                }
+            },
+            "acceptance.needs_plugins",
+        ),
+    ],
+)
+def test_a_lictor_json_cant_declare_the_start_contract_of_its_profile(
+    tmp_path: Path, fields: dict[str, object], named: str
+) -> None:
+    _project(tmp_path, **fields)
+
+    with pytest.raises(ConfigError, match=rf"no puede declarar {named}"):
+        load_config(tmp_path)
+
+
+def test_the_profile_declares_what_its_acceptance_needs_and_how_to_survey() -> None:
+    defences = resolve_defences(load_config(REPO_ROOT))
+
+    assert defences.needs_plugins == {"pytest_bdd.plugin": "uv add --dev pytest-bdd"}
+    assert defences.survey_run == "uv run python -I -B -m lictor_survey src --in {in} --out {out}"
+    assert defences.detect == ("pyproject.toml",)
+
+
+@pytest.mark.parametrize("run", ["x --out {out}", "x --in {in}"])
+def test_a_survey_must_say_where_its_input_and_report_go(run: str) -> None:
+    with pytest.raises(ValidationError, match=r"survey\.run debe incluir"):
+        SurveyConfig(run=run)
+
+
+def test_needing_a_plugin_needs_a_way_to_list_them() -> None:
+    data = load_profile("python-uv").model_dump(mode="json")
+    data["verification"]["plugins_command"] = ""
+    data["controls"] = [c for c in data["controls"] if c.get("when_plugin") is None]
+
+    with pytest.raises(ValidationError, match="needs_plugins necesita"):
+        Profile.model_validate(data)

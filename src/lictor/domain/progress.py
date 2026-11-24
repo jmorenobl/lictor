@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.model import Event
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
@@ -186,7 +187,13 @@ class RunProgress:
 
     def _handlers(self) -> Mapping[str, Callable[[Event], list[str]]]:
         return {
-            "lictor.run.started.v1": lambda _: ["Entorno de verificación listo."],
+            "lictor.run.started.v1": lambda event: [
+                "Entorno de verificación listo.",
+                *(
+                    f"⚠ Lo que los controles no ven: {line}"
+                    for line in blind_spot_lines(event.data.get("blind_spots")) or []
+                ),
+            ],
             "lictor.run.resumed.v1": self._resumed,
             "lictor.spec.loaded.v1": self._spec_loaded,
             "lictor.agent.started.v1": self._agent_started,

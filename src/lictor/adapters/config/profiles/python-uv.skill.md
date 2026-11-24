@@ -9,6 +9,9 @@ Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproj
 - **Un mínimo de cobertura se escribe como `min_score`, nunca como `fail_under`**: `{"id":
   "coverage", "mode": "block", "min_score": 80}`. Y nada de `--cov` en el `run` de `unit`: los
   argumentos de cobertura los pone `coverage`, y dos veces chocarían.
+- **Adoptar un proyecto con código:** `lictor doctor` dice qué dependencia falta (✗) y «lo que los
+  controles no ven» (⚠): tests sin control, ficheros que cargan los tests y el agente no puede
+  cambiar, código que nadie lee. Repásalo con la persona aviso por aviso (detalle, abajo).
 - **Cuándo corre un control añadido:** una mutación o una auditoría de dependencias, con
   `"stage": "check"`; uno de secretos (`gitleaks`), en cada intento.
 
@@ -34,6 +37,30 @@ Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproj
   src/romanos/. La CLI es `romanos.cli:main(argv: list[str]) -> int`, declarada en
   `[project.scripts]`; los tests la llaman en el proceso y leen stdout y stderr con `capsys`; el
   proyecto no está instalado, así que no se lanza el ejecutable.»
+
+**Adoptar un proyecto con código.** Antes del primer run, `lictor doctor`, y cada aviso de «Lo que
+los controles no ven» se decide con la persona. Arreglarlo es del proyecto, en `lictor.json`; Lictor
+solo lo ve:
+
+- **Dependencias (✗).** Si falta `pytest-bdd` o una herramienta de un control (`ruff`, `mypy`), se
+  añade con `uv add --dev` y se confirman `pyproject.toml` y `uv.lock`. Un programa que solo está en
+  la máquina tampoco vale: se usaría otro intérprete, sin las dependencias.
+- **Tests que ningún control ejecuta.** Si deben contar, se amplía el `run` de `unit` por `id` y se
+  añade su directorio a `paths.writable`. Por ejemplo, para todos los tests sin la marca
+  `integration`: `{"id": "unit", "run": "uv run pytest tests -m \"not integration\"
+  --ignore=tests/acceptance -q --junitxml {out}", "when_exists": "tests"}`, y el `agent_run` de
+  `coverage` con los mismos argumentos. Lo que `-m` deja fuera no se ve.
+- **Tests que el run ejecuta y el agente no puede cambiar.** Su directorio va a `paths.writable`, o
+  se sacan del `run`: si no, cambiar la API que usan para el run a la espera de una persona.
+- **Ficheros que cargan los tests e importan el código** (un `conftest.py`, o un módulo que importan
+  los tests). El agente nunca puede tocar un `conftest.py`. Si los escenarios van a cambiar lo que
+  importa (el aviso dice qué nombres), se mueve la fixture o el auxiliar junto a los tests que lo
+  usan, en una ruta escribible.
+- **Código que usa el proyecto y ningún control lee** (`examples/`, `scripts/`). Se añade su
+  directorio al `run` de `lint` y `types`, o se acepta.
+- **Lo que la persona acepta** va en `lictor.json`: `"blind_spots": {"accepted":
+  ["tests/integration/"]}`. Deja de repetirse y solo se cuenta. Luego, `lictor register` de lo que el
+  código ya cumple, antes del primer run.
 
 **Controles del perfil:** `lint` (ruff), `types` (mypy) y `unit` (pytest de `tests/unit`), y la
 aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` en modo

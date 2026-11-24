@@ -1197,3 +1197,31 @@ def test_report_shows_how_much_code_is_repeated(tmp_path: Path) -> None:
         "**duplication** (IVA-001, intento 1): fallo, 2 clones, 250 de 1800 tokens en clones"
         in (section)
     )
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({}, ["- *No se miró al empezar el run.*"]),
+        ({"blind_spots": None}, ["- *No se miró al empezar el run.*"]),
+        (
+            {"blind_spots": {"skipped": None, "spots": [], "lines": []}},
+            ["- *Nada: algún control ve cada test y cada fichero que usa el código.*"],
+        ),
+        (
+            {"blind_spots": {"skipped": "no comprobado: no hay código", "lines": []}},
+            ["- no comprobado: no hay código"],
+        ),
+        (
+            {"blind_spots": {"skipped": None, "spots": [], "lines": ["Uno.", "Dos."]}},
+            ["- Uno.", "- Dos."],
+        ),
+    ],
+)
+def test_report_says_what_the_controls_didnt_see_at_the_start(
+    tmp_path: Path, data: dict[str, object], expected: list[str]
+) -> None:
+    report = _report(tmp_path, [_started(**data), _verify_event({})])
+
+    section = report.split("## Lo que los controles no ven")[1].split("##")[0]
+    assert [line for line in section.splitlines() if line] == expected

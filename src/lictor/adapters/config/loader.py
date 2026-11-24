@@ -2,7 +2,7 @@ import hashlib
 import json
 import tomllib
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -24,8 +24,10 @@ from lictor.adapters.config.models import (
     agent_run_problems,
     allow_empty_message,
     driver_hints_message,
+    needs_plugins_message,
     plugin_without_list_message,
     refactor_hints_message,
+    survey_message,
     two_shapes_message,
 )
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
@@ -63,6 +65,10 @@ class Defences:
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
     interface_impostor: InterfaceImpostor | None = None
+    # What a project needs before a run, and how to read what its controls see (ADR-0015).
+    needs_plugins: dict[str, str] = field(default_factory=dict)
+    survey_run: str | None = None
+    detect: Sequence[str] = ()
 
 
 def _resolve_profiles_dir(profiles_dir: Path | None) -> Path:
@@ -234,7 +240,7 @@ def build_config_from_profile(
             limits=LimitsConfig(),
             paths=profile.paths,
             acceptance=AcceptanceConfig.model_validate(
-                profile.acceptance.model_dump(exclude={"driver_hints"})
+                profile.acceptance.model_dump(exclude={"driver_hints", "needs_plugins"})
             ),
             controls=list(profile.controls),
             agent_tools=list(profile.agent_tools),
@@ -326,6 +332,7 @@ def _merge_profile_defaults(
     profile_dump = profile.model_dump(mode="json")
     # The driver's instructions are the profile's alone: `resolve_defences` reads them.
     del profile_dump["acceptance"]["driver_hints"]
+    del profile_dump["acceptance"]["needs_plugins"]
     profile_dump["hints"] = render_hints(profile, project_root)
     merged = dict(raw_data)
     for key in _PROFILE_FALLBACK_KEYS:
@@ -527,6 +534,10 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
     acceptance = parsed.get("acceptance")
     if isinstance(acceptance, dict) and "driver_hints" in acceptance:
         raise ConfigError(driver_hints_message())
+    if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
+        raise ConfigError(needs_plugins_message())
+    if "survey" in parsed:
+        raise ConfigError(survey_message())
     if "refactor_hints" in parsed:
         raise ConfigError(refactor_hints_message())
     try:
@@ -678,6 +689,9 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
             if (face := profile.oracle.interface_impostor) is not None
             else None
         ),
+        needs_plugins=dict(profile.acceptance.needs_plugins),
+        survey_run=profile.survey.run if profile.survey is not None else None,
+        detect=tuple(profile.detect),
     )
 
 
@@ -692,7 +706,8 @@ def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
         for source in defences.verification.files
     }
     # Retention is read only when a run starts: changing it mustn't keep one from resuming.
-    project = config.model_dump(mode="json", exclude={"retention"})
+    # So are the blind spots a person accepts: only the reports read them (ADR-0015).
+    project = config.model_dump(mode="json", exclude={"retention", "blind_spots"})
     payload = {"config": project, "defences": resolved}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 

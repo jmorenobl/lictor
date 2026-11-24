@@ -15,7 +15,15 @@ from typing import Literal
 from lictor.application.ports import Executor, SpecSource, Vcs
 from lictor.application.run_files import prepare_scratch
 from lictor.application.skill import skill_stub_warning
+from lictor.application.start_survey import StartSurvey
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.blind_spots import (
+    BlindSpots,
+    StartRules,
+    blind_spots,
+    missing_plugins,
+    program_problems,
+)
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
 from lictor.domain.rules import (
@@ -29,6 +37,9 @@ from lictor.domain.stages import check_controls_warning
 
 EnvironmentCheck = Literal["run", "throwaway", "none"]
 UNCONFIGURED = "no comprobado: la configuración no carga"
+DEPENDENCIES = "Dependencias de la verificación"
+BLIND_SPOTS = "Lo que los controles no ven"
+NO_SURVEY = "no comprobado: el perfil no declara cómo leerlo"
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,9 @@ class PreconditionsRequest:
     # `doctor` answers for `lictor check` too: it also looks for the `check` controls' programs,
     # and warns that a run doesn't run them. A run and a resume only need the `attempt` ones.
     check_stage: bool = False
+    # Where the survey of the start contract leaves its evidence (ADR-0015); without it, what
+    # the project needs and what its controls don't see aren't checked.
+    survey_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,7 @@ class PreconditionsReport:
 
     checks: tuple[PreconditionCheck, ...] = ()
     cli_version: str | None = None
+    blind_spots: BlindSpots | None = None
 
     @property
     def problems(self) -> list[PreconditionProblem]:
@@ -103,6 +118,10 @@ class CheckPreconditions:
     check_stage_commands: Mapping[str, str] = field(default_factory=dict)
     aside: VerificationEnvironment | None = None
     spec_source: SpecSource | None = None
+    # The start contract (ADR-0015): what the acceptance needs, and how to read what is seen.
+    needs_plugins: Mapping[str, str] = field(default_factory=dict)
+    survey: StartSurvey | None = None
+    start_rules: StartRules | None = None
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
@@ -128,16 +147,18 @@ class CheckPreconditions:
         if environment is None:
             checks.append(PreconditionCheck("Comandos de verificación", skipped=UNCONFIGURED))
             checks.append(PreconditionCheck("Entorno de verificación", skipped=UNCONFIGURED))
+            if req.survey_dir is not None:
+                checks.append(PreconditionCheck(DEPENDENCIES, skipped=UNCONFIGURED))
+                checks.append(PreconditionCheck(BLIND_SPOTS, skipped=UNCONFIGURED))
             return PreconditionsReport(tuple(checks), cli_version)
         checks.append(
             self._commands(req, lambda program: self._found(environment, program, has_commits))
         )
-        checks.append(
-            self._environment(
-                environment, req, checks, scratch_ok=not scratch.problems, has_commits=has_commits
-            )
+        built, spots = self._environment(
+            environment, req, checks, scratch_ok=not scratch.problems, has_commits=has_commits
         )
-        return PreconditionsReport(tuple(checks), cli_version)
+        checks.extend(built)
+        return PreconditionsReport(tuple(checks), cli_version, spots)
 
     @staticmethod
     def _commits(has_commits: bool) -> PreconditionCheck:
@@ -247,28 +268,78 @@ class CheckPreconditions:
         *,
         scratch_ok: bool,
         has_commits: bool,
-    ) -> PreconditionCheck:
+    ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
+        """Build the environment and, with it still there, check the start contract on it."""
         name = "Entorno de verificación"
-        if req.environment == "none":
-            return PreconditionCheck(name, skipped=req.skip_reason)
-        if not has_commits:
-            return PreconditionCheck(name, skipped="no se construye: no hay ningún commit")
-        if not scratch_ok:
-            return PreconditionCheck(name, skipped="no se puede construir sin directorio temporal")
-        # A run that is going to stop anyway doesn't download anything.
-        if req.environment == "run" and any(check.problems for check in earlier):
-            return PreconditionCheck(
-                name, skipped="no se construye: antes hay que resolver lo anterior"
-            )
+        skipped = self._why_not_built(req, earlier, scratch_ok=scratch_ok, has_commits=has_commits)
+        if skipped is not None:
+            return [PreconditionCheck(name, skipped=skipped), *self._unchecked(req, skipped)], None
         try:
             if req.environment == "run":
                 environment.ensure(req.run_id)
-            else:
-                if req.log_dir is None:
-                    raise InternalLictorError("Un entorno desechable necesita dónde dejar su log")
-                source = self.aside or environment
-                with source.throwaway("HEAD", req.log_dir) as env:
-                    env.ensure(req.run_id)
+                return self._built(environment, req)
+            if req.log_dir is None:
+                raise InternalLictorError("Un entorno desechable necesita dónde dejar su log")
+            source = self.aside or environment
+            with source.throwaway("HEAD", req.log_dir) as env:
+                env.ensure(req.run_id)
+                return self._built(env, req)
         except EnvironmentUnavailableError as err:
-            return PreconditionCheck(name, (PreconditionProblem("environment", str(err)),))
-        return PreconditionCheck(name)
+            failed = PreconditionCheck(name, (PreconditionProblem("environment", str(err)),))
+            unchecked = self._unchecked(req, "no comprobado: el entorno no se pudo construir")
+            return [failed, *unchecked], None
+
+    @staticmethod
+    def _why_not_built(
+        req: PreconditionsRequest,
+        earlier: list[PreconditionCheck],
+        *,
+        scratch_ok: bool,
+        has_commits: bool,
+    ) -> str | None:
+        """Why the environment isn't built, or None when it is to be."""
+        if req.environment == "none":
+            return req.skip_reason
+        if not has_commits:
+            return "no se construye: no hay ningún commit"
+        if not scratch_ok:
+            return "no se puede construir sin directorio temporal"
+        # A run that is going to stop anyway doesn't download anything.
+        if req.environment == "run" and any(check.problems for check in earlier):
+            return "no se construye: antes hay que resolver lo anterior"
+        return None
+
+    def _unchecked(self, req: PreconditionsRequest, reason: str) -> list[PreconditionCheck]:
+        if req.survey_dir is None:
+            return []
+        return [
+            PreconditionCheck(DEPENDENCIES, skipped=reason),
+            PreconditionCheck(BLIND_SPOTS, skipped=reason),
+        ]
+
+    def _built(
+        self, environment: VerificationEnvironment, req: PreconditionsRequest
+    ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
+        """The environment's check, and what the project needs and its controls don't see."""
+        checks = [PreconditionCheck("Entorno de verificación")]
+        if req.survey_dir is None:
+            return checks, None
+        plugins = missing_plugins(self.needs_plugins, environment.installed_plugins)
+        if self.survey is None or self.start_rules is None:
+            dependencies = PreconditionCheck(DEPENDENCIES, tuple(plugins))
+            return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, skipped=NO_SURVEY)], None
+        surveyed = self.survey.execute(environment, self.vcs, self.project_root, req.survey_dir)
+        if isinstance(surveyed, str):
+            reason = f"no se pudo leer lo que ve cada control: {surveyed}"
+            dependencies = PreconditionCheck(DEPENDENCIES, tuple(plugins), warnings=(reason,))
+            return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=(reason,))], None
+        programs, later = program_problems(surveyed, self.start_rules.check_only)
+        dependencies = PreconditionCheck(DEPENDENCIES, (*plugins, *programs), warnings=tuple(later))
+        spots = blind_spots(surveyed, self.start_rules)
+        if spots.skipped is not None:
+            return [
+                *checks,
+                dependencies,
+                PreconditionCheck(BLIND_SPOTS, skipped=spots.skipped),
+            ], spots
+        return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=spots.lines)], spots

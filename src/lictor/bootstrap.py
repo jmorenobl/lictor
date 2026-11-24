@@ -23,6 +23,7 @@ from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.adapters.readers.mutation import MutationReader
+from lictor.adapters.readers.survey import SurveyReader
 from lictor.adapters.runner.subprocess_runner import SubprocessRunner
 from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
@@ -46,6 +47,7 @@ from lictor.application.skill import (
     render_skill,
 )
 from lictor.application.spec_history import SpecHistory
+from lictor.application.start_survey import StartSurvey, SurveyedCommandSpec
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.check_working_tree import CheckWorkingTree
@@ -60,7 +62,8 @@ from lictor.application.usecases.refactor_scenario import RefactorScenario
 from lictor.application.usecases.register_scenarios import RegisterScenarios
 from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
-from lictor.domain.controls import Control, command_controls, controls_of_stage
+from lictor.domain.blind_spots import StartRules
+from lictor.domain.controls import ACCEPTANCE_ID, Control, command_controls, controls_of_stage
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
 from lictor.domain.rules import RedOracle, control_label
@@ -290,6 +293,27 @@ def bootstrap_runtime(
             vcs, runner, doctor_audit, resolved_root, defences.verification
         ),
         spec_source=spec_source,
+        needs_plugins=defences.needs_plugins,
+        survey=(
+            StartSurvey(
+                run=defences.survey_run,
+                commands=[
+                    *(SurveyedCommandSpec(c.id, c.run) for c in command_controls(controls)),
+                    SurveyedCommandSpec(ACCEPTANCE_ID, active_config.acceptance.run),
+                ],
+                detect=defences.detect,
+                reader=SurveyReader(),
+            )
+            if defences.survey_run is not None
+            else None
+        ),
+        start_rules=StartRules(
+            writable=active_config.paths.writable,
+            driver=active_config.paths.driver,
+            forbidden=defences.forbidden_paths,
+            check_only=[c.id for c in check_controls],
+            accepted=active_config.blind_spots.accepted,
+        ),
     )
 
     graph_context = GraphContext(

@@ -86,9 +86,12 @@ def _profile_without_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             "env": {"PYTHONDONTWRITEBYTECODE": "1"},
         },
     }
-    # Without a command that lists the plugins, no control can depend on one (ADR-0008).
+    # Without a command that lists the plugins, no control can depend on one (ADR-0008), and
+    # the acceptance can't need one; without an environment there is nothing to survey in.
     for control in profile["controls"]:
         control.pop("when_plugin", None)
+    profile["acceptance"]["needs_plugins"] = {}
+    profile["survey"] = None
     (profiles / "sin-entorno.json").write_text(json.dumps(profile), encoding="utf-8")
     monkeypatch.setattr(loader, "DEFAULT_PROFILES_DIR", profiles)
 

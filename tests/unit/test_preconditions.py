@@ -10,12 +10,15 @@ import pytest
 
 from lictor.application.ports import Executor, Vcs
 from lictor.application.skill import install_skill_stub
+from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases import preconditions
 from lictor.application.usecases.preconditions import CheckPreconditions, PreconditionsRequest
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.blind_spots import StartRules
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import Health, PreconditionProblem
 from lictor.domain.rules import NO_COMMITS
+from lictor.domain.survey import LaunchedProgram, SurveyedCommand, SurveyedTests, SurveyReport
 
 HEALTHY = Health(ok=True, cli_version="2.1.0", auth_status="subscription")
 NAMES = [
@@ -443,3 +446,165 @@ def test_without_a_config_what_needs_it_is_skipped_and_the_rest_is_checked(
     ]
     assert [(p.kind, p.message) for p in report.problems] == [("config", "no carga")]
     assert report.cli_version is None
+
+
+SURVEYED = SurveyReport(
+    code_dir="src",
+    modules=("pkg",),
+    commands=(
+        SurveyedCommand("a", True, tests=True, paths=("tests/unit",)),
+        SurveyedCommand("lint", True, program=LaunchedProgram("linter", None, False)),
+    ),
+    tests=(SurveyedTests("tests/other/test_x.py", 2),),
+)
+CONTRACT = [
+    *NAMES[:-1],
+    "Entorno de verificación",
+    preconditions.DEPENDENCIES,
+    preconditions.BLIND_SPOTS,
+]
+
+
+def _with_contract(
+    tmp_path: Path, bin_dir: Path, surveyed: SurveyReport | str | None = SURVEYED
+) -> _Parts:
+    parts = _parts(tmp_path, bin_dir)
+    parts.environment.installed_plugins = ("otro",)
+    parts.use_case.needs_plugins = {"bdd.plugin": "añádelo"}
+    parts.use_case.start_rules = StartRules(("src/", "tests/unit/"), ("tests/acceptance/",))
+    if surveyed is not None:
+        survey = MagicMock(spec=StartSurvey)
+        survey.execute.return_value = surveyed
+        parts.use_case.survey = survey
+    return parts
+
+
+def test_without_a_survey_dir_the_start_contract_isnt_checked(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+
+    report = parts.use_case.execute(RUN)
+
+    assert [check.name for check in report.checks] == NAMES
+    assert report.blind_spots is None
+
+
+def test_the_start_contract_is_checked_on_the_environment_just_built(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    request = PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "start")
+
+    report = parts.use_case.execute(request)
+
+    assert [check.name for check in report.checks] == CONTRACT
+    dependencies, spots = report.checks[-2:]
+    assert [p.kind for p in dependencies.problems] == ["config", "config"]
+    assert "bdd.plugin" in dependencies.problems[0].message
+    assert "'linter'" in dependencies.problems[1].message
+    assert spots.problems == ()
+    assert "tests/other/test_x.py" in spots.warnings[0]
+    assert report.blind_spots is not None
+    assert parts.use_case.survey is not None
+    survey_execute = parts.use_case.survey.execute
+    assert isinstance(survey_execute, MagicMock)
+    survey_execute.assert_called_once_with(
+        parts.environment, parts.vcs, tmp_path, tmp_path / "start"
+    )
+
+
+def test_doctor_surveys_inside_the_throwaway_before_it_is_gone(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    built = MagicMock(spec=VerificationEnvironment)
+    built.installed_plugins = ("bdd.plugin",)
+    alive: list[bool] = []
+
+    @contextlib.contextmanager
+    def throwaway(rev: str, log_dir: Path) -> Iterator[MagicMock]:
+        alive.append(True)
+        yield built
+        alive.append(False)
+
+    parts.use_case.aside = MagicMock(spec=VerificationEnvironment)
+    parts.use_case.aside.throwaway.side_effect = throwaway
+    assert parts.use_case.survey is not None
+    survey_execute = parts.use_case.survey.execute
+    assert isinstance(survey_execute, MagicMock)
+    survey_execute.side_effect = lambda env, *_: alive[-1] and SURVEYED
+
+    report = parts.use_case.execute(
+        PreconditionsRequest(
+            run_id="d1",
+            environment="throwaway",
+            log_dir=tmp_path / "doctor",
+            survey_dir=tmp_path / "doctor" / "survey",
+        )
+    )
+
+    dependencies = report.checks[-2]
+    assert [p.message for p in dependencies.problems if "bdd.plugin" in p.message] == []
+    assert survey_execute.call_args.args[0] is built
+    assert report.blind_spots is not None
+
+
+def test_a_survey_that_fails_only_warns(tmp_path: Path, bin_dir: Path) -> None:
+    parts = _with_contract(tmp_path, bin_dir, "el análisis no dejó informe")
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    dependencies, spots = report.checks[-2:]
+    assert ["bdd.plugin" in p.message for p in dependencies.problems] == [True]
+    assert spots.problems == ()
+    assert spots.warnings == (
+        "no se pudo leer lo que ve cada control: el análisis no dejó informe",
+    )
+    assert report.blind_spots is None
+
+
+def test_a_profile_without_a_survey_checks_only_the_plugins(tmp_path: Path, bin_dir: Path) -> None:
+    parts = _with_contract(tmp_path, bin_dir, None)
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    dependencies, spots = report.checks[-2:]
+    assert len(dependencies.problems) == 1
+    assert spots.skipped == preconditions.NO_SURVEY
+
+
+def test_a_survey_without_the_projects_code_is_unchecked(tmp_path: Path, bin_dir: Path) -> None:
+    empty = SurveyReport(code_dir="src", modules=(), commands=())
+    parts = _with_contract(tmp_path, bin_dir, empty)
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    assert report.checks[-1].skipped == "no comprobado: no hay código del proyecto en src/"
+
+
+def test_without_an_environment_the_start_contract_says_why(tmp_path: Path, bin_dir: Path) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    request = PreconditionsRequest(
+        run_id="d1", environment="none", skip_reason="hay un run en curso", survey_dir=tmp_path
+    )
+
+    report = parts.use_case.execute(request)
+
+    assert [c.skipped for c in report.checks[-3:]] == ["hay un run en curso"] * 3
+    parts.environment.ensure.side_effect = EnvironmentUnavailableError("prepare falló")
+    failed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    assert [c.skipped for c in failed.checks[-2:]] == [
+        "no comprobado: el entorno no se pudo construir"
+    ] * 2
+
+
+def test_without_a_configuration_the_start_contract_is_unchecked(tmp_path: Path) -> None:
+    vcs = MagicMock(spec=Vcs)
+    vcs.has_commits.return_value = True
+    vcs.status.return_value = []
+    use_case = CheckPreconditions(vcs, None, None, tmp_path)
+
+    report = use_case.execute(PreconditionsRequest(run_id="d1", survey_dir=tmp_path))
+
+    assert [c.skipped for c in report.checks[-2:]] == [preconditions.UNCONFIGURED] * 2

@@ -141,6 +141,22 @@ def driver_hints_message() -> str:
     )
 
 
+def needs_plugins_message() -> str:
+    """Why `lictor.json` can't declare what the acceptance needs: the profile's driver uses it."""
+    return (
+        "lictor.json no puede declarar acceptance.needs_plugins: lo que necesita la aceptación lo "
+        "declara el perfil, cuyo driver lo usa. Bórralo."
+    )
+
+
+def survey_message() -> str:
+    """Why `lictor.json` can't declare the survey: it is the profile's reading of its tools."""
+    return (
+        "lictor.json no puede declarar survey: cómo se lee lo que ve cada control es del perfil. "
+        "Bórralo; lo que la persona acepta que no se vea va en blind_spots.accepted."
+    )
+
+
 class AcceptanceConfig(BaseModel):
     """Configuración de la suite de aceptación (L3) que decide el proyecto."""
 
@@ -168,6 +184,12 @@ class AcceptanceConfig(BaseModel):
             and "driver_hints" not in cls.model_fields
         ):
             raise ValueError(driver_hints_message())
+        if (
+            isinstance(data, dict)
+            and "needs_plugins" in data
+            and "needs_plugins" not in cls.model_fields
+        ):
+            raise ValueError(needs_plugins_message())
         return data
 
     @model_validator(mode="after")
@@ -189,6 +211,33 @@ class ProfileAcceptance(AcceptanceConfig):
     """The acceptance of a profile, with the instructions every driver of the profile gets."""
 
     driver_hints: str = ""
+    # The plugins its driver can't do without, each with how a person adds it (ADR-0015).
+    needs_plugins: dict[str, str] = Field(default_factory=dict)
+
+
+class SurveyConfig(BaseModel):
+    """The profile's command that reads what each verification command sees (ADR-0015)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_placeholders(self) -> Self:
+        split_command(self.run, "survey")
+        for placeholder in ("{in}", "{out}"):
+            if placeholder not in self.run:
+                msg = f"survey.run debe incluir '{placeholder}'"
+                raise ValueError(msg)
+        return self
+
+
+class BlindSpotsConfig(BaseModel):
+    """What the person accepts that no control sees: paths whose warnings are only counted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: list[str] = Field(default_factory=list)
 
 
 class ProfileVerification(BaseModel):
@@ -683,6 +732,7 @@ class Profile(BaseModel):
     driver_exempt_paths: list[str] = Field(default_factory=list)
     verification: ProfileVerification = Field(default_factory=ProfileVerification)
     oracle: ProfileOracle = Field(default_factory=ProfileOracle)
+    survey: SurveyConfig | None = None
     agent_tools: list[str] = Field(default_factory=list)
     agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
@@ -720,6 +770,13 @@ class Profile(BaseModel):
     @model_validator(mode="after")
     def _validate_readers(self) -> Self:
         _check_readers(self.controls)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_needs_can_be_listed(self) -> Self:
+        if self.acceptance.needs_plugins and not self.verification.plugins_command:
+            msg = "acceptance.needs_plugins necesita verification.plugins_command para comprobarlo"
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
@@ -782,6 +839,7 @@ class LictorConfig(BaseModel):
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
+    blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -834,6 +892,7 @@ class LictorFile(BaseModel):
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
+    blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)
@@ -842,6 +901,13 @@ class LictorFile(BaseModel):
     agent_commands: list[str] | None = None
     hints: str | None = None
     gitignore: list[str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_survey(cls, data: object) -> object:
+        if isinstance(data, dict) and "survey" in data:
+            raise ValueError(survey_message())
+        return data
 
     @field_validator("controls")
     @classmethod

@@ -368,6 +368,7 @@ def doctor(
                 uncommitted_warns=not checkout_repository(resolved_cwd).is_linked_worktree(),
                 config_problem=config_problem,
                 check_stage=True,
+                survey_dir=log_dir / "survey",
             )
             report = preconditions.execute(request)
         return _echo_checks(report)
