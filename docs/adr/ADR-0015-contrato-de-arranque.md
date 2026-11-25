@@ -265,7 +265,7 @@ tipo, sí sale. No entra en `config_fingerprint`: solo lo leen los informes.
 - **Las funciones nuevas no pasan de complejidad 10** en la medida del propio perfil, y no añaden
   clones.
 
-## Enmienda 0.19.0: la CI y `--cov`
+## Enmienda 0.19.0: la CI, `--cov`, el `pythonpath` y los controles en HEAD
 
 Sale de F76 y F78 (uso real, `.audits/qa/0-19-0/diseno.md`), con los hallazgos #6, #7, #8, #17,
 #18 y #19 de su revisión (`.audits/qa/0-19-0/revision-fable.md`).
@@ -350,3 +350,49 @@ cuenta de pasos aceptados (`accepted_ci`).
   está bajo las rutas de un paso puede salir en `ci_mas_ficheros`.
 - Las acciones compuestas, los workflows reutilizables y los `matrix` no se expanden: un comando con
   `${{ … }}` es «no se sabe».
+
+### El `pythonpath` del proyecto, detrás de las dependencias (F77)
+
+El perfil anula el `pythonpath` de pytest (`-o pythonpath=`) porque pytest lo aplica antes de
+importar los plugins y delante de `site-packages`: un `src/typing_extensions.py` sustituiría una
+dependencia. En agentix eso dejaba sin recoger 13 ficheros de `tests/unit`, que importan de
+`tests/support` (comprobado ejecutando `unit`). Ahora `lictor_project_path` lee el `pythonpath` del
+fichero que pytest eligió (`config.inipath`, público desde pytest 6.1), con su formato documentado
+(`[pytest]`, `[tool:pytest]`, `[tool.pytest.ini_options]`, y `[tool.pytest]` y `pytest.toml` desde
+pytest 9), y añade esas rutas **al final** de `sys.path`, tras `src`, en
+`pytest_load_initial_conftests`: después del arranque y de los plugins, detrás de las dependencias.
+Una ruta que sale del árbol verificado para la suite con un error que lo dice. La revisión proponía
+el lector privado de pytest (`load_config_dict_from_file`), que ya cambió de forma entre la 8 y la 9;
+no hace falta.
+
+En pytest 7 y 8 el `pythonpath` es un plugin propio, `python_path`, y con `-o pythonpath=` y ningún
+fichero de configuración falla una aserción antes de la 8.1 (Fable #23). El plugin del perfil lo
+bloquea (`set_blocked`, API de pluggy) en `pytest_addhooks`: su único trabajo es el que el perfil ya
+anula. En pytest 9 no existe. La matriz de `test_lictor_project_path.py` (nueve formatos, sin
+fichero, sin sección de pytest, una ruta fuera) se comprobó con pytest 7.4.4, 8.0.2, 8.4.2 y 9.0.3,
+también en Python 3.9 y con xdist `-n 2`: coincide con lo que hace pytest sin Lictor.
+
+### Los plugins se marcan antes de importarse (F81)
+
+`PYTEST_PLUGINS` importa y marca para reescribir cada plugin por turno. Si uno importa otro de la
+lista antes de su turno (`xdist.looponfail` importa `xdist.plugin`), pytest avisa de que no puede
+reescribirlo, y con `filterwarnings = ["error"]` (agentix) la suite no llega a arrancar. Con la
+carga automática, pytest marca todos antes de importar ninguno. `lictor_project_path`, el primero de
+la lista, hace lo mismo en `pytest_addhooks` con los que aún no están importados. No se toca el
+`filterwarnings` del proyecto.
+
+### Los controles que bloquean pasan en HEAD
+
+F77, F81, la metadata del propio paquete (F82: `version("agentix")` sin el proyecto instalado), el
+umbral de F78 y una base sin formatear (F75) tienen el mismo efecto: un control que bloquea falla en
+HEAD, y el primer intento lo pagaría sin que el agente pueda arreglarlo. `doctor` y un run nuevo
+(`preflight`) ejecutan una vez, en el entorno que ya construyen y en un clon limpio de HEAD, los
+controles `attempt` en `block` (`CheckProject`, con los lectores que lean de ellos), y cada uno que
+falla es ✗ `config` («Los controles pasan en HEAD»), con su error condensado y dónde está su salida
+(`<survey_dir>/controles/`). Corre código del proyecto: el estado se guarda como en un intento
+(`IntegritySnapshot`) y el entorno se comprueba después (`ensure`); un entorno cambiado es
+`environment`. La aceptación no se ejecuta: antes del driver no hay nada que juzgar, y sus
+escenarios pendientes fallan a propósito. Medido: en agentix, ✗ `unit` (los 24 casos de F82); en
+pyverifactu un commit antes del arreglo de formato, ✗ `format` con los tres ficheros que rompieron
+su CI.
+
