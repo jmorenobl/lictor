@@ -60,6 +60,7 @@ from lictor.domain.rules import (
     routes_rejected,
     run_outcome,
     runs_to_prune,
+    same_error_groups,
     score_meets,
     stub_lines,
     suppression_matches,
@@ -1685,3 +1686,78 @@ def test_a_name_without_a_run_id_at_its_end_is_not_a_retired_run() -> None:
     names = ["notas", f"{RUNS[0]}-copia", retired_name("uno", RUNS[1])]
 
     assert retired_to_prune(names, keep=0) == [retired_name("uno", RUNS[1])]
+
+
+def _collection_failure(
+    name: str, cause: str = "E   PackageNotFoundError: agentix"
+) -> TestCaseResult:
+    return TestCaseResult(
+        name, status="error", message="collection failure", details=f"Traceback\n  x\n{cause}\n"
+    )
+
+
+def test_condense_error_counts_cases_that_failed_alike_once_with_every_name_that_fits() -> None:
+    cases = [_collection_failure(f"tests.unit.test_{i}") for i in range(24)]
+
+    condensed = condense_error("unit", "", cases, max_chars=4000)
+
+    assert condensed.count("Mensaje: collection failure") == 1
+    assert "- 24 casos con el mismo error: tests.unit.test_0, tests.unit.test_1," in condensed
+    assert "tests.unit.test_23" in condensed
+    assert "Causa: E   PackageNotFoundError: agentix" in condensed
+    assert "más" not in condensed.split("Mensaje")[0]
+
+
+def test_condense_error_names_that_dont_fit_are_counted() -> None:
+    cases = [_collection_failure(f"tests.unit.test_modulo_largo_{i}") for i in range(40)]
+
+    condensed = condense_error("unit", "", cases, max_chars=800)
+
+    assert len(condensed) <= 800
+    assert "- 40 casos con el mismo error: tests.unit.test_modulo_largo_0," in condensed
+    shown = sum(
+        f"test_modulo_largo_{i}," in condensed or f"test_modulo_largo_{i} y" in condensed
+        for i in range(40)
+    )
+    assert f" y {40 - shown} más\n  Mensaje" in condensed
+    assert "casos fallidos más" not in condensed
+
+
+def test_condense_error_groups_keep_their_place_beside_a_lone_case() -> None:
+    cases = [
+        _collection_failure("a"),
+        TestCaseResult("solo", status="failure", message="assert 1 == 2"),
+        _collection_failure("b"),
+        _collection_failure("c", cause="E   ImportError: otro"),
+        _collection_failure("d", cause="E   ImportError: otro"),
+    ]
+
+    condensed = condense_error("unit", "", cases)
+
+    first, lone, second = (
+        condensed.index("2 casos con el mismo error: a, b"),
+        condensed.index("- solo"),
+        condensed.index("2 casos con el mismo error: c, d"),
+    )
+    assert first < lone < second
+
+
+def test_condense_error_same_message_and_another_cause_are_apart() -> None:
+    cases = [_collection_failure("a"), _collection_failure("b", cause="E   ImportError: otro")]
+
+    condensed = condense_error("unit", "", cases)
+
+    assert "casos con el mismo error" not in condensed
+    assert "- a\n" in condensed
+    assert "- b\n" in condensed
+
+
+def test_condense_error_cases_with_nothing_to_share_are_not_grouped() -> None:
+    cases = [TestCaseResult("a", status="failure"), TestCaseResult("b", status="failure")]
+
+    assert "casos con el mismo error" not in condense_error("x", "", cases)
+
+
+def test_same_error_groups_needs_message_or_cause() -> None:
+    by_message = [TestCaseResult(n, status="failure", message="m") for n in "ab"]
+    assert [[c.name for c in g] for g in same_error_groups(by_message)] == [["a", "b"]]
