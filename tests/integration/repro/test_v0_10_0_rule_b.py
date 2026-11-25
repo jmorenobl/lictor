@@ -66,11 +66,20 @@ def test_what_can_t_be_altered_from_the_when_on_stops_for_a_person_at_once(
     assert (rejected["data"]["reason"], rejected["data"]["final"]) == ("sin_prueba", True)
     error = str(rejected["data"]["error"])
     assert error.count("Este test no lo cambies") == 2
-    assert "Lictor no pudo comprobar IVA-001, IVA-002" in error
-    assert "`lictor register IVA-001 IVA-002`" in error
+    # Its Then reads the scenario's value: the person reads where (ADR-0016).
+    line = driver.splitlines().index("    assert calculo().valor == esperado") + 1
+    place = f"tests/acceptance/test_iva.py:{line}"
+    assert f"Lictor no pudo comprobar IVA-001, en {place}; IVA-002, en {place}" in error
+    assert "Lee antes esos tests" in error
+    assert "lictor register" not in error
     [measured] = events_of(root, "driver.measured")
-    outcomes = {sid: m["outcome"] for sid, m in measured["data"]["interface"].items()}
-    assert outcomes == {"IVA-001": "sin_alterar", "IVA-002": "sin_alterar"}
+    outcomes = {
+        sid: (m["outcome"], m["interface"]) for sid, m in measured["data"]["interface"].items()
+    }
+    assert outcomes == {
+        "IVA-001": ("solo_el_valor", "sin_alterar"),
+        "IVA-002": ("solo_el_valor", "sin_alterar"),
+    }
     assert green_ids(root) == []
     assert false_greens(root) == []
 

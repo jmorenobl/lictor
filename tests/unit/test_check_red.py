@@ -1,4 +1,5 @@
 import contextlib
+import html
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -2059,3 +2060,138 @@ def test_check_red_measures_nothing_of_a_sealed_driver(tmp_path: Path) -> None:
     use_case.execute(request)
 
     assert _events(event_log, "lictor.driver.measured.v1") == []
+
+
+# The impostor of the Gherkin (ADR-0016): what the interface can't prove is weighed with the
+# scenario's values.
+_WITH_GHERKIN = InterfaceImpostor("LICTOR_IMPOSTOR", "control", ("mas", "menos"), "LICTOR_GHERKIN")
+_UNREAD = json.dumps([["el IVA es 21", "tipo", "21"]])
+
+
+def _gherkin_xml(name: str, failure: str = "", altered: str = "0", unread: str = "[]") -> str:
+    """A test whose Then receives one value of the Gherkin, as both impostors report it."""
+    case = _iface_xml(name, failure)
+    props = {
+        "lictor.interface.trace": "0:aa:x1",
+        "lictor.gherkin.values": "1",
+        "lictor.gherkin.alterable": "0",
+        "lictor.gherkin.unread": unread,
+        "lictor.gherkin.altered": altered,
+    }
+    body = "".join(
+        f'<property name="{key}" value="{html.escape(value)}"/>' for key, value in props.items()
+    )
+    return case.replace("</properties>", body + "</properties>")
+
+
+class _GherkinRunner(_InterfaceRunner):
+    """Reports by the interface's mode and what the Gherkin was told: `gherkin-<mode>-<n>`."""
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandOutput:
+        raw = (env or {}).get("LICTOR_GHERKIN")
+        gherkin = json.loads(raw) if raw else None
+        self.gherkins.append(gherkin)
+        if gherkin is not None and "targets" in gherkin:
+            name = (
+                "bis"
+                if gherkin["mode"] == "control"
+                else (f"gherkin-{gherkin['mode']}-{gherkin['target']}")
+            )
+            self.reports = {**self.reports, "control": self.reports[name]}
+        elif gherkin is not None:
+            self.reports = {**self.reports, "control": self.reports["first"]}
+        return super().run(cmd, cwd, timeout_s, env)
+
+    gherkins: list[dict[str, Any] | None]
+
+
+def _gherkin_check(
+    tmp_path: Path, reports: dict[str, tuple[str, int]]
+) -> tuple[CheckRed, CheckRedRequest, MagicMock, _GherkinRunner]:
+    use_case, request, event_log, _, _, _ = _interface_check(
+        tmp_path, reports, interface_impostor=_WITH_GHERKIN
+    )
+    runner = _GherkinRunner(reports)
+    runner.gherkins = []
+    use_case.environment.runner = runner
+    return use_case, request, event_log, runner
+
+
+def test_check_red_a_test_that_reads_only_its_scenario_s_value_goes_to_the_person(
+    tmp_path: Path,
+) -> None:
+    """It survives what the interface returns, and fails with another value of the scenario."""
+    control = _suite(_iface_xml("test_iva_001", "assertion"), _gherkin_xml("test_iva_002"))
+    caught = _suite(_gherkin_xml("test_iva_002", "assertion", altered="1"))
+    reports = {
+        "red": (_IFACE_RED, 1),
+        "first": (control, 1),
+        "mas": (_IFACE_RED, 1),
+        "menos": (_IFACE_RED, 1),
+        "bis": (_suite(_gherkin_xml("test_iva_002")), 0),
+        "gherkin-mas-0": (caught, 1),
+        "gherkin-menos-0": (caught, 1),
+    }
+    use_case, request, event_log, runner = _gherkin_check(tmp_path, reports)
+
+    with pytest.raises(DriverError) as raised:
+        use_case.execute(request)
+
+    told = [(t["mode"], t["trace"]) if t else None for t in runner.told]
+    assert (
+        told
+        == [None, ("control", True), ("mas", False), ("menos", False)] + [("control", True)] * 3
+    )
+    assert runner.gherkins[1:] == [
+        {"mode": "control"},
+        None,
+        None,
+        {"mode": "control", "targets": ["IVA-002"]},
+        {"mode": "mas", "target": 0, "targets": ["IVA-002"]},
+        {"mode": "menos", "target": 0, "targets": ["IVA-002"]},
+    ]
+    step = runner.paths[0].parent
+    assert {p.parent.name for p in runner.paths[4:]} == {
+        "gherkin-control-bis",
+        "gherkin-mas-0",
+        "gherkin-menos-0",
+    }
+    assert step.name.endswith("-red")
+    reason = str(raised.value)
+    assert "Este test no lo cambies" in reason
+    assert "con otro valor del escenario en su lugar, falla" in reason
+    assert "en tests/acceptance/t.py" in reason
+    assert "Lee antes esos tests" in reason
+    assert "lictor register" not in reason
+    [measured] = _events(event_log, "lictor.driver.measured.v1")
+    found = measured.data["interface"]["IVA-002"]
+    assert (found["outcome"], found["interface"]) == ("solo_el_valor", "sobrevive")
+    assert found["gherkin"]["read"] == [0]
+
+
+def test_check_red_a_value_the_then_never_reads_is_told_to_the_agent_without_more_runs(
+    tmp_path: Path,
+) -> None:
+    control = _suite(
+        _iface_xml("test_iva_001", "assertion"), _gherkin_xml("test_iva_002", unread=_UNREAD)
+    )
+    reports = {
+        "red": (_IFACE_RED, 1),
+        "first": (control, 1),
+        "mas": (_IFACE_CAUGHT, 1),
+        "menos": (_IFACE_CAUGHT, 1),
+    }
+    use_case, request, _, runner = _gherkin_check(tmp_path, reports)
+
+    result = use_case.execute(request)
+
+    assert result.ok is False
+    assert len(runner.told) == 4  # the red and the interface's three: the code says it
+    assert result.last_error is not None
+    assert "el Entonces «el IVA es 21» recibe «21» del escenario y no lo usa" in result.last_error

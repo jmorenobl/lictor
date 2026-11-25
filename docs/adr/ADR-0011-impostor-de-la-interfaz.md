@@ -5,7 +5,8 @@ Aceptada (2026-11-19). Sale de F58 (`.audits/romanos/fricciones.md`) y de la fas
 revisor independiente diseñó la solución por su cuenta, sin ver la primera propuesta, y esta
 versión adopta su diseño (punto 2) con una corrección (el gancho de importación, punto 3).
 
-Enmendada en la 0.17.0 (2026-11-24) con las corrutinas y las librerías: ver la última sección.
+Enmendada en la 0.18.0 (2026-11-25) con los objetos de valor, junto a la ADR-0016: ver la última
+sección. Enmendada en la 0.17.0 (2026-11-24) con las corrutinas y las librerías.
 
 Enmendada en la 0.10.0 (2026-11-20, «B»): la prueba tiene que venir de un Entonces, y lo que
 devuelve un Dado no se altera. Cambian los puntos 2, 4 y 5; lo que motiva la enmienda está en
@@ -328,3 +329,76 @@ y por ellos cambiaron cosas:
 
 **Lo que no cambia:** las funciones planas y lo que se altera de cada tipo, los desenlaces de la
 regla B y las colecciones, y lo que se dice al agente de cada uno.
+
+## Enmienda de los objetos de valor (0.18.0, 2026-11-25)
+
+Sale de F62. Un Entonces que compara un objeto (una dataclass, un modelo de pydantic, un miembro de
+un `Enum`) salía `sin_alterar`: el impostor no sabía darle otro valor, y la persona tenía que
+registrar a mano un test que sí comparaba. Va con la ADR-0016, que pesa además el valor del
+escenario: sola, esta enmienda empeoraba un caso real (ALM-001 pasaba de `sin_alterar`, final, a
+`sobrevive`, con reintento).
+
+Medido sobre los 317 escenarios que pasan en las pasadas (`.audits/qa/objetos/diseno.md`), cada
+uno juzgado como si fuera nuevo:
+
+| Regla | Probados | Lo demás |
+|:--|--:|:--|
+| La 0.17.0 | 284 | 23 `sin_alterar`, 4 `no_aserta`, 4 `a_traves`, 2 `sobrevive` |
+| Con los objetos de valor | 307 | 4 `no_aserta`, 4 `a_traves`, 2 `sobrevive` |
+
+Los 23 nuevos (21 de `pyverifactu`) fallan, en los dos modos, por una aserción de un Entonces con
+el valor del escenario. ORD-003 (F74), que leía un objeto, queda probado.
+
+**Decisión:**
+
+1. **Se altera un objeto de valor**: una dataclass, un `NamedTuple`, un modelo de pydantic v2, una
+   clase de attrs, y un miembro de un `Enum` que no sea `Flag`. Del objeto se alteran **todos los
+   campos a la vez**, cada uno con el mismo `alter`, hasta 4 niveles de profundidad. Se construye
+   una copia de la misma clase con `copy.copy` y `object.__setattr__` (`_replace` en una tupla con
+   nombre), sin ejecutar `__init__`, `__post_init__` ni validadores. La copia es de la misma clase,
+   así que `isinstance` y la igualdad de la clase siguen funcionando, y no es igual ni al objeto
+   real ni a uno construido con los valores del escenario. De un `Enum` se da el miembro siguiente
+   en `mas` y el anterior en `menos`. Un enum de un solo miembro no se altera, y un `IntFlag` se
+   altera como el entero que es.
+2. **Lo que no es de valor se deja como está**: una clase cualquiera (un servicio, un almacén),
+   `__slots__` sin campos declarados, o un `Flag` combinado. Sus atributos son estado, o no tienen
+   otro miembro que dar.
+3. **Lo que vuelve a la interfaz vuelve real.** Vuelven por identidad:
+   - un objeto congelado;
+   - cada campo alterado que ya podía volver;
+   - **un objeto mutable que el driver no ha tocado**, es decir, cuyos campos son los mismos
+     objetos que cuando se alteró.
+
+   Uno que el driver cambió es suyo. Así, un método llamado sobre la copia corre sobre lo real, y
+   su resultado se altera una vez, no dos.
+4. **Una excepción provocada no prueba nada** (`provocada`, final). El impostor numera las
+   llamadas del driver en cada test. En el control dice cuáles lanzaron, y en cada modo cuáles tuvo
+   que tragar o sustituir (`lictor.interface.raised_at` y `.swallowed_at`, esta con el paso). Si un
+   modo tragó o sustituyó la excepción de una llamada que en el control no lanzó, la causó un valor
+   alterado que volvió a la interfaz: un entero pequeño, que Python comparte y no se reconoce por
+   identidad. Ese modo no dice nada del test. Un `probado`, un `no_aserta` o un `sobrevive` con una
+   excepción así es `provocada`. Al agente se le dice que no cambie el test, como con `sin_alterar`.
+   La persona lee en qué paso y en qué modo pasó (`provoked_note`).
+5. **La traza** (para la ADR-0016). Con `trace`, el impostor anota cada llamada del driver con su
+   paso, la función y un hash de cada argumento. Un objeto de valor se resume por sus campos, y el
+   texto, sin la raíz del clon. Solo lo pide el control.
+6. **En los stubs (ADR-0012)**, `provocada` se rechaza con su propio mensaje: el valor alterado
+   volvió a la interfaz, y el test se puede escribir de modo que se pueda juzgar.
+
+**Lo revisó Fable antes de implementarlo**, con 48 casos ejecutables (`.audits/qa/objetos/fable/`).
+Cada hallazgo se reprodujo ejecutándolo. Por ellos, lo mutable no tocado vuelve real (antes, un
+débil `facturar(p) is not None` salía probado por la excepción que tragaba el impostor), la
+excepción provocada es su propio desenlace y `Flag` queda fuera de los enums.
+
+**Límites conocidos:**
+
+- `copy.copy` ejecuta `__copy__` o `__getstate__` si la clase los define.
+- `attrs.frozen` no vuelve a lo real. En 3.9, una dataclass congelada con `__slots__` escritos a
+  mano no se altera.
+- `cached_property`, los campos que no se pueden alterar (un `UUID`) y los de `compare=False` dan
+  `sin_alterar`, `sobrevive` o, con la ADR-0016, `solo_el_valor`.
+- `[0]` de una lista de un elemento dentro de un objeto sigue siendo el límite de las colecciones.
+
+**Lo que no cambia:** lo que se altera de los demás tipos, la regla B, las colecciones y las
+corrutinas. Las tablas `_CHECKS` de `test_lictor_impostor.py` y las de `test_lictor_doubles.py` dan
+lo mismo.

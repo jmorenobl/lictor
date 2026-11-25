@@ -7,13 +7,20 @@ steps that act and check (`ALTERED_STEPS`), never what a Given prepares. A test 
 assertion in a Then fails in every mode, or that the impostor's error stops from the When on,
 depends on that value, so the code already met its scenario. These rules judge what the impostor
 reported; the plugin decides nothing.
+
+A mode whose only failure is an exception the impostor swallowed or replaced, at a call that didn't
+raise in the control, proves nothing: the value it altered went back to the interface and made it
+raise (`provocada`). With the impostor of the Gherkin (`gherkin_proof`, ADR-0016) the verdict also
+weighs the scenario's value: a Then that receives it and never reads it is refused first, and a
+test the interface can't prove that reads every value goes to the person (`solo_el_valor`).
 """
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from lictor.domain.model import Step, TestCaseResult
+from lictor.domain.gherkin_proof import GherkinFacts
+from lictor.domain.model import Step, TestCaseResult, UnreadValue
 from lictor.domain.rules import path_within
 
 ASSERTION_KIND = "assertion"
@@ -40,6 +47,9 @@ ProofOutcome = Literal[
     "fuera_del_entonces",  # it failed by an assertion of the driver, but outside a Then
     "sin_alterar",  # nothing the interface returned to it from the When on could be altered
     "no_concluyente",  # an impostor run told nothing about it
+    "provocada",  # a value it altered went back to the interface and made it raise
+    "ignora_el_valor",  # a Then receives a value of the scenario and never reads it (ADR-0016)
+    "solo_el_valor",  # it reads each value of the scenario, but nothing it checks is the code's
 ]
 
 # Worst first: what a mode says of the test, when the modes disagree.
@@ -53,7 +63,16 @@ _PRIORITY: tuple[ProofOutcome, ...] = (
 
 # What the driver's agent can fix by writing the test again; the rest only a person decides.
 _FIXABLE: frozenset[ProofOutcome] = frozenset(
-    {"no_llama", "sobrevive", "no_aserta", "fuera_del_entonces"}
+    {"no_llama", "sobrevive", "no_aserta", "fuera_del_entonces", "ignora_el_valor"}
+)
+# What a provoked exception overrides: a mode that failed, or passed, only because of it.
+_PROVOKABLE: frozenset[ProofOutcome] = frozenset({"probado", "no_aserta", "sobrevive"})
+# What the Gherkin may turn into `solo_el_valor`: a test whose Then calls the interface and reads
+# every value, but that the interface couldn't prove. A provoked exception, or a run that told
+# nothing, leaves nothing to weigh; an assertion of the driver outside the Then caught the result,
+# and moving it to the Then proves the test, so that one stays as the agent's to fix.
+_ONLY_THE_VALUE: frozenset[ProofOutcome] = frozenset(
+    {"sobrevive", "no_aserta", "sin_alterar", "a_traves"}
 )
 ONLY_FROM_A_GIVEN = "dado"  # the detail of a test that calls the interface only to prepare
 HANDED = "entrega"  # the detail of one that hands the interface to a library, which calls it
@@ -66,6 +85,7 @@ class InterfaceImpostor:
     variable: str
     control: str
     modes: tuple[str, ...]
+    gherkin: str | None = None  # the variable of the impostor of the Gherkin, told the same modes
 
 
 @dataclass(frozen=True)
@@ -106,17 +126,78 @@ def interface_proof(
         return _not_called(control)
     if not modes:
         return InterfaceProof("no_concluyente", "el perfil no declara ningún modo")
-    # What each mode says against the test; a mode that caught it says nothing.
+    judged = _worst_objection(modes, driver)
+    if judged.outcome not in _PROVOKABLE:
+        return judged
+    provoked = (provoked_in(mode, case, control) for mode, case in modes.items())
+    where = next((found for found in provoked if found), "")
+    return InterfaceProof("provocada", where) if where else judged
+
+
+def _worst_objection(
+    modes: Mapping[str, TestCaseResult | None], driver: Sequence[str]
+) -> InterfaceProof:
+    """What the modes say against the test, the worst first; none that object proves it."""
     objections = [
         objection
         for mode, case in modes.items()
         if (objection := _objection(mode, case, driver)) is not None
     ]
-    for outcome in _PRIORITY:
-        found = next((o for o in objections if o.outcome == outcome), None)
-        if found is not None:
-            return found
-    return InterfaceProof("probado")
+    return next(
+        (found for outcome in _PRIORITY for found in objections if found.outcome == outcome),
+        InterfaceProof("probado"),
+    )
+
+
+def provoked_in(mode: str, case: TestCaseResult | None, control: TestCaseResult) -> str:
+    """Where a mode swallowed or replaced an exception the control never raised, or "".
+
+    The call raised only with something altered: a value the impostor gave the driver went back to
+    the interface, which a weak test can't tell apart from a check.
+    """
+    if case is None:
+        return ""
+    raised = control.interface_raised_at
+    found = next((call for call in case.interface_swallowed_at if call[0] not in raised), None)
+    return "" if found is None else f"{STEP_PLACE[found[1]]} (modo {mode})"
+
+
+def weighed_proof(
+    proof: InterfaceProof, facts: GherkinFacts | None, control: TestCaseResult | None
+) -> InterfaceProof:
+    """The interface's verdict weighed with what the impostor of the Gherkin saw (ADR-0016).
+
+    A value of the scenario a Then receives and never reads is refused before anything else,
+    since the test can be fixed; a test the interface couldn't prove that reads every value that
+    isn't an input, and calls the interface from the When or the Then, goes to the person.
+    """
+    if facts is None:
+        return proof
+    if facts.unread:
+        return InterfaceProof("ignora_el_valor", unread_text(facts.unread[0]))
+    if (
+        proof.outcome in _ONLY_THE_VALUE
+        and facts.every_value_read
+        and control is not None
+        and _calls_from_when(control)
+    ):
+        return InterfaceProof("solo_el_valor", facts.place, proof.libraries)
+    return proof
+
+
+def weighs_the_gherkin(proof: InterfaceProof) -> bool:
+    """Whether the scenario's values can change what the interface said of a test."""
+    return proof.outcome in _ONLY_THE_VALUE
+
+
+def _calls_from_when(control: TestCaseResult) -> bool:
+    """Whether the When or the Then reached the interface: itself, through a library or handed."""
+    return any(control.interface_by_step(kind).from_when for kind in ("calls", "via", "handed"))
+
+
+def unread_text(unread: UnreadValue) -> str:
+    """The step that ignores a value of its scenario, and the value."""
+    return f"el Entonces «{unread.step}» recibe «{unread.value}» del escenario"
 
 
 def _not_called(control: TestCaseResult) -> InterfaceProof:
@@ -270,6 +351,19 @@ _REASONS: Mapping[str, str] = {
         "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
     ),
     "no_concluyente": "{head}, y no se pudo comprobar que su test mire el resultado: {detail}.",
+    # The value is the scenario's, and the step has it: comparing it is the fix (ADR-0016).
+    "ignora_el_valor": (
+        "{head}, pero {detail} y no lo usa: compara con assert lo que devuelve la interfaz con "
+        "ese valor."
+    ),
+    # As sin_alterar: the agent reads these when another scenario is retried, and why goes to
+    # the person (`only_the_value_note`, `provoked_note`).
+    "solo_el_valor": (
+        "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
+    ),
+    "provocada": (
+        "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
+    ),
 }
 
 
@@ -321,12 +415,48 @@ def through_note(proofs: Mapping[str, InterfaceProof]) -> str:
     )
 
 
+def only_the_value_note(proofs: Mapping[str, InterfaceProof]) -> str:
+    """What the impostors saw of tests that read their scenario's value but not, as far as Lictor
+    can tell, the code's: only facts, for the person. A test that compares the value with what a
+    Given stored looks the same, so nothing here says the test is right."""
+    each = "; ".join(
+        sid
+        + (f", en {proof.detail}" if proof.detail else "")
+        + (f", a través de {libraries_text(proof.libraries)}" if proof.libraries else "")
+        for sid, proof in proofs.items()
+    )
+    return (
+        f"Lictor no pudo comprobar {each}: con lo que devuelve la interfaz alterado, su test sigue "
+        "pasando o falla sin una aserción de un Entonces; con otro valor del escenario en su "
+        "lugar, falla. Lictor no puede probar que lo que compara venga del código: léelo ahí."
+    )
+
+
+def provoked_note(proofs: Mapping[str, InterfaceProof]) -> str:
+    """Why the impostor couldn't judge tests in which a value it altered made the code raise."""
+    each = "; ".join(f"{sid}, {proof.detail}" for sid, proof in proofs.items())
+    return (
+        f"Lictor no pudo comprobar {each}: el valor que alteró volvió a la interfaz y la hizo "
+        "lanzar, así que lo que hizo el test después no dice si compara el resultado."
+    )
+
+
 def person_notes(proofs: Mapping[str, InterfaceProof]) -> list[str]:
     """Why the impostor couldn't judge these tests, one note per reason, for the person only."""
-    unalterable = [sid for sid, proof in proofs.items() if proof.outcome == "sin_alterar"]
-    through = {sid: proof for sid, proof in proofs.items() if proof.outcome == "a_traves"}
-    notes = [unalterable_note(unalterable)] if unalterable else []
-    return notes + ([through_note(through)] if through else [])
+
+    def having(outcome: ProofOutcome) -> dict[str, InterfaceProof]:
+        return {sid: proof for sid, proof in proofs.items() if proof.outcome == outcome}
+
+    notes = [unalterable_note(list(found))] if (found := having("sin_alterar")) else []
+    notes += [through_note(found)] if (found := having("a_traves")) else []
+    notes += [only_the_value_note(found)] if (found := having("solo_el_valor")) else []
+    return notes + ([provoked_note(found)] if (found := having("provocada")) else [])
+
+
+def unreadable(proofs: Mapping[str, InterfaceProof]) -> bool:
+    """Whether any of these goes to the person because only its scenario's value was proved, or
+    an altered value made the code raise: then no hint invites to register them unread."""
+    return any(proof.outcome in ("solo_el_valor", "provocada") for proof in proofs.values())
 
 
 def without_impostor_reason(sid: str, test_name: str) -> str:

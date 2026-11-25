@@ -464,9 +464,12 @@ def test_project_needs_reach_the_commands(
 
     seen = probe.read_text(encoding="utf-8").splitlines()
     assert {"MI_FIJA=1", "MI_HEREDADA=2"} <= set(seen)
-    plugins = "lictor_project_path,lictor_outcome,lictor_impostor,lictor_doubles,pytest_bdd.plugin"
+    plugins = (
+        "lictor_project_path,lictor_outcome,lictor_impostor,lictor_gherkin,lictor_doubles,"
+        "pytest_bdd.plugin"
+    )
     assert f"PYTEST_PLUGINS={plugins}" in seen
-    assert not any(line.startswith("LICTOR_IMPOSTOR=") for line in seen)
+    assert not any(line.startswith(("LICTOR_IMPOSTOR=", "LICTOR_GHERKIN=")) for line in seen)
 
 
 @pytest.mark.parametrize(

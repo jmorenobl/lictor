@@ -11,6 +11,16 @@ Given or a fixture prepares). A fixture counts as outside any step even when a s
 What the driver hands back to the interface of what it altered goes back real: the alteration is
 the driver's to see.
 
+It alters numbers, dates, booleans, texts, collections, None and exceptions, and objects of value
+(a dataclass, a `NamedTuple`, a pydantic v2 model, an attrs class: every field at once, in a copy of
+the same class built without running its code; a member of an `Enum` that isn't a `Flag`: the next
+or the one before). Anything else, a service or a store, is state, and is left alone. It numbers the
+driver's calls of each test and says which raised unaltered and which had their exception swallowed
+or replaced: one that only raised altered was made to by a value of Lictor's the driver handed back
+to the interface. With `trace` it also writes, for each call, its step, the function and a hash of
+each argument, so that a run with a value of the scenario changed tells whether that value reached
+the interface (ADR-0016).
+
 It also counts the calls the driver made through a library, never altering them: the project's
 own code calling the interface after the driver entered it through a library (a runner that
 invokes a command), and a library calling a function the driver handed it. It reports, for each
@@ -27,9 +37,13 @@ could forge the whole report.
 from __future__ import annotations
 
 import asyncio.coroutines
+import copy
+import dataclasses
 import datetime
 import dis
+import enum
 import functools
+import hashlib
 import importlib.abc
 import importlib.machinery
 import inspect
@@ -57,6 +71,10 @@ ALTERED_NONE = "lictor.interface.altered_none"  # altered results that were None
 VIA = "lictor.interface.via"  # the project calling it, entered through a library: never altered
 HANDED = "lictor.interface.handed"  # a library calling what the driver handed it: never altered
 ENTRY = "lictor.interface.entry"  # by step: the libraries the driver called into, to name them
+RAISED_AT = "lictor.interface.raised_at"  # the driver's calls that raised, unaltered, by index
+# Those whose exception the impostor swallowed or replaced, by index and step: `3:then`.
+SWALLOWED_AT = "lictor.interface.swallowed_at"
+TRACE = "lictor.interface.trace"  # each call of the driver's: its step, the function, its arguments
 STEPS = ("given", "when", "then")
 CONTROL = "control"
 MORE = "mas"  # one more: number + 1, one element more, the exception swallowed
@@ -141,22 +159,147 @@ def alter(value: Any, mode: str) -> Any:
         return SENTINEL
     if isinstance(value, bool):
         return not value
-    step = 1 if mode == MORE else -1
-    if isinstance(value, float) and not math.isfinite(value):
-        return _UNALTERED
-    if isinstance(value, (int, float, Fraction, Decimal)):
-        changed: Any = value + step
-    elif isinstance(value, datetime.date):  # a datetime too: a day more or less
-        changed = value + datetime.timedelta(days=step)
-    elif type(value) in (str, bytes, list, tuple, dict, set, frozenset):
-        changed = _longer(value) if mode == MORE else _shorter(value)
-    else:
-        return _UNALTERED
+    if _of_value(value):
+        return _altered_object(value, mode)
+    changed = _altered_primitive(value, 1 if mode == MORE else -1, mode)
+    if changed is _UNALTERED:
+        return changed
     try:
         same = bool(changed == value)
     except Exception:  # a comparison that fails can't say it is the same
         same = False
     return _UNALTERED if same else changed
+
+
+def _altered_primitive(value: Any, step: int, mode: str) -> Any:
+    """A number one more or less, a date a day, a collection an element; else `_UNALTERED`."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return _UNALTERED
+    if isinstance(value, (int, float, Fraction, Decimal)):
+        return value + step
+    if isinstance(value, datetime.date):  # a datetime too: a day more or less
+        return value + datetime.timedelta(days=step)
+    if type(value) in (str, bytes, list, tuple, dict, set, frozenset):
+        return _longer(value) if mode == MORE else _shorter(value)
+    return _UNALTERED
+
+
+_DEPTH = [0]  # how deep the object being altered is: its fields are altered as values too
+_MAX_DEPTH = 4
+
+
+def _of_value(value: Any) -> bool:
+    """An object of value: a record of fields, or a member of an enumeration that isn't a flag.
+
+    A combined `Flag` has no other member to give; an `IntFlag` is altered as the integer it is.
+    """
+    if isinstance(value, enum.Enum):
+        return not isinstance(value, enum.Flag)
+    return _record_fields(value) is not None
+
+
+def _altered_object(value: Any, mode: str) -> Any:
+    if isinstance(value, enum.Enum):
+        return _other_member(value, mode)
+    return _altered_record(value, mode)
+
+
+def _other_member(value: Any, mode: str) -> Any:
+    """Another member of the same enumeration, or `_UNALTERED` if it has only one."""
+    kind: Any = type(value)
+    members = list(kind)  # without aliases, which are the same member
+    if len(members) <= 1:
+        return _UNALTERED
+    index = members.index(value) + (1 if mode == MORE else -1)
+    return members[index % len(members)]
+
+
+def _record_fields(value: Any) -> list[str] | None:
+    """The fields of an object of value, or None: what its equality compares, in its order."""
+    if isinstance(value, type):
+        return None
+    if dataclasses.is_dataclass(value):
+        return [f.name for f in dataclasses.fields(value)]
+    named = getattr(type(value), "_fields", None)  # a namedtuple
+    if isinstance(value, tuple) and isinstance(named, tuple):
+        return [str(name) for name in named]
+    return _declared_fields(value)
+
+
+def _declared_fields(value: Any) -> list[str] | None:
+    """The fields a library declares for its class: a pydantic v2 model's, an attrs class's."""
+    fields = getattr(type(value), "model_fields", None)
+    if isinstance(fields, dict) and hasattr(value, "__pydantic_fields_set__"):
+        return list(fields)
+    attrs = getattr(type(value), "__attrs_attrs__", None)
+    return None if attrs is None else [a.name for a in attrs]
+
+
+def _altered_record(value: Any, mode: str) -> Any:
+    """A copy of the object with every field it has altered, built without running its code."""
+    names = _record_fields(value) or []
+    if _DEPTH[0] >= _MAX_DEPTH:
+        return _UNALTERED
+    _DEPTH[0] += 1
+    try:
+        changes: dict[str, Any] = {}
+        for name in names:
+            field = _field(value, name)
+            changed = _UNALTERED if field is _UNALTERED else alter(field, mode)
+            if changed is not _UNALTERED:
+                changes[name] = changed
+    finally:
+        _DEPTH[0] -= 1
+    if not changes:
+        return _UNALTERED
+    if isinstance(value, tuple):
+        named: Any = value  # a namedtuple, which builds its copy without running the class's code
+        return named._replace(**changes)
+    try:
+        new = copy.copy(value)
+        for name, changed in changes.items():
+            object.__setattr__(new, name, changed)
+    except Exception:
+        return _UNALTERED
+    return new
+
+
+def _field(value: Any, name: str) -> Any:
+    """A field of an object of value, or `_UNALTERED` when reading it fails."""
+    try:
+        return getattr(value, name)
+    except Exception:  # a property that raises: there is nothing to alter in it
+        return _UNALTERED
+
+
+def _frozen(value: Any) -> bool:
+    """Whether an object of value can't be changed: then it can go back real by identity."""
+    params = getattr(type(value), "__dataclass_params__", None)
+    if params is not None:
+        return bool(params.frozen)
+    if isinstance(value, tuple):
+        return True
+    config = getattr(type(value), "model_config", None)
+    if isinstance(config, dict) and hasattr(value, "__pydantic_fields_set__"):
+        return bool(config.get("frozen"))
+    return False
+
+
+def _pairs(changed: Any, original: Any) -> list[tuple[Any, Any]]:
+    """What the impostor produced that can go back real, the fields of an object included.
+
+    A mutable object is in the list too: it goes back real as long as the driver hasn't changed it
+    (`_Impostor.real`), so that a method called on it runs on what the interface gave.
+    """
+    names = _record_fields(original)
+    record = bool(names) and type(changed) is type(original)
+    found = [(changed, original)] if _returnable(changed) or record else []
+    if names and type(changed) is type(original):
+        for name in names:
+            mine, theirs = _field(changed, name), _field(original, name)
+            if mine is not theirs and _UNALTERED not in (mine, theirs):
+                found.extend(_pairs(mine, theirs))
+    return found
 
 
 def _returnable(value: Any) -> bool:
@@ -173,6 +316,8 @@ def _returnable(value: Any) -> bool:
         return True
     if type(value) in (str, bytes, tuple, frozenset):
         return len(value) > 1
+    if _record_fields(value) is not None:
+        return _frozen(value)
     return False
 
 
@@ -186,6 +331,9 @@ class _Impostor:
         driver: Sequence[str],
         steps: Sequence[str],
         stubs: Mapping[str, Sequence[int]],
+        *,
+        trace: bool = False,
+        root: str = "",
     ) -> None:
         self.mode = mode
         self.writable = [_real(root) for root in writable]
@@ -194,6 +342,8 @@ class _Impostor:
         # The lines Lictor put in place of a stub, by file: no code that already exists.
         self.stubs = {_real(path): frozenset(lines) for path, lines in stubs.items()}
         self.fixtures = 0  # how many fixtures are being set up right now
+        self.trace_on = trace
+        self.root = root  # the clone's root, which the trace leaves out of the texts it hashes
         self.reset()
 
     def reset(self) -> None:
@@ -202,8 +352,15 @@ class _Impostor:
         self.altered_none = 0
         self.step: str | None = None
         self.produced: list[tuple[Any, Any]] = []  # what it altered, and what it was
+        # The fields of each mutable object it altered, by identity, as it gave them to the driver.
+        self.snapshots: dict[int, tuple[int, ...]] = {}
         self.by_step = {name: dict.fromkeys(STEPS, 0) for name in self.totals}
         self.entries: dict[str, set[str]] = {step: set() for step in STEPS}
+        self.trace: list[str] = []
+        self.calls_made = 0  # the driver's calls so far, which numbers each one
+        self.raised_at: list[int] = []  # driver calls that raised, unaltered
+        self.swallowed_at: list[str] = []  # driver calls whose exception it altered, `index:step`
+        self.step_index = -1  # which step of the test is in progress, from 0
 
     def where(self) -> str | None:
         """The kind of step a call is made from; a fixture's setup is outside any step."""
@@ -274,7 +431,12 @@ class _Impostor:
         """What the interface gave, for a value of the impostor's that the driver hands back."""
         for altered, original in self.produced:
             if value is altered:
-                return original
+                if _returnable(altered):
+                    return original
+                names = _record_fields(altered) or []
+                made = self.snapshots.get(id(altered), ())
+                now = tuple(id(getattr(altered, n, None)) for n in names)
+                return original if now == made else value  # the driver changed it: it is its own
         return value
 
     def wrap(self, func: Callable[..., Any]) -> Callable[..., Any]:
@@ -293,13 +455,21 @@ class _Impostor:
             args = tuple(self.real(arg) for arg in args)
             kwargs = {name: self.real(arg) for name, arg in kwargs.items()}
             step = self.where()
+            if self.trace_on:
+                self.trace.append(_signature(self, func, args, kwargs))
+            index = self.calls_made
+            self.calls_made += 1
             alters = self.mode != CONTROL and step in self.steps
             if coroutine:
-                return self._awaited(func(*args, **kwargs), alters, step)
+                return self._awaited(func(*args, **kwargs), alters, step, index)
             self.count(CALLS, step)
             if not alters:
-                return func(*args, **kwargs)
-            return self._altered(func, args, kwargs, step)
+                try:
+                    return func(*args, **kwargs)
+                except Exception:
+                    self.raised_at.append(index)
+                    raise
+            return self._altered(func, args, kwargs, step, index)
 
         if coroutine:
             _mark_coroutine(wrapper)
@@ -324,7 +494,7 @@ class _Impostor:
         """Await a coroutine the code created, from a frame that says who created it."""
         return await awaited
 
-    async def _awaited(self, awaited: Any, alters: bool, step: str | None) -> Any:
+    async def _awaited(self, awaited: Any, alters: bool, step: str | None, index: int) -> Any:
         """What the coroutine gives when awaited, altered as a plain call's result if `alters`.
 
         It counts as a call once awaited, from the step it was created in: one never awaited
@@ -333,13 +503,20 @@ class _Impostor:
         """
         self.count(CALLS, step)
         if not alters:
-            return await awaited
-        return self._altered(_awaited_value, (await _settled(awaited),), {}, step)
+            try:
+                return await awaited
+            except Exception:
+                self.raised_at.append(index)
+                raise
+        return self._altered(_awaited_value, (await _settled(awaited),), {}, step, index)
 
-    def _altered(self, func: Callable[..., Any], args: Any, kwargs: Any, step: str | None) -> Any:
+    def _altered(
+        self, func: Callable[..., Any], args: Any, kwargs: Any, step: str | None, index: int
+    ) -> Any:
         try:
             result = func(*args, **kwargs)
         except Exception as exc:
+            self.swallowed_at.append(f"{index}:{step}")
             self.count(ALTERED, step)
             if self.mode == MORE:
                 return None
@@ -350,9 +527,60 @@ class _Impostor:
         self.count(ALTERED, step)
         if result is None:
             self.altered_none += 1
-        if _returnable(changed):
-            self.produced.append((changed, result))
+        pairs = _pairs(changed, result)
+        self.produced.extend(pairs)
+        for altered, _ in pairs:
+            names = _record_fields(altered)
+            if names and not _returnable(altered):
+                self.snapshots[id(altered)] = tuple(id(getattr(altered, n, None)) for n in names)
         return changed
+
+
+_TRACE_DEPTH = 3  # how deep the trace looks into an argument
+_BY_REPR = (bool, int, float, Decimal, Fraction, datetime.date, datetime.time, datetime.timedelta)
+
+
+def _norm(value: Any, root: str, depth: int = 0) -> Any:
+    """What of a value the trace hashes: equal values give the same, whatever object holds them.
+
+    The clone's root is left out of texts, since each run has its own; an object that isn't of
+    value counts only by its class, since its address changes from run to run.
+    """
+    if depth > _TRACE_DEPTH:
+        return "…"
+    names = _record_fields(value)
+    if names is not None:
+        fields = [_norm(_field(value, n), root, depth + 1) for n in names]
+        return [type(value).__qualname__, *fields]
+    if isinstance(value, (str, bytes)):
+        text = value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+        return text.replace(root, "<R>") if root else text
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        return _norm_collection(value, root, depth)
+    if value is None or isinstance(value, (*_BY_REPR, enum.Enum)):
+        return repr(value)
+    return type(value).__qualname__
+
+
+def _norm_collection(value: Any, root: str, depth: int) -> Any:
+    if isinstance(value, dict):
+        return {str(_norm(k, root, depth + 1)): _norm(v, root, depth + 1) for k, v in value.items()}
+    items = [_norm(v, root, depth + 1) for v in value]
+    return sorted(map(str, items)) if isinstance(value, (set, frozenset)) else items
+
+
+def _signature(impostor: _Impostor, func: Callable[..., Any], args: Any, kwargs: Any) -> str:
+    """One call of the driver's: its step, what it called, and a short hash of each argument."""
+    root = impostor.root
+    parts = [_digest(a, root) for a in args]
+    parts += [f"{k}={_digest(v, root)}" for k, v in sorted(kwargs.items())]
+    name = hashlib.sha256(func.__qualname__.encode()).hexdigest()[:6]
+    return f"{impostor.step_index}:{name}:{'.'.join(parts)}"
+
+
+def _digest(value: Any, root: str) -> str:
+    text = json.dumps(_norm(value, root), default=str, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()[:8]
 
 
 class _Raised:
@@ -485,6 +713,8 @@ def _from_environment() -> _Impostor | None:
         list(data["driver"]),
         list(data["steps"]),
         {str(path): list(lines) for path, lines in dict(data["stubs"]).items()},
+        trace=bool(data.get("trace")),
+        root=str(data.get("root", "")),
     )
 
 
@@ -509,6 +739,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 def pytest_bdd_before_step(step: Any) -> None:
     if IMPOSTOR is not None:
         IMPOSTOR.step = str(getattr(step, "type", ""))
+        IMPOSTOR.step_index += 1
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -543,11 +774,15 @@ def pytest_runtest_makereport(
     """Record what the test's call did; the report reads the properties at teardown."""
     yield
     if IMPOSTOR is not None and call.when == "call":
+        props = item.user_properties
         for name, total in IMPOSTOR.totals.items():
-            item.user_properties.append((name, str(total)))
+            props.append((name, str(total)))
             for step in STEPS:
-                item.user_properties.append((f"{name}.{step}", str(IMPOSTOR.by_step[name][step])))
-        item.user_properties.append((ALTERED_NONE, str(IMPOSTOR.altered_none)))
+                props.append((f"{name}.{step}", str(IMPOSTOR.by_step[name][step])))
+        props.append((ALTERED_NONE, str(IMPOSTOR.altered_none)))
         for step in STEPS:
-            entries = ",".join(sorted(IMPOSTOR.entries[step]))
-            item.user_properties.append((f"{ENTRY}.{step}", entries))
+            props.append((f"{ENTRY}.{step}", ",".join(sorted(IMPOSTOR.entries[step]))))
+        props.append((RAISED_AT, ",".join(map(str, IMPOSTOR.raised_at))))
+        props.append((SWALLOWED_AT, ",".join(IMPOSTOR.swallowed_at)))
+        if IMPOSTOR.trace_on:
+            props.append((TRACE, ",".join(IMPOSTOR.trace)))

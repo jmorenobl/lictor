@@ -32,6 +32,7 @@ from lictor.domain.driver_measures import (
     stub_measures,
 )
 from lictor.domain.errors import DriverError
+from lictor.domain.gherkin_proof import GherkinFacts, gherkin_facts, static_facts, to_change
 from lictor.domain.interface_proof import (
     ALTERED_STEPS,
     InterfaceImpostor,
@@ -39,6 +40,9 @@ from lictor.domain.interface_proof import (
     interface_proofs,
     person_notes,
     unproved_reason,
+    unreadable,
+    weighed_proof,
+    weighs_the_gherkin,
     without_impostor_reason,
 )
 from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseResult
@@ -86,6 +90,15 @@ _UNDECIDED_HINT = (
     "regístralos tú y relanza: `lictor register {ids}`. Si no, revisa antes su test: nada ha "
     "probado que compruebe el resultado."
 )
+
+# The same, when some test only proved it reads its scenario's value, or the code raised for a value
+# the impostor altered: such a test may compare the value with what a Given stored, so nothing
+# invites to register it before reading it (ADR-0016).
+_READ_THEM_HINT = (
+    "Lee antes esos tests: nada ha probado que comparen lo que devuelve el código con el valor "
+    "del escenario."
+)
+_NO_RETRY = "Otro intento del driver no lo cambiaría."
 
 PROOF_TRAILER = "Lictor-Proof"
 INTERFACE_PROOF = "interfaz"  # the trailer's value: the impostor of the interface proved it
@@ -180,6 +193,43 @@ class _InterfaceRuns:
     proofs: dict[str, InterfaceProof]
     control: Mapping[str, TestCaseResult]  # empty when the run told nothing
     modes: Mapping[str, Mapping[str, TestCaseResult]]
+    gherkin: Mapping[str, GherkinFacts] = field(default_factory=dict)  # ADR-0016
+    unweighed: Mapping[str, InterfaceProof] = field(default_factory=dict)  # the interface's alone
+
+
+@dataclass(frozen=True)
+class _Proving:
+    """One proof by the impostors: what is judged, over which candidate, and where its evidence
+    goes (`interfaz-<modo>`, `gherkin-<modo>-<n>`; `stubs-` before them over the stubs)."""
+
+    request: CheckRedRequest
+    step_dir: Path
+    rev: str
+    impostor: InterfaceImpostor
+    judged: "_ToProve"
+
+    def evidence(self, impostor: str, run: str) -> Path:
+        prefix = impostor if self.judged.stubs_at is None else f"stubs-{impostor}"
+        return self.step_dir / f"{prefix}-{run}"
+
+
+@dataclass(frozen=True)
+class _Told:
+    """What one run of the impostors is told: the interface's mode, whether it traces the
+    driver's calls, and what the impostor of the Gherkin does (None: it isn't told)."""
+
+    mode: str
+    trace: bool = False
+    gherkin: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class _Ran:
+    """Where one run of the impostors left its report, and how it ended."""
+
+    run_dir: Path
+    output: CommandOutput
+    mode: str
 
 
 @dataclass(frozen=True)
@@ -409,7 +459,9 @@ class CheckRed:
             return ran, registration, None
         measures = registration.measures
         if measures is not None:
-            found = interface_measures(ran.proofs, ran.control, ran.modes)
+            found = interface_measures(
+                ran.proofs, ran.control, ran.modes, ran.unweighed, ran.gherkin
+            )
             measures = replace(measures, interface=found)
         return None, replace(registration, measures=measures), ran.proofs
 
@@ -637,26 +689,19 @@ class CheckRed:
         failed = [sid for sid in unproven if proofs is None or not proofs[sid].proved]
         if not failed:
             return tuple(unproven)
-        lines = [
-            without_impostor_reason(sid, unproven[sid].name)
-            if proofs is None
-            else unproved_reason(sid, unproven[sid].name, proofs[sid], request.oracle.writable)
-            for sid in failed
-        ]
-        ids = " ".join(failed)
+        told = _unproved_text(request, unproven, failed, proofs)
         cases = tuple(unproven[sid] for sid in failed)
-        # Why the impostor couldn't judge some, only for the person: the agent never reads it.
-        note = person_notes({sid: proofs[sid] for sid in failed}) if proofs else []
-        if proofs is not None and not any(proofs[sid].fixable for sid in failed):
+        if told.final:
             # No retry of the driver changes what the impostor can tell: a person decides.
-            reason = "\n".join([*lines, *note, _UNDECIDED_HINT.format(ids=ids)])
+            reason = "\n".join([*told.lines, *told.note, told.hint])
             rejection = _Rejection(
                 "sin_prueba", reason, cases, registration.red_cases, registration.red_output
             )
             self._reject(request, step_dir, rejection, final=True)
             raise DriverError(reason)
+        lines = list(told.lines)
         if request.driver_attempts >= request.max_driver_attempts:
-            lines.extend([*note, _REGISTER_HINT.format(ids=ids)])
+            lines.extend([*told.note, told.hint])
         rejection = _Rejection(
             "sin_prueba", "\n".join(lines), cases, registration.red_cases, registration.red_output
         )
@@ -673,61 +718,157 @@ class CheckRed:
         """Run the acceptance once per mode of the impostor, each in a clean clone of `rev`.
 
         With `stubs_at`, each clone has its stubs at that constant, and the impostor is told
-        their lines so that it leaves them unwrapped (ADR-0012).
+        their lines so that it leaves them unwrapped (ADR-0012). The control traces the driver's
+        calls and, with the impostor of the Gherkin, numbers what each Then receives: what the
+        interface can't prove is then weighed with the scenario's values (ADR-0016).
         """
-        scenario_ids, stubs_at = judged.scenario_ids, judged.stubs_at
-        prefix = "interfaz" if stubs_at is None else "stubs-interfaz"
+        proving = _Proving(request, step_dir, rev, impostor, judged)
+        runs = self._interface_runs(proving)
+        if isinstance(runs, _Rejection):
+            return runs
+        control_run = runs.pop(impostor.control)
+        proofs = interface_proofs(judged.scenario_ids, control_run, runs, request.oracle.driver)
+        control_cases = {} if isinstance(control_run, str) else control_run
+        modes = {mode: {} if isinstance(run, str) else run for mode, run in runs.items()}
+        if impostor.gherkin is None or not control_cases:
+            return _InterfaceRuns(proofs, control_cases, modes)
+        facts = self._weigh_the_gherkin(proving, proofs, control_cases)
+        if isinstance(facts, _Rejection):
+            return facts
+        weighed = {
+            sid: weighed_proof(proof, facts.get(sid), control_cases.get(sid))
+            for sid, proof in proofs.items()
+        }
+        return _InterfaceRuns(weighed, control_cases, modes, facts, proofs)
+
+    def _interface_runs(
+        self, proving: "_Proving"
+    ) -> dict[str, Mapping[str, TestCaseResult] | str] | _Rejection:
+        """The control, which traces and tells the Gherkin's impostor to count, and each mode."""
+        impostor = proving.impostor
+        ids = [_scenario_str(s) for s in proving.request.all_scenario_ids]
         runs: dict[str, Mapping[str, TestCaseResult] | str] = {}
         for mode in (impostor.control, *impostor.modes):
-            run_dir = step_dir / f"{prefix}-{mode}"
-            run_dir.mkdir()
-            with verification_tree(self.vcs, rev, request.project_root) as clone:
-                stubs = self._stubs_at(clone, request, stubs_at)
-                told = {
-                    "mode": mode,
-                    "writable": [str(clone / root.strip("/")) for root in request.oracle.writable],
-                    "driver": [str(clone / root.strip("/")) for root in request.oracle.driver],
-                    "steps": list(ALTERED_STEPS),
-                    "stubs": {str(clone / rel): lines for rel, lines in stubs.items()},
-                }
-                command, output, tampered = self._run_acceptance_suite(
-                    request,
-                    run_dir / "acceptance.xml",
-                    clone,
-                    {impostor.variable: json.dumps(told)},
-                )
-            save_output(run_dir / "acceptance.log", command, output)
-            if tampered:
-                return _Rejection("L0-estado", describe_tampering(tampered))
-            env_problem = self.environment.ensure(request.run_id)
-            if env_problem:
-                return _Rejection("L0-entorno", env_problem)
-            runs[mode] = self._interface_results(request, run_dir, output, mode)
-        control = runs.pop(impostor.control)
-        proofs = interface_proofs(scenario_ids, control, runs, request.oracle.driver)
-        return _InterfaceRuns(
-            proofs,
-            {} if isinstance(control, str) else control,
-            {mode: {} if isinstance(run, str) else run for mode, run in runs.items()},
+            control = mode == impostor.control
+            told = _Told(mode, trace=control, gherkin={"mode": mode} if control else None)
+            ran = self._impostor_run(proving, proving.evidence("interfaz", mode), told)
+            if isinstance(ran, _Rejection):
+                return ran
+            runs[mode] = self._interface_results(proving.request, ran, ids)
+        return runs
+
+    def _weigh_the_gherkin(
+        self,
+        proving: "_Proving",
+        proofs: Mapping[str, InterfaceProof],
+        control: Mapping[str, TestCaseResult],
+    ) -> dict[str, GherkinFacts] | _Rejection:
+        """Change each value the Then steps of an unproved test read from the Gherkin, alone and
+        once per mode, over those tests only; a second control tells what changes by itself.
+
+        A test with a value its Then never reads needs no run: that is a fact of its code.
+        """
+        ids = proving.judged.scenario_ids
+        facts = {sid: static_facts(control[sid]) for sid in ids if sid in control}
+        targets = _gherkin_targets(facts, proofs, control)
+        if not targets:
+            return facts
+        face = proving.impostor
+        where = proving.evidence("gherkin", f"{face.control}-bis")
+        again = self._gherkin_run(proving, where, {"mode": face.control}, targets)
+        if isinstance(again, _Rejection):
+            return again
+        changed = self._changed_values(proving, targets, control)
+        if isinstance(changed, _Rejection):
+            return changed
+        for sid in targets:
+            facts[sid] = gherkin_facts(
+                control[sid],
+                again.get(sid),
+                {key: run.get(sid) for key, run in changed.items()},
+                face.modes,
+                proving.request.oracle.driver,
+            )
+        return facts
+
+    def _changed_values(
+        self, proving: "_Proving", targets: Sequence[str], control: Mapping[str, TestCaseResult]
+    ) -> dict[tuple[str, int], Mapping[str, TestCaseResult]] | _Rejection:
+        """One run per value any target can change and per mode, over the targets alone."""
+        changed: dict[tuple[str, int], Mapping[str, TestCaseResult]] = {}
+        numbers = sorted({n for sid in targets for n in to_change(control[sid])})
+        for number, mode in ((n, m) for n in numbers for m in proving.impostor.modes):
+            where = proving.evidence("gherkin", f"{mode}-{number}")
+            ran = self._gherkin_run(proving, where, {"mode": mode, "target": number}, targets)
+            if isinstance(ran, _Rejection):
+                return ran
+            changed[(mode, number)] = ran
+        return changed
+
+    def _gherkin_run(
+        self,
+        proving: "_Proving",
+        run_dir: Path,
+        gherkin: Mapping[str, object],
+        targets: Sequence[str],
+    ) -> Mapping[str, TestCaseResult] | _Rejection:
+        """One run of `targets` alone, with the interface in control, tracing, and the Gherkin
+        told `gherkin`; a run that told nothing counts for none of them."""
+        told = _Told(
+            proving.impostor.control, trace=True, gherkin={**gherkin, "targets": list(targets)}
         )
+        ran = self._impostor_run(proving, run_dir, told)
+        if isinstance(ran, _Rejection):
+            return ran
+        results = self._interface_results(proving.request, ran, targets)
+        return {} if isinstance(results, str) else results
+
+    def _impostor_run(
+        self, proving: "_Proving", run_dir: Path, told: "_Told"
+    ) -> "_Ran | _Rejection":
+        """Run the acceptance in a clean clone of the candidate, with the impostors told `told`."""
+        request, impostor = proving.request, proving.impostor
+        run_dir.mkdir()
+        with verification_tree(self.vcs, proving.rev, request.project_root) as clone:
+            stubs = self._stubs_at(clone, request, proving.judged.stubs_at)
+            face = {
+                "mode": told.mode,
+                "writable": [str(clone / root.strip("/")) for root in request.oracle.writable],
+                "driver": [str(clone / root.strip("/")) for root in request.oracle.driver],
+                "steps": list(ALTERED_STEPS),
+                "stubs": {str(clone / rel): lines for rel, lines in stubs.items()},
+                "trace": told.trace,
+                "root": str(clone),
+            }
+            env = {impostor.variable: json.dumps(face)}
+            if told.gherkin is not None and impostor.gherkin is not None:
+                env[impostor.gherkin] = json.dumps(told.gherkin)
+            command, output, tampered = self._run_acceptance_suite(
+                request, run_dir / "acceptance.xml", clone, env
+            )
+        save_output(run_dir / "acceptance.log", command, output)
+        if tampered:
+            return _Rejection("L0-estado", describe_tampering(tampered))
+        env_problem = self.environment.ensure(request.run_id)
+        if env_problem:
+            return _Rejection("L0-entorno", env_problem)
+        return _Ran(run_dir, output, told.mode)
 
     def _interface_results(
-        self, request: CheckRedRequest, run_dir: Path, output: CommandOutput, mode: str
+        self, request: CheckRedRequest, ran: "_Ran", ids: Sequence[str]
     ) -> Mapping[str, TestCaseResult] | str:
-        """What one run of the impostor reported of each scenario, or why it told nothing."""
-        junit = self.reader.read(run_dir / "acceptance.xml")
-        execution = Execution.of(output, request.acceptance_timeout_s)
+        """What one run of the impostor reported of each of `ids`, or why it told nothing."""
+        junit = self.reader.read(ran.run_dir / "acceptance.xml")
+        execution = Execution.of(ran.output, request.acceptance_timeout_s)
         trusted = trust(junit, execution, request.acceptance_failure_exit_codes)
+        mode = ran.mode
         if isinstance(trusted, Crashed):
             return f"la aceptación con el modo {mode} del impostor no dejó un informe válido: " + (
                 trusted.reason
             )
         try:
             return map_test_cases_to_scenarios(
-                trusted.cases,
-                [_scenario_str(s) for s in request.all_scenario_ids],
-                request.link,
-                request.scenario_files,
+                trusted.cases, list(ids), request.link, request.scenario_files
             )
         except DriverError as exc:
             return f"la aceptación con el modo {mode} del impostor no se pudo emparejar: {exc}"
@@ -999,6 +1140,59 @@ def _respecified_reason(scenarios: Sequence[str]) -> str:
         f"implementación ya la cumple, regístralos tú y relanza: `lictor register {ids}`. "
         "Si no, su test no detecta el cambio: corrígelo."
     )
+
+
+@dataclass(frozen=True)
+class _UnprovedText:
+    """What a rejection for unproved tests says: to the agent (`lines`), and to the person once
+    no retry is left (`note`, why the impostor couldn't judge some, and `hint`, what to do)."""
+
+    lines: tuple[str, ...]
+    note: tuple[str, ...]
+    hint: str
+    final: bool  # no retry of the driver changes what the impostor can tell
+
+
+def _unproved_text(
+    request: CheckRedRequest,
+    unproven: Mapping[str, TestCaseResult],
+    failed: Sequence[str],
+    proofs: Mapping[str, InterfaceProof] | None,
+) -> _UnprovedText:
+    ids = " ".join(failed)
+    if proofs is None:
+        lines = tuple(without_impostor_reason(sid, unproven[sid].name) for sid in failed)
+        return _UnprovedText(lines, (), _REGISTER_HINT.format(ids=ids), final=False)
+    judged = {sid: proofs[sid] for sid in failed}
+    lines = tuple(
+        unproved_reason(sid, unproven[sid].name, proof, request.oracle.writable)
+        for sid, proof in judged.items()
+    )
+    final = not any(proof.fixable for proof in judged.values())
+    hint = _person_hint(judged, ids, final=final)
+    return _UnprovedText(lines, tuple(person_notes(judged)), hint, final)
+
+
+def _person_hint(judged: Mapping[str, InterfaceProof], ids: str, *, final: bool) -> str:
+    """What the person reads last: to register what the code already met, unless some test only
+    proved it reads its scenario's value, which a test comparing it with a Given's looks like."""
+    if unreadable(judged):
+        return f"{_NO_RETRY} {_READ_THEM_HINT}" if final else _READ_THEM_HINT
+    return (_UNDECIDED_HINT if final else _REGISTER_HINT).format(ids=ids)
+
+
+def _gherkin_targets(
+    facts: Mapping[str, GherkinFacts],
+    proofs: Mapping[str, InterfaceProof],
+    control: Mapping[str, TestCaseResult],
+) -> list[str]:
+    """The tests the scenario's values can still decide: unproved, every value read in their code,
+    and some value the impostor of the Gherkin can change."""
+    return [
+        sid
+        for sid, fact in facts.items()
+        if weighs_the_gherkin(proofs[sid]) and not fact.unread and to_change(control[sid])
+    ]
 
 
 def _scenario_str(sid: ScenarioId | str) -> str:

@@ -1,8 +1,9 @@
 """Immutable domain models and value objects for Lictor."""
 
+import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
@@ -282,6 +283,17 @@ INTERFACE_ENTRY_PROPERTY = "lictor.interface.entry"  # by step: the libraries, c
 SCENARIO_PROPERTY = "lictor.scenario"  # tags of the Gherkin scenario the test executed
 FEATURE_PROPERTY = "lictor.feature"  # its feature file, relative to the project
 STEP_PROPERTY = "lictor.step"  # the kind of Gherkin step the failure was raised in
+# The driver's calls to the interface, numbered from 0 in each test: those that raised unaltered,
+# and those whose exception the impostor swallowed or replaced, with their step (`3:then`).
+INTERFACE_RAISED_AT_PROPERTY = "lictor.interface.raised_at"
+INTERFACE_SWALLOWED_AT_PROPERTY = "lictor.interface.swallowed_at"
+# Each call of the driver's, in a run that traces them: `step:function:hash.hash` (ADR-0016).
+INTERFACE_TRACE_PROPERTY = "lictor.interface.trace"
+GHERKIN_VALUES_PROPERTY = "lictor.gherkin.values"  # the values the Then steps got from the Gherkin
+GHERKIN_ALTERABLE_PROPERTY = "lictor.gherkin.alterable"  # which of them could be changed
+GHERKIN_UNREAD_PROPERTY = "lictor.gherkin.unread"  # JSON: [step, parameter, value] of each unread
+GHERKIN_UNRECEIVED_PROPERTY = "lictor.gherkin.unreceived"  # extracted, not taken by the step
+GHERKIN_ALTERED_PROPERTY = "lictor.gherkin.altered"  # "1" if the run changed the value it was told
 
 # The kinds of a Gherkin step, as the runner names them: «And» and «But» take the one before.
 Step = Literal["given", "when", "then"]
@@ -303,6 +315,23 @@ def step_property(name: str, step: Step) -> str:
 def _count(value: str) -> int:
     """Read a count a plugin reported; anything that isn't one counts as nothing."""
     return int(value) if value.isascii() and value.isdigit() else 0
+
+
+def _entries(value: str) -> tuple[str, ...]:
+    return tuple(entry for entry in value.split(",") if entry)
+
+
+def _numbers(value: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in _entries(value) if n.isascii() and n.isdigit())
+
+
+@dataclass(frozen=True)
+class UnreadValue:
+    """A value of the Gherkin a Then got and never reads: the step, its parameter, the value."""
+
+    step: str
+    parameter: str
+    value: str
 
 
 @dataclass(frozen=True)
@@ -397,6 +426,63 @@ class TestCaseResult:
             if name
         }
         return tuple(sorted(found))
+
+    @property
+    def interface_raised_at(self) -> frozenset[int]:
+        """The driver's calls, by number, that raised with nothing altered."""
+        return frozenset(_numbers(self.properties.get(INTERFACE_RAISED_AT_PROPERTY, "")))
+
+    @property
+    def interface_swallowed_at(self) -> tuple[tuple[int, Step | None], ...]:
+        """The driver's calls whose exception the impostor swallowed or replaced, with the step."""
+        found: list[tuple[int, Step | None]] = []
+        for entry in _entries(self.properties.get(INTERFACE_SWALLOWED_AT_PROPERTY, "")):
+            number, _, step = entry.partition(":")
+            if number.isascii() and number.isdigit():
+                found.append((int(number), next((s for s in STEPS if s == step), None)))
+        return tuple(found)
+
+    @property
+    def interface_trace(self) -> tuple[str, ...]:
+        """Each call of the driver's to the interface, in a run that traced them."""
+        return _entries(self.properties.get(INTERFACE_TRACE_PROPERTY, ""))
+
+    @property
+    def gherkin_values(self) -> int:
+        """How many values the Then steps received from the Gherkin, as its impostor counted."""
+        return _count(self.properties.get(GHERKIN_VALUES_PROPERTY, ""))
+
+    @property
+    def gherkin_alterable(self) -> tuple[int, ...]:
+        """The numbers of those values the impostor of the Gherkin can change."""
+        return _numbers(self.properties.get(GHERKIN_ALTERABLE_PROPERTY, ""))
+
+    @property
+    def gherkin_unread(self) -> tuple[UnreadValue, ...]:
+        """The values a Then received from the Gherkin and its code never reads."""
+        try:
+            raw = json.loads(self.properties.get(GHERKIN_UNREAD_PROPERTY, "") or "[]")
+        except ValueError:
+            return ()
+        if not isinstance(raw, list):
+            return ()
+        return tuple(
+            UnreadValue(*entry)
+            for entry in raw
+            if isinstance(entry, list)
+            and len(entry) == len(fields(UnreadValue))
+            and all(isinstance(part, str) for part in entry)
+        )
+
+    @property
+    def gherkin_unreceived(self) -> int:
+        """How many values the step's parser extracted that its function doesn't take."""
+        return _count(self.properties.get(GHERKIN_UNRECEIVED_PROPERTY, ""))
+
+    @property
+    def gherkin_altered(self) -> bool:
+        """Whether the run changed the value of the Gherkin it was told to."""
+        return self.properties.get(GHERKIN_ALTERED_PROPERTY, "") == "1"
 
     @property
     def scenario_tags(self) -> tuple[str, ...]:

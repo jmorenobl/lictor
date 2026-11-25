@@ -15,7 +15,8 @@ from lictor.domain.driver_measures import (
     StubMeasure,
     measures_record,
 )
-from lictor.domain.model import Event, JournalDamage, StepCounts
+from lictor.domain.gherkin_proof import GherkinFacts
+from lictor.domain.model import Event, JournalDamage, StepCounts, UnreadValue
 
 
 class InMemoryEventLog(EventLog):
@@ -1127,6 +1128,31 @@ _MEASURES = DriverMeasures(
             handed=StepCounts(then=1),
             libraries=("typer.testing",),
         ),
+        "ENR-005": InterfaceMeasure(
+            outcome="solo_el_valor",
+            calls=StepCounts(when=1),
+            altered={"mas": StepCounts(when=1), "menos": StepCounts(when=1)},
+            failed_step={"mas": None, "menos": None},
+            interface="sobrevive",
+            gherkin=GherkinFacts(4, read=(0, 1, 2), inputs=(3,), unreceived=1),
+        ),
+        "FP-002": InterfaceMeasure(
+            outcome="provocada",
+            calls=StepCounts(then=2),
+            altered={"mas": StepCounts(then=1), "menos": StepCounts(then=1)},
+            failed_step={"mas": "then", "menos": "then"},
+            interface="probado",
+            provoked=("mas", "menos"),
+            gherkin=GherkinFacts(1),
+        ),
+        "VER-005": InterfaceMeasure(
+            outcome="ignora_el_valor",
+            calls=StepCounts(when=1),
+            altered={"mas": StepCounts(when=1), "menos": StepCounts(when=1)},
+            failed_step={"mas": "then", "menos": "then"},
+            interface="probado",
+            gherkin=GherkinFacts(2, unread=(UnreadValue("paso", "tipo", "alta"),)),
+        ),
     },
 )
 
@@ -1147,16 +1173,29 @@ def test_report_shows_what_the_red_saw_and_what_c_decided_of_each_driver_measure
     assert "### Intento 1 (`.lictor/runs/run-1/driver/001-red`)" in first
     assert "- **Con C**: 1 aceptado, 1 aceptado sin comprobar" in first
     assert (
-        "- **Interfaz**: 1 `a_traves`, 1 `fuera_del_entonces`, 1 `probado`, 1 `sin_alterar`"
-        in first
+        "- **Interfaz**: 1 `a_traves`, 1 `fuera_del_entonces`, 1 `ignora_el_valor`, "
+        "1 `probado`, 1 `provocada`, 1 `sin_alterar`, 1 `solo_el_valor`" in first
     )
     assert (
-        "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 | - |"
-        in first
+        "| PRE-001 | - | - | - | `probado` | mas: Entonces; menos: Cuando | 1 / 1 / 2 / 0 | - "
+        "| - |" in first
     )
+    assert (
+        "| ENR-005 | - | - | - | `solo_el_valor` (interfaz: `sobrevive`) | mas: sin fallo en un "
+        "paso; menos: sin fallo en un paso | 0 / 1 / 0 / 0 | - | 3 de 4 leídos, 1 entrada, "
+        "1 no recibido |" in first
+    )
+    assert (
+        "| FP-002 | - | - | - | `provocada` (interfaz: `probado`), lanzó por lo alterado en "
+        "mas, menos |" in first
+    )
+    assert "| 0 / 0 / 2 / 0 | - | 1 valor |" in first
+    assert "| VER-005 | - | - | - | `ignora_el_valor` (interfaz: `probado`) |" in first
+    assert "| - | 2 valores, 1 sin leer |" in first
     assert (
         "| CLI-001 | - | - | - | `a_traves` | mas: sin fallo en un paso; menos: sin fallo en un "
-        "paso | 3 / 0 / 0 / 0 | 31 desde el código, 1 de lo que entrega (typer.testing) |" in first
+        "paso | 3 / 0 / 0 / 0 | 31 desde el código, 1 de lo que entrega (typer.testing) | - |"
+        in first
     )
     assert "| APA-001 | - | - | - | `fuera_del_entonces` | mas: Cuando; menos: Cuando |" in first
     assert (

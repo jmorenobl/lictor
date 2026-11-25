@@ -18,6 +18,7 @@ from lictor.domain.driver_measures import (
     measures_from_record,
 )
 from lictor.domain.duplication import describe_duplication
+from lictor.domain.gherkin_proof import GherkinFacts
 from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
@@ -386,8 +387,8 @@ def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> lis
             "| Escenario | Rojo | Stubs, por constante | Con C | Interfaz | "
             "Falla en, por modo | "
             "Llamadas del control (Dado / Cuando / Entonces / fuera) | "
-            "Por una librería, desde el Cuando |",
-            "|---|---|---|---|---|---|---|---|",
+            "Por una librería, desde el Cuando | Gherkin |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         lines += [_measure_row(sid, measures) for sid in _measured_ids(measures)]
     return lines
@@ -429,17 +430,52 @@ def _measure_row(sid: str, measures: DriverMeasures) -> str:
     rule_c = _stub_text(stub) if stub else "-"
     found = (measures.interface or {}).get(sid)
     if found is None:
-        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - | - |"
+        return f"| {sid} | {red_text} | {stub_text} | {rule_c} | - | - | - | - | - |"
     failed = "; ".join(
         f"{mode}: {_step_word(step) if step else 'sin fallo en un paso'}"
         for mode, step in found.failed_step.items()
     )
     calls = found.calls
     return (
-        f"| {sid} | {red_text} | {stub_text} | {rule_c} | `{found.outcome}` | {failed or '-'} | "
-        f"{calls.given} / {calls.when} / {calls.then} / {calls.outside} | "
-        f"{_library_text(found)} |"
+        f"| {sid} | {red_text} | {stub_text} | {rule_c} | {_proof_text(found)} | "
+        f"{failed or '-'} | {calls.given} / {calls.when} / {calls.then} / {calls.outside} | "
+        f"{_library_text(found)} | {_gherkin_text(found.gherkin)} |"
     )
+
+
+def _proof_text(found: InterfaceMeasure) -> str:
+    """What was decided of the test and, when the scenario's values weighed it, what the
+    interface alone said; with the modes in which an altered value made the code raise."""
+    text = f"`{found.outcome}`"
+    if found.interface is not None and found.interface != found.outcome:
+        text += f" (interfaz: `{found.interface}`)"
+    if found.provoked:
+        text += f", lanzó por lo alterado en {', '.join(found.provoked)}"
+    return text
+
+
+def _gherkin_text(facts: GherkinFacts | None) -> str:
+    """What the impostor of the Gherkin saw of a test: «3 de 4 leídos, 1 entrada»."""
+    if facts is None:
+        return "-"
+    changed = len(facts.read) + len(facts.inputs) + len(facts.survived) + len(facts.errors)
+    first = (
+        f"{len(facts.read)} de {changed} leídos"
+        if changed
+        else _amount(facts.values, "valor", "valores")
+    )
+    rest = [
+        (len(facts.unread), "sin leer", "sin leer"),
+        (len(facts.inputs), "entrada", "entradas"),
+        (len(facts.survived), "pasa cambiado", "pasan cambiados"),
+        (len(facts.errors), "falla sin aserción", "fallan sin aserción"),
+        (facts.unreceived, "no recibido", "no recibidos"),
+    ]
+    return ", ".join([first, *(_amount(*part) for part in rest if part[0])])
+
+
+def _amount(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
 
 
 def _library_text(found: InterfaceMeasure) -> str:
