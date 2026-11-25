@@ -8,6 +8,7 @@ from pathlib import Path
 from lictor import __version__
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.adapters.ci.yaml_ci import YamlCiReader
 from lictor.adapters.config.loader import (
     PackagedProfiles,
     ProfileConfigInitializer,
@@ -347,6 +348,7 @@ def bootstrap_runtime(
                 ],
                 detect=defences.detect,
                 reader=SurveyReader(),
+                ci=YamlCiReader(defences.ci_hooks),
             )
             if defences.survey_run is not None
             else None

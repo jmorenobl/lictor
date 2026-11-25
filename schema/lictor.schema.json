@@ -78,7 +78,7 @@
     },
     "BlindSpotsConfig": {
       "additionalProperties": false,
-      "description": "What the person accepts that no control sees: paths whose warnings are only counted.",
+      "description": "What the person accepts that no control sees, only counted: paths, and «file: command»\nfor a step of the CI.",
       "properties": {
         "accepted": {
           "items": {

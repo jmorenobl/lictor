@@ -11,15 +11,18 @@ from lictor.domain.blind_spots import (
     blind_spot_lines,
     blind_spots,
     blind_spots_record,
+    configuration_problems,
     missing_plugins,
     program_problems,
 )
 from lictor.domain.reports import InvalidReport
 from lictor.domain.survey import (
     CodeUser,
+    CoverageGate,
     LaunchedProgram,
     LoadedFile,
     ProjectImport,
+    SurveyedCi,
     SurveyedCommand,
     SurveyedTests,
     SurveyReport,
@@ -146,6 +149,8 @@ def test_a_command_whose_reach_is_unknown_silences_what_it_might_see() -> None:
     assert spots.unknown == (
         "No se puede saber qué ejecuta el comando del control 'unit': make puede ejecutar "
         "cualquier cosa.",
+        # What it silences is counted, so a blind command doesn't read as a project with none.
+        "Por eso quedan sin juzgar 1 ficheros de tests (1 tests) que ningún otro comando ejecuta.",
     )
     assert spots.unknown[0] in spots.lines
 
@@ -527,12 +532,14 @@ def test_the_record_keeps_every_field_by_name() -> None:
         "spots": [],
         "lines": ["Aceptados en lictor.json (blind_spots.accepted): 1 ficheros."],
         "accepted": 1,
+        "accepted_ci": 0,
     }
     assert blind_spots_record(skipped) == {
         "skipped": "no comprobado: no hay código del proyecto en src/",
         "spots": [],
         "lines": [],
         "accepted": 0,
+        "accepted_ci": 0,
     }
 
 
@@ -575,3 +582,266 @@ def test_an_unknown_command_keeps_its_program_and_a_file_its_single_test() -> No
     assert report.tests[0].tests == 1
     data["code_users"][0]["imports"] = {}
     assert survey_report(data) == InvalidReport("el fichero de código 0.imports no es una lista")
+
+
+# What the CI checks against what the controls do (F76), and what the configuration of the tests
+# does to the commands (F78).
+
+FORMAT = "ruff format"
+CHECK = "ruff check"
+WORKFLOW = ".github/workflows/test.yml"
+
+
+def _step(line: int, run: str, tool: str | None, covers: tuple[str, ...] = ()) -> SurveyedCi:
+    tests = tool == "pytest"
+    return SurveyedCi(WORKFLOW, line, run, "workflow", True, tool=tool, covers=covers, tests=tests)
+
+
+def _checker(cid: str, tool: str, covers: tuple[str, ...]) -> SurveyedCommand:
+    return SurveyedCommand(cid, True, paths=("src",), tool=tool, covers=covers)
+
+
+def test_pyverifactu_main_checks_its_format_and_no_control_does() -> None:
+    report = _report(
+        commands=(UNIT, ACCEPTANCE, _checker("lint", CHECK, ("src/a.py",))),
+        ci=(
+            _step(25, "uv run pytest -m 'not integration'", "pytest"),
+            _step(29, "uv run ruff check src/", CHECK, ("src/a.py",)),
+            _step(31, "uv run ruff format --check src/", FORMAT, ("src/a.py",)),
+            _step(23, "uv sync --all-extras", None),
+        ),
+    )
+
+    spots = blind_spots(report, RULES)
+
+    assert _kinds(spots) == {"ci_sin_control": (f"{WORKFLOW}:31",)}
+    (line,) = spots.lines
+    assert line.startswith(
+        f"La CI comprueba `uv run ruff format --check src/` ({WORKFLOW}:31) y ningún control lo "
+        "hace: el run puede dejar un verde que la CI rechace."
+    )
+    assert "«fichero: comando» en blind_spots.accepted" in line
+
+
+def test_a_control_that_runs_the_check_is_recognised_by_its_command_not_its_id() -> None:
+    report = _report(
+        commands=(UNIT, ACCEPTANCE, _checker("estilo", FORMAT, ("src/a.py",))),
+        ci=(_step(31, "uv run ruff format --check src/", FORMAT, ("src/a.py",)),),
+    )
+
+    assert blind_spots(report, RULES) == BlindSpots()
+
+
+def test_a_check_of_the_ci_on_more_files_than_its_control_names_them() -> None:
+    report = _report(
+        commands=(UNIT, ACCEPTANCE, _checker("lint", CHECK, ("src/a.py",))),
+        ci=(
+            _step(
+                27,
+                "uv run ruff check .",
+                CHECK,
+                ("noxfile.py", "scripts/s.py", "src/a.py", "tests/a.py", "tests/b/c.py"),
+            ),
+        ),
+    )
+
+    spots = blind_spots(report, RULES)
+
+    assert _kinds(spots) == {
+        "ci_mas_ficheros": ("noxfile.py", "scripts/s.py", "tests/a.py", "tests/b/c.py")
+    }
+    assert spots.lines[0].startswith(
+        f"La CI comprueba `uv run ruff check .` ({WORKFLOW}:27) en ficheros que no lee ningún "
+        "control que haga lo mismo ('lint'): noxfile.py, scripts/ (1), tests/ (2); 4 ficheros."
+    )
+
+
+def test_the_tests_the_ci_runs_are_left_to_the_tests_no_control_runs() -> None:
+    report = _report(
+        ci=(_step(35, "uv run pytest", "pytest"),),
+        tests=(
+            SurveyedTests("tests/unit/test_a.py", 3, ("unit",), (0,)),
+            SurveyedTests("tests/e2e/test_b.py", 2, (), (0,)),
+        ),
+    )
+
+    spots = blind_spots(report, RULES)
+
+    assert _kinds(spots) == {"sin_control": ("tests/e2e/test_b.py",)}
+    assert f"La CI sí los ejecuta: `uv run pytest` ({WORKFLOW}:35)." in spots.lines[0]
+
+
+def test_a_step_of_the_ci_is_accepted_by_file_and_command_never_by_file() -> None:
+    accepted = (
+        f"{WORKFLOW}:  uv run  ruff format --check src/",
+        ".pre-commit-config.yaml",
+        "tests/",
+    )
+    rules = StartRules(RULES.writable, RULES.driver, FORBIDDEN, accepted=accepted)
+    report = _report(
+        ci=(
+            _step(31, "uv run ruff format --check src/", FORMAT),
+            SurveyedCi(
+                ".pre-commit-config.yaml", 8, "ruff format", "pre-commit", True, tool=FORMAT
+            ),
+        ),
+    )
+
+    spots = blind_spots(report, rules)
+
+    # The hook added to a file accepted as a path still warns.
+    assert _kinds(spots) == {"ci_sin_control": (".pre-commit-config.yaml:8",)}
+    assert spots.accepted_ci == 1
+    assert spots.lines[-1] == (
+        "Aceptados en lictor.json (blind_spots.accepted): 1 comandos de la CI."
+    )
+
+
+def test_what_of_the_ci_cant_be_read_or_known_is_named_alone() -> None:
+    report = _report(
+        ci=(
+            SurveyedCi(
+                WORKFLOW, 18, "uv run ${{ matrix.cmd }}", "workflow", False, "una expresión"
+            ),
+            SurveyedCi(WORKFLOW, 19, "make lint", "workflow", False, "make puede ejecutar"),
+        ),
+        ci_unreadable=(".github/workflows/bad.yml: no es YAML válido (línea 2)",),
+    )
+
+    spots = blind_spots(report, RULES)
+
+    assert spots.spots == ()
+    assert spots.lines == (
+        "No se pudo leer la CI en .github/workflows/bad.yml: no es YAML válido (línea 2).",
+        f"No se puede saber qué comprueba la CI en `uv run ${{{{ matrix.cmd }}}}` ({WORKFLOW}:18): "
+        f"una expresión; `make lint` ({WORKFLOW}:19): make puede ejecutar.",
+    )
+
+
+def test_a_cov_that_takes_the_commands_path_stops_the_run() -> None:
+    eaten = SurveyedCommand(
+        "unit",
+        True,
+        tests=True,
+        paths=(".",),
+        config="pyproject.toml",
+        eaten="tests/unit",
+    )
+
+    (problem,) = configuration_problems(_report(commands=(eaten, ACCEPTANCE)))
+
+    assert problem.kind == "config"
+    assert problem.message == (
+        "El comando del control 'unit' nombra tests/unit, pero el `--cov` con que acaba addopts "
+        "en pyproject.toml lo toma como su valor, y lo que se ejecuta es .. Escribe "
+        "`--cov=<paquete>` en addopts, con el paquete que mide; el agente no puede tocar esa "
+        "configuración."
+    )
+
+
+def test_a_minimum_inherited_with_the_cov_of_addopts_stops_the_run_once() -> None:
+    gate = CoverageGate("--cov=bookwright", "pyproject.toml", "80", "pyproject.toml")
+    commands = tuple(
+        SurveyedCommand(cid, True, tests=True, paths=(p,), gate=gate)
+        for cid, p in (("unit", "tests/unit"), ("acceptance", "tests/acceptance"))
+    )
+
+    (problem,) = configuration_problems(_report(commands=(*commands, LINT)))
+
+    assert problem.kind == "config"
+    assert problem.message.startswith(
+        "addopts en pyproject.toml mide la cobertura en todo comando de tests (--cov=bookwright) "
+        "y pyproject.toml exige un mínimo (80 %): un comando que ejecuta solo una parte de los "
+        "tests sale con un fallo aunque pasen todos, y la aceptación nunca podría pasar. Afecta "
+        "a 'unit' y la aceptación. Saca --cov=bookwright de addopts"
+    )
+
+
+def test_a_configuration_that_does_nothing_to_the_commands_is_no_problem() -> None:
+    assert configuration_problems(_report()) == []
+
+
+CI_GOOD: dict[str, Any] = {
+    **copy.deepcopy(GOOD),
+    "ci": [
+        {
+            "file": WORKFLOW,
+            "line": 31,
+            "run": "uv run ruff format --check src/",
+            "origin": "workflow",
+            "status": "understood",
+            "tool": FORMAT,
+            "covers": ["src/a.py"],
+        },
+        {
+            "file": WORKFLOW,
+            "line": 32,
+            "run": "make",
+            "origin": "workflow",
+            "status": "unknown",
+            "tool": None,
+            "reason": "make",
+        },
+    ],
+}
+
+
+def test_the_ci_and_the_new_facts_of_a_command_are_read() -> None:
+    data = copy.deepcopy(CI_GOOD)
+    data["tests"][0]["ci_run_by"] = [1]
+    data["commands"][0].update(
+        tool="pytest",
+        config="pyproject.toml",
+        eaten="tests/unit",
+        gate={"cov": "--cov", "addopts": "pyproject.toml", "threshold": "80", "source": "a.cfg"},
+    )
+
+    report = survey_report(data)
+
+    assert isinstance(report, SurveyReport)
+    assert report.ci == (
+        SurveyedCi(
+            WORKFLOW,
+            31,
+            "uv run ruff format --check src/",
+            "workflow",
+            True,
+            "",
+            FORMAT,
+            ("src/a.py",),
+        ),
+        SurveyedCi(WORKFLOW, 32, "make", "workflow", False, "make"),
+    )
+    assert report.tests[0].ci_run_by == (1,)
+    unit = report.commands[0]
+    assert (unit.tool, unit.config, unit.eaten) == ("pytest", "pyproject.toml", "tests/unit")
+    assert unit.gate == CoverageGate("--cov", "pyproject.toml", "80", "a.cfg")
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "reason"),
+    [
+        (("ci",), {}, "ci no es una lista"),
+        (("ci", 0, "status"), "x", "el paso de la CI 0 tiene un estado que no existe: 'x'"),
+        (("ci", 0, "line"), 0, "el paso de la CI 0.line no es un número válido: 0"),
+        (("ci", 0, "file"), "/etc/x", "el paso de la CI 0.file sale del árbol: '/etc/x'"),
+        (("ci", 0, "covers"), ["../x"], "el paso de la CI 0.covers sale del árbol: '../x'"),
+        (("ci", 1, "reason"), "", "el paso de la CI 1.reason no es un texto"),
+        (
+            ("tests", 0, "ci_run_by"),
+            [2],
+            "el fichero de tests 0.ci_run_by nombra un paso de la CI que no se le dio",
+        ),
+        (("commands", 0, "gate"), {"cov": "x"}, "el comando 0.gate.addopts no es un texto"),
+    ],
+)
+def test_a_ci_that_cant_be_what_the_survey_wrote_is_invalid(
+    path: tuple[str | int, ...], value: object, reason: str
+) -> None:
+    data: Any = copy.deepcopy(CI_GOOD)
+    target = data
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    assert survey_report(data) == InvalidReport(reason)

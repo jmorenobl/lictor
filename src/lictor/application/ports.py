@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from lictor.domain.ci import CiSteps
 from lictor.domain.conventions import TreeEntry
 from lictor.domain.model import (
     AgentResult,
@@ -271,6 +272,15 @@ class ReportReader[R](Protocol):
     """
 
     def read(self, path: Path) -> ReportOf[R]: ...
+
+
+class CiReader(Protocol):
+    """Reads the commands of the project's CI from a tree: its workflows and its pre-commit.
+
+    It reads files and runs nothing; a file it can't read is named in `unreadable`, never raised.
+    """
+
+    def read(self, root: Path) -> CiSteps: ...
 
 
 @dataclass(frozen=True)

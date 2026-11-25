@@ -6,15 +6,17 @@ What it can't do (no report, one that can't be read) is a reason, never an excep
 of Lictor mustn't stop a project that is fine.
 """
 
+import dataclasses
 import json
 import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lictor.application.ports import ReportReader, Vcs
+from lictor.application.ports import CiReader, ReportReader, Vcs
 from lictor.application.run_files import save_output, verification_tree, write_text
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.ci import CiStep, CiSteps
 from lictor.domain.reports import InvalidReport, MissingReport
 from lictor.domain.survey import SurveyReport
 
@@ -32,14 +34,31 @@ class SurveyedCommandSpec:
     run: str
 
 
+def _step_payload(step: CiStep) -> dict[str, object]:
+    return {
+        "file": step.file,
+        "line": step.line,
+        "run": step.run,
+        "origin": step.origin,
+        "pass_filenames": step.pass_filenames,
+        "files": list(step.files),
+        "exclude": list(step.exclude),
+    }
+
+
 @dataclass(frozen=True)
 class StartSurvey:
-    """The profile's survey command, what it is asked about and how its report is read."""
+    """The profile's survey command, what it is asked about and how its report is read.
+
+    With `ci`, the steps of the project's CI are read from the same clone and handed to the
+    survey too, which recognises them with the rules it uses for the controls (F76).
+    """
 
     run: str
     commands: Sequence[SurveyedCommandSpec]
     detect: Sequence[str]
     reader: ReportReader[SurveyReport]
+    ci: CiReader | None = None
 
     def execute(
         self, environment: VerificationEnvironment, vcs: Vcs, project_root: Path, evidence: Path
@@ -49,16 +68,19 @@ class StartSurvey:
         given = evidence / INPUT_NAME
         report = evidence / REPORT_NAME
         report.unlink(missing_ok=True)
-        payload = {
-            "commands": [{"id": c.id, "run": c.run} for c in self.commands],
-            "detect": list(self.detect),
-        }
-        write_text(given, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
         tokens = [
             token.replace("{in}", str(given)).replace("{out}", str(report))
             for token in shlex.split(self.run)
         ]
         with verification_tree(vcs, "HEAD", project_root) as tree:
+            ci = self.ci.read(tree) if self.ci is not None else CiSteps()
+            payload: dict[str, object] = {
+                "commands": [{"id": c.id, "run": c.run} for c in self.commands],
+                "detect": list(self.detect),
+            }
+            if self.ci is not None:
+                payload["ci"] = [_step_payload(step) for step in ci.steps]
+            write_text(given, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
             output = environment.run(tokens, cwd=tree, timeout_s=SURVEY_TIMEOUT_S)
         save_output(evidence / LOG_NAME, tokens, output)
         if output.timed_out:
@@ -70,4 +92,4 @@ class StartSurvey:
             return "el análisis no dejó informe"
         if isinstance(read, InvalidReport):
             return f"el informe del análisis no es válido: {read.reason}"
-        return read
+        return dataclasses.replace(read, ci_unreadable=ci.unreadable)
