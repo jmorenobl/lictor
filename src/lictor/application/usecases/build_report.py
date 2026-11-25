@@ -77,6 +77,24 @@ def _seconds_between(start: str, end: str) -> int | None:
     return int(elapsed.total_seconds() * _MS_PER_SECOND)
 
 
+def _verified_owner(
+    info: dict[str, Any], sid: str | None, *, refactor: bool
+) -> dict[str, Any] | None:
+    """Whose verification it is: the scenario's, or its refactor's."""
+    if refactor and sid:
+        return _refactor_of(info, sid)
+    found: dict[str, Any] | None = info["scenarios"].get(sid or "")
+    return found
+
+
+def _note_api(info: dict[str, Any], controls: Mapping[str, Any]) -> None:
+    """Keep the API comparison of a passing verification: what the run leaves broken."""
+    for control_id, recorded in controls.items():
+        api = _compared_api(recorded)
+        if api is not None:
+            info["api"] = (control_id, api)
+
+
 def _note_red_check(info: dict[str, Any], outcome: str, ev: Event) -> None:
     """Keep how long a red check took, if its event says it (F52)."""
     timing = red_timing_text(ev.data)
@@ -952,15 +970,14 @@ class BuildReport:
         controls = recorded_controls(ev.data.get("controls"))
         acceptance = acceptance_from_record(ev.data.get("acceptance"))
         refactor = ev.data.get("role") == REFACTOR_ROLE
-        owner = _refactor_of(info, sid) if refactor and sid else info["scenarios"].get(sid or "")
+        owner = _verified_owner(info, sid, refactor=refactor)
         if owner is not None:
             owner["verify_ms"] += recorded_duration(controls, acceptance)
 
         # A refactor's failure costs no attempt: it is told in its own section.
-        if not ev.data.get("ok") and not refactor:
-            failed_at = ev.data.get("failed_at")
-            if failed_at:
-                info["failed_by_level"][str(failed_at)] += 1
+        failed_at = ev.data.get("failed_at")
+        if not ev.data.get("ok") and not refactor and failed_at:
+            info["failed_by_level"][str(failed_at)] += 1
 
         attempt = f"{ev.data.get('attempt')} (refactor)" if refactor else ev.data.get("attempt")
         outcome = "verde" if ev.data.get("ok") else str(ev.data.get("failed_at") or "falló")
@@ -971,9 +988,8 @@ class BuildReport:
         for control_id, recorded in controls.items():
             where = f"**{control_id}** ({sid}, intento {attempt})"
             self._process_control(info, where, recorded, controls)
-            api = _compared_api(recorded)
-            if ev.data.get("ok") and api is not None:
-                info["api"] = (control_id, api)
+        if ev.data.get("ok"):
+            _note_api(info, controls)
 
     @staticmethod
     def _process_control(

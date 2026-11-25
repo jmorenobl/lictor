@@ -146,21 +146,7 @@ class CheckPreconditions:
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
-        checks: list[PreconditionCheck] = []
-        if req.config_problem is not None:
-            problem = PreconditionProblem("config", req.config_problem)
-            checks.append(PreconditionCheck("Configuración", (problem,)))
-        checks.append(self._commits(has_commits))
-        if req.clean_tree:
-            checks.append(self._clean_tree(warn=req.uncommitted_warns))
-        if req.features:
-            checks.append(self._features())
-        if req.skill and (warning := skill_stub_warning(self.project_root)):
-            checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
-        if req.conventions and has_commits and (rules := self._conventions()) is not None:
-            checks.append(rules)
-        if req.check_stage and self.check_stage_ids:
-            checks.append(self._check_stage())
+        checks = self._project_checks(req, has_commits)
         checks.append(self._identity())
         executor, cli_version = self._executor()
         checks.append(executor)
@@ -170,10 +156,7 @@ class CheckPreconditions:
         if environment is None:
             checks.append(PreconditionCheck("Comandos de verificación", skipped=UNCONFIGURED))
             checks.append(PreconditionCheck("Entorno de verificación", skipped=UNCONFIGURED))
-            if req.survey_dir is not None:
-                checks.append(PreconditionCheck(DEPENDENCIES, skipped=UNCONFIGURED))
-                checks.append(PreconditionCheck(BLIND_SPOTS, skipped=UNCONFIGURED))
-                checks.append(PreconditionCheck(HEAD_CONTROLS, skipped=UNCONFIGURED))
+            checks.extend(self._unchecked(req, UNCONFIGURED))
             return PreconditionsReport(tuple(checks), cli_version)
         checks.append(
             self._commands(req, lambda program: self._found(environment, program, has_commits))
@@ -183,6 +166,32 @@ class CheckPreconditions:
         )
         checks.extend(built)
         return PreconditionsReport(tuple(checks), cli_version, spots)
+
+    def _project_checks(
+        self, req: PreconditionsRequest, has_commits: bool
+    ) -> list[PreconditionCheck]:
+        """What is the project's own, before the machine: configuration, repository, rules."""
+        checks: list[PreconditionCheck] = []
+        if req.config_problem is not None:
+            problem = PreconditionProblem("config", req.config_problem)
+            checks.append(PreconditionCheck("Configuración", (problem,)))
+        checks.append(self._commits(has_commits))
+        if req.clean_tree:
+            checks.append(self._clean_tree(warn=req.uncommitted_warns))
+        if req.features:
+            checks.append(self._features())
+        return [*checks, *self._advice(req, has_commits)]
+
+    def _advice(self, req: PreconditionsRequest, has_commits: bool) -> list[PreconditionCheck]:
+        """What `doctor` warns of and never stops for: the skill, the rules, the `check` stage."""
+        checks: list[PreconditionCheck] = []
+        if req.skill and (warning := skill_stub_warning(self.project_root)):
+            checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
+        if req.conventions and has_commits and (rules := self._conventions()) is not None:
+            checks.append(rules)
+        if req.check_stage and self.check_stage_ids:
+            checks.append(self._check_stage())
+        return checks
 
     @staticmethod
     def _commits(has_commits: bool) -> PreconditionCheck:
