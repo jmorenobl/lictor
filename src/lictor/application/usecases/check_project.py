@@ -34,6 +34,7 @@ from lictor.domain.controls import (
     Control,
     ControlMode,
     RunStep,
+    Step,
     check_selection,
     verification_steps,
 )
@@ -186,12 +187,7 @@ class CheckProject:
             entries.append(ctrl_run.entry)
             if note := lent_note(step, ctrl_run.entry):
                 lent[step.control.id] = note
-            if (failed := failure_of(ctrl_run.entry.outcome, ctrl_run.output)) is not None:
-                reason = failure_reason(step, ctrl_run.entry, failed.reason)
-                failures.append(
-                    ControlFailure(step.control.id, step.control.mode, reason, failed.cases)
-                )
-                self._full_error(req, ctrl_run.entry, failures[-1])
+            failures.extend(self._failures(req, step, ctrl_run))
             failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
             if failure is not None:
                 reason = failure_reason(step, ctrl_run.entry, failure.reason)
@@ -267,6 +263,19 @@ class CheckProject:
         evidence = partial(self._evidence, req)
         judging = Judging(self.readers, req.api_base)
         return run_control(step, judging, evidence, execute, readings)
+
+    def _failures(
+        self, req: CheckProjectRequest, step: Step, ctrl_run: ControlRun
+    ) -> tuple[ControlFailure, ...]:
+        """Why a control that ran failed, whatever its mode, with all of it left beside its log;
+        nothing if it didn't."""
+        failed = failure_of(ctrl_run.entry.outcome, ctrl_run.output)
+        if failed is None:
+            return ()
+        reason = failure_reason(step, ctrl_run.entry, failed.reason)
+        failure = ControlFailure(step.control.id, step.control.mode, reason, failed.cases)
+        self._full_error(req, ctrl_run.entry, failure)
+        return (failure,)
 
     def _full_error(
         self, req: CheckProjectRequest, entry: ControlEntry, failure: ControlFailure

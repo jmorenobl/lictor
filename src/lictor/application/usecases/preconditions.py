@@ -443,14 +443,12 @@ class CheckPreconditions:
             return _api_check(message, blocks=blocks), compared
         return PreconditionCheck(API_BASE), compared
 
-    def _head_controls(
-        self, environment: VerificationEnvironment, req: PreconditionsRequest, survey_dir: Path
-    ) -> PreconditionCheck:
-        """Run on a clean clone of HEAD the controls that block, as the first attempt would.
+    def _blocking_on_head(
+        self, environment: VerificationEnvironment
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """The blocking controls to run on HEAD, and those left out because they can't start.
 
-        What fails there is the project's before any agent touches it: a path its tests need, a
-        warning made an error, its own metadata missing, an unformatted base. Project code runs,
-        so the state is guarded as in an attempt, and the environment is checked afterwards.
+        With `api.base`, HEAD's API against its base is its own check, measured once there.
         """
         cannot_start = {
             control.id
@@ -462,8 +460,19 @@ class CheckPreconditions:
         }
         blocking, left_out = blocking_on_head(self.head_controls, cannot_start)
         if self._compares_api():
-            # HEAD's API against its base is its own check, measured once there.
             blocking = tuple(cid for cid in blocking if not _is_api(cid, self.head_controls))
+        return blocking, left_out
+
+    def _head_controls(
+        self, environment: VerificationEnvironment, req: PreconditionsRequest, survey_dir: Path
+    ) -> PreconditionCheck:
+        """Run on a clean clone of HEAD the controls that block, as the first attempt would.
+
+        What fails there is the project's before any agent touches it: a path its tests need, a
+        warning made an error, its own metadata missing, an unformatted base. Project code runs,
+        so the state is guarded as in an attempt, and the environment is checked afterwards.
+        """
+        blocking, left_out = self._blocking_on_head(environment)
         notes = (head_not_started(left_out),) if left_out else ()
         if not blocking or self.readers is None:
             skipped = NONE_STARTS if notes else "ningún control bloquea"

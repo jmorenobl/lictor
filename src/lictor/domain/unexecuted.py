@@ -146,36 +146,50 @@ def unexecuted_changes(
     files its JUnit had cases of, or None when it has no JUnit to read: then what the survey says
     it runs is trusted.
     """
-    report, spots, present = tree.report, tree.spots, tree.present
+    deleted = tuple(p for p in changed if p not in tree.present)
+    accepted, judged = _split_accepted([p for p in changed if p in tree.present], rules)
+    facts = _facts(tree, rules, ran)
+    files = tuple(
+        Unexecuted(path, kind) for path in judged if (kind := facts.kind(path)) is not None
+    )
+    return UnexecutedChanges(files, deleted, len(accepted), _notes(judged, facts))
+
+
+def _split_accepted(paths: Sequence[str], rules: StartRules) -> tuple[list[str], list[str]]:
+    """The paths the person accepted in `blind_spots.accepted`, and the rest."""
     roots = accepted_paths(rules)
-    deleted = tuple(p for p in changed if p not in present)
-    accepted = [p for p in changed if p in present and path_within(p, roots)]
-    judged = [p for p in changed if p in present and p not in accepted]
-    facts = _Facts(
+    accepted = [p for p in paths if path_within(p, roots)]
+    return accepted, [p for p in paths if p not in accepted]
+
+
+def _facts(tree: FinalTree, rules: StartRules, ran: Mapping[str, frozenset[str] | None]) -> _Facts:
+    report = tree.report
+    commands = report.commands
+    return _Facts(
         by_spot={
             path: spot.kind
-            for spot in spots.spots
+            for spot in tree.spots.spots
             if spot.kind in _FROM_SPOTS
             for path in spot.paths
         },
         tests={t.path: t for t in report.tests},
         read={f.path for f in report.loaded}
         | {u.path for u in report.code_users}
-        | {path for c in report.commands for path in c.covers},
+        | {path for c in commands for path in c.covers},
         code_dir=report.code_dir,
         oracle=(FEATURES_DIR, *rules.driver),
         ran=ran,
-        unknown=any(not c.understood for c in report.commands),
+        unknown=any(not c.understood for c in commands),
     )
-    files = tuple(
-        Unexecuted(path, kind) for path in judged if (kind := facts.kind(path)) is not None
-    )
-    notes = [CODE_NOTE] if any(path_within(p, [report.code_dir]) for p in judged) else []
+
+
+def _notes(judged: Sequence[str], facts: _Facts) -> tuple[str, ...]:
+    notes = [CODE_NOTE] if any(path_within(p, [facts.code_dir]) for p in judged) else []
     if facts.unknown:
         notes.append(
             "Hay comandos que no se sabe qué ejecutan: los tests que nombran no se juzgan aquí."
         )
-    return UnexecutedChanges(files, deleted, len(accepted), tuple(notes))
+    return tuple(notes)
 
 
 def _as_kind(spot: str) -> UnexecutedKind:
@@ -204,18 +218,27 @@ def unexecuted_record(
 
 def unexecuted_lines(found: UnexecutedChanges) -> list[str]:
     """The lines a person reads, grouped by kind in a fixed order, deletions and notes last."""
-    lines: list[str] = []
-    for kind, text in KIND_TEXT.items():
-        paths = [f.path for f in found.files if f.kind == kind]
-        if paths:
-            lines.append(f"- {text[0].upper()}{text[1:]}: {', '.join(f'`{p}`' for p in paths)}")
+    lines = _kind_lines(found.files)
     if found.deleted:
-        lines.append(f"- Borrados: {', '.join(f'`{p}`' for p in found.deleted)}")
+        lines.append(f"- Borrados: {_quoted(found.deleted)}")
     if found.accepted:
         lines.append(f"- Aceptados en blind_spots.accepted, solo contados: {found.accepted}")
     if not lines:
         lines.append("- Nada: cada fichero que cambió lo ejecuta o lo lee algún control.")
     return [*lines, *(f"- {note}" for note in found.notes)]
+
+
+def _kind_lines(files: Sequence[Unexecuted]) -> list[str]:
+    lines = []
+    for kind, text in KIND_TEXT.items():
+        paths = [f.path for f in files if f.kind == kind]
+        if paths:
+            lines.append(f"- {text[0].upper()}{text[1:]}: {_quoted(paths)}")
+    return lines
+
+
+def _quoted(paths: Sequence[str]) -> str:
+    return ", ".join(f"`{p}`" for p in paths)
 
 
 def unexecuted_from_record(record: object) -> UnexecutedChanges | str | None:
@@ -228,18 +251,25 @@ def unexecuted_from_record(record: object) -> UnexecutedChanges | str | None:
     raw = record.get("files")
     if not isinstance(raw, list):
         return None
-    files = []
-    for item in raw:
-        if isinstance(item, Mapping) and isinstance(item.get("path"), str):
-            kind = item.get("kind")
-            if kind in KIND_TEXT:
-                files.append(Unexecuted(item["path"], _as_kind(str(kind))))
-    deleted = record.get("deleted")
-    notes = record.get("notes")
     accepted = record.get("accepted")
     return UnexecutedChanges(
-        tuple(files),
-        tuple(p for p in deleted if isinstance(p, str)) if isinstance(deleted, list) else (),
+        tuple(_files_of(raw)),
+        _strings(record.get("deleted")),
         accepted if isinstance(accepted, int) and not isinstance(accepted, bool) else 0,
-        tuple(n for n in notes if isinstance(n, str)) if isinstance(notes, list) else (),
+        _strings(record.get("notes")),
     )
+
+
+def _files_of(raw: Sequence[object]) -> list[Unexecuted]:
+    files = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        path, kind = item.get("path"), item.get("kind")
+        if isinstance(path, str) and isinstance(kind, str) and kind in KIND_TEXT:
+            files.append(Unexecuted(path, _as_kind(kind)))
+    return files
+
+
+def _strings(raw: object) -> tuple[str, ...]:
+    return tuple(item for item in raw if isinstance(item, str)) if isinstance(raw, list) else ()
