@@ -66,6 +66,35 @@ def cost_text(usd: float, decimals: int = 2) -> str:
     return f"{usd:.{decimals}f} $".replace(".", ",")
 
 
+_RED_PHASE_TEXT = {
+    "red": "aceptación",
+    "stubs": "stubs",
+    "interface": "interfaz",
+    "gherkin": "Gherkin",
+}
+
+
+def red_timing_text(data: Mapping[str, object]) -> str | None:
+    """How long a red check took and where, from its event (F52): None if it doesn't say."""
+    total = data.get("duration_ms")
+    if not isinstance(total, int):
+        return None
+    phases = data.get("phases")
+    parts: list[str] = []
+    if isinstance(phases, Mapping):
+        for phase, label in _RED_PHASE_TEXT.items():
+            entry = phases.get(phase)
+            if not isinstance(entry, Mapping):
+                continue
+            runs, took = entry.get("runs"), entry.get("duration_ms")
+            if not isinstance(runs, int) or not isinstance(took, int):
+                continue
+            times = "" if runs == 1 else f" en {runs} ejecuciones"
+            parts.append(f"{label} {duration_text(took)}{times}")
+    detail = f": {'; '.join(parts)}" if parts else ""
+    return f"rojo en {duration_text(total)}{detail}"
+
+
 def duration_text(ms: int) -> str:
     """A duration as a person says it: `59 s`, `2 min 5 s`, `1 h 1 min`."""
     seconds = round(ms / _MS_PER_S)
@@ -282,11 +311,15 @@ class RunProgress:
 
     def _driver_rejected(self, event: Event) -> list[str]:
         attempt, reason = event.data.get("attempt"), event.data.get("reason")
-        return [f"driver: el intento {attempt} se rechazó ({reason})."]
+        timing = red_timing_text(event.data)
+        took = f"; {timing}" if timing else ""
+        return [f"driver: el intento {attempt} se rechazó ({reason}{took})."]
 
-    def _driver_sealed(self, _: Event) -> list[str]:
+    def _driver_sealed(self, event: Event) -> list[str]:
         spend = self.spend(DRIVER_OWNER)
-        return [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)})."]
+        timing = red_timing_text(event.data)
+        took = f", {timing}" if timing else ""
+        return [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)}{took})."]
 
     def _reregistered(self, event: Event) -> list[str]:
         sid = str(event.scenarioid)

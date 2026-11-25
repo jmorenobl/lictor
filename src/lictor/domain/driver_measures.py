@@ -390,3 +390,34 @@ def _through_from(
 
 def _names(raw: object) -> TypeGuard[list[str]]:
     return isinstance(raw, list) and all(isinstance(name, str) for name in raw)
+
+
+# The phases of a red check, as `report.md` and the journal name them, in the order they run.
+RED_PHASES = ("red", "stubs", "interface", "gherkin")
+
+
+def red_check_phase(run_dir_name: str, step_dir_name: str) -> str:
+    """Tell which phase of the red check a run of the acceptance belongs to, by its evidence.
+
+    The red itself writes in its step's own directory; every other run has one inside it:
+    `impostor-<n>` for the constants that replace the stubs, `interfaz-<mode>` and
+    `stubs-interfaz-<mode>` for the interface's impostor, and the Gherkin's ones (ADR-0016).
+    """
+    if run_dir_name == step_dir_name:
+        return "red"
+    if "gherkin" in run_dir_name:
+        return "gherkin"
+    if "interfaz" in run_dir_name:
+        return "interface"
+    return "stubs"
+
+
+def red_check_timing(runs: Sequence[tuple[str, int]], duration_ms: int) -> dict[str, object]:
+    """Record how long a red check took, whole and by phase, with how many runs each had (F52)."""
+    phases: dict[str, dict[str, int]] = {}
+    for phase, took in runs:
+        entry = phases.setdefault(phase, {"runs": 0, "duration_ms": 0})
+        entry["runs"] += 1
+        entry["duration_ms"] += took
+    ordered = {phase: phases[phase] for phase in RED_PHASES if phase in phases}
+    return {"duration_ms": duration_ms, "phases": ordered}

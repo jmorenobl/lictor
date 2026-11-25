@@ -226,6 +226,27 @@ def test_report_gives_the_reason_of_the_exit(tmp_path: Path) -> None:
     assert "**Motivo**: Árbol sucio" in report
 
 
+def test_report_says_how_long_each_red_check_took(tmp_path: Path) -> None:
+    timing = {"duration_ms": 12_000, "phases": {"red": {"runs": 1, "duration_ms": 9_000}}}
+    events = [
+        _event("lictor.run.started.v1", {}),
+        _event("lictor.driver.rejected.v1", {"attempt": 1, "reason": "no_llama", **timing}),
+        _event("lictor.driver.sealed.v1", {"commit": "abc", **timing}),
+    ]
+
+    report = _report(tmp_path, events)
+
+    assert "## Comprobaciones del rojo" in report
+    assert "- intento 1, rechazado (no_llama): rojo en 12 s: aceptación 9 s" in report
+    assert "- sellado: rojo en 12 s: aceptación 9 s" in report
+
+
+def test_a_report_without_timed_red_checks_says_so(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_event("lictor.driver.sealed.v1", {"commit": "abc"})])
+
+    assert "- *Ninguna comprobación del rojo dice su duración.*" in report
+
+
 def test_report_omits_the_reason_when_there_is_none(tmp_path: Path) -> None:
     assert "Motivo" not in _report(tmp_path, [_event("lictor.run.finished.v1", {"exit_code": 0})])
 

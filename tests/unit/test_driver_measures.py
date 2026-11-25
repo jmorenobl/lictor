@@ -10,6 +10,8 @@ from lictor.domain.driver_measures import (
     interface_measures,
     measures_from_record,
     measures_record,
+    red_check_phase,
+    red_check_timing,
     red_measures,
     stub_measures,
 )
@@ -310,3 +312,39 @@ def test_a_record_without_its_libraries_doesn_t_follow_the_schema(libraries: obj
     interface["A-4"] = {**interface["A-4"], "libraries": libraries}
 
     assert measures_from_record({**record, "interface": interface}) is None
+
+
+@pytest.mark.parametrize(
+    ("run_dir", "phase"),
+    [
+        ("001-red", "red"),
+        ("impostor-2", "stubs"),
+        ("interfaz-mas", "interface"),
+        ("stubs-interfaz-menos", "interface"),
+        ("gherkin-control-bis", "gherkin"),
+        ("stubs-gherkin-mas-1", "gherkin"),
+    ],
+)
+def test_each_run_of_a_red_check_belongs_to_the_phase_its_evidence_names(
+    run_dir: str, phase: str
+) -> None:
+    assert red_check_phase(run_dir, "001-red") == phase
+
+
+def test_a_red_checks_timing_adds_each_phases_runs_in_the_order_they_run() -> None:
+    runs = [("gherkin", 30), ("red", 10), ("stubs", 5), ("stubs", 7), ("interface", 20)]
+
+    timing = red_check_timing(runs, 100)
+
+    assert timing == {
+        "duration_ms": 100,
+        "phases": {
+            "red": {"runs": 1, "duration_ms": 10},
+            "stubs": {"runs": 2, "duration_ms": 12},
+            "interface": {"runs": 1, "duration_ms": 20},
+            "gherkin": {"runs": 1, "duration_ms": 30},
+        },
+    }
+    phases = timing["phases"]
+    assert isinstance(phases, dict)
+    assert list(phases) == ["red", "stubs", "interface", "gherkin"]

@@ -26,6 +26,7 @@ from lictor.domain.progress import (
     calls_text,
     cost_text,
     duration_text,
+    red_timing_text,
     status_text,
 )
 from lictor.domain.refactor import REFACTORED
@@ -73,6 +74,36 @@ def _seconds_between(start: str, end: str) -> int | None:
     return int(elapsed.total_seconds() * _MS_PER_SECOND)
 
 
+def _note_red_check(info: dict[str, Any], outcome: str, ev: Event) -> None:
+    """Keep how long a red check took, if its event says it (F52)."""
+    timing = red_timing_text(ev.data)
+    if timing is None:
+        return
+    attempt = ev.data.get("attempt")
+    which = f"intento {attempt}, " if attempt is not None else ""
+    took = ev.data.get("duration_ms")
+    info["red_checks"].append(
+        (f"- {which}{outcome}: {timing}", took if isinstance(took, int) else 0)
+    )
+
+
+def _quarantine_lines(info: dict[str, Any]) -> list[str]:
+    if not info["quarantines"]:
+        return ["- *Ningún escenario en cuarentena.*"]
+    lines: list[str] = []
+    for q_id, q_data in sorted(info["quarantines"].items()):
+        lines.append(f"- **{q_id}**: {q_data['reason']}")
+        if q_data.get("last_error"):
+            lines.extend(["  ```", f"  {q_data['last_error']}", "  ```"])
+    return lines
+
+
+def _red_check_lines(info: dict[str, Any]) -> list[str]:
+    if not info["red_checks"]:
+        return ["- *Ninguna comprobación del rojo dice su duración.*"]
+    return [line for line, _ in info["red_checks"]]
+
+
 def _total_duration(info: dict[str, Any]) -> str:
     """The run's wall clock, from its start to its end, and how much of it went where.
 
@@ -86,6 +117,9 @@ def _total_duration(info: dict[str, Any]) -> str:
         f"agente {duration_text(int(owners['agent_ms']))}, "
         f"verificación {duration_text(int(owners['verify_ms']))}"
     )
+    red_ms = sum(took for _, took in info["red_checks"])
+    if red_ms:
+        split += f", rojo {duration_text(red_ms)}"
     start, end = info["started_at"], info["finished_at"]
     wall = _seconds_between(start, end) if start and end else None
     if wall is None:
@@ -632,6 +666,7 @@ class BuildReport:
             "skipped_controls": [],
             "rejected_drivers": [],
             "driver_measures": [],
+            "red_checks": [],
             "reopened": [],
             "reregistered": [],
             "by_hand": [],
@@ -756,6 +791,7 @@ class BuildReport:
         info["exit_reason"] = str(ev.data.get("reason", "") or "")
 
     def _on_driver_sealed(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, "sellado", ev)
         info["driver_seen"] = True
         info["driver"]["status"] = "sellado"
         info["driver"]["commit"] = str(ev.data.get("commit", "-"))
@@ -763,7 +799,8 @@ class BuildReport:
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]
 
-    def _on_driver_checked(self, _: Event, info: dict[str, Any]) -> None:
+    def _on_driver_checked(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, "comprobado", ev)
         info["driver_seen"] = True
         info["driver"]["status"] = "comprobado"
 
@@ -777,6 +814,7 @@ class BuildReport:
             )
 
     def _on_driver_rejected(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, f"rechazado ({ev.data.get('reason')})", ev)
         info["driver_seen"] = True
         if ev.data.get("final"):
             info["driver"]["status"] = "rechazado"
@@ -945,17 +983,9 @@ class BuildReport:
             *_scenario_table(info, owners, totals),
         ]
 
-        lines.extend(["", "## Cuarentenas"])
-        if not info["quarantines"]:
-            lines.append("- *Ningún escenario en cuarentena.*")
-        else:
-            for q_id, q_data in sorted(info["quarantines"].items()):
-                lines.append(f"- **{q_id}**: {q_data['reason']}")
-                if q_data.get("last_error"):
-                    lines.append("  ```")
-                    lines.append(f"  {q_data['last_error']}")
-                    lines.append("  ```")
+        lines.extend(["", "## Cuarentenas", *_quarantine_lines(info)])
 
+        lines.extend(["", "## Comprobaciones del rojo", *_red_check_lines(info)])
         lines.extend(_green_sections(info))
         lines.extend(["", "## Refactors", *_refactor_lines(info)])
 
