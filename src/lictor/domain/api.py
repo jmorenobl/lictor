@@ -83,9 +83,10 @@ REFACTOR_API: Final[str] = (
     "definición y reexportarla con el mismo nombre, o subir un método a una clase base, no la "
     "rompe."
 )
-_CONFLICT: Final[str] = (
-    "Si el escenario no se puede cumplir sin romperla, declara `LICTOR: SPEC_CONFLICT`. Una "
-    "rotura que la persona acepta se apunta en `api.accepted` de lictor.json."
+# Only when the control blocks: a break then fails every attempt, and only the person can accept it.
+IMPLEMENTER_API_BLOCKS: Final[str] = (
+    "- Esa API bloquea: si el escenario no se puede cumplir sin romperla, declara "
+    "`LICTOR: SPEC_CONFLICT`."
 )
 
 
@@ -369,16 +370,26 @@ def break_line(item: ApiBreak) -> str:
     return f"`{item.name}`: {item.detail}"
 
 
-def named_breaks(breaks: Sequence[ApiBreak]) -> list[str]:
-    """The lines of a list of breaks, the first `NAMED` by name and the rest counted."""
-    lines = [f"- {break_line(b)}" for b in breaks[:NAMED]]
-    if len(breaks) > NAMED:
-        lines.append(f"- y {len(breaks) - NAMED} más")
+def named_breaks(breaks: Sequence[ApiBreak], named: int | None = NAMED) -> list[str]:
+    """The lines of a list of breaks, the first `named` by name and the rest counted; every one
+    with `None`."""
+    shown = breaks if named is None else breaks[:named]
+    lines = [f"- {break_line(b)}" for b in shown]
+    if len(breaks) > len(shown):
+        lines.append(f"- y {len(breaks) - len(shown)} más")
     return lines
 
 
-def broken_reason(comparison: ApiComparison) -> str:
-    """Why an API control fails: what of the base's public API breaks, and what to do."""
+# What the person can do with a break, where Lictor speaks to them and never to the agent.
+API_ACCEPT_HINT: Final[str] = "Una rotura que aceptas se apunta en `api.accepted` de lictor.json."
+
+
+def broken_reason(comparison: ApiComparison, named: int | None = NAMED) -> str:
+    """Why an API control fails: what of the base's public API breaks, as facts.
+
+    What to do about it depends on who reads it: the implementer hears it in its measures
+    (`IMPLEMENTER_API_BLOCKS`), the person where Lictor speaks to them.
+    """
     count = len(comparison.broken)
     base = comparison.base[:SHORT_SHA]
     head = (
@@ -386,7 +397,7 @@ def broken_reason(comparison: ApiComparison) -> str:
         if count == 1
         else f"Se rompen {count} nombres de la API pública de la base ({base}):"
     )
-    return "\n".join([head, *named_breaks(comparison.broken), _CONFLICT])
+    return "\n".join([head, *named_breaks(comparison.broken, named)])
 
 
 def describe_api(

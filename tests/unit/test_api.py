@@ -521,10 +521,7 @@ def test_what_breaks_fails_naming_it_and_what_to_do() -> None:
     )
 
     assert verdict == Failed(
-        f"Se rompe un nombre de la API pública de la base ({'a' * 12}):\n"
-        "- `p.f`: ya no existe\n"
-        "Si el escenario no se puede cumplir sin romperla, declara `LICTOR: SPEC_CONFLICT`. Una "
-        "rotura que la persona acepta se apunta en `api.accepted` de lictor.json."
+        f"Se rompe un nombre de la API pública de la base ({'a' * 12}):\n- `p.f`: ya no existe"
     )
 
 
@@ -559,7 +556,7 @@ def test_the_reason_counts_several_and_names_the_first_ones() -> None:
     assert lines[1] == "- `p.f00`: ya no existe"
     assert lines[NAMED] == f"- `p.f{NAMED - 1}`: ya no existe"
     assert lines[NAMED + 1] == "- y 2 más"
-    assert len(lines) == NAMED + 3
+    assert len(lines) == NAMED + 2
 
 
 def test_exactly_named_breaks_are_all_named() -> None:
@@ -867,3 +864,13 @@ def test_a_failed_or_a_refactor_verification_warns_no_green(ok: bool, role: str)
     progress.observe(_verify(ok=ok, role=role))
 
     assert not any(line.startswith("⚠") for line in progress.observe(_green()))
+
+
+def test_the_whole_reason_names_every_break() -> None:
+    """What `check` leaves in `api.error.txt`: no break counted instead of named."""
+    many = tuple(ApiBreak(f"p.f{i:02}", "removed", detail="ya no existe") for i in range(NAMED + 2))
+
+    lines = broken_reason(_comparison(*many), named=None).splitlines()
+
+    assert len(lines) == NAMED + 3
+    assert lines[-1] == f"- `p.f{NAMED + 1}`: ya no existe"

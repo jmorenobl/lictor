@@ -15,7 +15,7 @@ from lictor.application.run_files import (
 )
 from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
-from lictor.domain.api import IMPLEMENTER_API
+from lictor.domain.api import IMPLEMENTER_API, IMPLEMENTER_API_BLOCKS
 from lictor.domain.complexity import implementer_complexity_text
 from lictor.domain.controls import (
     AGENT_FILES,
@@ -239,17 +239,18 @@ def _error_block(request: ImplementScenarioRequest) -> str:
     return f"{block}\n{failure}".strip()
 
 
-def _measures_api(request: ImplementScenarioRequest) -> bool:
-    """Whether the run measures the public API: then the implementer always hears of it, in
-    either mode, since what breaks goes to the report (ADR-0017)."""
-    return any(control.report == "api" for control in request.controls)
+def _measures_api(request: ImplementScenarioRequest) -> str | None:
+    """The mode of the run's API control, if it has one: the implementer always hears of it, in
+    either mode, since what breaks goes to the report (ADR-0017), and of a conflict when it
+    blocks."""
+    return next((c.mode for c in request.controls if c.report == "api"), None)
 
 
 def _measures_text(
     measures: Sequence[AgentMeasure],
     blocking: Sequence[CommandControl],
     files: str | None,
-    api: bool,
+    api: str | None,
 ) -> str:
     """Each minimum to meet with its command, what a control of the code that blocks asks, and
     not to break the public API that was there."""
@@ -260,8 +261,10 @@ def _measures_text(
             lines.append(implementer_duplication_text(command))
         elif control.limit is not None:
             lines.append(implementer_complexity_text(control.limit, command))
-    if api:
+    if api is not None:
         lines.append(IMPLEMENTER_API)
+    if api == "block":
+        lines.append(IMPLEMENTER_API_BLOCKS)
     return "\n".join(lines)
 
 

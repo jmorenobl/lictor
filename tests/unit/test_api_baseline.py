@@ -230,7 +230,7 @@ def test_a_blocking_api_control_fails_naming_what_broke(tmp_path: Path) -> None:
 
     assert result.failed_at == "api"
     assert "`p.f`: ya no existe" in (result.condensed_error or "")
-    assert "LICTOR: SPEC_CONFLICT" in (result.condensed_error or "")
+    assert "SPEC_CONFLICT" not in (result.condensed_error or ""), "the verdict gives facts"
 
 
 def test_what_the_person_accepts_doesnt_block(tmp_path: Path) -> None:

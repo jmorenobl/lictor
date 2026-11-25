@@ -414,8 +414,10 @@ class CheckPreconditions:
         snapshot.verify_and_restore()
         shown = relative_to_project(evidence, self.project_root)
         problems = [
-            PreconditionProblem("config", head_control_problem(cid, reason, f"{shown}/"))
-            for cid, reason in result.blocked
+            PreconditionProblem(
+                "config", head_control_problem(failure.id, failure.condensed(), f"{shown}/")
+            )
+            for failure in result.blocked
         ]
         if snapshot.changes:
             problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
