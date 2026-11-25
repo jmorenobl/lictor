@@ -23,7 +23,7 @@ from lictor.domain.errors import ConfigError, ExitCode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
-PROFILE_IDS = ["lint", "types", "unit", "coverage", "complexity", "duplication"]
+PROFILE_IDS = ["lint", "format", "types", "unit", "coverage", "complexity", "duplication"]
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -177,7 +177,7 @@ def test_the_stage_of_a_control_enters_the_fingerprint(tmp_path: Path) -> None:
 def test_enabled_false_drops_a_control_of_the_profile(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "types", "enabled": False}])
 
-    assert _ids(path) == ["lint", "unit", "coverage", "complexity", "duplication"]
+    assert _ids(path) == ["lint", "format", "unit", "coverage", "complexity", "duplication"]
 
 
 def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> None:
@@ -213,7 +213,7 @@ def test_an_added_control_needs_what_the_profile_cant_give(tmp_path: Path) -> No
         load_config(path)
     assert "level" in str(raised.value)
     assert "report" in str(raised.value)
-    assert "lint, types, unit, coverage" in str(raised.value)
+    assert "lint, format, types, unit, coverage" in str(raised.value)
     assert raised.value.exit_code == ExitCode.PRECONDITION
 
 
@@ -222,7 +222,7 @@ def test_dropping_a_control_the_profile_lacks_is_a_typo(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="tipos") as raised:
         load_config(path)
-    assert "lint, types, unit, coverage" in str(raised.value)
+    assert "lint, format, types, unit, coverage" in str(raised.value)
 
 
 def test_a_control_written_twice_is_refused(tmp_path: Path) -> None:

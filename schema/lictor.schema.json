@@ -360,6 +360,12 @@
           "minimum": 1,
           "title": "Keep Runs",
           "type": "integer"
+        },
+        "keep_retired": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Keep Retired",
+          "type": "integer"
         }
       },
       "title": "RetentionConfig",

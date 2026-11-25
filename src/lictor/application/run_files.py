@@ -22,7 +22,7 @@ from lictor.application.ports import Vcs
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput
-from lictor.domain.rules import runs_to_prune
+from lictor.domain.rules import retired_to_prune, runs_to_prune
 
 DRIVER_OWNER = "driver"
 # What `doctor` and `check` leave, apart from any run's and replaced by the next one.
@@ -76,6 +76,42 @@ def prune_runs(
         for name in pruned:
             shutil.rmtree(runs_dir / name, ignore_errors=True)
     return pruned
+
+
+RETIRED_DIR = "retired"
+# What a run leaves that a person reads after it: the checkpoint and the seal only served a resume.
+RETIRED_EVIDENCE = ("journal.jsonl", "report.md", "runs")
+
+
+def archive_run_evidence(worktree: Path, main_root: Path, name: str, keep: int) -> Path | None:
+    """Copy a run's journal, report and evidence to the checkout before its worktree goes.
+
+    The copy is written beside its place and renamed into it, so a failure halfway leaves nothing
+    that passes for evidence. Afterwards only the `keep` most recent stay. Returns the directory,
+    or None when the worktree has nothing to keep. Raises OSError when it can't copy: the caller
+    then refuses to remove the worktree.
+    """
+    source = worktree / ".lictor"
+    present = [item for item in RETIRED_EVIDENCE if (source / item).exists()]
+    if not present:
+        return None
+    retired = own_dir(main_root) / RETIRED_DIR
+    retired.mkdir(exist_ok=True)
+    target = retired / name
+    partial = retired / f".{name}.partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir()
+    for item in present:
+        if (source / item).is_dir():
+            shutil.copytree(source / item, partial / item, symlinks=True)
+        else:
+            shutil.copy2(source / item, partial / item)
+    shutil.rmtree(target, ignore_errors=True)
+    partial.rename(target)
+    entries = [p.name for p in retired.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    for old in retired_to_prune(entries, keep):
+        shutil.rmtree(retired / old, ignore_errors=True)
+    return target
 
 
 def new_step_dir(path: Path) -> Path:
@@ -165,6 +201,24 @@ def sweep_scratch(project_root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+LICTOR_GITIGNORE = "*\n"
+
+
+def own_dir(project_root: Path) -> Path:
+    """Return `.lictor/`, created if missing, with a `.gitignore` that makes git ignore all of it.
+
+    Everything in it is Lictor's, never the person's: without it, a project whose `.gitignore`
+    doesn't name `.lictor/` saw `run` warn that its own lock was left uncommitted, the worktree's
+    clean tree failed on the checkpoint, and `git worktree remove` refused the worktree (F53).
+    """
+    lictor_dir = project_root / ".lictor"
+    lictor_dir.mkdir(parents=True, exist_ok=True)
+    ignore = lictor_dir / ".gitignore"
+    if not ignore.is_file():
+        ignore.write_text(LICTOR_GITIGNORE, encoding="utf-8")
+    return lictor_dir
+
+
 @contextlib.contextmanager
 def holding_project(project_root: Path) -> Iterator[bool]:
     """Try to hold the project, and say whether it was free; never wait for it.
@@ -174,8 +228,7 @@ def holding_project(project_root: Path) -> Iterator[bool]:
     isn't inherited, so a command left orphaned doesn't keep it. The file is not state of the run:
     neither `IntegritySnapshot` nor the anchor read it.
     """
-    lictor_dir = project_root / ".lictor"
-    lictor_dir.mkdir(parents=True, exist_ok=True)
+    lictor_dir = own_dir(project_root)
     fd = os.open(lictor_dir / RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         try:

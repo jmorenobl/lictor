@@ -17,7 +17,7 @@ from lictor.adapters.config.loader import (
     project_root_of,
     resolve_defences,
 )
-from lictor.adapters.config.models import LictorConfig, domain_controls
+from lictor.adapters.config.models import LictorConfig, RetentionConfig, domain_controls
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
@@ -139,6 +139,18 @@ def observed_journal(project_root: Path, observe: Callable[[Event], None]) -> Ev
 def checkout_repository(project_root: Path) -> GitCli:
     """The repository of a checkout, before any configuration is read: `run` starts here."""
     return GitCli(project_root.resolve())
+
+
+def retired_runs_kept(project_root: Path) -> int:
+    """How many retired runs the checkout keeps: its `lictor.json`'s, or the default if it fails.
+
+    `retire` reads it in the person's checkout, whose configuration may not load: losing a run's
+    evidence because of a broken `lictor.json` would be worse than keeping the default number.
+    """
+    try:
+        return load_config(project_root).retention.keep_retired
+    except ConfigError:
+        return RetentionConfig().keep_retired
 
 
 def new_run_id() -> str:

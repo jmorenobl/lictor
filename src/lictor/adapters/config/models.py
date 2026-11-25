@@ -837,6 +837,8 @@ class RetentionConfig(BaseModel):
 
     # Counting the run that starts: it is only read then, so it doesn't decide a resume.
     keep_runs: int = Field(default=10, ge=1)
+    # The evidence `lictor retire` keeps in the checkout's .lictor/retired/, counting the new one.
+    keep_retired: int = Field(default=10, ge=1)
 
 
 class LictorConfig(BaseModel):

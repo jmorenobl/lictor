@@ -35,7 +35,9 @@ CONFIG = {
     "backend": {"kind": "fake", "model": "fake-model-1"},
     "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
     "acceptance": {"run": "echo test {out}"},
-    "controls": [{"id": c, "enabled": False} for c in ("lint", "types", "unit", "coverage")],
+    "controls": [
+        {"id": c, "enabled": False} for c in ("lint", "format", "types", "unit", "coverage")
+    ],
     "agent_tools": [],
     "hints": "",
     "gitignore": [],
@@ -446,6 +448,50 @@ def test_retire_removes_a_finished_runs_worktree_and_keeps_its_branch(
     assert "lictor/uno" in _branches(project)
     assert f"Worktree retirado: {run_uno.worktree}" in result.stdout
     assert "`git branch -d lictor/uno`" in result.stdout
+
+
+def test_retire_keeps_the_runs_evidence_in_the_checkout_before_removing_it(
+    project: Path, run_uno: RunEntry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _states(monkeypatch, uno=FINISHED)
+    lictor = Path(run_uno.worktree) / ".lictor"
+    lictor.mkdir(exist_ok=True)
+    (lictor / "journal.jsonl").write_text('{"evento": 1}\n', encoding="utf-8")
+    (lictor / "report.md").write_text("# Informe\n", encoding="utf-8")
+    (lictor / "runs" / run_uno.run_id / "driver").mkdir(parents=True)
+    (lictor / "runs" / run_uno.run_id / "driver" / "001-driver.json").write_text("{}", "utf-8")
+
+    result = _retire(project, "uno")
+
+    assert result.exit_code == 0, result.output
+    kept = project / ".lictor" / "retired" / f"uno-{run_uno.run_id}"
+    assert (kept / "journal.jsonl").read_text(encoding="utf-8") == '{"evento": 1}\n'
+    assert (kept / "report.md").read_text(encoding="utf-8") == "# Informe\n"
+    assert (kept / "runs" / run_uno.run_id / "driver" / "001-driver.json").is_file()
+    assert not (kept / "checkpoints.sqlite").exists()
+    assert f"Evidencia guardada en .lictor/retired/uno-{run_uno.run_id}/" in result.stdout
+    assert not Path(run_uno.worktree).exists()
+
+
+def test_retire_removes_nothing_when_the_evidence_cant_be_kept(
+    project: Path, run_uno: RunEntry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _states(monkeypatch, uno=FINISHED)
+    (Path(run_uno.worktree) / ".lictor").mkdir(exist_ok=True)
+    (Path(run_uno.worktree) / ".lictor" / "report.md").write_text("# Informe\n", "utf-8")
+
+    def fails(*_args: object) -> None:
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr("lictor.cli.archive_run_evidence", fails)
+
+    result = _retire(project, "uno")
+
+    assert result.exit_code == 40
+    assert "no se ha podido guardar la evidencia" in result.stderr
+    assert "disco lleno" in result.stderr
+    assert Path(run_uno.worktree).is_dir()
+    assert read_run_index(project) == [run_uno]
 
 
 def test_retire_deletes_an_integrated_branch_when_asked(

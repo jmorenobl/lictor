@@ -20,6 +20,8 @@ from lictor.application.events import new_event
 from lictor.application.ports import Clock
 from lictor.application.run_files import (
     DOCTOR_DIR,
+    RETIRED_DIR,
+    archive_run_evidence,
     aside_dir,
     exclusive_run,
     holding_project,
@@ -50,6 +52,7 @@ from lictor.bootstrap import (
     checkout_repository,
     new_run_id,
     observed_journal,
+    retired_runs_kept,
     skill_content,
     unconfigured_preconditions,
 )
@@ -82,6 +85,7 @@ from lictor.domain.rules import (
     baseline_head_accepted,
     describe_score,
     precondition_exit_code,
+    retired_name,
 )
 from lictor.domain.run_branches import (
     branch_name_problem,
@@ -1134,7 +1138,7 @@ def retire(
         if isinstance(found, int):
             return found
         with exclusive_run(main_root, "lictor retire"):
-            refused = _remove_run_worktree(found, name)
+            refused = _remove_run_worktree(found, name, main_root)
             if refused is not None:
                 return refused
             remove_from_run_index(main_root, found.branch)
@@ -1143,8 +1147,12 @@ def retire(
     _safe_run(_execute)
 
 
-def _remove_run_worktree(run: RunEntry, name: str) -> int | None:
-    """Take the worktree away, holding it, unless something in it could still be lost."""
+def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | None:
+    """Take the worktree away, holding it, unless something in it could still be lost.
+
+    Its journal, report and evidence go to the checkout first: without them a retired run left
+    nothing to measure or explain (F56). If they can't be copied, nothing is removed.
+    """
     worktree = Path(run.worktree)
     if not worktree.is_dir():
         return None
@@ -1166,7 +1174,24 @@ def _remove_run_worktree(run: RunEntry, name: str) -> int | None:
                 err=True,
             )
             return int(ExitCode.PRECONDITION)
+        try:
+            kept = archive_run_evidence(
+                worktree,
+                main_root,
+                retired_name(name, run.run_id),
+                retired_runs_kept(main_root),
+            )
+        except OSError as exc:
+            typer.echo(
+                f"Error: no se ha podido guardar la evidencia del run en .lictor/{RETIRED_DIR}/ "
+                f"({exc}). No se ha tocado nada: libera espacio o corrige los permisos y vuelve a "
+                "lanzar.",
+                err=True,
+            )
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         repository.remove_worktree(worktree)
+    if kept is not None:
+        typer.echo(f"Evidencia guardada en {kept.relative_to(main_root)}/")
     typer.echo(f"Worktree retirado: {worktree}")
     return None
 

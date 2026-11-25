@@ -76,6 +76,7 @@ def test_load_python_uv_profile() -> None:
     assert "tests/acceptance/" in profile.paths.protected
     assert [c.id for c in profile.controls] == [
         "lint",
+        "format",
         "types",
         "unit",
         "coverage",
@@ -562,7 +563,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "path", ["primero"])
-    config = SimpleNamespace(invocation_params=SimpleNamespace(dir=tmp_path))
+    config = SimpleNamespace(invocation_params=SimpleNamespace(dir=tmp_path), inipath=None)
 
     pytest_load_initial_conftests(cast(pytest.Config, config))
 
@@ -572,7 +573,10 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
 @pytest.mark.parametrize(
     ("plugin", "expected"),
     [
-        (lictor_project_path.__file__, {"pytest", "sys", "typing"}),
+        (
+            lictor_project_path.__file__,
+            {"configparser", "importlib", "os", "pathlib", "pytest", "sys", "typing"},
+        ),
         (lictor_outcome.__file__, {"pytest", "pathlib", "sys", "typing", "collections"}),
         (
             lictor_impostor.__file__,

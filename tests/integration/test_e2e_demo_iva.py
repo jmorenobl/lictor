@@ -148,7 +148,9 @@ def _setup_demo_iva_repo(
         "acceptance": {
             "run": "python3 -m pytest tests/acceptance -q --junitxml {out}",
         },
-        "controls": [{"id": c, "enabled": False} for c in ("lint", "types", "unit", "coverage")],
+        "controls": [
+            {"id": c, "enabled": False} for c in ("lint", "format", "types", "unit", "coverage")
+        ],
         "agent_tools": [],
         "hints": "demo-iva hints",
         "gitignore": [".venv/", "__pycache__/"],

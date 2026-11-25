@@ -55,6 +55,8 @@ from lictor.domain.rules import (
     registration_problems,
     registration_subject,
     render_full_error,
+    retired_name,
+    retired_to_prune,
     routes_rejected,
     run_outcome,
     runs_to_prune,
@@ -1665,3 +1667,21 @@ def test_a_registration_of_several_counts_them_and_leaves_the_ids_to_the_trailer
     ids = [f"DNI-{n:03d}" for n in range(14, 25)]
 
     assert registration_subject(ids, "verde colateral") == "test: verde colateral, 11 escenarios"
+
+
+def test_a_retired_run_is_named_after_its_run_and_its_id() -> None:
+    assert retired_name("uno", RUNS[0]) == f"uno-{RUNS[0]}"
+
+
+def test_retired_runs_past_the_most_recent_go_oldest_first_by_their_id() -> None:
+    names = [retired_name(n, rid) for n, rid in zip("edcba", RUNS, strict=True)]
+
+    assert retired_to_prune(names, keep=2) == sorted(names[:3])
+    assert retired_to_prune(names, keep=5) == []
+    assert retired_to_prune(names, keep=0) == sorted(names)
+
+
+def test_a_name_without_a_run_id_at_its_end_is_not_a_retired_run() -> None:
+    names = ["notas", f"{RUNS[0]}-copia", retired_name("uno", RUNS[1])]
+
+    assert retired_to_prune(names, keep=0) == [retired_name("uno", RUNS[1])]

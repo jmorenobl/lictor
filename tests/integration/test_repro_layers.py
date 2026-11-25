@@ -134,7 +134,7 @@ def test_a_case_that_names_either_of_the_pair_keeps_both(tmp_path: Path, named: 
     ids = {c.id for c in load_config(tmp_path).controls}
 
     assert {"unit", "coverage"} <= ids
-    assert not {"lint", "types"} & ids
+    assert not {"lint", "format", "types"} & ids
 
 
 @pytest.mark.parametrize("dropped", ["unit", "coverage"])

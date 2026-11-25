@@ -1022,6 +1022,28 @@ def runs_to_prune(run_ids: Collection[str], keep: int, protected: Collection[str
     return sorted(rid for rid in runs[max(keep, 0) :] if rid not in protected)
 
 
+def retired_name(name: str, run_id: str) -> str:
+    """Name the directory that keeps a retired run's evidence: its name and its run id.
+
+    The id keeps a name used again by a later run from landing on the evidence of the first.
+    """
+    return f"{name}-{run_id}"
+
+
+def retired_to_prune(names: Collection[str], keep: int) -> list[str]:
+    """Return the retired runs past the `keep` most recent, oldest first.
+
+    Their order is their run id's, the end of each name; a name without one isn't Lictor's.
+    """
+    dated = {
+        found.group(0): name
+        for name in names
+        if (found := RUN_ID.search(name)) is not None and name.endswith(found.group(0))
+    }
+    newest = sorted(dated, reverse=True)
+    return sorted(dated[rid] for rid in newest[max(keep, 0) :])
+
+
 def score_meets(score: Score, minimum: float | None) -> bool:
     """Tell whether a score reaches the minimum its control declares, if any."""
     return minimum is None or score.percent >= minimum

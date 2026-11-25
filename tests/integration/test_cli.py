@@ -63,7 +63,9 @@ def test_cli_status_and_report(tmp_path: Path) -> None:
         "backend": {"kind": "fake", "model": "fake-model-1"},
         "paths": {"writable": ["src/"], "driver": ["tests/"], "protected": ["lictor.json"]},
         "acceptance": {"run": "echo test {out}"},
-        "controls": [{"id": c, "enabled": False} for c in ("lint", "types", "unit", "coverage")],
+        "controls": [
+            {"id": c, "enabled": False} for c in ("lint", "format", "types", "unit", "coverage")
+        ],
         "agent_tools": [],
         "hints": "",
         "gitignore": [],
