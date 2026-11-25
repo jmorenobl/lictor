@@ -1259,7 +1259,8 @@ def create_graph(
 
     # It builds the verification environment, which runs code the project's lock file brings in.
     builder.add_node("preflight", untrusted(nodes.preflight))
-    builder.add_node("load_spec", nodes.load_spec)
+    # Either may end the run, and the end surveys what it changed (H2 of 0.20.0) in the environment.
+    builder.add_node("load_spec", untrusted(nodes.load_spec))
     builder.add_node("build_driver", untrusted(nodes.build_driver))
     builder.add_node("red_check", untrusted(nodes.red_check))
     builder.add_node("pick_next", nodes.pick_next)
@@ -1271,7 +1272,7 @@ def create_graph(
     builder.add_node("commit_refactor", nodes.commit_refactor)
     builder.add_node("quarantine", nodes.quarantine)
     builder.add_node("pause", nodes.pause)
-    builder.add_node("report", nodes.report)
+    builder.add_node("report", untrusted(nodes.report))
 
     builder.set_entry_point("preflight")
 
