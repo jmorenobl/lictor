@@ -13,8 +13,9 @@ from lictor.domain.driver_measures import (
     red_measures,
     stub_measures,
 )
+from lictor.domain.gherkin_proof import GherkinFacts
 from lictor.domain.interface_proof import InterfaceProof, ProofOutcome
-from lictor.domain.model import StepCounts, TestCaseResult
+from lictor.domain.model import StepCounts, TestCaseResult, UnreadValue
 from lictor.domain.stub_proof import StubOutcome, StubProof, caught
 
 DRIVER = ["tests/acceptance/"]
@@ -129,6 +130,26 @@ def test_the_interface_measure_keeps_what_was_proved_and_the_facts_of_every_run(
     )
 
 
+def test_the_interface_measure_keeps_what_weighed_the_proof() -> None:
+    swallowed = {"lictor.interface.swallowed_at": "0:then"}
+    then = _failed("assertion", "then")
+    mas = TestCaseResult("test_x", status="failure", properties={**then.properties, **swallowed})
+    facts = GherkinFacts(1, read=(0,), place="tests/acceptance/test_x.py:3")
+    weighed = {"A-1": InterfaceProof("provocada", "de un Entonces (modo mas)")}
+
+    found = interface_measures(
+        weighed,
+        {"A-1": THEN_ONLY},
+        {"mas": {"A-1": mas}},
+        unweighed={"A-1": PROVED},
+        gherkin={"A-1": facts},
+    )
+
+    assert (found["A-1"].outcome, found["A-1"].interface) == ("provocada", "probado")
+    assert found["A-1"].provoked == ("mas",)
+    assert found["A-1"].gherkin == facts
+
+
 FULL = DriverMeasures(
     red={"A-1": RedMeasure("then", "entonces"), "A-2": RedMeasure(None, "no_aserta")},
     stubs={
@@ -150,6 +171,23 @@ FULL = DriverMeasures(
             via=StepCounts(when=31),
             handed=StepCounts(then=1),
             libraries=("typer.testing",),
+        ),
+        "A-5": InterfaceMeasure(
+            outcome="solo_el_valor",
+            calls=StepCounts(then=1),
+            altered={"mas": StepCounts(then=1), "menos": StepCounts(then=1)},
+            failed_step={"mas": None, "menos": None},
+            interface="sobrevive",
+            provoked=("menos",),
+            gherkin=GherkinFacts(
+                3,
+                (UnreadValue("el tipo es alta", "tipo", "alta"),),
+                1,
+                read=(0,),
+                inputs=(1,),
+                errors=(2,),
+                place="tests/acceptance/test_x.py:12",
+            ),
         ),
     },
 )
@@ -217,10 +255,36 @@ def _broken(path: tuple[str, ...], value: object) -> dict[str, object]:
         _broken(("interface", "A-3", "altered", "mas"), None),
         _broken(("interface", "A-3", "failed_step"), None),
         _broken(("interface", "A-3", "failed_step", "mas"), "luego"),
+        _broken(("interface", "A-5", "interface"), "cazado"),
+        _broken(("interface", "A-5", "provoked"), "menos"),
+        _broken(("interface", "A-5", "gherkin"), []),
+        _broken(("interface", "A-5", "gherkin", "values"), -1),
+        _broken(("interface", "A-5", "gherkin", "read"), [True]),
+        _broken(("interface", "A-5", "gherkin", "unread"), [["paso", "tipo"]]),
+        _broken(("interface", "A-5", "gherkin", "unread"), None),
+        _broken(("interface", "A-5", "gherkin", "place"), 12),
     ],
 )
 def test_a_record_that_doesn_t_follow_the_schema_reads_as_none(raw: object) -> None:
     assert measures_from_record(raw) is None
+
+
+def test_the_record_of_the_interface_keeps_what_weighed_it() -> None:
+    record = measures_record(FULL)["interface"]
+
+    assert isinstance(record, dict)
+    assert (record["A-5"]["interface"], record["A-5"]["provoked"]) == ("sobrevive", ["menos"])
+    assert record["A-5"]["gherkin"] == {
+        "values": 3,
+        "unread": [["el tipo es alta", "tipo", "alta"]],
+        "unreceived": 1,
+        "read": [0],
+        "inputs": [1],
+        "survived": [],
+        "errors": [2],
+        "place": "tests/acceptance/test_x.py:12",
+    }
+    assert record["A-3"]["gherkin"] is None
 
 
 def test_a_record_keyed_by_something_else_than_text_reads_as_none() -> None:

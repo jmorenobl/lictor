@@ -7,11 +7,19 @@ and the proof of the interface. They decide nothing themselves.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from typing import Literal, TypeGuard, get_args
 
-from lictor.domain.interface_proof import ALTERED_STEPS, InterfaceProof, ProofOutcome
-from lictor.domain.model import STEPS, InterfaceCount, Step, StepCounts, TestCaseResult
+from lictor.domain.gherkin_proof import GherkinFacts
+from lictor.domain.interface_proof import ALTERED_STEPS, InterfaceProof, ProofOutcome, provoked_in
+from lictor.domain.model import (
+    STEPS,
+    InterfaceCount,
+    Step,
+    StepCounts,
+    TestCaseResult,
+    UnreadValue,
+)
 from lictor.domain.stub_proof import (
     Caught,
     StubOutcome,
@@ -58,6 +66,11 @@ class InterfaceMeasure:
     via: StepCounts = field(default_factory=StepCounts)
     handed: StepCounts = field(default_factory=StepCounts)
     libraries: tuple[str, ...] = ()
+    # What the interface alone said, before the scenario's values weighed it (ADR-0016), the
+    # modes in which an altered value made the code raise, and what the Gherkin's impostor saw.
+    interface: ProofOutcome | None = None
+    provoked: tuple[str, ...] = ()
+    gherkin: GherkinFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -105,24 +118,42 @@ def interface_measures(
     proofs: Mapping[str, InterfaceProof],
     control: Mapping[str, TestCaseResult],
     modes: Mapping[str, Mapping[str, TestCaseResult]],
+    unweighed: Mapping[str, InterfaceProof] | None = None,
+    gherkin: Mapping[str, GherkinFacts] | None = None,
 ) -> dict[str, InterfaceMeasure]:
-    """What the impostor of the interface proved of each scenario it judged, and what it saw."""
+    """What the impostor of the interface proved of each scenario it judged, and what it saw;
+    with the Gherkin's, `unweighed` is what the interface alone said."""
+    alone, seen = unweighed or {}, gherkin or {}
     measures: dict[str, InterfaceMeasure] = {}
     for sid, proof in proofs.items():
         cases = {mode: run.get(sid) for mode, run in modes.items()}
-        case = control.get(sid)
-        measures[sid] = InterfaceMeasure(
-            outcome=proof.outcome,
-            calls=_by_step(case, "calls"),
-            altered={mode: _by_step(run, "altered") for mode, run in cases.items()},
-            failed_step={
-                mode: run.failed_step if run is not None else None for mode, run in cases.items()
-            },
-            via=_by_step(case, "via"),
-            handed=_by_step(case, "handed"),
-            libraries=case.interface_entries(ALTERED_STEPS) if case is not None else (),
+        own = alone.get(sid)
+        measures[sid] = replace(
+            _seen_by_the_interface(proof, control.get(sid), cases),
+            interface=own.outcome if own is not None else None,
+            gherkin=seen.get(sid),
         )
     return measures
+
+
+def _seen_by_the_interface(
+    proof: InterfaceProof,
+    case: TestCaseResult | None,
+    cases: Mapping[str, TestCaseResult | None],
+) -> InterfaceMeasure:
+    """What the control (`case`) and each mode's run (`cases`) told of one test."""
+    return InterfaceMeasure(
+        outcome=proof.outcome,
+        calls=_by_step(case, "calls"),
+        altered={mode: _by_step(run, "altered") for mode, run in cases.items()},
+        failed_step={mode: run.failed_step if run else None for mode, run in cases.items()},
+        via=_by_step(case, "via"),
+        handed=_by_step(case, "handed"),
+        libraries=case.interface_entries(ALTERED_STEPS) if case is not None else (),
+        provoked=tuple(
+            mode for mode, run in cases.items() if case and provoked_in(mode, run, case)
+        ),
+    )
 
 
 def _by_step(case: TestCaseResult | None, count: InterfaceCount) -> StepCounts:
@@ -173,6 +204,22 @@ def _interface_record(m: InterfaceMeasure) -> dict[str, object]:
         "via": _counts_record(m.via),
         "handed": _counts_record(m.handed),
         "libraries": list(m.libraries),
+        "interface": m.interface,
+        "provoked": list(m.provoked),
+        "gherkin": None if m.gherkin is None else _gherkin_record(m.gherkin),
+    }
+
+
+def _gherkin_record(facts: GherkinFacts) -> dict[str, object]:
+    return {
+        "values": facts.values,
+        "unread": [[u.step, u.parameter, u.value] for u in facts.unread],
+        "unreceived": facts.unreceived,
+        "read": list(facts.read),
+        "inputs": list(facts.inputs),
+        "survived": list(facts.survived),
+        "errors": list(facts.errors),
+        "place": facts.place,
     }
 
 
@@ -264,10 +311,69 @@ def _interface_from(raw: Mapping[str, object]) -> InterfaceMeasure | None:
         raw.get("failed_step"), lambda v: (_step(v),) if v is None or _step(v) else None
     )
     through = _through_from(raw)
+    weighed = _weighed_from(raw)
     if outcome is None or calls is None or altered is None or steps is None or through is None:
         return None
+    if weighed is None:
+        return None
     failed = {mode: step for mode, (step,) in steps.items()}
-    return InterfaceMeasure(outcome, calls, altered, failed, *through)
+    return InterfaceMeasure(outcome, calls, altered, failed, *through, *weighed)
+
+
+def _weighed_from(
+    raw: Mapping[str, object],
+) -> tuple[ProofOutcome | None, tuple[str, ...], GherkinFacts | None] | None:
+    """What weighed the interface's verdict: its own outcome, the provoked modes, the Gherkin."""
+    alone, provoked, gherkin = raw.get("interface"), raw.get("provoked"), raw.get("gherkin")
+    outcome = None if alone is None else _one_of(alone, _PROOF_OUTCOMES)
+    facts = None if gherkin is None else _gherkin_from(gherkin)
+    if (alone is not None and outcome is None) or not _names(provoked):
+        return None
+    if gherkin is not None and facts is None:
+        return None
+    return outcome, tuple(provoked), facts
+
+
+_GHERKIN_COUNTS = ("values", "unreceived")
+_GHERKIN_NUMBERS = ("read", "inputs", "survived", "errors")
+
+
+def _gherkin_from(raw: object) -> GherkinFacts | None:
+    if not isinstance(raw, dict):
+        return None
+    counts = _every(raw, _GHERKIN_COUNTS, _count)
+    numbers = _every(raw, _GHERKIN_NUMBERS, _numbers)
+    unread, place = _unread_from(raw.get("unread")), raw.get("place")
+    if counts is None or numbers is None or unread is None or not isinstance(place, str):
+        return None
+    values, unreceived = counts
+    read, inputs, survived, errors = (tuple(n) for n in numbers)
+    return GherkinFacts(values, unread, unreceived, read, inputs, survived, errors, place)
+
+
+def _every[T](
+    raw: Mapping[str, object], names: Sequence[str], check: Callable[[object], TypeGuard[T]]
+) -> list[T] | None:
+    """The fields `names` of `raw`, in order, if each passes `check`; else None."""
+    found = [raw.get(name) for name in names]
+    passed = [value for value in found if check(value)]
+    return passed if len(passed) == len(found) else None
+
+
+def _unread_from(raw: object) -> tuple[UnreadValue, ...] | None:
+    if not isinstance(raw, list):
+        return None
+    if not all(_names(u) and len(u) == len(fields(UnreadValue)) for u in raw):
+        return None
+    return tuple(UnreadValue(*u) for u in raw)
+
+
+def _count(raw: object) -> TypeGuard[int]:
+    return isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0
+
+
+def _numbers(raw: object) -> TypeGuard[list[int]]:
+    return isinstance(raw, list) and all(_count(n) for n in raw)
 
 
 def _through_from(

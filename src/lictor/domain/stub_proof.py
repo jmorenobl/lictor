@@ -174,6 +174,13 @@ _REASONS: Mapping[str, str] = {
         "Entonces no depende de lo que devuelve la interfaz: compara con assert, en un Entonces, "
         "el resultado con el valor que da su escenario."
     ),
+    # What the impostor altered went back to the interface and made it raise: the test can't be
+    # judged as it is, but it can be written so that it can, as any other the stubs pass.
+    "provocada": (
+        "{head} pasa aunque los stubs no estén implementados, y Lictor no puede comprobarlo: el "
+        "valor que alteró volvió a la interfaz y la hizo lanzar. Compara con assert, en un "
+        "Entonces, lo que devuelve la interfaz con el valor que da su escenario."
+    ),
     "sin_interfaz": (
         "{head} pasa aunque los stubs devuelvan un valor en lugar de lanzar NotImplementedError, "
         "y este perfil no puede comprobar que mire el resultado: compara con assert, en un "
@@ -195,10 +202,13 @@ def stub_reason(
     if proof.outcome == "a_la_interfaz":
         if interface is None:
             key = "sin_interfaz"
-        elif interface.outcome in ("no_llama", "a_traves"):
+        elif interface.outcome in ("no_llama", "a_traves", "solo_el_valor"):
             # Through a library or not at all, what it checks doesn't come from what the
-            # interface returns it: the command it runs passes without the stubs too.
+            # interface returns it: the command it runs passes without the stubs too. One that
+            # reads only its scenario's value doesn't compare what the interface returns either.
             key = "sin_codigo"
+        elif interface.outcome == "provocada":
+            key = "provocada"
         else:
             return unproved_reason(sid, test_name, interface, writable, _INTERFACE_PASSES)
     return _REASONS[key].format(

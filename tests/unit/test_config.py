@@ -50,6 +50,7 @@ from lictor.adapters.config.profiles.python_uv import (
     lictor_coverage,
     lictor_doubles,
     lictor_duplication,
+    lictor_gherkin,
     lictor_impostor,
     lictor_outcome,
     lictor_project_path,
@@ -545,6 +546,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_project_path.py",
         "lictor_outcome.py",
         "lictor_impostor.py",
+        "lictor_gherkin.py",
         "lictor_doubles.py",
         "lictor_complexity.py",
         "lictor_duplication.py",
@@ -577,11 +579,15 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
             {
                 "asyncio",
                 "collections",
+                "copy",
+                "dataclasses",
                 "datetime",
                 "decimal",
                 "dis",
+                "enum",
                 "fractions",
                 "functools",
+                "hashlib",
                 "importlib",
                 "inspect",
                 "json",
@@ -591,6 +597,22 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
                 "sys",
                 "sysconfig",
                 "types",
+                "typing",
+            },
+        ),
+        (
+            lictor_gherkin.__file__,
+            {
+                "collections",
+                "datetime",
+                "decimal",
+                "dis",
+                "importlib",
+                "inspect",
+                "json",
+                "os",
+                "pytest",
+                "re",
                 "typing",
             },
         ),
@@ -904,6 +926,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_project_path.__file__,
         lictor_outcome.__file__,
         lictor_impostor.__file__,
+        lictor_gherkin.__file__,
         lictor_doubles.__file__,
         lictor_complexity.__file__,
         lictor_duplication.__file__,
@@ -951,6 +974,7 @@ def test_profile_no_longer_assumes_a_project_dependency() -> None:
         "lictor_project_path",
         "lictor_outcome",
         "lictor_impostor",
+        "lictor_gherkin",
         "lictor_doubles",
     ]
     assert "PYTEST_PLUGINS" not in verification.env
@@ -1508,7 +1532,7 @@ def test_the_profile_declares_the_impostor_of_the_interface() -> None:
     defences = resolve_defences(load_config(REPO_ROOT))
 
     assert defences.interface_impostor == InterfaceImpostor(
-        "LICTOR_IMPOSTOR", "control", ("mas", "menos")
+        "LICTOR_IMPOSTOR", "control", ("mas", "menos"), gherkin="LICTOR_GHERKIN"
     )
 
 

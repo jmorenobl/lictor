@@ -623,7 +623,7 @@ def _reject_reserved_names(
 ) -> None:
     impostor = oracle.interface_impostor
     fixed_by_profile = {
-        *([impostor.variable] if impostor is not None else []),
+        *(impostor.variables if impostor is not None else []),
         *profile.env,
         *profile.inherit,
         *profile.prepare_inherit,
@@ -685,7 +685,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
             else None
         ),
         interface_impostor=(
-            InterfaceImpostor(face.variable, face.control, tuple(face.modes))
+            InterfaceImpostor(face.variable, face.control, tuple(face.modes), face.gherkin)
             if (face := profile.oracle.interface_impostor) is not None
             else None
         ),

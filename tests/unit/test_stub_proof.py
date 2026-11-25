@@ -230,6 +230,7 @@ def test_what_went_to_the_interface_is_told_as_the_interface_says_it() -> None:
         InterfaceProof("no_llama", "dado"),
         InterfaceProof("no_llama", "entrega", ("anyio._core",)),
         InterfaceProof("a_traves", libraries=("typer.testing",)),
+        InterfaceProof("solo_el_valor", "tests/acceptance/test_iva.py:9"),
     ],
 )
 def test_what_checks_nothing_of_the_code_that_exists_is_told_as_such(
@@ -244,6 +245,35 @@ def test_what_checks_nothing_of_the_code_that_exists_is_told_as_such(
         "devuelve la interfaz: compara con assert, en un Entonces, el resultado con el valor "
         "que da su escenario."
     )
+
+
+@pytest.mark.parametrize(
+    ("interface", "verdict"),
+    [("ignora_el_valor", "rechazado"), ("solo_el_valor", "rechazado"), ("provocada", "rechazado")],
+)
+def test_what_the_scenario_s_value_decides_rejects_over_the_stubs(
+    interface: ProofOutcome, verdict: str
+) -> None:
+    assert stub_verdict(StubProof("a_la_interfaz"), InterfaceProof(interface)) == verdict
+
+
+def test_a_value_the_then_ignores_is_told_as_the_interface_tells_it() -> None:
+    proof = InterfaceProof(
+        "ignora_el_valor", "el Entonces «el IVA es 21» recibe «21» del escenario"
+    )
+
+    assert _reason(StubProof("a_la_interfaz"), proof) == (
+        "El test test_iva_002 del escenario IVA-002 pasa aunque los stubs no estén implementados, "
+        "pero el Entonces «el IVA es 21» recibe «21» del escenario y no lo usa: compara con "
+        "assert lo que devuelve la interfaz con ese valor."
+    )
+
+
+def test_an_exception_an_altered_value_raised_asks_for_a_test_that_can_be_judged() -> None:
+    text = _reason(StubProof("a_la_interfaz"), InterfaceProof("provocada", "x"))
+
+    assert "el valor que alteró volvió a la interfaz y la hizo lanzar" in text
+    assert text.endswith("con el valor que da su escenario.")
 
 
 def test_the_person_reads_the_known_limits_and_what_was_sealed_unchecked() -> None:

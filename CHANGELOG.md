@@ -7,6 +7,42 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.18.0] - 2026-11-25
+
+Un escenario cuyo resultado es un objeto se prueba, y el Entonces tiene que leer el valor de su
+escenario (enmienda de los objetos de valor de la ADR-0011, y ADR-0016). En los 317 escenarios de
+las pasadas, juzgados como si fueran nuevos, el impostor probaba 284; ahora prueba 307. De los
+otros, 9 van a la persona con un mensaje cierto en lugar de reintentarse con uno falso, y uno
+(VER-005), que recibe un valor del escenario y no lo usa, se rechaza diciéndolo. Ningún test
+correcto se rechaza.
+
+### Añadido
+
+- **El impostor de la interfaz altera objetos de valor** (F62): una dataclass, un `NamedTuple`, un
+  modelo de pydantic v2, una clase de attrs y un miembro de un `Enum` que no sea `Flag`. Todos los
+  campos a la vez, en una copia de la misma clase construida sin ejecutar su código. Lo que vuelve
+  a la interfaz vuelve real, también un objeto mutable que el driver no ha tocado.
+- **Una excepción que solo provocó un valor alterado no prueba nada**: `provocada`, final. El
+  impostor numera las llamadas del driver y dice cuáles lanzaron en el control y cuáles tragó o
+  sustituyó en cada modo.
+- **El impostor del Gherkin** (`python_uv/lictor_gherkin.py`, ADR-0016). Un Entonces que recibe
+  un valor del escenario y no lo lee nunca (un hecho de su bytecode, sin más ejecuciones) se
+  rechaza como `ignora_el_valor`, con reintento, diciendo el paso y el valor. Un test que la
+  interfaz no prueba pero que lee cada valor de su escenario (un fichero, la salida de una orden,
+  lo que recibió un doble) va a la persona como `solo_el_valor`, final, con dónde lo lee y sin
+  invitar a registrarlo. Solo corre sobre lo que la interfaz no prueba.
+- **Las medidas del driver dicen qué pesó en cada veredicto**: `interface`, `provoked` y `gherkin`
+  en `lictor.driver.measured.v1`, y una columna «Gherkin» en «Medidas del driver» de `report.md`.
+
+### Cambiado
+
+- `interface_impostor` del perfil tiene `gherkin`, la variable del impostor del Gherkin
+  (`LICTOR_GHERKIN` en `python-uv`), y `lictor_gherkin` está en sus `plugins` y `files`.
+- Un test cuyo resultado es una clase que no es de valor, o `[0]` de una lista de uno, y que lee el
+  valor de su escenario, ya no se reintenta con un mensaje que no puede cumplir: va a la persona.
+- En los stubs, `solo_el_valor` se rechaza como `a_traves` (`sin_codigo`), y `provocada` con su
+  propio mensaje.
+
 ## [0.17.0] - 2026-11-24
 
 El impostor de la interfaz en código adoptado (ADR-0011, enmienda de las corrutinas y las

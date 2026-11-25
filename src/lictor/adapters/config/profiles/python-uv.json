@@ -64,7 +64,7 @@
       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
     },
     "plugin_variable": "PYTEST_PLUGINS",
-    "plugins": ["lictor_project_path", "lictor_outcome", "lictor_impostor", "lictor_doubles"],
+    "plugins": ["lictor_project_path", "lictor_outcome", "lictor_impostor", "lictor_gherkin", "lictor_doubles"],
     "plugins_command": "{env_dir}/bin/python -I -B -c 'from importlib.metadata import entry_points; print(*(e.value for e in entry_points(group=\"pytest11\")), sep=\"\\n\")'",
     "inherit": ["PATH", "TMPDIR"],
     "reserved": [
@@ -72,7 +72,7 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV", "LICTOR_*"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_gherkin.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py"]
   },
   "survey": {"run": "uv run python -I -B -m lictor_survey src --in {in} --out {out}"},
   "oracle": {
@@ -87,7 +87,7 @@
         {"code": "\\1return __import__(\"lictor_doubles\").stub(\"EMPTY\")", "name": "un doble vacío de Lictor", "double": true}
       ]
     },
-    "interface_impostor": {"variable": "LICTOR_IMPOSTOR", "control": "control", "modes": ["mas", "menos"]}
+    "interface_impostor": {"variable": "LICTOR_IMPOSTOR", "gherkin": "LICTOR_GHERKIN", "control": "control", "modes": ["mas", "menos"]}
   },
   "agent_tools": ["Bash(uv run pytest:*)", "Bash(uv run ruff:*)", "Bash(uv run mypy:*)", "Bash(uv run python -I -B {lictor_files}/lictor_complexity.py:*)", "Bash(uv run python -I -B {lictor_files}/lictor_coverage.py:*)", "Bash(uv run python -I -B {lictor_files}/lictor_duplication.py:*)"],
   "agent_commands": ["uv run ruff check src", "uv run mypy src", "uv run pytest tests/unit -q", "uv run pytest tests/acceptance -q"],

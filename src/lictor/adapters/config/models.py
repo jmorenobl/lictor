@@ -312,12 +312,15 @@ class InterfaceImpostorConfig(BaseModel):
     """How the profile's impostor of the interface is told what to do (ADR-0011).
 
     Each run of the acceptance gets `variable` with one mode: `control` wraps the interface and
-    alters nothing, and each of `modes` alters what it returns to the driver.
+    alters nothing, and each of `modes` alters what it returns to the driver. `gherkin` names the
+    variable of the impostor of the Gherkin's value (ADR-0016), told the same modes: with it, a
+    test the interface can't prove has each value of its Then changed in turn.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     variable: str = Field(pattern=r"^[A-Z_][A-Z0-9_]*$")
+    gherkin: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")
     # Each mode names a directory of evidence: `interfaz-<modo>`.
     control: str = Field(pattern=_MODE_NAME)
     modes: list[Annotated[str, Field(pattern=_MODE_NAME)]] = Field(min_length=1)
@@ -327,7 +330,14 @@ class InterfaceImpostorConfig(BaseModel):
         names = [self.control, *self.modes]
         if len(set(names)) != len(names):
             raise ValueError("oracle.interface_impostor repite un modo")
+        if self.gherkin == self.variable:
+            raise ValueError("oracle.interface_impostor usa la misma variable para el Gherkin")
         return self
+
+    @property
+    def variables(self) -> list[str]:
+        """The variables the impostors are told through, which belong to them alone."""
+        return [self.variable, *([self.gherkin] if self.gherkin is not None else [])]
 
 
 class ProfileOracle(BaseModel):
@@ -787,12 +797,13 @@ class Profile(BaseModel):
             return self
         verification = self.verification
         taken = {*verification.env, *verification.inherit, verification.plugin_variable}
-        if impostor.variable in taken:
-            msg = f"oracle.interface_impostor usa {impostor.variable}, que fija verification"
-            raise ValueError(msg)
-        if not any(fnmatchcase(impostor.variable, p) for p in verification.reserved):
-            msg = f"oracle.interface_impostor usa {impostor.variable}, que no está en reserved"
-            raise ValueError(msg)
+        for variable in impostor.variables:
+            if variable in taken:
+                msg = f"oracle.interface_impostor usa {variable}, que fija verification"
+                raise ValueError(msg)
+            if not any(fnmatchcase(variable, p) for p in verification.reserved):
+                msg = f"oracle.interface_impostor usa {variable}, que no está en reserved"
+                raise ValueError(msg)
         return self
 
     @model_validator(mode="after")

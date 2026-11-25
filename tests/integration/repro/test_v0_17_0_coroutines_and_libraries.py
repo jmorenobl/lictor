@@ -111,7 +111,11 @@ def test_an_async_interface_the_code_already_meets_goes_green_without_a_person(
 def test_a_command_a_library_runs_stops_for_a_person_at_the_first_attempt(
     make_project: ProjectFactory,
 ) -> None:
-    """IVA-001 only runs the command; IVA-002 calls the interface and is proved."""
+    """IVA-001 only runs the command; IVA-002 calls the interface and is proved.
+
+    IVA-001's Then reads the scenario's value, so it goes to the person as `solo_el_valor`
+    (ADR-0016), with the library it went through.
+    """
     root = make_project()
     _code_already_meets(root, GOOD_2, (CLI_PATH, CLI))
     agent = Agent(driver=_driver(CLI_DRIVER))
@@ -124,12 +128,14 @@ def test_a_command_a_library_runs_stops_for_a_person_at_the_first_attempt(
     assert rejected["data"]["reason"] == "sin_prueba"
     assert rejected["data"]["final"] is True
     error = str(rejected["data"]["error"])
-    assert "Lictor no pudo comprobar IVA-001, a través de runpy:" in error
+    assert ", a través de runpy: con lo que devuelve la interfaz alterado" in error
+    assert "Lictor no pudo comprobar IVA-001, en tests/acceptance/" in error
     assert "no llama a la interfaz" not in error
-    assert "lictor register IVA-001" in error
+    assert "Lee antes esos tests" in error
+    assert "lictor register" not in error
     [measured] = events_of(root, "driver.measured")
     found = measured["data"]["interface"]["IVA-001"]
-    assert found["outcome"] == "a_traves"
+    assert (found["outcome"], found["interface"]) == ("solo_el_valor", "a_traves")
     assert found["libraries"] == ["runpy"]
     assert found["via"]["when"] == 0
     assert found["via"]["then"] >= 1

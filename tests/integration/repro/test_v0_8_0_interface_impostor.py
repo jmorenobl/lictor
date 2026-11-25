@@ -135,7 +135,7 @@ _CHECKS_THAT_IGNORE_THE_RESULT = [
 def test_a_test_that_ignores_the_result_still_stops_the_run(
     make_project: ProjectFactory, check: str
 ) -> None:
-    """The code meets the scenario, but nothing tells this test from one that checks nothing."""
+    """The code meets the scenario, but the Then gets its value and never reads it (ADR-0016)."""
     root = make_project()
     _code_already_meets(root)
     agent = Agent(driver=_driver_over_the_code(DRIVER.replace(TOTAL_CHECK, check)))
@@ -147,7 +147,10 @@ def test_a_test_that_ignores_the_result_still_stops_the_run(
     rejected = events_of(root, "driver.rejected")
     assert {event["data"]["reason"] for event in rejected} == {"sin_prueba"}
     error = str(rejected[-1]["data"]["error"])
-    assert "sigue pasando cuando la interfaz devuelve otro valor" in error
+    assert (
+        "pero el Entonces «el total es 121» recibe «121» del escenario y no lo usa: compara con "
+        "assert lo que devuelve la interfaz con ese valor." in error
+    )
     assert "sin llegar a la interfaz" not in error
     assert "lictor register" in error
     assert green_ids(root) == []

@@ -107,7 +107,8 @@ def test_what_it_can_t_tell_apart_says_the_exception_and_the_line(
     """The first of a list of one number: with one less, its index fails before its assertion.
 
     With one object instead, one more is a copy of it and the first one stays: it survives, the
-    known limit of the amendment.
+    known limit of the amendment. Its Then reads the scenario's value, so it goes to the person at
+    once (`solo_el_valor`, ADR-0016) with the line: a retry would only hear what it already does.
     """
     root = make_project()
     _code_already_meets(root, _ONE_NUMBER)
@@ -117,14 +118,15 @@ def test_what_it_can_t_tell_apart_says_the_exception_and_the_line(
     outcome = run_lictor(root, agent)
 
     assert outcome == Outcome(10), agent.calls
-    assert agent.calls == ["driver", "driver"]
-    rejected = events_of(root, "driver.rejected")
-    assert [event["data"]["final"] for event in rejected] == [False, True]
-    error = str(rejected[0]["data"]["error"])
+    assert agent.calls == ["driver"]
+    [rejected] = events_of(root, "driver.rejected")
+    assert rejected["data"]["final"] is True
+    error = str(rejected["data"]["error"])
     line = driver.splitlines().index("    assert calculo()[0] == esperado") + 1
-    assert (
-        f"error de un Entonces, en tests/acceptance/test_iva.py:{line} (modo menos: IndexError"
-    ) in error
-    assert "Ese otro valor lo pone Lictor para comprobar el test: no lo trates aparte." in error
+    assert f"Lictor no pudo comprobar IVA-001, en tests/acceptance/test_iva.py:{line}" in error
+    assert "Este test no lo cambies" in error
+    [measured] = events_of(root, "driver.measured")
+    found = measured["data"]["interface"]["IVA-001"]
+    assert (found["outcome"], found["interface"]) == ("solo_el_valor", "no_aserta")
     assert green_ids(root) == []
     assert false_greens(root) == []

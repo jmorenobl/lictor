@@ -1,6 +1,6 @@
 [project]
 name = "lictor"
-version = "0.17.0"
+version = "0.18.0"
 description = "Implementa escenarios Gherkin con un agente y los verifica de forma determinista."
 readme = "README.md"
 authors = [
@@ -139,6 +139,7 @@ also_copy = ["src/"]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_rules.py",
     "tests/unit/test_interface_proof.py",
+    "tests/unit/test_gherkin_proof.py",
     "tests/unit/test_driver_measures.py",
     "tests/unit/test_stub_proof.py",
     "tests/unit/test_refactor.py",
