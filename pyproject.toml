@@ -157,6 +157,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_gitignore.py",
     "tests/unit/test_scores.py",
     "tests/unit/test_progress.py",
+    "tests/unit/test_head_controls.py",
     "tests/unit/test_implement_scenario.py",
     "tests/unit/test_prepare_driver.py",
     "tests/unit/test_commit_green.py",

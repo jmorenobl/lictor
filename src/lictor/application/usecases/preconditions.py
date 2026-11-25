@@ -12,11 +12,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from lictor.application.ports import Executor, SpecSource, Vcs
-from lictor.application.run_files import prepare_scratch
+from lictor.application.ports import Executor, ReportReaders, SpecSource, Vcs
+from lictor.application.run_files import (
+    prepare_scratch,
+    relative_to_project,
+    verification_tree,
+)
 from lictor.application.skill import skill_stub_warning
 from lictor.application.start_survey import StartSurvey
-from lictor.application.verification_env import VerificationEnvironment
+from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
+from lictor.application.usecases.verify_attempt import IntegritySnapshot
+from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
 from lictor.domain.blind_spots import (
     BlindSpots,
     StartRules,
@@ -24,7 +30,9 @@ from lictor.domain.blind_spots import (
     missing_plugins,
     program_problems,
 )
+from lictor.domain.controls import Control
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
+from lictor.domain.head_controls import head_control_problem, head_tampered
 from lictor.domain.model import PreconditionProblem
 from lictor.domain.rules import (
     CHECK_STAGE_ONLY,
@@ -39,6 +47,7 @@ EnvironmentCheck = Literal["run", "throwaway", "none"]
 UNCONFIGURED = "no comprobado: la configuración no carga"
 DEPENDENCIES = "Dependencias de la verificación"
 BLIND_SPOTS = "Lo que los controles no ven"
+HEAD_CONTROLS = "Los controles pasan en HEAD"
 NO_SURVEY = "no comprobado: el perfil no declara cómo leerlo"
 
 
@@ -122,6 +131,10 @@ class CheckPreconditions:
     needs_plugins: Mapping[str, str] = field(default_factory=dict)
     survey: StartSurvey | None = None
     start_rules: StartRules | None = None
+    # The controls a run verifies with, and how to read them: those that block must pass on HEAD
+    # before any agent works, or the first attempt pays for what it can't fix.
+    head_controls: Sequence[Control] = ()
+    readers: ReportReaders | None = None
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
@@ -150,6 +163,7 @@ class CheckPreconditions:
             if req.survey_dir is not None:
                 checks.append(PreconditionCheck(DEPENDENCIES, skipped=UNCONFIGURED))
                 checks.append(PreconditionCheck(BLIND_SPOTS, skipped=UNCONFIGURED))
+                checks.append(PreconditionCheck(HEAD_CONTROLS, skipped=UNCONFIGURED))
             return PreconditionsReport(tuple(checks), cli_version)
         checks.append(
             self._commands(req, lambda program: self._found(environment, program, has_commits))
@@ -315,9 +329,59 @@ class CheckPreconditions:
         return [
             PreconditionCheck(DEPENDENCIES, skipped=reason),
             PreconditionCheck(BLIND_SPOTS, skipped=reason),
+            PreconditionCheck(HEAD_CONTROLS, skipped=reason),
         ]
 
     def _built(
+        self, environment: VerificationEnvironment, req: PreconditionsRequest
+    ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
+        """The start contract on the environment just built, and its controls on HEAD."""
+        checks, spots = self._start_contract(environment, req)
+        if req.survey_dir is None:
+            return checks, spots
+        return [*checks, self._head_controls(environment, req, req.survey_dir)], spots
+
+    def _head_controls(
+        self, environment: VerificationEnvironment, req: PreconditionsRequest, survey_dir: Path
+    ) -> PreconditionCheck:
+        """Run on a clean clone of HEAD the controls that block, as the first attempt would.
+
+        What fails there is the project's before any agent touches it: a path its tests need, a
+        warning made an error, its own metadata missing, an unformatted base. Project code runs,
+        so the state is guarded as in an attempt, and the environment is checked afterwards.
+        """
+        blocking = [c.id for c in self.head_controls if c.mode == "block"]
+        if not blocking or self.readers is None:
+            return PreconditionCheck(HEAD_CONTROLS, skipped="ningún control bloquea")
+        evidence = survey_dir / "controles"
+        shutil.rmtree(evidence, ignore_errors=True)
+        evidence.mkdir(parents=True)
+        snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
+        with verification_tree(self.vcs, "HEAD", self.project_root) as tree:
+            result = CheckProject(EnvironmentRunner(environment), self.readers).execute(
+                CheckProjectRequest(
+                    project_root=self.project_root,
+                    controls=self.head_controls,
+                    control_ids=blocking,
+                    tree=tree,
+                    evidence_dir=evidence,
+                    keep_going=True,
+                    installed_plugins=environment.installed_plugins,
+                )
+            )
+        snapshot.verify_and_restore()
+        shown = relative_to_project(evidence, self.project_root)
+        problems = [
+            PreconditionProblem("config", head_control_problem(cid, reason, f"{shown}/"))
+            for cid, reason in result.blocked
+        ]
+        if snapshot.changes:
+            problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
+        if tampered := environment.ensure(req.run_id):
+            problems.append(PreconditionProblem("environment", tampered))
+        return PreconditionCheck(HEAD_CONTROLS, tuple(problems))
+
+    def _start_contract(
         self, environment: VerificationEnvironment, req: PreconditionsRequest
     ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
         """The environment's check, and what the project needs and its controls don't see."""

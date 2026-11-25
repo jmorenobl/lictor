@@ -62,6 +62,9 @@ from lictor.domain.verdicts import (
     trust,
 )
 
+# What each blocked control keeps of its failure: its reason and its first cases.
+BLOCKED_CHARS = 800
+
 
 @dataclass(frozen=True)
 class CheckAcceptanceSpec:
@@ -108,6 +111,8 @@ class CheckProjectResult:
     added: tuple[Added, ...] = ()
     # The note of each control that ran with the arguments of a reader that only runs in check.
     lent: Mapping[str, str] = field(default_factory=dict)
+    # Each control that failed blocking, with why, in the order they ran.
+    blocked: tuple[tuple[str, str], ...] = ()
 
     @property
     def acceptance_verdict(self) -> Verdict | None:
@@ -141,6 +146,7 @@ class CheckProject:
         readings = Readings()
         lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
+        blocked: list[tuple[str, str]] = []
 
         for step in steps:
             ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
@@ -151,6 +157,17 @@ class CheckProject:
             if failure is not None:
                 reason = failure_reason(step, ctrl_run.entry, failure.reason)
                 failure = replace(failure, reason=reason)
+                blocked.append(
+                    (
+                        step.control.id,
+                        condense_error(
+                            failed_at=step.control.id,
+                            raw_error=reason,
+                            test_cases=failure.cases,
+                            max_chars=BLOCKED_CHARS,
+                        ),
+                    )
+                )
                 first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
@@ -173,6 +190,7 @@ class CheckProject:
             acceptance=accepted,
             added=selection.added,
             lent=lent,
+            blocked=tuple(blocked),
         )
         if first_failure is None:
             return done

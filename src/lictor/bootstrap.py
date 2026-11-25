@@ -326,6 +326,8 @@ def bootstrap_runtime(
             check_only=[c.id for c in check_controls],
             accepted=active_config.blind_spots.accepted,
         ),
+        head_controls=attempt_controls,
+        readers=readers,
     )
 
     graph_context = GraphContext(

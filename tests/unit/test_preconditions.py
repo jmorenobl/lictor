@@ -1,22 +1,27 @@
 """Unit tests for the checks every command makes before spending anything."""
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
 
-from lictor.application.ports import Executor, Vcs
+from lictor.application.ports import Executor, ReportReaders, Vcs
 from lictor.application.skill import install_skill_stub
 from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases import preconditions
-from lictor.application.usecases.preconditions import CheckPreconditions, PreconditionsRequest
+from lictor.application.usecases.preconditions import (
+    CheckPreconditions,
+    PreconditionsReport,
+    PreconditionsRequest,
+)
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.blind_spots import StartRules
+from lictor.domain.controls import CommandControl
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
-from lictor.domain.model import Health, PreconditionProblem
+from lictor.domain.model import CommandOutput, Health, PreconditionProblem
 from lictor.domain.rules import NO_COMMITS
 from lictor.domain.survey import LaunchedProgram, SurveyedCommand, SurveyedTests, SurveyReport
 
@@ -462,6 +467,7 @@ CONTRACT = [
     "Entorno de verificación",
     preconditions.DEPENDENCIES,
     preconditions.BLIND_SPOTS,
+    preconditions.HEAD_CONTROLS,
 ]
 
 
@@ -499,7 +505,7 @@ def test_the_start_contract_is_checked_on_the_environment_just_built(
     report = parts.use_case.execute(request)
 
     assert [check.name for check in report.checks] == CONTRACT
-    dependencies, spots = report.checks[-2:]
+    dependencies, spots = report.checks[-3:-1]
     assert [p.kind for p in dependencies.problems] == ["config", "config"]
     assert "bdd.plugin" in dependencies.problems[0].message
     assert "'linter'" in dependencies.problems[1].message
@@ -544,7 +550,7 @@ def test_doctor_surveys_inside_the_throwaway_before_it_is_gone(
         )
     )
 
-    dependencies = report.checks[-2]
+    dependencies = report.checks[-3]
     assert [p.message for p in dependencies.problems if "bdd.plugin" in p.message] == []
     assert survey_execute.call_args.args[0] is built
     assert report.blind_spots is not None
@@ -555,7 +561,7 @@ def test_a_survey_that_fails_only_warns(tmp_path: Path, bin_dir: Path) -> None:
 
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
 
-    dependencies, spots = report.checks[-2:]
+    dependencies, spots = report.checks[-3:-1]
     assert ["bdd.plugin" in p.message for p in dependencies.problems] == [True]
     assert spots.problems == ()
     assert spots.warnings == (
@@ -569,7 +575,7 @@ def test_a_profile_without_a_survey_checks_only_the_plugins(tmp_path: Path, bin_
 
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
 
-    dependencies, spots = report.checks[-2:]
+    dependencies, spots = report.checks[-3:-1]
     assert len(dependencies.problems) == 1
     assert spots.skipped == preconditions.NO_SURVEY
 
@@ -580,7 +586,7 @@ def test_a_survey_without_the_projects_code_is_unchecked(tmp_path: Path, bin_dir
 
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
 
-    assert report.checks[-1].skipped == "no comprobado: no hay código del proyecto en src/"
+    assert report.checks[-2].skipped == "no comprobado: no hay código del proyecto en src/"
 
 
 def test_without_an_environment_the_start_contract_says_why(tmp_path: Path, bin_dir: Path) -> None:
@@ -591,12 +597,12 @@ def test_without_an_environment_the_start_contract_says_why(tmp_path: Path, bin_
 
     report = parts.use_case.execute(request)
 
-    assert [c.skipped for c in report.checks[-3:]] == ["hay un run en curso"] * 3
+    assert [c.skipped for c in report.checks[-4:]] == ["hay un run en curso"] * 4
     parts.environment.ensure.side_effect = EnvironmentUnavailableError("prepare falló")
     failed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
-    assert [c.skipped for c in failed.checks[-2:]] == [
+    assert [c.skipped for c in failed.checks[-3:]] == [
         "no comprobado: el entorno no se pudo construir"
-    ] * 2
+    ] * 3
 
 
 def test_without_a_configuration_the_start_contract_is_unchecked(tmp_path: Path) -> None:
@@ -607,4 +613,71 @@ def test_without_a_configuration_the_start_contract_is_unchecked(tmp_path: Path)
 
     report = use_case.execute(PreconditionsRequest(run_id="d1", survey_dir=tmp_path))
 
-    assert [c.skipped for c in report.checks[-2:]] == [preconditions.UNCONFIGURED] * 2
+    assert [c.skipped for c in report.checks[-3:]] == [preconditions.UNCONFIGURED] * 3
+
+
+def _blocking(control_id: str, mode: str = "block") -> CommandControl:
+    return CommandControl(
+        id=control_id, level="L1", run=f"{control_id}-tool", report="exit-code", mode=mode
+    )
+
+
+def _with_head_controls(
+    tmp_path: Path, bin_dir: Path, codes: dict[str, int]
+) -> tuple[_Parts, PreconditionsReport]:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.head_controls = [_blocking(cid) for cid in codes] + [_blocking("m", "measure")]
+    parts.use_case.readers = MagicMock(spec=ReportReaders)
+    parts.environment.ensure.return_value = None
+
+    def run(cmd: Sequence[str], cwd: Path, timeout_s: int, *_: object) -> CommandOutput:
+        return CommandOutput(
+            returncode=codes.get(cmd[0].removesuffix("-tool"), 0), stdout="", stderr=""
+        )
+
+    parts.environment.run.side_effect = run
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
+    return parts, report
+
+
+def test_a_blocking_control_that_fails_on_head_is_the_projects_to_fix(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts, report = _with_head_controls(tmp_path, bin_dir, {"lint": 0, "format": 1, "unit": 2})
+
+    head = report.checks[-1]
+    assert head.name == preconditions.HEAD_CONTROLS
+    assert [p.kind for p in head.problems] == ["config", "config"]
+    assert "El control 'format' no pasa en HEAD" in head.problems[0].message
+    assert "El control 'unit' no pasa en HEAD" in head.problems[1].message
+    assert "en lictor.json" in head.problems[0].message
+    ran = [call.args[0][0] for call in parts.environment.run.call_args_list]
+    assert "m-tool" not in ran, "a control that only measures blocks nothing"
+    assert (tmp_path / "s" / "controles").is_dir()
+
+
+def test_controls_that_pass_on_head_leave_nothing_to_fix(tmp_path: Path, bin_dir: Path) -> None:
+    _, report = _with_head_controls(tmp_path, bin_dir, {"lint": 0})
+
+    assert report.checks[-1].problems == ()
+    assert report.checks[-1].skipped is None
+
+
+def test_without_blocking_controls_nothing_runs_on_head(tmp_path: Path, bin_dir: Path) -> None:
+    _, report = _with_head_controls(tmp_path, bin_dir, {})
+
+    assert report.checks[-1].skipped == "ningún control bloquea"
+
+
+def test_a_control_that_changes_the_environment_on_head_is_the_machines(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.head_controls = [_blocking("lint")]
+    parts.use_case.readers = MagicMock(spec=ReportReaders)
+    parts.environment.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
+    parts.environment.ensure.side_effect = [None, "el entorno cambió"]
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
+
+    assert report.checks[-1].problems == (PreconditionProblem("environment", "el entorno cambió"),)
