@@ -32,10 +32,15 @@ from lictor.domain.blind_spots import (
     missing_plugins,
     program_problems,
 )
-from lictor.domain.controls import Control
+from lictor.domain.controls import Control, command_controls
 from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
-from lictor.domain.head_controls import head_control_problem, head_tampered
+from lictor.domain.head_controls import (
+    blocking_on_head,
+    head_control_problem,
+    head_not_started,
+    head_tampered,
+)
 from lictor.domain.model import PreconditionProblem
 from lictor.domain.rules import (
     CHECK_STAGE_ONLY,
@@ -51,6 +56,9 @@ UNCONFIGURED = "no comprobado: la configuración no carga"
 DEPENDENCIES = "Dependencias de la verificación"
 BLIND_SPOTS = "Lo que los controles no ven"
 HEAD_CONTROLS = "Los controles pasan en HEAD"
+NONE_STARTS = (
+    "no comprobado: no arranca ningún control que bloquea, como dice «Comandos de verificación»"
+)
 NO_SURVEY = "no comprobado: el perfil no declara cómo leerlo"
 
 
@@ -374,9 +382,19 @@ class CheckPreconditions:
         warning made an error, its own metadata missing, an unformatted base. Project code runs,
         so the state is guarded as in an attempt, and the environment is checked afterwards.
         """
-        blocking = [c.id for c in self.head_controls if c.mode == "block"]
+        cannot_start = {
+            control.id
+            for control in command_controls(self.head_controls)
+            if missing_executables(
+                {control.id: control.run},
+                lambda program: self._found(environment, program, has_commits=True),
+            )
+        }
+        blocking, left_out = blocking_on_head(self.head_controls, cannot_start)
+        notes = (head_not_started(left_out),) if left_out else ()
         if not blocking or self.readers is None:
-            return PreconditionCheck(HEAD_CONTROLS, skipped="ningún control bloquea")
+            skipped = NONE_STARTS if notes else "ningún control bloquea"
+            return PreconditionCheck(HEAD_CONTROLS, skipped=skipped)
         evidence = survey_dir / "controles"
         shutil.rmtree(evidence, ignore_errors=True)
         evidence.mkdir(parents=True)
@@ -403,7 +421,7 @@ class CheckPreconditions:
             problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
         if tampered := environment.ensure(req.run_id):
             problems.append(PreconditionProblem("environment", tampered))
-        return PreconditionCheck(HEAD_CONTROLS, tuple(problems))
+        return PreconditionCheck(HEAD_CONTROLS, tuple(problems), warnings=notes)
 
     def _start_contract(
         self, environment: VerificationEnvironment, req: PreconditionsRequest

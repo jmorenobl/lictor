@@ -396,3 +396,7 @@ escenarios pendientes fallan a propósito. Medido: en agentix, ✗ `unit` (los 2
 pyverifactu un commit antes del arreglo de formato, ✗ `format` con los tres ficheros que rompieron
 su CI.
 
+Un control cuyo programa no encuentra «Comandos de verificación», y un lector de uno así, no se ejecutan
+en HEAD: volverían a fallar y harían del proyecto (10) lo que puede ser de la máquina (40). Se nombran
+con ⚠, y si no queda ninguno la comprobación queda «no comprobado».
+

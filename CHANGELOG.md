@@ -43,6 +43,8 @@ campos nuevos): un run a medias no se reanuda.
   controles que bloquean, antes de ningún agente: lo que falla ahí es del proyecto (✗, 10), con su
   error y dónde está su salida. En agentix lo da `unit` (el paquete lee su propia metadata y no está
   instalado en el entorno de verificación, F82); en pyverifactu antes del arreglo, `format`.
+  Un control cuyo programa no se encuentra no se ejecuta ahí: ya lo dice «Comandos de
+  verificación», como de la máquina (40).
 - **La CI del proyecto frente a los controles (F76).** `doctor` y un run nuevo leen
   `.github/workflows/` y `.pre-commit-config.yaml` (con PyYAML) y avisan, con fichero y línea, de lo
   que la CI comprueba con `pytest`, `ruff check`, `ruff format` o `mypy` y ningún control hace, o

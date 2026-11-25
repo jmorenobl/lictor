@@ -275,6 +275,9 @@ def test_c3_plugin_planted_during_a_command_is_not_loaded_nor_accepted(
 ) -> None:
     """Nothing is discovered at run time: acceptance comes right after the planting control."""
     planted = tmp_path / "plantado"
+    # Armed by the agent, so it plants in an attempt's verification: on HEAD, before any agent,
+    # the start of the run would already catch it (ADR-0015, amendment of 0.19.0).
+    armed = tmp_path / "armado"
     script = tmp_path / "plantar.py"
     script.write_text(
         f"import pathlib\n{_PLANT_FROM_A_CONTROL}pathlib.Path({str(planted)!r}).touch()\n",
@@ -283,13 +286,14 @@ def test_c3_plugin_planted_during_a_command_is_not_loaded_nor_accepted(
     control = {
         "id": "planta",
         "level": "L2",
-        "run": f"sh -c 'test -e {planted} || uv run python {script}'",
+        "run": f"sh -c 'test ! -e {armed} || test -e {planted} || uv run python {script}'",
         "report": "exit-code",
     }
     root = make_project(extra_controls=[control])
 
     def impl(task: AgentTask, _sid: str, _attempt: int) -> None:
         """Leave the stub: only the planted plugin could turn it green."""
+        armed.touch()
         no_op_change(task)
 
     run_lictor(root, Agent(impl=impl))
@@ -358,15 +362,24 @@ def test_venv_tampered_during_verification_rejects_the_attempt(
     """A control runs project code too: the hash must also hold after the commands."""
     venv = tmp_path / "demo-iva" / VERIFY_ENV / "pyvenv.cfg"
     once = tmp_path / "ya-tocado"
+    # Armed by the agent: on HEAD the start of the run would catch it before any attempt.
+    armed = tmp_path / "armado"
     tamper = {
         "id": "toca-venv",
         "level": "L2",
-        "run": f"sh -c 'test -e {once} || {{ touch {once}; echo \\# >> {venv}; }}'",
+        "run": (
+            f"sh -c 'test ! -e {armed} || test -e {once} || "
+            f"{{ touch {once}; echo \\# >> {venv}; }}'"
+        ),
         "report": "exit-code",
     }
     root = make_project(extra_controls=[tamper])
 
-    run_lictor(root, Agent())
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> None:
+        armed.touch()
+        good_impl(task, scenario_id, attempt)
+
+    run_lictor(root, Agent(impl=impl))
 
     require(once.exists(), "el control debía tocar la venv")
     assert events_of(root, "verify.finished")[0]["data"]["failed_at"] == "L0-entorno"

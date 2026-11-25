@@ -5,7 +5,9 @@ only the person can fix: a configuration the profile overrides, a dependency not
 unformatted base. `doctor` and a new run say so first (ADR-0015, amendment of 0.19.0).
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+
+from lictor.domain.controls import Control, ReaderControl
 
 
 def head_control_problem(control_id: str, error: str, evidence: str) -> str:
@@ -26,4 +28,35 @@ def head_tampered(changes: Sequence[str]) -> str:
     return (
         "Los controles cambiaron el estado de Lictor al ejecutarse en HEAD "
         f"({', '.join(changes)}); se ha restaurado. Algo del proyecto escribe fuera de su árbol."
+    )
+
+
+def blocking_on_head(
+    controls: Sequence[Control], cannot_start: Collection[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split the blocking controls into those to run on HEAD and those left out.
+
+    One whose command can't start, or a reader of one, is already wrong in «Comandos de
+    verificación», which says whose it is: running it would only fail again and blame the project
+    for what may be the machine's.
+    """
+
+    def left_out(control: Control) -> bool:
+        return control.id in cannot_start or (
+            isinstance(control, ReaderControl) and control.reads in cannot_start
+        )
+
+    blocking = [control for control in controls if control.mode == "block"]
+    return (
+        tuple(control.id for control in blocking if not left_out(control)),
+        tuple(control.id for control in blocking if left_out(control)),
+    )
+
+
+def head_not_started(control_ids: Sequence[str]) -> str:
+    """Tell which blocking controls weren't run on HEAD because their program can't start."""
+    names = ", ".join(f"'{cid}'" for cid in control_ids)
+    return (
+        f"No se ejecutan en HEAD {names}: su programa no arranca, como dice «Comandos de "
+        "verificación»."
     )

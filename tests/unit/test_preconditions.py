@@ -19,7 +19,7 @@ from lictor.application.usecases.preconditions import (
 )
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.blind_spots import StartRules
-from lictor.domain.controls import CommandControl
+from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import CommandOutput, Health, PreconditionProblem
 from lictor.domain.rules import NO_COMMITS
@@ -618,7 +618,7 @@ def test_without_a_configuration_the_start_contract_is_unchecked(tmp_path: Path)
 
 def _blocking(control_id: str, mode: str = "block") -> CommandControl:
     return CommandControl(
-        id=control_id, level="L1", run=f"{control_id}-tool", report="exit-code", mode=mode
+        id=control_id, level="L1", run=f"herramienta {control_id}", report="exit-code", mode=mode
     )
 
 
@@ -631,9 +631,7 @@ def _with_head_controls(
     parts.environment.ensure.return_value = None
 
     def run(cmd: Sequence[str], cwd: Path, timeout_s: int, *_: object) -> CommandOutput:
-        return CommandOutput(
-            returncode=codes.get(cmd[0].removesuffix("-tool"), 0), stdout="", stderr=""
-        )
+        return CommandOutput(returncode=codes.get(cmd[1], 0), stdout="", stderr="")
 
     parts.environment.run.side_effect = run
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
@@ -651,8 +649,8 @@ def test_a_blocking_control_that_fails_on_head_is_the_projects_to_fix(
     assert "El control 'format' no pasa en HEAD" in head.problems[0].message
     assert "El control 'unit' no pasa en HEAD" in head.problems[1].message
     assert "en lictor.json" in head.problems[0].message
-    ran = [call.args[0][0] for call in parts.environment.run.call_args_list]
-    assert "m-tool" not in ran, "a control that only measures blocks nothing"
+    ran = [call.args[0][1] for call in parts.environment.run.call_args_list]
+    assert "m" not in ran, "a control that only measures blocks nothing"
     assert (tmp_path / "s" / "controles").is_dir()
 
 
@@ -667,6 +665,45 @@ def test_without_blocking_controls_nothing_runs_on_head(tmp_path: Path, bin_dir:
     _, report = _with_head_controls(tmp_path, bin_dir, {})
 
     assert report.checks[-1].skipped == "ningún control bloquea"
+
+
+def test_a_control_whose_program_cant_start_isnt_run_on_head(tmp_path: Path, bin_dir: Path) -> None:
+    # «Comandos de verificación» already says it, as the machine's: running it would fail again
+    # and make it the project's, turning a 40 into a 10.
+    parts = _with_contract(tmp_path, bin_dir)
+    missing = CommandControl(id="falta", level="L1", run="no-existe-xyz", report="exit-code")
+    reader = ReaderControl(id="cobertura", level="L4", reads="falta", adds="--cov", mode="block")
+    parts.use_case.head_controls = [_blocking("lint"), missing, reader]
+    parts.use_case.readers = MagicMock(spec=ReportReaders)
+    parts.environment.ensure.return_value = None
+    parts.environment.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
+
+    head = report.checks[-1]
+    assert head.problems == ()
+    assert head.warnings == (
+        "No se ejecutan en HEAD 'falta', 'cobertura': su programa no arranca, como dice "
+        "«Comandos de verificación».",
+    )
+    assert [call.args[0] for call in parts.environment.run.call_args_list] == [
+        ["herramienta", "lint"]
+    ]
+
+
+def test_with_no_blocking_control_able_to_start_head_is_unchecked(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    missing = CommandControl(id="falta", level="L1", run="no-existe-xyz", report="exit-code")
+    parts.use_case.head_controls = [missing]
+    parts.use_case.readers = MagicMock(spec=ReportReaders)
+    parts.environment.ensure.return_value = None
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
+
+    assert report.checks[-1].skipped == preconditions.NONE_STARTS
+    parts.environment.run.assert_not_called()
 
 
 def test_a_control_that_changes_the_environment_on_head_is_the_machines(
