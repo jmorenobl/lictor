@@ -958,3 +958,19 @@ def test_delete_branch_keeps_one_that_isnt_integrated(git_repo: Path, tmp_path: 
     subprocess.run([GIT_BIN, "merge", "-q", "--ff-only", "lictor/iva"], cwd=git_repo, check=True)
     cli.delete_branch("lictor/iva")
     assert not cli.branch_exists("lictor/iva")
+
+
+def test_cited_in_names_the_committed_files_with_the_whole_word(git_repo: Path) -> None:
+    """ADR-0017: where a broken public name is still cited, read from HEAD, not the disk."""
+    (git_repo / "docs").mkdir()
+    (git_repo / "docs" / "uso.md").write_text("Llama a save_chain(nif).\n", encoding="utf-8")
+    (git_repo / "CHANGELOG.md").write_text("- save_chain guarda\n", encoding="utf-8")
+    (git_repo / "otro.md").write_text("save_chains y presave_chain no cuentan\n", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "docs"], cwd=git_repo, check=True)
+    (git_repo / "sin_confirmar.md").write_text("save_chain\n", encoding="utf-8")
+    cli = GitCli(repo_dir=git_repo)
+
+    assert cli.cited_in("save_chain") == ["CHANGELOG.md", "docs/uso.md"]
+    assert cli.cited_in("-e") == []  # a word, never an option
+    assert cli.cited_in("nadie_lo_cita") == []

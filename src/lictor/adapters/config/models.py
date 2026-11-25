@@ -27,7 +27,9 @@ from lictor.domain.controls import (
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity", "duplication"]
+ReportFormat = Literal[
+    "exit-code", "junit", "mutation", "coverage", "complexity", "duplication", "api"
+]
 ControlMode = Literal["block", "measure"]
 # When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
 ProfileStatus = Literal["stable", "beta", "alpha"]
@@ -234,6 +236,18 @@ class SurveyConfig(BaseModel):
 
 class BlindSpotsConfig(BaseModel):
     """What the person accepts that no control sees: paths whose warnings are only counted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: list[str] = Field(default_factory=list)
+
+
+class ApiConfig(BaseModel):
+    """What the person accepts to break of the public API that existed (ADR-0017).
+
+    Qualified names, as the report names them: a break of one of them, or of a name under it, is
+    told apart and doesn't fail the control.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -851,6 +865,7 @@ class LictorConfig(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -904,6 +919,7 @@ class LictorFile(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)

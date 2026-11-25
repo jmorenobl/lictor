@@ -18,6 +18,7 @@ from lictor.adapters.config.loader import (
     resolve_defences,
 )
 from lictor.adapters.config.models import LictorConfig, domain_controls
+from lictor.adapters.readers.api import ApiReader
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
@@ -29,6 +30,7 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.application.api_baseline import ApiBaseline, api_control
 from lictor.application.events import ObservedEventLog
 from lictor.application.ports import (
     AuditSink,
@@ -159,6 +161,14 @@ def unconfigured_preconditions(project_root: Path) -> tuple[CheckPreconditions, 
     return checks, SystemClock()
 
 
+def _api_baseline(config: LictorConfig, readers: ReportReaders) -> ApiBaseline | None:
+    """How the public API of a base is measured (ADR-0017): with the API control, if any."""
+    api = api_control(domain_controls(config))
+    if api is None:
+        return None
+    return ApiBaseline(api.run, api.timeout_s, readers.api, tuple(config.api.accepted))
+
+
 def bootstrap_runtime(
     project_root: Path,
     *,
@@ -185,6 +195,7 @@ def bootstrap_runtime(
         mutation=MutationReader(),
         complexity=ComplexityReader(),
         duplication=DuplicationReader(),
+        api=ApiReader(),
     )
     spec_source = GherkinSource()
 
@@ -206,7 +217,9 @@ def bootstrap_runtime(
 
     initializer = ProfileConfigInitializer()
     init_uc = InitProject(initializer=initializer)
-    report_uc = BuildReport(event_log=active_event_log)
+    report_uc = BuildReport(
+        event_log=active_event_log, search=vcs, writable=active_config.paths.writable
+    )
 
     prepare_driver_uc = PrepareDriver(
         vcs=vcs,
@@ -246,6 +259,7 @@ def bootstrap_runtime(
         environment=environment,
         readers=readers,
         project_root=resolved_root,
+        api=_api_baseline(active_config, readers),
     )
 
     commit_green_uc = CommitGreen(
@@ -268,7 +282,7 @@ def bootstrap_runtime(
         ),
         readers=readers,
         project_root=resolved_root,
-        evidence_dir=check_dir,
+        api=_api_baseline(active_config, readers),
     )
 
     # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.

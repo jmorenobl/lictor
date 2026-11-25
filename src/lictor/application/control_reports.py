@@ -21,6 +21,7 @@ from lictor.application.run_files import (
     relative_to_project,
     save_output,
 )
+from lictor.domain.api import ApiBase, compare_api
 from lictor.domain.controls import ReadStep, RunStep, Step, executed_as, lent_by_check
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import CommandOutput
@@ -43,6 +44,7 @@ from lictor.domain.rules import plugin_skip_reason
 from lictor.domain.verdicts import (
     Execution,
     VerdictRule,
+    api_verdict,
     complexity_verdict,
     coverage_verdict,
     duplication_verdict,
@@ -54,9 +56,16 @@ from lictor.domain.verdicts import (
 
 
 def read_and_judge(
-    readers: ReportReaders, rule: VerdictRule, report_path: Path, output: CommandOutput
+    readers: ReportReaders,
+    rule: VerdictRule,
+    report_path: Path,
+    output: CommandOutput,
+    api_base: ApiBase | None = None,
 ) -> Judged:
-    """What a control's command left, read with the reader of its format, and its verdict."""
+    """What a control's command left, read with the reader of its format, and its verdict.
+
+    An API report is compared with `api_base`, the run's base, when there is one (ADR-0017).
+    """
     run = Execution.of(output, rule.timeout_s)
     empty_exit_codes = rule.empty_exit_codes
     match rule.report:
@@ -71,16 +80,39 @@ def read_and_judge(
         case "mutation":
             mutation = readers.mutation.read(report_path)
             return Judged(mutation, mutation_verdict(mutation, run))
-        case "complexity":
-            if rule.limit is None:  # a CommandControl can't be built so
-                raise InternalLictorError("Un control de complejidad sin límite")
-            complexity = readers.complexity.read(report_path)
-            return Judged(complexity, complexity_verdict(complexity, run, rule.limit))
-        case "duplication":
-            duplication = readers.duplication.read(report_path)
-            return Judged(duplication, duplication_verdict(duplication, run))
+        case "complexity" | "duplication" | "api":
+            return _judge_the_code(readers, rule, report_path, run, api_base)
         case _:
             assert_never(rule.report)
+
+
+def _judge_the_code(
+    readers: ReportReaders,
+    rule: VerdictRule,
+    report_path: Path,
+    run: Execution,
+    api_base: ApiBase | None,
+) -> Judged:
+    """A control that measures the code itself: its complexity, its clones or its public API."""
+    if rule.report == "duplication":
+        duplication = readers.duplication.read(report_path)
+        return Judged(duplication, duplication_verdict(duplication, run))
+    if rule.report == "api":
+        api = compare_api(readers.api.read(report_path), api_base)
+        return Judged(api, api_verdict(api, run))
+    if rule.limit is None:  # a CommandControl can't be built so
+        raise InternalLictorError("Un control de complejidad sin límite")
+    complexity = readers.complexity.read(report_path)
+    return Judged(complexity, complexity_verdict(complexity, run, rule.limit))
+
+
+@dataclass(frozen=True)
+class Judging:
+    """What judges what a control left: a reader per format, and the base an API report is
+    compared with in this verification (ADR-0017), if there is one."""
+
+    readers: ReportReaders
+    api_base: ApiBase | None = None
 
 
 @dataclass(frozen=True)
@@ -156,7 +188,7 @@ def not_run(step: RunStep, outcome: Skipped | NotExecuted, readings: Readings) -
 
 def run_control(
     step: RunStep,
-    readers: ReportReaders,
+    judging: Judging,
     evidence_of: EvidenceOf,
     execute: Execute,
     readings: Readings,
@@ -180,7 +212,10 @@ def run_control(
     if tampered:
         unjudged: CommandOutcome = Executed(ran, Unjudged(tampered))
         return ControlRun(CommandEntry(control, unjudged), format_output(output))
-    judged = read_and_judge(readers, control.verdict_rule, evidence.report, output)
+    readers = judging.readers
+    judged = read_and_judge(
+        readers, control.verdict_rule, evidence.report, output, judging.api_base
+    )
     verdict = enforce_min_score(judged.verdict, judged.score, control.min_score)
     judgement = Judged(judged.report, verdict)
     if step.read_by is not None:

@@ -1281,3 +1281,72 @@ def test_report_says_what_the_controls_didnt_see_at_the_start(
 
     section = report.split("## Lo que los controles no ven")[1].split("##")[0]
     assert [line for line in section.splitlines() if line] == expected
+
+
+class _Search:
+    """Where each word is written in HEAD, as a search of the commit would say."""
+
+    def __init__(self, found: dict[str, list[str]]) -> None:
+        self.found = found
+        self.asked: list[str] = []
+
+    def cited_in(self, word: str) -> list[str]:
+        self.asked.append(word)
+        return self.found.get(word, [])
+
+
+def _api_record(**fields: object) -> dict[str, object]:
+    removed = {"name": "p.storage.save_chain", "change": "removed", "detail": "ya no existe"}
+    api: dict[str, object] = {
+        "symbols": 40,
+        "base": "c" * 40,
+        "broken": [removed],
+        "accepted": [],
+        "problem": None,
+        **fields,
+    }
+    return _executed(mode="measure", passed=False, output="r/api.log", api=api)
+
+
+def test_report_says_what_the_run_broke_of_the_public_api_and_where_it_is_cited(
+    tmp_path: Path,
+) -> None:
+    """ADR-0017: what the last passing verification broke, and where it is still named."""
+    search = _Search({"save_chain": ["CHANGELOG.md", "docs/storage.md", "src/p/storage.py"]})
+    log = InMemoryEventLog([_verify_event({"api": _api_record()})])
+    use_case = BuildReport(log, search, ["src/"])
+
+    report = use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1")).content
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert section.strip().splitlines() == [
+        f"- **api**: 40 nombres públicos; 1 rotura respecto a {'c' * 12}",
+        "- `p.storage.save_chain`: ya no existe",
+        "  - citado fuera de lo escribible en: CHANGELOG.md, docs/storage.md",
+    ]
+    assert search.asked == ["save_chain"]
+    scores = report.split("## Puntuaciones")[1].split("\n## ")[0]
+    assert "**api** (IVA-001, intento 1): fallo, 40 nombres públicos; 1 rotura" in scores
+
+
+def test_report_marks_an_accepted_break_and_ignores_a_failed_verification(tmp_path: Path) -> None:
+    accepted = {"name": "p.f", "change": "removed", "detail": "ya no existe"}
+    events = [
+        _verify_event({"api": _api_record(broken=[], accepted=[accepted])}),
+        _verify_event({"api": _api_record()}, ok=False, attempt=2),
+    ]
+
+    report = _report(tmp_path, events)
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert "- `p.f`: ya no existe (aceptada en `api.accepted`)" in section
+    assert "save_chain" not in section
+
+
+def test_report_without_a_comparison_says_so(tmp_path: Path) -> None:
+    facts = _executed(mode="measure", api={"symbols": 3, "base": None})
+
+    report = _report(tmp_path, [_verify_event({"api": facts})])
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert section.strip() == "- *Ningún control de API comparó con la base del run.*"

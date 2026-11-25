@@ -15,6 +15,7 @@ from lictor.application.run_files import (
 )
 from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
+from lictor.domain.api import IMPLEMENTER_API
 from lictor.domain.complexity import implementer_complexity_text
 from lictor.domain.controls import (
     AGENT_FILES,
@@ -212,7 +213,7 @@ class ImplementScenario:
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{check_commands}": ", ".join(commands) or "los tests del proyecto",
-            "{medidas}": _measures_text(measures, blocking, files),
+            "{medidas}": _measures_text(measures, blocking, files, _measures_api(request)),
             "{hints}": request.hints,
             "{bloque_de_error}": _error_block(request),
         }
@@ -234,10 +235,20 @@ def _error_block(request: ImplementScenarioRequest) -> str:
     return f"{block}\n{failure}".strip()
 
 
+def _measures_api(request: ImplementScenarioRequest) -> bool:
+    """Whether the run measures the public API: then the implementer always hears of it, in
+    either mode, since what breaks goes to the report (ADR-0017)."""
+    return any(control.report == "api" for control in request.controls)
+
+
 def _measures_text(
-    measures: Sequence[AgentMeasure], blocking: Sequence[CommandControl], files: str | None
+    measures: Sequence[AgentMeasure],
+    blocking: Sequence[CommandControl],
+    files: str | None,
+    api: bool,
 ) -> str:
-    """Each minimum to meet with its command, and what a control of the code that blocks asks."""
+    """Each minimum to meet with its command, what a control of the code that blocks asks, and
+    not to break the public API that was there."""
     lines = [agent_measures_text(measures)] if measures else []
     for control in blocking:
         command = agent_command(control, files)
@@ -245,6 +256,8 @@ def _measures_text(
             lines.append(implementer_duplication_text(command))
         elif control.limit is not None:
             lines.append(implementer_complexity_text(control.limit, command))
+    if api:
+        lines.append(IMPLEMENTER_API)
     return "\n".join(lines)
 
 

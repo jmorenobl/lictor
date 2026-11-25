@@ -52,6 +52,7 @@ def test_every_row_belongs_to_a_known_table() -> None:
         "mutation",
         "complexity",
         "duplication",
+        "api",
         "min_score",
         "timed_out",
     }
@@ -107,6 +108,12 @@ def test_a_complexity_control(row: dict[str, Any], tmp_path: Path) -> None:
     _check(row["expected"], c.complexity_control(report, row["code"]))
 
 
+@pytest.mark.parametrize("row", _rows("api", "report", "code"))
+def test_an_api_control(row: dict[str, Any], tmp_path: Path) -> None:
+    report = c.leave_report(tmp_path / "a.json", c.API_REPORTS[row["report"]])
+    _check(row["expected"], c.api_control(report, row["code"]))
+
+
 @pytest.mark.parametrize("row", _rows("duplication", "report", "code"))
 def test_a_duplication_control(row: dict[str, Any], tmp_path: Path) -> None:
     report = c.leave_report(tmp_path / "d.json", c.DUPLICATION_REPORTS[row["report"]])
@@ -128,6 +135,7 @@ def test_a_minimum_score(row: dict[str, Any]) -> None:
         ("mutation", "report", c.MUTATION_REPORTS),
         ("complexity", "report", c.COMPLEXITY_REPORTS),
         ("duplication", "report", c.DUPLICATION_REPORTS),
+        ("api", "report", c.API_REPORTS),
         ("min_score", "case", c.MIN_SCORE_CASES),
     ],
 )

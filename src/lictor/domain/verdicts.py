@@ -8,10 +8,13 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import assert_never
 
+from lictor.domain.api import broken_reason
 from lictor.domain.complexity import over_limit, over_limit_reason
 from lictor.domain.duplication import clones_reason, duplication_of
 from lictor.domain.model import CommandOutput, CoverageScore, Score, TestCaseResult
 from lictor.domain.reports import (
+    ApiComparison,
+    ApiReport,
     ComplexityReport,
     CoverageReport,
     DuplicationReport,
@@ -231,6 +234,26 @@ def duplication_verdict(report: ReportOf[DuplicationReport], execution: Executio
         return found
     duplication = duplication_of(found)
     return Failed(clones_reason(duplication)) if duplication.count else Passed()
+
+
+def api_verdict(report: ReportOf[ApiReport] | ApiComparison, execution: Execution) -> Verdict:
+    """An API control (ADR-0017): a report, a command that ended well, and nothing of the base
+    broken that the person hasn't accepted.
+
+    Without a base there is nothing to compare, and the report is only facts: it passes. A base
+    that couldn't be measured is no comparison, and never a pass.
+    """
+    missing = f"Sin informe de API (código de salida {execution.exit_code})"
+    found: ApiReport | ApiComparison | Failed = _own_report(
+        report, execution, "API", missing, "El comando de API"
+    )
+    if isinstance(found, Failed):
+        return found
+    if isinstance(found, ApiReport):
+        return Passed()
+    if found.problem is not None:
+        return Failed(found.problem)
+    return Failed(broken_reason(found)) if found.broken else Passed()
 
 
 def report_cases(report: Report | None) -> tuple[TestCaseResult, ...]:

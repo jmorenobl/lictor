@@ -14,11 +14,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from lictor.domain.api import break_line, break_record, breaks_from_record
 from lictor.domain.complexity import OverLimit, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.duplication import Duplication, duplication_of, kept
 from lictor.domain.model import AgentSignal, AgentStatus, CoverageScore, Score
 from lictor.domain.reports import (
+    ApiBreak,
+    ApiComparison,
     Clone,
     CloneOccurrence,
     ComplexityReport,
@@ -86,12 +89,14 @@ class Measure:
     """What one control measured: cases that passed, and what it left undone.
 
     A control that measures the code also keeps what it found, which the refactor's prompt names:
-    the functions above a limit (ADR-0013) or the clones (ADR-0014).
+    the functions above a limit (ADR-0013) or the clones (ADR-0014). One of the API keeps what
+    breaks against the run's base (ADR-0017): a set, which a refactor may not add to.
     """
 
     passed: int | None = None
     misses: tuple[tuple[MissKind, int], ...] | None = None
     findings: Findings | None = None
+    breaks: frozenset[ApiBreak] | None = None
 
 
 def complexity_misses(over: OverLimit) -> tuple[tuple[MissKind, int], ...]:
@@ -137,6 +142,9 @@ def _measure_of(entry: ControlEntry) -> Measure | None:
     if isinstance(judged.report, DuplicationReport):
         duplication = duplication_of(judged.report)
         return Measure(misses=duplication_misses(duplication), findings=duplication)
+    if isinstance(judged.report, ApiComparison):
+        # A base that couldn't be measured compares nothing: there is no set to keep.
+        return Measure(breaks=judged.report.breaks) if judged.report.problem is None else None
     return _judged_measure(judged)
 
 
@@ -170,9 +178,19 @@ def measures_record(measures: Mapping[str, Measure]) -> dict[str, dict[str, obje
             "passed": m.passed,
             "misses": None if m.misses is None else dict(m.misses),
             **({} if m.findings is None else {"findings": _findings_record(m.findings)}),
+            **({} if m.breaks is None else {"api_breaks": _breaks_record(m.breaks)}),
         }
         for cid, m in measures.items()
     }
+
+
+def _breaks_record(breaks: frozenset[ApiBreak]) -> list[dict[str, object]]:
+    return [break_record(b) for b in sorted(breaks, key=lambda b: (b.name, b.change, b.param))]
+
+
+def _breaks_or_none(value: object) -> frozenset[ApiBreak] | None:
+    found = breaks_from_record(value)
+    return None if found is None else frozenset(found)
 
 
 def _findings_record(findings: Findings) -> dict[str, object]:
@@ -208,6 +226,7 @@ def measures_from_record(record: Mapping[str, Mapping[str, object]]) -> dict[str
             passed=_int_or_none(fields.get("passed")),
             misses=_misses_or_none(fields),
             findings=_findings_or_none(fields.get("findings")),
+            breaks=_breaks_or_none(fields.get("api_breaks")),
         )
         for cid, fields in record.items()
     }
@@ -309,7 +328,22 @@ def refactor_regressions(baseline: Mapping[str, Measure], now: Mapping[str, Meas
             )
         if before.misses is not None:
             found.extend(_more_untested(cid, before.misses, after.misses))
+        if before.breaks is not None:
+            found.extend(_more_broken(cid, before.breaks, after.breaks))
     return found
+
+
+def _more_broken(
+    cid: str, before: frozenset[ApiBreak], after: frozenset[ApiBreak] | None
+) -> list[str]:
+    """What the refactor breaks of the public API that its green didn't (ADR-0017).
+
+    Sets, not a count: a refactor that mends one break and makes another is caught.
+    """
+    if after is None:
+        return [f"{cid}: sin medida, y en el verde la tenía"]
+    new = sorted(after - before, key=lambda b: (b.name, b.change, b.param))
+    return [f"{cid}: rompe {break_line(b)}, y el verde no" for b in new]
 
 
 def _more_untested(

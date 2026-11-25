@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from lictor.application.ports import Vcs, Worktrees
+from lictor.application.ports import TextSearch, Vcs, Worktrees
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import Candidate, RepoPin, TreeChange
 
@@ -40,7 +40,7 @@ _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _EXECUTABLE_MODE = "100755"
 
 
-class GitCli(Vcs, Worktrees):
+class GitCli(Vcs, Worktrees, TextSearch):
     """VCS implementation using the local git command line binary."""
 
     def __init__(self, repo_dir: Path | None = None, ignored: Sequence[str] = ()) -> None:
@@ -412,6 +412,19 @@ class GitCli(Vcs, Worktrees):
             ["ls-tree", "-r", "-z", "--name-only", f"{rev}^{{tree}}", "--", directory]
         ).stdout
         return [path for path in raw.split("\0") if path]
+
+    def cited_in(self, word: str) -> list[str]:
+        """The files of HEAD that hold `word` as a whole word, read from the commit, not the disk.
+
+        It is a fixed string, so a name can't be read as a pattern or an option.
+        """
+        found = self._run_git(
+            ["grep", "-l", "-w", "-F", "-I", "-e", word, "HEAD", "--"], check=False
+        )
+        if found.returncode not in (0, 1):
+            return []
+        prefix = "HEAD:"
+        return sorted(line.removeprefix(prefix) for line in found.stdout.splitlines() if line)
 
     def is_executable(self, rev: str, path: str) -> bool:
         """Look the file up in the commit, not on disk: a clone only has what was committed."""

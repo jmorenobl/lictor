@@ -10,6 +10,7 @@ from typing import assert_never
 from lictor.application.control_reports import (
     ControlEvidence,
     ControlRun,
+    Judging,
     Readings,
     failure_reason,
     lent_note,
@@ -26,6 +27,7 @@ from lictor.application.run_files import (
     save_output,
 )
 from lictor.application.usecases.verify_attempt import describe_tampering
+from lictor.domain.api import ApiBase
 from lictor.domain.controls import (
     ACCEPTANCE_ID,
     Added,
@@ -93,6 +95,8 @@ class CheckProjectRequest:
     keep_going: bool = False
     control_ids: Sequence[str] | None = None
     deleted: Sequence[str] = ()
+    # The base the public API is compared with (`--base`), measured already (ADR-0017).
+    api_base: ApiBase | None = None
 
 
 @dataclass(frozen=True)
@@ -210,7 +214,9 @@ class CheckProject:
             # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
             return self.runner.run(cmd=command, cwd=tree, timeout_s=timeout_s), ()
 
-        return run_control(step, self.readers, partial(self._evidence, req), execute, readings)
+        evidence = partial(self._evidence, req)
+        judging = Judging(self.readers, req.api_base)
+        return run_control(step, judging, evidence, execute, readings)
 
     def _evidence(self, req: CheckProjectRequest, step_id: str) -> ControlEvidence:
         evidence_dir = req.evidence_dir or aside_dir(req.project_root, CHECK_DIR)
