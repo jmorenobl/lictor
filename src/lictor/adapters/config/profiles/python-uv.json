@@ -22,7 +22,8 @@
     {"id": "unit",  "level": "L2", "run": "uv run pytest tests/unit -q --junitxml {out}", "report": "junit", "mode": "block", "empty_exit_codes": [5], "when_exists": "tests/unit"},
     {"id": "coverage", "level": "L2", "reads": "unit", "adds": "--cov=src --cov-branch --cov-fail-under=0 --cov-report=json:{out}", "report": "coverage", "mode": "measure", "when_plugin": "pytest_cov.plugin", "agent_run": "uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q"},
     {"id": "complexity", "level": "L1", "run": "uv run python -I -B -m lictor_complexity src --out {out}", "report": "complexity", "mode": "measure", "limit": 10, "agent_run": "uv run python -I -B {lictor_files}/lictor_complexity.py src"},
-    {"id": "duplication", "level": "L1", "run": "uv run python -I -B -m lictor_duplication src --out {out}", "report": "duplication", "mode": "measure", "agent_run": "uv run python -I -B {lictor_files}/lictor_duplication.py src"}
+    {"id": "duplication", "level": "L1", "run": "uv run python -I -B -m lictor_duplication src --out {out}", "report": "duplication", "mode": "measure", "agent_run": "uv run python -I -B {lictor_files}/lictor_duplication.py src"},
+    {"id": "api", "level": "L1", "run": "uv run python -I -B -m lictor_api src --out {out}", "report": "api", "mode": "measure"}
   ],
   "suppressions": ["# noqa", "# type: ignore", "# pragma: no cover"],
   "banned_patterns": [
@@ -73,7 +74,7 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV", "LICTOR_*"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_gherkin.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_gherkin.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py", "python_uv/lictor_api.py"]
   },
   "survey": {
     "run": "uv run python -I -B -m lictor_survey src --in {in} --out {out}",

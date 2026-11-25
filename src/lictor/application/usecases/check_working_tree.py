@@ -10,8 +10,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lictor.application.ports import ReportReaders, Vcs
-from lictor.application.run_files import verification_tree
+from lictor.application.api_baseline import ApiBaseline
+from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
+from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
     CheckProject,
@@ -19,8 +20,10 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
+from lictor.domain.api import ApiBase
 from lictor.domain.controls import Control
 from lictor.domain.errors import PreconditionError
+from lictor.domain.model import CommandOutput
 from lictor.domain.rules import NO_COMMITS
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
@@ -38,6 +41,8 @@ class CheckWorkingTreeRequest:
     keep_going: bool = False
     error_max_chars: int = 4000
     rev: str | None = None
+    # A commit to compare the public API with (ADR-0017); without one it only gives facts.
+    api_base: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,13 +70,14 @@ class CheckWorkingTree:
         environment: VerificationEnvironment,
         readers: ReportReaders,
         project_root: Path,
-        evidence_dir: Path,
+        api: ApiBaseline | None = None,
     ) -> None:
         self.vcs = vcs
         self.environment = environment
         self.readers = readers
         self.project_root = project_root
-        self.evidence_dir = evidence_dir
+        self.evidence_dir = aside_dir(project_root, CHECK_DIR)
+        self.api = api
 
     def execute(self, req: CheckWorkingTreeRequest) -> CheckWorkingTreeResult:
         """Check; raise `EnvironmentUnavailableError` if git can't commit or nothing builds.
@@ -85,6 +91,7 @@ class CheckWorkingTree:
         with self.environment.throwaway(subject.rev, self.evidence_dir) as environment:
             environment.ensure(req.run_id)
             check = CheckProject(EnvironmentRunner(environment), self.readers)
+            api_base = self._api_base(req, environment)
             with verification_tree(self.vcs, subject.rev, self.project_root) as tree:
                 result = check.execute(
                     CheckProjectRequest(
@@ -99,10 +106,26 @@ class CheckWorkingTree:
                         control_ids=req.control_ids,
                         deleted=subject.deleted,
                         installed_plugins=environment.installed_plugins,
+                        api_base=api_base,
                     )
                 )
             tampered = environment.ensure(req.run_id)
         return CheckWorkingTreeResult(subject.description, result, tampered)
+
+    def _api_base(
+        self, req: CheckWorkingTreeRequest, environment: VerificationCommands
+    ) -> ApiBase | None:
+        """The base `--base` names, measured in a clean clone of it like what is checked."""
+        if req.api_base is None or self.api is None:
+            return None
+
+        def run_in(
+            command: Sequence[str], tree: Path, timeout_s: int
+        ) -> tuple[CommandOutput, tuple[str, ...]]:
+            # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
+            return environment.run(command, tree, timeout_s), ()
+
+        return self.api.base(req.api_base, self.vcs, self.project_root, run_in, self.evidence_dir)
 
     def _subject(self, rev: str | None) -> _Subject:
         if rev is not None:

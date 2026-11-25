@@ -12,6 +12,7 @@ from lictor.application.usecases.refactor_scenario import (
     RefactorScenarioRequest,
     RefactorScenarioResult,
 )
+from lictor.domain.api import REFACTOR_API
 from lictor.domain.complexity import OverLimit
 from lictor.domain.controls import GREEN_COVERAGE, CommandControl, ReaderControl
 from lictor.domain.duplication import Duplication
@@ -353,3 +354,20 @@ def test_the_refactor_puts_the_projects_rules_above_the_profiles_goals(tmp_path:
     assert "Reglas del proyecto:\nSin clases." in prompt
     assert "estas reglas del proyecto, después los objetivos de calidad" in prompt
     assert prompt.index("Sin clases.") < prompt.index("Contexto del proyecto: Contexto.")
+
+
+def test_a_green_measured_against_its_base_tells_the_refactor_not_to_break_the_api(
+    tmp_path: Path,
+) -> None:
+    """ADR-0017: the refactor is discarded if it breaks what its green didn't, in either mode."""
+    green = {"api": Measure(breaks=frozenset())}
+
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), baseline=green)
+
+    assert REFACTOR_API in _task(executor).prompt
+
+
+def test_a_green_without_a_comparison_says_nothing_of_the_api(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), baseline={"api": Measure()})
+
+    assert "API pública" not in _task(executor).prompt

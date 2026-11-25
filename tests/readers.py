@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor.adapters.readers.api import ApiReader
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
@@ -22,6 +23,7 @@ def all_readers() -> ReportReaders:
         mutation=MutationReader(),
         complexity=ComplexityReader(),
         duplication=DuplicationReader(),
+        api=ApiReader(),
     )
 
 

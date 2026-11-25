@@ -176,6 +176,9 @@ class GraphState(TypedDict, total=False):
     # green's own report there (F71).
     refactor_baseline_step: str | None
     refactor_outcome: str | None
+    # The commit the run started from: the one base of the public API (ADR-0017). Only its SHA;
+    # its report is measured again from git, never read from `runs/`.
+    api_base: str | None
 
 
 @dataclass(frozen=True)
@@ -372,7 +375,7 @@ class _GraphNodes:
             },
         )
         self.ctx.event_log.append(event)
-        return {"anchor": self._anchor()}
+        return {"anchor": self._anchor(), "api_base": self.ctx.vcs.get_head_sha()}
 
     def _anchor(self) -> dict[str, str]:
         return observe_anchor(self.ctx.vcs, self.ctx.project_root)
@@ -684,6 +687,8 @@ class _GraphNodes:
 
         res = self.ctx.verify_attempt.execute(
             VerifyAttemptRequest(
+                # The public API is compared with the commit the run started from (ADR-0017).
+                api_base=state.get("api_base"),
                 scenario_id=current_id,
                 run_id=state["run_id"],
                 role="implement",
@@ -868,6 +873,7 @@ class _GraphNodes:
                 link=self.ctx.map_link,
                 refactor_of=state.get("refactor_of") or "",
                 baseline=_baseline(state),
+                api_base=state.get("api_base"),
             )
         )
         self._verified(state, current_id, "refactor", self._green_slot(state), res)

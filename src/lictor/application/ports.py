@@ -21,6 +21,7 @@ from lictor.domain.model import (
     TreeChange,
 )
 from lictor.domain.reports import (
+    ApiReport,
     ComplexityReport,
     CoverageReport,
     DuplicationReport,
@@ -104,6 +105,15 @@ class Worktrees(Protocol):
 
     def delete_branch(self, branch: str) -> None:
         """Delete a branch only if it is integrated into HEAD, as `git branch -d` does."""
+        ...
+
+
+class TextSearch(Protocol):
+    """Where a word is written in the committed project: `report.md` says where a broken public
+    name is still cited (ADR-0017)."""
+
+    def cited_in(self, word: str) -> list[str]:
+        """The files of HEAD that hold `word` as a whole word, relative to the project."""
         ...
 
 
@@ -292,6 +302,7 @@ class ReportReaders:
     mutation: ReportReader[MutationReport]
     complexity: ReportReader[ComplexityReport]
     duplication: ReportReader[DuplicationReport]
+    api: ReportReader[ApiReport]
 
 
 @runtime_checkable

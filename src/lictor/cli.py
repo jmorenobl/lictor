@@ -58,6 +58,7 @@ from lictor.bootstrap import (
     skill_content,
     unconfigured_preconditions,
 )
+from lictor.domain.api import describe_api
 from lictor.domain.complexity import describe_over, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.duplication import describe_duplication
@@ -70,7 +71,12 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
-from lictor.domain.reports import ComplexityReport, DuplicationReport
+from lictor.domain.reports import (
+    ApiComparison,
+    ApiReport,
+    ComplexityReport,
+    DuplicationReport,
+)
 from lictor.domain.results import (
     ControlEntry,
     Executed,
@@ -446,6 +452,14 @@ def check(
             help="Seguir tras el primer fallo y mostrar el resultado de todos los controles",
         ),
     ] = False,
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base",
+            help="Comparar la API pública con la de este commit (p. ej. main); sin él, solo "
+            "cuenta sus nombres",
+        ),
+    ] = None,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -480,6 +494,7 @@ def check(
                     control_ids=control or None,
                     keep_going=keep_going,
                     error_max_chars=config.limits.error_max_chars,
+                    api_base=base,
                 )
             )
 
@@ -555,9 +570,21 @@ def _executed_lines(
         score = (
             f": {describe_duplication(len(report.clones), report.in_clones, report.code_tokens)}"
         )
+    score = _api_phrase(judgement.report) or score
     if isinstance(judgement.verdict, Passed):
         return [f"✓ {name}{stage} {took}{score}"]
     return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]
+
+
+def _api_phrase(report: object) -> str | None:
+    """What an API control found, as facts: how many names, and against `--base` what broke."""
+    if isinstance(report, ApiReport):
+        return f": {describe_api(len(report.symbols), None, 0, 0)}"
+    if isinstance(report, ApiComparison):
+        symbols = len(report.report.symbols)
+        broken, accepted = len(report.broken), len(report.accepted)
+        return f": {describe_api(symbols, report.base, broken, accepted, report.problem)}"
+    return None
 
 
 def _read_lines(name: str, stage: str, read: Read, entries: Sequence[ControlEntry]) -> list[str]:

@@ -28,7 +28,9 @@ from lictor.domain.conventions import MAX_CONVENTIONS_CHARS, too_long_message
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity", "duplication"]
+ReportFormat = Literal[
+    "exit-code", "junit", "mutation", "coverage", "complexity", "duplication", "api"
+]
 ControlMode = Literal["block", "measure"]
 # When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
 ProfileStatus = Literal["stable", "beta", "alpha"]
@@ -278,6 +280,18 @@ class ConventionsConfig(BaseModel):
                 )
                 raise ValueError(msg)
         return reviewed
+
+
+class ApiConfig(BaseModel):
+    """What the person accepts to break of the public API that existed (ADR-0017).
+
+    Qualified names, as the report names them: a break of one of them, or of a name under it, is
+    told apart and doesn't fail the control.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: list[str] = Field(default_factory=list)
 
 
 class ProfileVerification(BaseModel):
@@ -897,6 +911,7 @@ class LictorConfig(BaseModel):
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
     conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -951,6 +966,7 @@ class LictorFile(BaseModel):
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
     conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)

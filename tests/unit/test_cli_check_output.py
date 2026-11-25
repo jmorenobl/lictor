@@ -4,6 +4,10 @@ from lictor.application.usecases.check_project import CheckProjectResult
 from lictor.cli import _check_lines, _check_output
 from lictor.domain.controls import Added, CommandControl, ReaderControl
 from lictor.domain.reports import (
+    ApiBreak,
+    ApiComparison,
+    ApiReport,
+    ApiSymbol,
     CodeFile,
     CoverageReport,
     DuplicationReport,
@@ -83,3 +87,25 @@ def test_check_says_how_much_code_is_repeated() -> None:
     entry = CommandEntry(control, Executed(_RAN, Judged(report, Passed())))
 
     assert _check_lines("duplication", "", entry, [entry]) == ["✓ duplication (7ms): ningún clon"]
+
+
+_API = CommandControl("api", "L1", "api {out}", "api", mode="measure")
+_SYMBOL = ApiSymbol("p.f", "function", "p.f", "src/p.py", 1)
+
+
+def _api_line(report: ApiReport | ApiComparison, verdict: Passed | Failed) -> list[str]:
+    entry = CommandEntry(_API, Executed(_RAN, Judged(report, verdict)))
+    return _check_lines("api", "", entry, [entry])
+
+
+def test_check_gives_the_facts_of_the_api_without_a_base() -> None:
+    """ADR-0017: no base, no verdict: how many public names."""
+    assert _api_line(ApiReport((_SYMBOL,)), Passed()) == ["✓ api (7ms): 1 nombre público"]
+
+
+def test_check_with_a_base_says_what_broke_against_it() -> None:
+    compared = ApiComparison(ApiReport((_SYMBOL,)), "d" * 40, (ApiBreak("p.g", "removed"),))
+
+    lines = _api_line(compared, Failed("roto"))
+
+    assert lines[0] == f"✗ api (7ms): 1 nombre público; 1 rotura respecto a {'d' * 12}"

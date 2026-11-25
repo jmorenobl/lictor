@@ -23,7 +23,7 @@ from lictor.domain.errors import ConfigError, ExitCode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITTEN_BY_0_2_0 = REPO_ROOT / "tests" / "fixtures" / "lictor_0_2_0.json"
-PROFILE_IDS = ["lint", "format", "types", "unit", "coverage", "complexity", "duplication"]
+PROFILE_IDS = ["lint", "format", "types", "unit", "coverage", "complexity", "duplication", "api"]
 ADDED = {"id": "audit", "level": "L4", "run": "pip-audit", "report": "exit-code"}
 
 
@@ -177,7 +177,7 @@ def test_the_stage_of_a_control_enters_the_fingerprint(tmp_path: Path) -> None:
 def test_enabled_false_drops_a_control_of_the_profile(tmp_path: Path) -> None:
     path = _with_controls(tmp_path, [{"id": "types", "enabled": False}])
 
-    assert _ids(path) == ["lint", "format", "unit", "coverage", "complexity", "duplication"]
+    assert _ids(path) == ["lint", "format", "unit", "coverage", "complexity", "duplication", "api"]
 
 
 def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> None:
@@ -197,6 +197,7 @@ def test_an_added_control_goes_after_the_one_written_before_it(tmp_path: Path) -
         "coverage",
         "complexity",
         "duplication",
+        "api",
     ]
 
 
@@ -287,3 +288,26 @@ def test_a_limit_goes_with_a_complexity_report_and_nothing_else(
 ) -> None:
     with pytest.raises(ConfigError, match=message):
         load_config(_with_controls(tmp_path, [change]))
+
+
+def _with_api(tmp_path: Path, api: object) -> Path:
+    path = tmp_path / "lictor.json"
+    path.write_text(json.dumps({"profile": "python-uv@0.2", "api": api}), "utf-8")
+    return path
+
+
+def test_what_the_person_accepts_to_break_is_read_and_decides_a_resume(tmp_path: Path) -> None:
+    """ADR-0017: `api.accepted` changes a verdict, so it is in the fingerprint."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    accepting = _with_api(tmp_path / "a", {"accepted": ["pkg.storage.save_chain"]})
+    nothing = _with_api(tmp_path / "b", {})
+
+    assert load_config(accepting).api.accepted == ["pkg.storage.save_chain"]
+    assert load_config(nothing).api.accepted == []
+    assert _fingerprint(accepting) != _fingerprint(nothing)
+
+
+def test_the_api_takes_nothing_but_what_is_accepted(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="base"):
+        load_config(_with_api(tmp_path, {"base": "main"}))

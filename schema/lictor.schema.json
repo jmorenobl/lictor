@@ -33,6 +33,21 @@
       "title": "AcceptanceConfig",
       "type": "object"
     },
+    "ApiConfig": {
+      "additionalProperties": false,
+      "description": "What the person accepts to break of the public API that existed (ADR-0017).\n\nQualified names, as the report names them: a break of one of them, or of a name under it, is\ntold apart and doesn't fail the control.",
+      "properties": {
+        "accepted": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Accepted",
+          "type": "array"
+        }
+      },
+      "title": "ApiConfig",
+      "type": "object"
+    },
     "BackendConfig": {
       "additionalProperties": false,
       "description": "Configuración del backend de agente.",
@@ -139,7 +154,8 @@
             "mutation",
             "coverage",
             "complexity",
-            "duplication"
+            "duplication",
+            "api"
           ],
           "title": "Report",
           "type": "string"
@@ -422,6 +438,9 @@
     },
     "conventions": {
       "$ref": "#/$defs/ConventionsConfig"
+    },
+    "api": {
+      "$ref": "#/$defs/ApiConfig"
     },
     "paths": {
       "anyOf": [

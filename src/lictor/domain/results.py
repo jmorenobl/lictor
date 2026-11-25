@@ -15,10 +15,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Literal, assert_never
 
+from lictor.domain.api import break_record, breaks_from_record
 from lictor.domain.complexity import over_limit
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.model import Candidate, Score, TestCaseResult
 from lictor.domain.reports import (
+    ApiBreak,
+    ApiComparison,
+    ApiReport,
     ComplexityReport,
     CoverageReport,
     DuplicationReport,
@@ -387,6 +391,18 @@ class RecordedDuplication:
 
 
 @dataclass(frozen=True)
+class RecordedApi:
+    """What the journal keeps of an API report: how many public names, and against its base
+    (ADR-0017) what broke, what the person accepted, or why it couldn't compare."""
+
+    symbols: int
+    base: str | None = None
+    broken: tuple[ApiBreak, ...] = ()
+    accepted: tuple[ApiBreak, ...] = ()
+    problem: str | None = None
+
+
+@dataclass(frozen=True)
 class RecordedJudged:
     passed: bool
     reason: str | None
@@ -394,6 +410,7 @@ class RecordedJudged:
     cases: Mapping[str, int]
     complexity: RecordedComplexity | None = None
     duplication: RecordedDuplication | None = None
+    api: RecordedApi | None = None
 
 
 @dataclass(frozen=True)
@@ -466,6 +483,7 @@ def control_record(entry: ControlEntry) -> dict[str, object]:
                 "cases": _case_counts(judged.cases),
                 **_complexity_record(entry.control, judged.report),
                 **_duplication_record(judged.report),
+                **_api_record(judged.report),
             }
         case Read(reads=reads, verdict=verdict) as read:
             return {
@@ -508,6 +526,37 @@ def _duplication_record(report: Report | None) -> dict[str, object]:
             "code_tokens": report.code_tokens,
         }
     }
+
+
+def _api_record(report: Report | None) -> dict[str, object]:
+    if isinstance(report, ApiReport):
+        return {"api": {"symbols": len(report.symbols), "base": None}}
+    if not isinstance(report, ApiComparison):
+        return {}
+    return {
+        "api": {
+            "symbols": len(report.report.symbols),
+            "base": report.base,
+            "broken": [break_record(b) for b in report.broken],
+            "accepted": [break_record(b) for b in report.accepted],
+            "problem": report.problem,
+        }
+    }
+
+
+def _api_from(raw: object) -> RecordedApi | None:
+    if not isinstance(raw, dict):
+        return None
+    symbols, base, problem = _int(raw, "symbols"), raw.get("base"), raw.get("problem")
+    if symbols is None or not (base is None or isinstance(base, str)):
+        return None
+    if not (problem is None or isinstance(problem, str)):
+        return None
+    broken = breaks_from_record(raw.get("broken", []))
+    accepted = breaks_from_record(raw.get("accepted", []))
+    if broken is None or accepted is None:
+        return None
+    return RecordedApi(symbols, base, broken, accepted, problem)
 
 
 def _duplication_from(raw: object) -> RecordedDuplication | None:
@@ -632,23 +681,35 @@ def _judgement_from(raw: Mapping[str, object]) -> RecordedJudged | RecordedUnjud
     measured = _measured_from(raw)
     if measured is None:
         return None
-    score, complexity, duplication = measured
-    return RecordedJudged(was_passed, _text(raw, "reason"), score, cases, complexity, duplication)
+    score, complexity, duplication, api = measured
+    return RecordedJudged(
+        was_passed, _text(raw, "reason"), score, cases, complexity, duplication, api
+    )
 
 
-def _measured_from(
-    raw: Mapping[str, object],
-) -> tuple[Score | None, RecordedComplexity | None, RecordedDuplication | None] | None:
+type _Measured = tuple[
+    Score | None, RecordedComplexity | None, RecordedDuplication | None, RecordedApi | None
+]
+
+
+def _measured_from(raw: Mapping[str, object]) -> _Measured | None:
     """What a judged record keeps of what it measured; None if one is there and unreadable."""
     score_raw = raw.get("score")
     complexity_raw, duplication_raw = raw.get("complexity"), raw.get("duplication")
+    api_raw = raw.get("api")
     score = score_from_record(score_raw) if score_raw is not None else None
     complexity = _complexity_from(complexity_raw)
     duplication = _duplication_from(duplication_raw)
-    found = ((score_raw, score), (complexity_raw, complexity), (duplication_raw, duplication))
+    api = _api_from(api_raw)
+    found = (
+        (score_raw, score),
+        (complexity_raw, complexity),
+        (duplication_raw, duplication),
+        (api_raw, api),
+    )
     if any((written is None) != (read is None) for written, read in found):
         return None
-    return score, complexity, duplication
+    return score, complexity, duplication, api
 
 
 def recorded_from_failed_run(read: RecordedRead, recorded: Mapping[str, RecordedControl]) -> bool:

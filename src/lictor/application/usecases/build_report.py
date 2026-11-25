@@ -1,14 +1,15 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from lictor.application.ports import EventLog
+from lictor.application.ports import EventLog, TextSearch
 from lictor.application.seal import hash_file, hash_tree
+from lictor.domain.api import break_line, describe_api
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
 from lictor.domain.conventions import conventions_report_lines
@@ -34,6 +35,7 @@ from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     OLDER_EVENTS,
     VERIFY_FINISHED,
+    RecordedApi,
     RecordedControl,
     RecordedExecuted,
     RecordedJudged,
@@ -47,7 +49,7 @@ from lictor.domain.results import (
     recorded_duration,
     recorded_from_failed_run,
 )
-from lictor.domain.rules import describe_score, minimum_text
+from lictor.domain.rules import describe_score, minimum_text, path_within
 from lictor.domain.stub_proof import unchecked_note
 
 _MS_PER_SECOND: Final[int] = 1000
@@ -228,7 +230,31 @@ def _judged_score(judged: RecordedJudged) -> str:
     if judged.duplication is not None:
         d = judged.duplication
         return f", {describe_duplication(d.clones, d.in_clones, d.code_tokens)}"
+    if judged.api is not None:
+        a = judged.api
+        described = describe_api(a.symbols, a.base, len(a.broken), len(a.accepted), a.problem)
+        return f", {described}"
     return f", {describe_score(judged.score)}" if judged.score else ""
+
+
+def _api_section(
+    found: tuple[str, RecordedApi] | None, cited: Mapping[str, Sequence[str]]
+) -> list[str]:
+    """What the run broke of the public API it started with (ADR-0017), as its last passing
+    verification measured it, and where each broken name is still cited outside what the agent
+    may write."""
+    if found is None:
+        return ["- *Ningún control de API comparó con la base del run.*"]
+    control_id, api = found
+    described = describe_api(api.symbols, api.base, len(api.broken), len(api.accepted), api.problem)
+    lines = [f"- **{control_id}**: {described}"]
+    for item, accepted in [*((b, False) for b in api.broken), *((b, True) for b in api.accepted)]:
+        mark = " (aceptada en `api.accepted`)" if accepted else ""
+        lines.append(f"- {break_line(item)}{mark}")
+        places = cited.get(item.name, ())
+        if places:
+            lines.append(f"  - citado fuera de lo escribible en: {', '.join(places)}")
+    return lines
 
 
 def _blind_spot_section(info: dict[str, Any]) -> list[str]:
@@ -239,6 +265,16 @@ def _blind_spot_section(info: dict[str, Any]) -> list[str]:
     return [f"- {line}" for line in spots] or [
         "- *Nada: algún control ve cada test y cada fichero que usa el código.*"
     ]
+
+
+def _compared_api(recorded: RecordedControl) -> RecordedApi | None:
+    """What an API control compared with the run's base, if it did."""
+    if not isinstance(recorded, RecordedExecuted):
+        return None
+    judged = recorded.judgement
+    if not isinstance(judged, RecordedJudged) or judged.api is None or judged.api.base is None:
+        return None
+    return judged.api
 
 
 @dataclass(frozen=True)
@@ -594,8 +630,16 @@ def _scenario_table(
 class BuildReport:
     """Use case to aggregate journal events and write report.md."""
 
-    def __init__(self, event_log: EventLog) -> None:
+    def __init__(
+        self,
+        event_log: EventLog,
+        search: TextSearch | None = None,
+        writable: Sequence[str] = (),
+    ) -> None:
         self.event_log = event_log
+        # Where a broken public name is still cited, outside what the agent may write (ADR-0017).
+        self.search = search
+        self.writable = tuple(writable)
 
     def execute(self, req: BuildReportRequest) -> BuildReportResult:
         """Read journal events, deduplicate, aggregate metrics, and write report.md."""
@@ -644,7 +688,21 @@ class BuildReport:
         data["retired_evidence"] = _retirement_notes(events, retired)
         older = sum(1 for ev in events if ev.type in OLDER_EVENTS)
         data["journal_damage"] = replace(self.event_log.damage(), older=older)
+        data["api_cited"] = self._cited(data["api"])
         return self._format_markdown(data)
+
+    def _cited(self, found: tuple[str, RecordedApi] | None) -> dict[str, list[str]]:
+        """Each broken name's files in HEAD outside `paths.writable`, by its last part."""
+        if found is None or self.search is None:
+            return {}
+        api = found[1]
+        cited: dict[str, list[str]] = {}
+        for item in (*api.broken, *api.accepted):
+            word = item.name.rsplit(".", 1)[-1]
+            places = [f for f in self.search.cited_in(word) if not path_within(f, self.writable)]
+            if places:
+                cited[item.name] = places
+        return cited
 
     def _aggregate_metrics(self, events: list[Event]) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -663,6 +721,8 @@ class BuildReport:
             "check_controls": [],
             "blind_spots": None,
             "conventions": None,
+            # The last API comparison of a passing verification: what the run leaves broken.
+            "api": None,
             "measures": [],
             "scores": [],
             "skipped_controls": [],
@@ -911,6 +971,9 @@ class BuildReport:
         for control_id, recorded in controls.items():
             where = f"**{control_id}** ({sid}, intento {attempt})"
             self._process_control(info, where, recorded, controls)
+            api = _compared_api(recorded)
+            if ev.data.get("ok") and api is not None:
+                info["api"] = (control_id, api)
 
     @staticmethod
     def _process_control(
@@ -1018,6 +1081,7 @@ class BuildReport:
                 "## Lo que los controles no ven",
                 *_blind_spot_section(info),
                 *conventions_report_lines(info["conventions"]),
+                *["", "## API pública", *_api_section(info["api"], info["api_cited"])],
             ]
         )
 
