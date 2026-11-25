@@ -1,7 +1,7 @@
 # ADR-0017: Un control de la API pública, comparada con el commit en que empezó el run
 
 ## Estado
-Propuesta (2026-11-25), borrador para la 0.19.0. Sale de F80 (el primer uso real: la PR #1 de
+Aceptada (2026-11-25), en la 0.19.0. Sale de F80 (el primer uso real: la PR #1 de
 verifactu-py, fase 4a de pyverifactu) y del diseño `.audits/qa/0-19-0/diseno.md`, revisado por su
 cuenta en `.audits/qa/0-19-0/revision-fable.md` (hallazgos #1–#5, que cambiaron la definición y la
 base). Sigue el patrón de las ADR-0013 y 0014: un módulo del perfil da hechos, el dominio da el
