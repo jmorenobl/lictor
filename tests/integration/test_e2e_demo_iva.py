@@ -220,12 +220,14 @@ def test_run_tells_each_step_on_stderr_and_leaves_stdout_alone(tmp_path: Path) -
 
     assert res.exit_code == 0, res.output
     lines = res.stderr.splitlines()
-    assert lines[:4] == [
+    assert lines[:3] == [
         "Entorno de verificación listo.",
         "Escenarios: 3 (0 en verde, 3 pendientes).",
         "driver: escribiendo el driver, intento 1 de 2…",
-        "driver: sellado (1 llamada, 0,01 $).",
     ]
+    # The seal says how long its red took, and where (F52).
+    assert lines[3].startswith("driver: sellado (1 llamada, 0,01 $, rojo en ")
+    assert ": aceptación " in lines[3]
     assert "IVA-001: implementando, intento 1 de 3…" in lines
     assert any(line.startswith("IVA-001: verde, intento 1, ") for line in lines)
     # Each implemented green goes through one refactor, which the fake leaves unchanged.

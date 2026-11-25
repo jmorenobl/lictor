@@ -154,7 +154,7 @@ def test_cli_refuses_while_another_run_holds_the_project(
     assert result.exit_code == 10, result.output
     assert "otra ejecución" in result.output
     assert (tmp_path / "lictor.json").read_text(encoding="utf-8") == "{}"
-    assert sorted(p.name for p in (tmp_path / ".lictor").iterdir()) == ["run.lock"]
+    assert sorted(p.name for p in (tmp_path / ".lictor").iterdir()) == [".gitignore", "run.lock"]
 
 
 def _installed_version() -> str:
