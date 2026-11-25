@@ -11,6 +11,7 @@ to a base class, keeps every name, so it breaks nothing.
 Which break a scenario asks for can't be told apart: the person accepts it in `api.accepted`.
 """
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -378,6 +379,52 @@ def named_breaks(breaks: Sequence[ApiBreak], named: int | None = NAMED) -> list[
     if len(breaks) > len(shown):
         lines.append(f"- y {len(breaks) - len(shown)} más")
     return lines
+
+
+_REFERENCE = re.compile(r"[^\s~^:?*\[\\]+")
+
+
+def reference_name_problem(ref: str) -> str | None:
+    """Why a text can't name the base of the API as git names a reference, or None if it can.
+
+    Roughly `git check-ref-format`: never an option, and nothing git would read as a range, a
+    reflog entry or a pattern.
+    """
+    if (
+        _REFERENCE.fullmatch(ref)
+        and not ref.startswith(("-", "/"))
+        and not ref.endswith(("/", ".", ".lock"))
+        and not any(bad in ref for bad in ("..", "@{", "//"))
+    ):
+        return None
+    return (
+        f"«{ref}» no vale como base de la API: escribe el nombre de una rama o una etiqueta, "
+        "como `origin/main`."
+    )
+
+
+@dataclass(frozen=True)
+class UnresolvedBase:
+    """Why `api.base` (or `check --base`) gives no commit to compare with (H4 of 0.20.0)."""
+
+    message: str
+
+
+def missing_base(ref: str) -> UnresolvedBase:
+    """The reference names no commit of this repository."""
+    return UnresolvedBase(
+        f"La base de la API, «{ref}», no es ningún commit de este repositorio: corrige "
+        "`api.base` en lictor.json, o trae esa rama (`git fetch`)."
+    )
+
+
+def no_common_base(ref: str) -> UnresolvedBase:
+    """The reference exists, but shares no ancestor here with what is verified."""
+    return UnresolvedBase(
+        f"Lo verificado no comparte ningún antepasado con la base de la API, «{ref}», en este "
+        "repositorio. Suele ser un clon superficial: trae más historia con "
+        "`git fetch --deepen=<n>` o `git fetch --unshallow`."
+    )
 
 
 # What the person can do with a break, where Lictor speaks to them and never to the agent.

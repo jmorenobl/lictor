@@ -212,6 +212,15 @@ class Vcs(Protocol):
         """Return the bytes of a file, or of a link's target, in the tree of `rev`."""
         ...
 
+    def resolve_commit(self, ref: str) -> str | None:
+        """The commit a reference names, or None if the repository has no such commit."""
+        ...
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        """The best common ancestor of two commits, or None if they share none here (a shallow
+        clone may lack it)."""
+        ...
+
     def parent_of(self, rev: str) -> str:
         """Return the first parent of a commit, or "" for a root commit."""
         ...

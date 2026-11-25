@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lictor.application.api_baseline import ApiBaseline
+from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
 from lictor.application.usecases.check_project import (
@@ -20,7 +20,7 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
-from lictor.domain.api import ApiBase
+from lictor.domain.api import ApiBase, UnresolvedBase
 from lictor.domain.controls import Control
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
@@ -85,13 +85,14 @@ class CheckWorkingTree:
         Raise `PreconditionError` if the repository has no commit: there is nothing to verify on.
         """
         subject = self._subject(req.rev)
+        base = self._base(req, subject.rev)
         # Each check replaces what the previous one left.
         shutil.rmtree(self.evidence_dir, ignore_errors=True)
         self.evidence_dir.mkdir(parents=True)
         with self.environment.throwaway(subject.rev, self.evidence_dir) as environment:
             environment.ensure(req.run_id)
             check = CheckProject(EnvironmentRunner(environment), self.readers)
-            api_base = self._api_base(req, environment)
+            api_base = self._api_base(base, environment)
             with verification_tree(self.vcs, subject.rev, self.project_root) as tree:
                 result = check.execute(
                     CheckProjectRequest(
@@ -112,11 +113,22 @@ class CheckWorkingTree:
             tampered = environment.ensure(req.run_id)
         return CheckWorkingTreeResult(subject.description, result, tampered)
 
-    def _api_base(
-        self, req: CheckWorkingTreeRequest, environment: VerificationCommands
-    ) -> ApiBase | None:
-        """The base `--base` names, measured in a clean clone of it like what is checked."""
-        if req.api_base is None or self.api is None:
+    def _base(self, req: CheckWorkingTreeRequest, rev: str) -> str | None:
+        """Where what is checked left `--base`, or `api.base` as a run compares (H4 of 0.20.0).
+
+        Raise `PreconditionError` if that names no commit, or none it shares here: before any
+        environment is built for nothing.
+        """
+        if self.api is None or (ref := req.api_base or self.api.ref) is None:
+            return None
+        found = resolve_base(self.vcs, rev, ref)
+        if isinstance(found, UnresolvedBase):
+            raise PreconditionError(found.message)
+        return found
+
+    def _api_base(self, sha: str | None, environment: VerificationCommands) -> ApiBase | None:
+        """That base, measured in a clean clone of it like what is checked."""
+        if sha is None or self.api is None:
             return None
 
         def run_in(
@@ -125,7 +137,7 @@ class CheckWorkingTree:
             # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
             return environment.run(command, tree, timeout_s), ()
 
-        return self.api.base(req.api_base, self.vcs, self.project_root, run_in, self.evidence_dir)
+        return self.api.base(sha, self.vcs, self.project_root, run_in, self.evidence_dir)
 
     def _subject(self, rev: str | None) -> _Subject:
         if rev is not None:

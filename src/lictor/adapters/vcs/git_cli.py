@@ -483,6 +483,19 @@ class GitCli(Vcs, Worktrees, TextSearch):
         found = self._run_git(["rev-parse", "--verify", "--quiet", f"{rev}^"], check=False)
         return found.stdout.strip() if found.returncode == 0 else ""
 
+    def resolve_commit(self, ref: str) -> str | None:
+        """Ask quietly for the commit a reference names; `--end-of-options` keeps it a name."""
+        found = self._run_git(
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"],
+            check=False,
+        )
+        return found.stdout.strip() if found.returncode == 0 else None
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        """git exits 1 with nothing to say when two commits share no ancestor it has."""
+        found = self._run_git(["merge-base", "--end-of-options", a, b], check=False)
+        return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
+
     def has_commits(self) -> bool:
         """Ask for HEAD's commit quietly: without one, git fails and says nothing."""
         res = self._run_git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], check=False)

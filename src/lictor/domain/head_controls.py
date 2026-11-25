@@ -7,7 +7,9 @@ unformatted base. `doctor` and a new run say so first (ADR-0015, amendment of 0.
 
 from collections.abc import Collection, Sequence
 
+from lictor.domain.api import named_breaks
 from lictor.domain.controls import Control, ReaderControl
+from lictor.domain.reports import ApiComparison
 
 
 def head_control_problem(control_id: str, error: str, evidence: str) -> str:
@@ -60,3 +62,24 @@ def head_not_started(control_ids: Sequence[str]) -> str:
         f"No se ejecutan en HEAD {names}: su programa no arranca, como dice «Comandos de "
         "verificación»."
     )
+
+
+def head_api_broken(comparison: ApiComparison, ref: str, *, blocks: bool) -> str:
+    """Tell what HEAD already breaks of the public API where it left `ref` (H4 of 0.20.0).
+
+    When the control blocks, every attempt would fail on it whatever the agent did: only the
+    person can accept it or change the mode. When it measures, a run only warns of new breaks.
+    """
+    count = len(comparison.broken)
+    names = "\n".join(named_breaks(comparison.broken))
+    what = "1 nombre" if count == 1 else f"{count} nombres"
+    head = (
+        f"HEAD ya rompe {what} de la API pública respecto a «{ref}» "
+        f"({comparison.base[:12]}), sin aceptar:\n{names}\n"
+    )
+    if blocks:
+        return head + (
+            "Con el control 'api' en block, cada intento fallaría haga lo que haga el agente: "
+            "acepta esas roturas en `api.accepted` de lictor.json, o pon 'api' en measure."
+        )
+    return head + "El run solo avisará de lo que rompa de nuevo."

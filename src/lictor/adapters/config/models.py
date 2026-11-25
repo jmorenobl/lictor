@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.config import JsonDict
 
+from lictor.domain.api import reference_name_problem
 from lictor.domain.controls import (
     CommandControl,
     Control,
@@ -292,6 +293,16 @@ class ApiConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     accepted: list[str] = Field(default_factory=list)
+    # Where the work will be integrated (`origin/main`): every run of it is compared with where it
+    # left that branch, not with its own start (H4 of 0.20.0). Without it, the run's start.
+    base: str | None = None
+
+    @field_validator("base")
+    @classmethod
+    def _a_reference(cls, value: str | None) -> str | None:
+        if value is not None and (problem := reference_name_problem(value)) is not None:
+            raise ValueError(problem)
+        return value
 
 
 class ProfileVerification(BaseModel):

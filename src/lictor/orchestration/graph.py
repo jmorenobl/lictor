@@ -16,6 +16,7 @@ from langgraph.types import interrupt
 
 from lictor import __version__
 from lictor.application.anchor import observe_anchor
+from lictor.application.api_baseline import resolve_base
 from lictor.application.events import new_event
 from lictor.application.ports import (
     Clock,
@@ -54,6 +55,7 @@ from lictor.application.usecases.verify_attempt import (
     VerifyAttemptRequest,
     control_summaries,
 )
+from lictor.domain.api import UnresolvedBase
 from lictor.domain.blind_spots import blind_spots_record
 from lictor.domain.controls import Control
 from lictor.domain.errors import (
@@ -65,6 +67,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
+from lictor.domain.progress import api_start_record
 from lictor.domain.refactor import (
     Measure,
     RefactorRecord,
@@ -73,6 +76,7 @@ from lictor.domain.refactor import (
     oracle_measures,
     settled_without_verifying,
 )
+from lictor.domain.reports import ApiComparison
 from lictor.domain.results import (
     VERIFY_FINISHED,
     VerifyResult,
@@ -176,9 +180,12 @@ class GraphState(TypedDict, total=False):
     # green's own report there (F71).
     refactor_baseline_step: str | None
     refactor_outcome: str | None
-    # The commit the run started from: the one base of the public API (ADR-0017). Only its SHA;
-    # its report is measured again from git, never read from `runs/`.
+    # The one base of the public API (ADR-0017): where HEAD left `api.base`, or without it the
+    # commit the run started from. Only its SHA; its report is measured again from git, never
+    # read from `runs/`.
     api_base: str | None
+    # The commit the run started from: what the run changed is told from it (H2 of 0.20.0).
+    started_at: str | None
 
 
 @dataclass(frozen=True)
@@ -241,6 +248,9 @@ class GraphContext:
     agent_files: Sequence[Path] = ()
     # The project's rules of code (F79): every agent gets them, and nothing checks them.
     conventions: str = ""
+    # Where the work will be integrated (`api.base`, H4 of 0.20.0): the API is compared with where
+    # the run's start left it.
+    api_base_ref: str | None = None
 
     @property
     def refactor(self) -> bool:
@@ -351,6 +361,15 @@ class _GraphNodes:
         if problems:
             reason = " ".join(problem.message for problem in problems)
             return self._finish(state, precondition_exit_code(problems), reason, report=False)
+        head = self.ctx.vcs.get_head_sha()
+        base = head
+        if self.ctx.api_base_ref is not None:
+            found = resolve_base(self.ctx.vcs, head, self.ctx.api_base_ref)
+            if isinstance(found, UnresolvedBase):
+                # `CheckPreconditions` says it first; a branch moved since then lands here.
+                code = int(ExitCode.PRECONDITION)
+                return self._finish(state, code, found.message, report=False)
+            base = found
 
         event = new_event(
             self.ctx.clock,
@@ -372,10 +391,11 @@ class _GraphNodes:
                 ],
                 "blind_spots": blind_spots_record(report.blind_spots),
                 "conventions": _conventions_record(self.ctx.conventions),
+                "api_start": _api_start(report.api_start),
             },
         )
         self.ctx.event_log.append(event)
-        return {"anchor": self._anchor(), "api_base": self.ctx.vcs.get_head_sha()}
+        return {"anchor": self._anchor(), "api_base": base, "started_at": head}
 
     def _anchor(self) -> dict[str, str]:
         return observe_anchor(self.ctx.vcs, self.ctx.project_root)
@@ -1295,3 +1315,10 @@ def create_graph(
     builder.add_edge("report", END)
 
     return builder.compile(checkpointer=checkpointer)
+
+
+def _api_start(compared: ApiComparison | None) -> dict[str, object] | None:
+    """What HEAD already broke against `api.base` at the start (H4 of 0.20.0), if compared."""
+    if compared is None or compared.problem is not None:
+        return None
+    return api_start_record(compared.base, (b.name for b in compared.broken))

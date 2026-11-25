@@ -5,13 +5,14 @@ shows (F11), so both say the same thing: what the journal recorded, never a gues
 """
 
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.model import Event
 from lictor.domain.refactor import REFACTORED
+from lictor.domain.reports import ApiBreak
 from lictor.domain.results import (
     VERIFY_FINISHED,
     RecordedControl,
@@ -133,16 +134,32 @@ class Spend:
 _API_NAMED: Final[int] = 3
 
 
-def api_warning(controls: Iterable[RecordedControl]) -> str | None:
-    """What a passing verification broke of the public API of the run's base (ADR-0017), in one
-    line, or None if it broke nothing the person hasn't accepted."""
+def api_broken_names(controls: Iterable[RecordedControl]) -> frozenset[str]:
+    """The names a passing verification left broken of the public API of its base."""
+    return frozenset(b.name for b in _api_breaks(controls))
+
+
+def _api_breaks(controls: Iterable[RecordedControl]) -> tuple[ApiBreak, ...]:
     for control in controls:
         if not isinstance(control, RecordedExecuted):
             continue
         judged = control.judgement
-        if not isinstance(judged, RecordedJudged) or judged.api is None or not judged.api.broken:
-            continue
-        broken = judged.api.broken
+        if isinstance(judged, RecordedJudged) and judged.api is not None and judged.api.broken:
+            return judged.api.broken
+    return ()
+
+
+def api_warning(
+    controls: Iterable[RecordedControl], known: Collection[str] = frozenset()
+) -> str | None:
+    """What a passing verification broke of the public API of the run's base (ADR-0017), in one
+    line, or None if it broke nothing the person hasn't accepted.
+
+    `known` are the names already broken: at the run's start, against `api.base`, or by an
+    earlier green of the run. Only the rest is news (H4 of 0.20.0).
+    """
+    broken = tuple(b for b in _api_breaks(controls) if b.name not in known)
+    if broken:
         names = ", ".join(f"`{b.name}` ({b.detail})" for b in broken[:_API_NAMED])
         more = f" y {len(broken) - _API_NAMED} más" if len(broken) > _API_NAMED else ""
         return f"rompe la API pública de la base: {names}{more}; lo detalla report.md."
@@ -175,6 +192,8 @@ class RunProgress:
     # What the passing verification of a scenario broke of the public API (ADR-0017), told with
     # its green.
     _api_broken: dict[str, str | None] = field(default_factory=dict)
+    # What was already broken: at the start against `api.base`, or by an earlier green.
+    _api_known: set[str] = field(default_factory=set)
 
     def _all_spend(self) -> list[Spend]:
         return [*self._spend.values(), *self._refactor_spend.values()]
@@ -242,13 +261,7 @@ class RunProgress:
 
     def _handlers(self) -> Mapping[str, Callable[[Event], list[str]]]:
         return {
-            "lictor.run.started.v1": lambda event: [
-                "Entorno de verificación listo.",
-                *(
-                    f"⚠ Lo que los controles no ven: {line}"
-                    for line in blind_spot_lines(event.data.get("blind_spots")) or []
-                ),
-            ],
+            "lictor.run.started.v1": self._run_started,
             "lictor.run.resumed.v1": self._resumed,
             "lictor.spec.loaded.v1": self._spec_loaded,
             "lictor.agent.started.v1": self._agent_started,
@@ -324,13 +337,26 @@ class RunProgress:
             )
         return lines
 
+    def _run_started(self, event: Event) -> list[str]:
+        self._api_known.update(api_start_names(event.data.get("api_start")))
+        return [
+            "Entorno de verificación listo.",
+            *(
+                f"⚠ Lo que los controles no ven: {line}"
+                for line in blind_spot_lines(event.data.get("blind_spots")) or []
+            ),
+        ]
+
     def _verify_finished(self, event: Event) -> list[str]:
         controls = recorded_controls(event.data.get("controls"))
         acceptance = acceptance_from_record(event.data.get("acceptance"))
         self._owner(event).verify_ms += recorded_duration(controls, acceptance)
         # A refactor that fails tells it once, with `scenario.refactored`.
         if event.data.get("ok") and event.data.get("role") != REFACTOR_ROLE:
-            self._api_broken[str(event.scenarioid)] = api_warning(controls.values())
+            self._api_broken[str(event.scenarioid)] = api_warning(
+                controls.values(), self._api_known
+            )
+            self._api_known.update(api_broken_names(controls.values()))
         if event.data.get("ok") or event.data.get("role") == REFACTOR_ROLE:
             return []
         failed_at = event.data.get("failed_at")
@@ -619,3 +645,18 @@ def describe_status(view: StatusView) -> list[str]:
         _spend_line(view.progress),
         *_scenario_lines(view, status),
     ]
+
+
+def api_start_record(base: str, broken: Iterable[str]) -> dict[str, object]:
+    """What `run.started` keeps of HEAD's API against `api.base` (H4 of 0.20.0)."""
+    return {"base": base, "broken": sorted(broken)}
+
+
+def api_start_names(record: object) -> frozenset[str]:
+    """The names a recorded start already broke; none from a run without `api.base`."""
+    if not isinstance(record, Mapping):
+        return frozenset()
+    names = record.get("broken")
+    if not isinstance(names, list):
+        return frozenset()
+    return frozenset(name for name in names if isinstance(name, str))

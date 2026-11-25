@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.conventions import rule_files_warnings
 from lictor.application.ports import Executor, ReportReaders, SpecSource, Vcs
 from lictor.application.run_files import (
@@ -24,6 +25,7 @@ from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
+from lictor.domain.api import UnresolvedBase, compare_api
 from lictor.domain.blind_spots import (
     BlindSpots,
     StartRules,
@@ -37,11 +39,13 @@ from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.head_controls import (
     blocking_on_head,
+    head_api_broken,
     head_control_problem,
     head_not_started,
     head_tampered,
 )
-from lictor.domain.model import PreconditionProblem
+from lictor.domain.model import CommandOutput, PreconditionProblem
+from lictor.domain.reports import ApiComparison, ApiReport, InvalidReport
 from lictor.domain.rules import (
     CHECK_STAGE_ONLY,
     NO_COMMITS,
@@ -56,6 +60,7 @@ UNCONFIGURED = "no comprobado: la configuración no carga"
 DEPENDENCIES = "Dependencias de la verificación"
 BLIND_SPOTS = "Lo que los controles no ven"
 HEAD_CONTROLS = "Los controles pasan en HEAD"
+API_BASE = "La API frente a su base"
 NONE_STARTS = (
     "no comprobado: no arranca ningún control que bloquea, como dice «Comandos de verificación»"
 )
@@ -111,10 +116,18 @@ class PreconditionsReport:
     checks: tuple[PreconditionCheck, ...] = ()
     cli_version: str | None = None
     blind_spots: BlindSpots | None = None
+    # HEAD against `api.base` at the start (H4 of 0.20.0): what was already broken, so a run only
+    # warns of what it breaks.
+    api_start: ApiComparison | None = None
 
     @property
     def problems(self) -> list[PreconditionProblem]:
         return [problem for check in self.checks for problem in check.problems]
+
+
+# What checking on the environment just built gives: its checks, the blind spots, and HEAD's API
+# against its base.
+type _Contract = tuple[list[PreconditionCheck], BlindSpots | None, ApiComparison | None]
 
 
 @dataclass
@@ -148,6 +161,8 @@ class CheckPreconditions:
     # before any agent works, or the first attempt pays for what it can't fix.
     head_controls: Sequence[Control] = ()
     readers: ReportReaders | None = None
+    # How the base of the public API is measured, and `api.base` (H4 of 0.20.0).
+    api: ApiBaseline | None = None
     # The profile's rule files, and the hash of each one the person reviewed (F79).
     rule_files: Sequence[str] = ()
     reviewed: Mapping[str, str] = field(default_factory=dict)
@@ -169,11 +184,11 @@ class CheckPreconditions:
         checks.append(
             self._commands(req, lambda program: self._found(environment, program, has_commits))
         )
-        built, spots = self._environment(
+        built, spots, api_start = self._environment(
             environment, req, checks, scratch_ok=not scratch.problems, has_commits=has_commits
         )
         checks.extend(built)
-        return PreconditionsReport(tuple(checks), cli_version, spots)
+        return PreconditionsReport(tuple(checks), cli_version, spots, api_start)
 
     def _project_checks(
         self, req: PreconditionsRequest, has_commits: bool
@@ -314,12 +329,16 @@ class CheckPreconditions:
         *,
         scratch_ok: bool,
         has_commits: bool,
-    ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
+    ) -> _Contract:
         """Build the environment and, with it still there, check the start contract on it."""
         name = "Entorno de verificación"
         skipped = self._why_not_built(req, earlier, scratch_ok=scratch_ok, has_commits=has_commits)
         if skipped is not None:
-            return [PreconditionCheck(name, skipped=skipped), *self._unchecked(req, skipped)], None
+            return (
+                [PreconditionCheck(name, skipped=skipped), *self._unchecked(req, skipped)],
+                None,
+                None,
+            )
         try:
             if req.environment == "run":
                 environment.ensure(req.run_id)
@@ -333,7 +352,7 @@ class CheckPreconditions:
         except EnvironmentUnavailableError as err:
             failed = PreconditionCheck(name, (PreconditionProblem("environment", str(err)),))
             unchecked = self._unchecked(req, "no comprobado: el entorno no se pudo construir")
-            return [failed, *unchecked], None
+            return [failed, *unchecked], None, None
 
     @staticmethod
     def _why_not_built(
@@ -362,16 +381,67 @@ class CheckPreconditions:
             PreconditionCheck(DEPENDENCIES, skipped=reason),
             PreconditionCheck(BLIND_SPOTS, skipped=reason),
             PreconditionCheck(HEAD_CONTROLS, skipped=reason),
+            *([PreconditionCheck(API_BASE, skipped=reason)] if self._compares_api() else []),
         ]
 
-    def _built(
-        self, environment: VerificationEnvironment, req: PreconditionsRequest
-    ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
-        """The start contract on the environment just built, and its controls on HEAD."""
+    def _compares_api(self) -> bool:
+        """Whether there is an API control and an `api.base` to compare HEAD with."""
+        return self.api is not None and self.api.ref is not None
+
+    def _built(self, environment: VerificationEnvironment, req: PreconditionsRequest) -> _Contract:
+        """The start contract on the environment just built, its controls on HEAD, and HEAD's API
+        against its base."""
         checks, spots = self._start_contract(environment, req)
         if req.survey_dir is None:
-            return checks, spots
-        return [*checks, self._head_controls(environment, req, req.survey_dir)], spots
+            return checks, spots, None
+        checks.append(self._head_controls(environment, req, req.survey_dir))
+        if self.api is None or self.api.ref is None:
+            return checks, spots, None
+        api_check, api_start = self._api_against_base(
+            environment, req.survey_dir, self.api, self.api.ref
+        )
+        return [*checks, api_check], spots, api_start
+
+    def _api_against_base(
+        self,
+        environment: VerificationEnvironment,
+        survey_dir: Path,
+        api: ApiBaseline,
+        ref: str,
+    ) -> tuple[PreconditionCheck, ApiComparison | None]:
+        """HEAD's public API against where it left `api.base` (H4 of 0.20.0).
+
+        A break of HEAD that the person hasn't accepted fails every attempt when the control
+        blocks, whatever the agent does; when it measures, the run only warns of new ones.
+        """
+        head = self.vcs.get_head_sha()
+        found = resolve_base(self.vcs, head, ref)
+        if isinstance(found, UnresolvedBase):
+            unresolved = PreconditionProblem("config", found.message)
+            return PreconditionCheck(API_BASE, (unresolved,)), None
+        evidence = survey_dir / "api"
+
+        def run_in(
+            command: Sequence[str], tree: Path, timeout_s: int
+        ) -> tuple[CommandOutput, tuple[str, ...]]:
+            snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
+            output = environment.run(command, tree, timeout_s)
+            snapshot.verify_and_restore()
+            return output, tuple(snapshot.changes)
+
+        base = api.base(found, self.vcs, self.project_root, run_in, evidence / "base")
+        measured = api.base(head, self.vcs, self.project_root, run_in, evidence / "head").found
+        report = measured if isinstance(measured, ApiReport) else InvalidReport(measured)
+        compared = compare_api(report, base)
+        blocks = any(c.report == "api" and c.mode == "block" for c in self.head_controls)
+        if not isinstance(compared, ApiComparison):
+            return _api_check(f"no se pudo medir la API de HEAD: {measured}", blocks=blocks), None
+        if compared.problem is not None:
+            return _api_check(compared.problem, blocks=blocks), compared
+        if compared.broken:
+            message = head_api_broken(compared, ref, blocks=blocks)
+            return _api_check(message, blocks=blocks), compared
+        return PreconditionCheck(API_BASE), compared
 
     def _head_controls(
         self, environment: VerificationEnvironment, req: PreconditionsRequest, survey_dir: Path
@@ -391,6 +461,9 @@ class CheckPreconditions:
             )
         }
         blocking, left_out = blocking_on_head(self.head_controls, cannot_start)
+        if self._compares_api():
+            # HEAD's API against its base is its own check, measured once there.
+            blocking = tuple(cid for cid in blocking if not _is_api(cid, self.head_controls))
         notes = (head_not_started(left_out),) if left_out else ()
         if not blocking or self.readers is None:
             skipped = NONE_STARTS if notes else "ningún control bloquea"
@@ -452,3 +525,14 @@ class CheckPreconditions:
                 PreconditionCheck(BLIND_SPOTS, skipped=spots.skipped),
             ], spots
         return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=spots.lines)], spots
+
+
+def _api_check(message: str, *, blocks: bool) -> PreconditionCheck:
+    """What every attempt would pay is the project's to fix; what only measures is a warning."""
+    if blocks:
+        return PreconditionCheck(API_BASE, (PreconditionProblem("config", message),))
+    return PreconditionCheck(API_BASE, warnings=(message,))
+
+
+def _is_api(control_id: str, controls: Sequence[Control]) -> bool:
+    return any(c.id == control_id and c.report == "api" for c in controls)

@@ -211,7 +211,9 @@ def _api_baseline(config: LictorConfig, readers: ReportReaders) -> ApiBaseline |
     api = api_control(domain_controls(config))
     if api is None:
         return None
-    return ApiBaseline(api.run, api.timeout_s, readers.api, tuple(config.api.accepted))
+    return ApiBaseline(
+        api.run, api.timeout_s, readers.api, tuple(config.api.accepted), ref=config.api.base
+    )
 
 
 def bootstrap_runtime(
@@ -376,6 +378,7 @@ def bootstrap_runtime(
         ),
         head_controls=attempt_controls,
         readers=readers,
+        api=_api_baseline(active_config, readers),
         rule_files=rule_files(active_config),
         reviewed=active_config.conventions.reviewed,
     )
@@ -389,6 +392,7 @@ def bootstrap_runtime(
         driver_hints=defences.driver_hints,
         hints=active_config.hints,
         conventions=active_config.conventions.text,
+        api_base_ref=active_config.api.base,
         check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,

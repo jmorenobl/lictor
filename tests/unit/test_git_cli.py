@@ -974,3 +974,44 @@ def test_cited_in_names_the_committed_files_with_the_whole_word(git_repo: Path) 
     assert cli.cited_in("save_chain") == ["CHANGELOG.md", "docs/uso.md"]
     assert cli.cited_in("-e") == []  # a word, never an option
     assert cli.cited_in("nadie_lo_cita") == []
+
+
+def _commit(repo: Path, name: str) -> str:
+    (repo / name).write_text(name, encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", name], cwd=repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-q", "-m", name], cwd=repo, check=True)
+    done = subprocess.run(
+        [GIT_BIN, "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    )
+    return done.stdout.strip()
+
+
+def test_the_base_of_a_branch_is_where_it_left_the_other(git_repo: Path) -> None:
+    """H4 of 0.20.0: `api.base` compares with where the work left the branch it goes to."""
+    cli = GitCli(repo_dir=git_repo)
+    fork = cli.get_head_sha()
+    subprocess.run([GIT_BIN, "checkout", "-q", "-b", "trabajo"], cwd=git_repo, check=True)
+    work = _commit(git_repo, "trabajo.txt")
+    subprocess.run([GIT_BIN, "checkout", "-q", "main"], cwd=git_repo, check=True)
+    _commit(git_repo, "main.txt")
+
+    assert cli.resolve_commit("main") is not None
+    assert cli.merge_base(work, "main") == fork
+    assert cli.merge_base(fork, "main") == fork  # behind it: itself
+
+
+def test_a_reference_that_names_nothing_resolves_to_none(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+
+    assert cli.resolve_commit("origin/main") is None
+    assert cli.resolve_commit("--all") is None  # never read as an option
+
+
+def test_histories_with_no_common_ancestor_have_no_base(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    head = cli.get_head_sha()
+    subprocess.run([GIT_BIN, "checkout", "-q", "--orphan", "otra"], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "rm", "-rq", "--cached", "."], cwd=git_repo, check=True)
+    other = _commit(git_repo, "otra.txt")
+
+    assert cli.merge_base(head, other) is None
