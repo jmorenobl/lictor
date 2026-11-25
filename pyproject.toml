@@ -127,6 +127,7 @@ source = ["lictor"]
 source_paths = [
     "src/lictor/domain/",
     "src/lictor/application/anchor.py",
+    "src/lictor/application/conventions.py",
     "src/lictor/application/events.py",
     "src/lictor/application/seal.py",
     "src/lictor/application/spec_history.py",
@@ -170,4 +171,5 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_complexity.py",
     "tests/unit/test_duplication.py",
     "tests/unit/test_blind_spots.py",
+    "tests/unit/test_conventions.py",
 ]

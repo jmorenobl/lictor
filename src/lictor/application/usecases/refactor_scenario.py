@@ -33,6 +33,7 @@ from lictor.domain.controls import (
     refactor_measures_text,
     runnable_command,
 )
+from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
@@ -75,6 +76,7 @@ class RefactorScenarioRequest:
     # The directory of that verification: the refactor's coverage measure compares with the
     # green's report there (F71). None leaves it to the counts in the prompt.
     baseline_step: Path | None = None
+    conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,8 @@ class RefactorScenario:
             "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
             "{medidas_del_codigo}": _code_text(request, code, files, changed),
             "{hints}": request.hints,
+            # Last: the person's text mustn't be read as a placeholder.
+            "{conventions}": conventions_block(request.conventions, "refactor"),
         }
         prompt = template
         for key, value in replacements.items():

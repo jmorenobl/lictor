@@ -16,6 +16,8 @@ from lictor.adapters.config.loader import (
     load_config,
     project_root_of,
     resolve_defences,
+    rule_files,
+    write_reviewed_conventions,
 )
 from lictor.adapters.config.models import LictorConfig, RetentionConfig, domain_controls
 from lictor.adapters.readers.complexity import ComplexityReader
@@ -29,6 +31,7 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.application.conventions import rule_files_at
 from lictor.application.events import ObservedEventLog
 from lictor.application.ports import (
     AuditSink,
@@ -64,9 +67,15 @@ from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.blind_spots import StartRules
 from lictor.domain.controls import ACCEPTANCE_ID, Control, command_controls, controls_of_stage
+from lictor.domain.conventions import (
+    RuleFile,
+    describe_conventions,
+    describe_recorded,
+    reviewed_record,
+)
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
-from lictor.domain.rules import RedOracle, control_label
+from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
 from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
 
@@ -151,6 +160,29 @@ def retired_runs_kept(project_root: Path) -> int:
         return load_config(project_root).retention.keep_retired
     except ConfigError:
         return RetentionConfig().keep_retired
+
+
+def project_conventions(project_root: Path) -> str:
+    """What `lictor conventions` prints: the project's rules and each rule file's state (F79)."""
+    root = project_root.resolve()
+    config = load_config(root)
+    files = _head_rule_files(root, config)
+    return describe_conventions(config.conventions.text, files, config.conventions.reviewed)
+
+
+def record_reviewed_conventions(project_root: Path) -> str:
+    """Take HEAD's rule files as reviewed, as they are now, in `lictor.json` (F79)."""
+    root = project_root.resolve()
+    files = _head_rule_files(root, load_config(root))
+    write_reviewed_conventions(root, reviewed_record(files))
+    return describe_recorded(files)
+
+
+def _head_rule_files(root: Path, config: LictorConfig) -> tuple[RuleFile, ...]:
+    vcs = GitCli(root)
+    if not vcs.has_commits():
+        raise ConfigError(f"Los ficheros de reglas se leen de HEAD. {NO_COMMITS}")
+    return rule_files_at(vcs, "HEAD", rule_files(config))
 
 
 def new_run_id() -> str:
@@ -328,6 +360,8 @@ def bootstrap_runtime(
         ),
         head_controls=attempt_controls,
         readers=readers,
+        rule_files=rule_files(active_config),
+        reviewed=active_config.conventions.reviewed,
     )
 
     graph_context = GraphContext(
@@ -338,6 +372,7 @@ def bootstrap_runtime(
         suppressions=defences.suppressions,
         driver_hints=defences.driver_hints,
         hints=active_config.hints,
+        conventions=active_config.conventions.text,
         check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,

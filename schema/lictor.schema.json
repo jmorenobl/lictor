@@ -246,6 +246,26 @@
       "title": "ControlChange",
       "type": "object"
     },
+    "ConventionsConfig": {
+      "additionalProperties": false,
+      "description": "The project's rules of code, which the agents get (F79), and the rule files they came from.\n\n`reviewed` is the hash of each rule file's content as the person read it, written by\n`lictor conventions --reviewed`: only `doctor` reads it, so it stays out of the fingerprint.",
+      "properties": {
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "reviewed": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Reviewed",
+          "type": "object"
+        }
+      },
+      "title": "ConventionsConfig",
+      "type": "object"
+    },
     "LimitsConfig": {
       "additionalProperties": false,
       "description": "Límites de intentos y tamaño de error.",
@@ -399,6 +419,9 @@
     },
     "blind_spots": {
       "$ref": "#/$defs/BlindSpotsConfig"
+    },
+    "conventions": {
+      "$ref": "#/$defs/ConventionsConfig"
     },
     "paths": {
       "anyOf": [

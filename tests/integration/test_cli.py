@@ -97,6 +97,7 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
         "Feature: X\n  @X-001\n  Scenario: Uno\n    Given algo\n", encoding="utf-8"
     )
     (tmp_path / SKILL_FILE).write_text("---\nname: lictor\n---\nde otra versión\n")
+    (tmp_path / "AGENTS.md").write_text("Todo en inglés.\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
     broken = Health(ok=False, cli_version="", auth_status="none", message="sin sesión")
@@ -113,9 +114,35 @@ def test_cli_doctor_exits_40_when_the_executor_is_not_ready(
         "⚠ Momento de los controles: Controles que solo corren en `lictor check`: unit y coverage."
         in result.output
     )
+    # F79: a rule file nobody reviewed is told, and doesn't stop anything.
+    assert "⚠ Reglas del proyecto: `AGENTS.md`: sin revisar." in result.output
 
 
-@pytest.mark.parametrize("command", [["run"], ["init", "--force"]])
+def test_cli_conventions_shows_the_rules_and_reviewed_records_the_rule_files(
+    tmp_path: Path,
+) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("Todo en inglés.\n", encoding="utf-8")
+    assert runner.invoke(app, ["init", "--no-skill", "--cwd", str(tmp_path)]).exit_code == 0
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "x"], cwd=tmp_path, check=True, capture_output=True)
+
+    shown = runner.invoke(app, ["conventions", "--cwd", str(tmp_path)])
+    assert shown.exit_code == 0, shown.output
+    assert "- `AGENTS.md`: sin revisar" in shown.output
+
+    recorded = runner.invoke(app, ["conventions", "--reviewed", "--cwd", str(tmp_path)])
+    assert recorded.exit_code == 0, recorded.output
+    config = json.loads((tmp_path / "lictor.json").read_text(encoding="utf-8"))
+    assert list(config["conventions"]["reviewed"]) == ["AGENTS.md"]
+    assert (
+        "- `AGENTS.md`: revisado"
+        in runner.invoke(app, ["conventions", "--cwd", str(tmp_path)]).output
+    )
+
+
+@pytest.mark.parametrize("command", [["run"], ["init", "--force"], ["conventions", "--reviewed"]])
 def test_cli_refuses_while_another_run_holds_the_project(
     tmp_path: Path, command: list[str]
 ) -> None:

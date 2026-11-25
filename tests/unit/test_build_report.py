@@ -1302,3 +1302,20 @@ def test_report_says_what_the_controls_didnt_see_at_the_start(
 
     section = report.split("## Lo que los controles no ven")[1].split("##")[0]
     assert [line for line in section.splitlines() if line] == expected
+
+
+def test_report_says_the_projects_rules_once_and_that_they_arent_checked(tmp_path: Path) -> None:
+    # F79, Fable #12: rules nothing verifies are said to be so.
+    conventions = {"text": "Todo en inglés.", "sha256": "0" * 64}
+    report = _report(tmp_path, [_started(conventions=conventions), _verify_event({})])
+
+    assert report.count("## Reglas del proyecto") == 1
+    section = report.split("## Reglas del proyecto")[1].split("##")[0]
+    assert "no comprueba que se sigan" in section
+    assert "> Todo en inglés." in section
+
+
+def test_report_without_rules_has_no_section_for_them(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_started(conventions=None), _verify_event({})])
+
+    assert "## Reglas del proyecto" not in report

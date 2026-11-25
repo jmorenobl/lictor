@@ -521,3 +521,22 @@ def test_driver_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> No
     assert "Bash solo admite: make lint, make test." in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
+
+
+def test_the_driver_hears_the_projects_rules_and_names_the_code_by_them(tmp_path: Path) -> None:
+    # F79: the driver fixes the names of the interface before anything is implemented.
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), conventions="Identificadores en inglés."
+    )
+
+    prompt = _prompt(executor)
+    assert "Reglas del proyecto:\nIdentificadores en inglés." in prompt
+    assert "no el idioma del Gherkin" in prompt
+    assert "y las instrucciones del perfil, después los valores literales" in prompt
+
+
+def test_the_driver_prompt_has_no_rules_block_without_rules(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(tmp_path, AgentResult(status="ok"))
+
+    assert "Reglas del proyecto" not in _prompt(executor)
+    assert "{conventions}" not in _prompt(executor)

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from lictor.domain.conventions import TreeEntry
 from lictor.domain.model import (
     AgentResult,
     AgentTask,
@@ -190,6 +191,14 @@ class Vcs(Protocol):
 
     def read_file(self, rev: str, path: str) -> str:
         """Return the content of a file in the tree of `rev`."""
+        ...
+
+    def tree_entries(self, rev: str) -> list[TreeEntry]:
+        """Return every file and link of the tree of `rev`, at any depth, with its mode."""
+        ...
+
+    def read_bytes(self, rev: str, path: str) -> bytes:
+        """Return the bytes of a file, or of a link's target, in the tree of `rev`."""
         ...
 
     def parent_of(self, rev: str) -> str:

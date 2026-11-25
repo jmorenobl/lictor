@@ -52,6 +52,8 @@ from lictor.bootstrap import (
     checkout_repository,
     new_run_id,
     observed_journal,
+    project_conventions,
+    record_reviewed_conventions,
     retired_runs_kept,
     skill_content,
     unconfigured_preconditions,
@@ -305,6 +307,44 @@ def skill_command(
     _safe_run(_execute)
 
 
+@app.command("conventions")
+def conventions_command(
+    reviewed: Annotated[
+        bool,
+        typer.Option(
+            "--reviewed",
+            help=(
+                "Dar por revisados los ficheros de reglas tal como están en HEAD: escribe su hash "
+                "en conventions.reviewed de lictor.json, sin tocar lo demás"
+            ),
+        ),
+    ] = False,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Muestra las reglas del proyecto (conventions) y si cada fichero de reglas está revisado.
+
+    Lictor da esas reglas a sus agentes y no comprueba que se sigan.
+    """
+
+    def _execute() -> int:
+        if not reviewed:
+            typer.echo(project_conventions(cwd), nl=False)
+            return 0
+        # It rewrites `lictor.json`, which a run in progress guards as its own state.
+        with exclusive_run(cwd, "lictor conventions --reviewed"):
+            typer.echo(record_reviewed_conventions(cwd), nl=False)
+        return 0
+
+    _safe_run(_execute)
+
+
 def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
     """The checks `doctor` makes, and why the configuration didn't load, if it didn't."""
     try:
@@ -373,6 +413,7 @@ def doctor(
                 config_problem=config_problem,
                 check_stage=True,
                 survey_dir=log_dir / "survey",
+                conventions=True,
             )
             report = preconditions.execute(request)
         return _echo_checks(report)
