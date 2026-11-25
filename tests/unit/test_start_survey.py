@@ -1,5 +1,6 @@
 """Running the profile's survey on a clean clone of HEAD, and reading what it left (ADR-0015)."""
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,6 +11,7 @@ from lictor.adapters.readers.survey import SurveyReader
 from lictor.application.ports import Vcs
 from lictor.application.start_survey import StartSurvey, SurveyedCommandSpec
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.ci import CiStep, CiSteps
 from lictor.domain.model import CommandOutput
 from lictor.domain.survey import SurveyReport
 
@@ -99,3 +101,43 @@ def test_a_report_left_by_an_earlier_survey_counts_for_nothing(tmp_path: Path) -
     result = _survey().execute(_environment(None), _vcs(), tmp_path, evidence)
 
     assert result == "el análisis no dejó informe"
+
+
+class _Ci:
+    """A reader of the CI that answers with what it is given, and says where it was asked."""
+
+    def __init__(self, steps: CiSteps) -> None:
+        self.steps = steps
+        self.roots: list[Path] = []
+
+    def read(self, root: Path) -> CiSteps:
+        self.roots.append(root)
+        return self.steps
+
+
+def test_the_steps_of_the_ci_are_read_from_the_same_clone_and_handed_to_the_survey(
+    tmp_path: Path,
+) -> None:
+    step = CiStep("w.yml", 3, "uv run mypy src", "pre-commit", True, ("^src/",), ("x",))
+    ci = _Ci(CiSteps((step,), ("bad.yml: no es YAML válido",)))
+    vcs = _vcs()
+    environment = _environment(REPORT)
+    survey = dataclasses.replace(_survey(), ci=ci)
+
+    result = survey.execute(environment, vcs, tmp_path, tmp_path / "evidence")
+
+    assert ci.roots == [vcs.export_tree.call_args.args[1]]
+    assert environment.seen["given"]["ci"] == [
+        {
+            "file": "w.yml",
+            "line": 3,
+            "run": "uv run mypy src",
+            "origin": "pre-commit",
+            "pass_filenames": True,
+            "files": ["^src/"],
+            "exclude": ["x"],
+        }
+    ]
+    # What Lictor couldn't read of the CI goes with the survey's facts.
+    assert isinstance(result, SurveyReport)
+    assert result.ci_unreadable == ("bad.yml: no es YAML válido",)

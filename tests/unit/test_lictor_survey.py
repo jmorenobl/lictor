@@ -78,7 +78,7 @@ def test_a_pytest_command_runs_its_paths(
         ("uv run tox -e py", "tox"),
         ("uv run python -m unittest discover -s tests", "python"),
         ("sh -c 'cd . && uv run pytest tests'", "sh"),
-        ("uv run pytest --cov-config pyproject.toml -q", "--cov-config"),
+        ("uv run pytest --cov-context test -q", "--cov-context"),
         ("uv run pytest -q --json-report-file out/r.json", "--json-report-file"),
         ("uv run pytest --pyargs pkg", "--pyargs"),
         ("uv run pytest tests --ignore-glob '*_i.py'", "--ignore-glob"),
@@ -419,3 +419,279 @@ def test_the_command_writes_the_report(tmp_path: Path) -> None:
 def test_a_command_without_what_it_needs_fails(tmp_path: Path, args: list[str]) -> None:
     assert lictor_survey.main(args) == 2
     assert not (tmp_path / "r.json").exists()
+
+
+def _addopts(addopts: str, extra: str = "") -> dict[str, str]:
+    return {"pyproject.toml": f'[tool.pytest.ini_options]\naddopts = "{addopts}"\n{extra}'}
+
+
+@pytest.mark.parametrize(
+    ("addopts", "run", "paths", "eaten"),
+    [
+        # `--cov=X` changes nothing of what runs.
+        ("-ra --cov=pkg", "uv run pytest tests/unit -q", ["tests/unit"], None),
+        ("--cov -ra", "uv run pytest tests/unit -q", ["tests/unit"], None),
+        # A `--cov` that ends `addopts` takes the command's first path: pytest runs everything.
+        ("-ra --cov", "uv run pytest tests/unit -q", ["."], "tests/unit"),
+        ("-ra --cov", "uv run pytest tests/unit tests/other", ["tests/other"], "tests/unit"),
+        ("-ra --cov", "uv run pytest -q tests/unit", ["tests/unit"], None),
+        # In the command a word after `--cov` is its value, always, and nobody is surprised.
+        ("-ra", "uv run pytest --cov src tests/unit", ["tests/unit"], None),
+        ("-ra", "uv run pytest --cov tests/unit", ["."], None),
+    ],
+)
+def test_cov_takes_a_value_only_when_a_word_follows_it(
+    tmp_path: Path, addopts: str, run: str, paths: list[str], eaten: str | None
+) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT, **OTHER, **_addopts(addopts)})
+
+    command = _command(_survey(root, unit=run), "unit")
+
+    assert command["status"] == "understood"
+    assert command["paths"] == paths
+    assert command["eaten"] == eaten
+    assert command["config"] == "pyproject.toml"
+
+
+def test_bookwright_cov_in_addopts_no_longer_hides_the_tests_no_control_runs(
+    tmp_path: Path,
+) -> None:
+    files = _addopts(
+        "-ra --strict-markers --cov=pkg --cov-report=term-missing",
+        "[tool.coverage.report]\nfail_under = 80\n",
+    )
+    root = _tree(tmp_path, {**PKG, **UNIT, **OTHER, **files})
+
+    report = _survey(
+        root, unit="uv run pytest tests/unit -q", acceptance="uv run pytest tests/acceptance -q"
+    )
+
+    assert _unrun(report) == ["tests/integration/test_i.py"]
+    gate = {"cov": "--cov=pkg", "addopts": "pyproject.toml", "threshold": "80"}
+    assert _command(report, "unit")["gate"] == {**gate, "source": "pyproject.toml"}
+    assert _command(report, "acceptance")["gate"] == {**gate, "source": "pyproject.toml"}
+
+
+FAIL_80 = {"setup.cfg": "[coverage:report]\nfail_under = 80\n"}
+
+
+@pytest.mark.parametrize(
+    ("files", "run", "gate"),
+    [
+        ({".coveragerc": "[report]\nfail_under = 90\n"}, "pytest tests", (".coveragerc", "90")),
+        (
+            {"setup.cfg": "[coverage:report]\nfail_under = 70.5\n"},
+            "pytest tests",
+            ("setup.cfg", "70.5"),
+        ),
+        # The first file coverage.py takes is its configuration, even without a minimum.
+        ({".coveragerc": "[run]\nbranch = true\n", **FAIL_80}, "pytest tests", None),
+        (
+            {"cov.ini": "[report]\nfail_under = 60\n"},
+            "pytest tests --cov-config cov.ini",
+            ("cov.ini", "60"),
+        ),
+        ({"setup.cfg": "[coverage:report]\nfail_under = 0\n"}, "pytest tests", None),
+        (FAIL_80, "pytest tests --no-cov", None),
+        # The command's own minimum is its choice; zero is none.
+        (FAIL_80, "pytest tests --cov-fail-under=0", None),
+        ({}, "pytest tests", None),
+    ],
+)
+def test_the_minimum_a_command_inherits_with_the_cov_of_addopts(
+    tmp_path: Path, files: dict[str, str], run: str, gate: tuple[str, str] | None
+) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT, **files, **_addopts("--cov=pkg")})
+
+    found = _command(_survey(root, unit=f"uv run {run}"), "unit")["gate"]
+
+    assert (None if found is None else (found["source"], found["threshold"])) == gate
+
+
+def test_a_minimum_in_addopts_is_inherited_too(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT, **_addopts("--cov=pkg --cov-fail-under 75")})
+
+    gate = _command(_survey(root, unit="uv run pytest tests/unit"), "unit")["gate"]
+
+    assert gate == {
+        "cov": "--cov=pkg",
+        "addopts": "pyproject.toml",
+        "threshold": "75",
+        "source": "pyproject.toml",
+    }
+
+
+def test_without_cov_in_addopts_no_minimum_is_inherited(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path, {**PKG, **UNIT, **_addopts("-ra", "[tool.coverage.report]\nfail_under = 80\n")}
+    )
+
+    command = _command(_survey(root, unit="uv run pytest tests/unit --cov=pkg"), "unit")
+
+    assert command["gate"] is None
+
+
+@pytest.mark.parametrize(
+    ("run", "tool"),
+    [
+        ("uv run pytest tests/unit -q", "pytest"),
+        ("uv run python -m pytest tests", "pytest"),
+        ("uv run ruff check src", "ruff check"),
+        ("uv run ruff format --check src", "ruff format"),
+        ("uv run ruff format --diff src", "ruff format"),
+        # Without `--check` a control formats and passes: it checks nothing.
+        ("uv run ruff format src", None),
+        ("uv run mypy src", "mypy"),
+        ("uv run python -m mypy src", "mypy"),
+        ("gitleaks detect", None),
+        ("uv run python -I -B -m lictor_complexity src --out {out}", None),
+    ],
+)
+def test_a_control_says_which_check_it_is(tmp_path: Path, run: str, tool: str | None) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT})
+
+    assert _command(_survey(root, c=run), "c")["tool"] == tool
+
+
+def test_a_checker_reads_the_files_under_its_paths(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {**PKG, **UNIT, "scripts/s.py": "", "pyproject.toml": '[tool.mypy]\nfiles = ["src"]\n'},
+    )
+
+    report = _survey(
+        root, lint="uv run ruff check", types="uv run mypy", narrow="uv run ruff check src"
+    )
+
+    everything = ["scripts/s.py", "src/pkg/__init__.py", "tests/unit/test_a.py"]
+    assert _command(report, "lint")["covers"] == everything
+    # mypy alone reads the `files` of its configuration.
+    assert _command(report, "types")["covers"] == ["src/pkg/__init__.py"]
+    assert _command(report, "narrow")["covers"] == ["src/pkg/__init__.py"]
+
+
+def _ci(root: Path, *steps: dict[str, Any], **runs: str) -> dict[str, Any]:
+    commands = [{"id": cid, "run": run} for cid, run in runs.items()]
+    ci = [{"file": "ci.yml", "line": i + 1, "origin": "workflow", **s} for i, s in enumerate(steps)]
+    return lictor_survey.survey(root, "src", commands, ["pyproject.toml"], ci)
+
+
+@pytest.mark.parametrize(
+    ("run", "origin", "tool"),
+    [
+        ("uv run ruff format --check src/", "workflow", "ruff format"),
+        # A hook that formats fails when it changes a file: it checks.
+        ("uv run ruff format", "pre-commit", "ruff format"),
+        ("uv run ruff format", "workflow", None),
+        ("ruff check --fix", "pre-commit", "ruff check"),
+        ("uvx ruff check .", "workflow", "ruff check"),
+        ("uv run mypy src/", "workflow", "mypy"),
+        ("uv run pytest -m 'not integration' --cov=pkg", "workflow", "pytest"),
+        ("uv sync --all-extras", "workflow", None),
+        ("uv build", "workflow", None),
+        ("uv run --group docs mkdocs build --strict", "workflow", None),
+        ("uv python install ${{ matrix.python-version }}", "workflow", None),
+        ('echo "$HOME/.cargo/bin"', "workflow", None),
+        ("sh", "workflow", None),
+        ("awk '{ print", "workflow", None),
+        ("python -m zipfile -l dist/x.whl", "workflow", None),
+    ],
+)
+def test_a_step_of_the_ci_is_recognised_with_the_rules_of_the_controls(
+    tmp_path: Path, run: str, origin: str, tool: str | None
+) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT})
+
+    (step,) = _ci(root, {"run": run, "origin": origin})["ci"]
+
+    assert step["status"] == "understood"
+    assert step["tool"] == tool
+    assert (step["file"], step["line"], step["run"]) == ("ci.yml", 1, run)
+
+
+@pytest.mark.parametrize(
+    ("run", "reason"),
+    [
+        ("make lint", "make puede ejecutar cualquier cosa"),
+        ("uv run tox -e py", "tox puede ejecutar cualquier cosa"),
+        ("hatch run test", "hatch puede ejecutar cualquier cosa"),
+        ("bash -c 'uv run pytest'", "bash -c"),
+        ("uv run ${{ matrix.cmd }}", "expresión de GitHub Actions"),
+        ("uv run pytest ${{ matrix.args }}", "expresión de GitHub Actions"),
+        ("uv run pytest -c other.ini", "-c cambia lo que ejecuta"),
+        ("uv run ruff check 'src", "comillas sin cerrar"),
+    ],
+)
+def test_a_step_of_the_ci_whose_reach_cant_be_read_is_unknown(
+    tmp_path: Path, run: str, reason: str
+) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT})
+
+    (step,) = _ci(root, {"run": run})["ci"]
+
+    assert step["status"] == "unknown"
+    assert reason in step["reason"]
+    assert "covers" not in step
+
+
+def test_mypy_alone_without_files_in_its_configuration_reaches_nothing(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT})
+
+    (step,) = _ci(root, {"run": "uv run mypy"})["ci"]
+
+    assert (step["status"], step["covers"]) == ("understood", [])
+
+
+def test_a_hook_that_gets_the_changed_files_reaches_every_file_its_patterns_choose(
+    tmp_path: Path,
+) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT, "scripts/s.py": "", "src/pkg/old_x.py": ""})
+
+    report = _ci(
+        root,
+        {"run": "ruff check --fix", "origin": "pre-commit", "pass_filenames": True},
+        {
+            "run": "ruff check --fix",
+            "origin": "pre-commit",
+            "pass_filenames": True,
+            "files": ["^src/"],
+            "exclude": ["old_"],
+        },
+        # Without the files, its patterns only decide when it runs: it reaches its paths.
+        {
+            "run": "mypy src/",
+            "origin": "pre-commit",
+            "pass_filenames": False,
+            "files": ["^scripts/"],
+        },
+        {"run": "ruff check", "origin": "pre-commit", "pass_filenames": True, "files": ["("]},
+    )
+
+    every, chosen, own, broken = report["ci"]
+    assert every["covers"] == [
+        "scripts/s.py",
+        "src/pkg/__init__.py",
+        "src/pkg/old_x.py",
+        "tests/unit/test_a.py",
+    ]
+    assert chosen["covers"] == ["src/pkg/__init__.py"]
+    assert own["covers"] == ["src/pkg/__init__.py", "src/pkg/old_x.py"]
+    assert broken["status"] == "unknown"
+    assert "patrón" in broken["reason"]
+
+
+def test_the_tests_a_step_of_the_ci_runs_are_marked(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {**PKG, **UNIT, **OTHER})
+
+    report = _ci(
+        root,
+        {"run": "uv run pytest"},
+        {"run": "uv run ruff check ."},
+        {"run": "uv run pytest tests/unit"},
+        unit="uv run pytest tests/unit -q",
+    )
+
+    marks = {t["path"]: t.get("ci_run_by", []) for t in report["tests"]}
+    assert marks == {"tests/integration/test_i.py": [0], "tests/unit/test_a.py": [0, 2]}
+    # A step of the CI is no control: it runs nothing a run verifies with.
+    assert _unrun(report) == ["tests/integration/test_i.py"]

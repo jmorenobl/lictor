@@ -1,0 +1,37 @@
+# Comprobaciones que se ejecutan en cada commit. Instalar con:
+#   uv run pre-commit install
+# Todas usan las herramientas del entorno de uv, así que las versiones son las de uv.lock.
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock
+        name: uv.lock al día con pyproject.toml
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff format --check
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: pytest
+        name: pytest (sin tests con LLM real)
+        entry: uv run pytest -q -n 4
+        language: system
+        # Solo si cambia código o el entorno: ningún test lee el libro ni la documentación.
+        files: ^((src|tests|benchmarks)/.*\.py|pyproject\.toml|uv\.lock)$
+        pass_filenames: false

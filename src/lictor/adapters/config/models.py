@@ -221,6 +221,9 @@ class SurveyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: str = Field(min_length=1)
+    # The command each known remote hook of pre-commit runs, by its id (F76): Lictor reads the
+    # CI, and only the profile knows which hooks are its tools'.
+    ci_hooks: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_placeholders(self) -> Self:
@@ -233,7 +236,8 @@ class SurveyConfig(BaseModel):
 
 
 class BlindSpotsConfig(BaseModel):
-    """What the person accepts that no control sees: paths whose warnings are only counted."""
+    """What the person accepts that no control sees, only counted: paths, and «file: command»
+    for a step of the CI."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

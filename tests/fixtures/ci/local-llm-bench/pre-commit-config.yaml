@@ -1,0 +1,46 @@
+# Todos los hooks de calidad son LOCALES y se ejecutan con `uv run`, de modo
+# que usan la MISMA versión y la MISMA configuración (pyproject.toml) que
+# cuando ejecutas ruff/mypy/pytest a mano. Los hooks remotos de astral-sh
+# fijan su propia versión de ruff y acaban midiendo cosas distintas.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-toml
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true

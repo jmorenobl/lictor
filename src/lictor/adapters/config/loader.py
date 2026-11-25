@@ -68,6 +68,7 @@ class Defences:
     # What a project needs before a run, and how to read what its controls see (ADR-0015).
     needs_plugins: dict[str, str] = field(default_factory=dict)
     survey_run: str | None = None
+    ci_hooks: dict[str, str] = field(default_factory=dict)
     detect: Sequence[str] = ()
 
 
@@ -691,6 +692,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         ),
         needs_plugins=dict(profile.acceptance.needs_plugins),
         survey_run=profile.survey.run if profile.survey is not None else None,
+        ci_hooks=dict(profile.survey.ci_hooks) if profile.survey is not None else {},
         detect=tuple(profile.detect),
     )
 

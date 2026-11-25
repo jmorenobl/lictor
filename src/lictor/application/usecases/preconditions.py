@@ -21,6 +21,7 @@ from lictor.domain.blind_spots import (
     BlindSpots,
     StartRules,
     blind_spots,
+    configuration_problems,
     missing_plugins,
     program_problems,
 )
@@ -334,6 +335,7 @@ class CheckPreconditions:
             dependencies = PreconditionCheck(DEPENDENCIES, tuple(plugins), warnings=(reason,))
             return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=(reason,))], None
         programs, later = program_problems(surveyed, self.start_rules.check_only)
+        programs += configuration_problems(surveyed)
         dependencies = PreconditionCheck(DEPENDENCIES, (*plugins, *programs), warnings=tuple(later))
         spots = blind_spots(surveyed, self.start_rules)
         if spots.skipped is not None:
