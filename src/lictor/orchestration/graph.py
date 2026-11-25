@@ -27,6 +27,7 @@ from lictor.application.ports import (
     VerificationCommands,
 )
 from lictor.application.spec_history import GreenRecord, SpecHistory
+from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.build_report import BuildReport, BuildReportRequest
 from lictor.application.usecases.check_red import CheckRed, CheckRedRequest
 from lictor.application.usecases.commit_green import CommitGreen, CommitGreenRequest
@@ -57,7 +58,7 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.domain.api import UnresolvedBase
 from lictor.domain.blind_spots import blind_spots_record
-from lictor.domain.controls import Control
+from lictor.domain.controls import ACCEPTANCE_ID, Control
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -106,6 +107,7 @@ from lictor.domain.rules import (
     suspicious_driver,
 )
 from lictor.domain.stages import ResultBranch, committed_greens, final_reason
+from lictor.domain.unexecuted import UNEXECUTED, unexecuted_record
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -186,6 +188,8 @@ class GraphState(TypedDict, total=False):
     api_base: str | None
     # The commit the run started from: what the run changed is told from it (H2 of 0.20.0).
     started_at: str | None
+    # Where the last verification that passed left its reports: which test files each JUnit ran.
+    verified_step: str | None
 
 
 @dataclass(frozen=True)
@@ -251,6 +255,8 @@ class GraphContext:
     # Where the work will be integrated (`api.base`, H4 of 0.20.0): the API is compared with where
     # the run's start left it.
     api_base_ref: str | None = None
+    # What the run changed that no control executed, told once it ends (H2 of 0.20.0).
+    unexecuted: UnexecutedSurvey | None = None
 
     @property
     def refactor(self) -> bool:
@@ -263,6 +269,11 @@ def _conventions_record(text: str) -> dict[str, str] | None:
     if not text.strip():
         return None
     return {"text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+
+
+def _verified_step(res: VerifyResult) -> dict[str, Any]:
+    """Where a verification that passed left its reports; one that failed changes nothing."""
+    return {"verified_step": res.evidence.get("path")} if res.ok else {}
 
 
 def _baseline_of(res: VerifyResult) -> dict[str, Any]:
@@ -304,6 +315,35 @@ class _GraphNodes:
     def __init__(self, ctx: GraphContext) -> None:
         self.ctx = ctx
 
+    def _unexecuted(self, state: GraphState) -> None:
+        """Tell what the run changed that no control executed, once its branch moved (H2)."""
+        started = state.get("started_at")
+        finder, environment = self.ctx.unexecuted, self.ctx.environment
+        if finder is None or environment is None or not started:
+            return
+        head = self.ctx.vcs.get_head_sha()
+        if head == started:
+            return
+        step = state.get("verified_step")
+        verified = self.ctx.project_root / step if step else None
+
+        def reports(command: str) -> Path | None:
+            if verified is None:
+                return None
+            name = "acceptance.xml" if command == ACCEPTANCE_ID else f"control_{command}.xml"
+            return verified / name
+
+        evidence = self.ctx.project_root / ".lictor" / "runs" / state["run_id"] / "unexecuted"
+        found = finder.execute(environment, (started, head), evidence, reports)
+        self.ctx.event_log.append(
+            new_event(
+                self.ctx.clock,
+                UNEXECUTED,
+                state["run_id"],
+                data=unexecuted_record(found, started, head),
+            )
+        )
+
     def _finish(
         self,
         state: GraphState,
@@ -332,6 +372,7 @@ class _GraphNodes:
                 else None
             ),
         )
+        self._unexecuted(state)
         event = new_event(
             self.ctx.clock,
             "lictor.run.finished.v1",
@@ -758,6 +799,7 @@ class _GraphNodes:
             "last_failed_at": res.failed_at,
             "failures": [*state.get("failures", []), list(res.failure) if res.failure else None],
             **_baseline_of(res),
+            **_verified_step(res),
             "totals": _verify_totals(verify_duration),
         }
 
@@ -911,6 +953,7 @@ class _GraphNodes:
                 "collateral": list(res.collateral),
             },
             "refactor_outcome": None if res.ok else "discarded",
+            **_verified_step(res),
             "totals": _verify_totals(verification_duration(res.controls, res.acceptance)),
         }
 

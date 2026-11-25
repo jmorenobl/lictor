@@ -7,12 +7,13 @@ would record. The environment is built for that same commit, apart from any run'
 
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
+from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
     CheckProject,
@@ -25,6 +26,7 @@ from lictor.domain.controls import Control
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
 from lictor.domain.rules import NO_COMMITS
+from lictor.domain.unexecuted import UnexecutedChanges
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
 
@@ -52,6 +54,8 @@ class CheckWorkingTreeResult:
     subject: str
     check: CheckProjectResult
     tampered: str | None = None
+    # With a base, what changed from it that no control executed, or why it can't be told (H2).
+    unexecuted: UnexecutedChanges | str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,23 +65,24 @@ class _Subject:
     deleted: tuple[str, ...] = ()
 
 
+@dataclass
 class CheckWorkingTree:
-    """Verify the working tree, or a commit, in a clone and in a verification environment."""
+    """Verify the working tree, or a commit, in a clone and in a verification environment.
 
-    def __init__(
-        self,
-        vcs: Vcs,
-        environment: VerificationEnvironment,
-        readers: ReportReaders,
-        project_root: Path,
-        api: ApiBaseline | None = None,
-    ) -> None:
-        self.vcs = vcs
-        self.environment = environment
-        self.readers = readers
-        self.project_root = project_root
-        self.evidence_dir = aside_dir(project_root, CHECK_DIR)
-        self.api = api
+    With a base (`--base`, or `api.base`), it also compares the public API with it and tells what
+    changed from it that no control executed (H2 and H4 of 0.20.0).
+    """
+
+    vcs: Vcs
+    environment: VerificationEnvironment
+    readers: ReportReaders
+    project_root: Path
+    api: ApiBaseline | None = None
+    unexecuted: UnexecutedSurvey | None = None
+    evidence_dir: Path = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.evidence_dir = aside_dir(self.project_root, CHECK_DIR)
 
     def execute(self, req: CheckWorkingTreeRequest) -> CheckWorkingTreeResult:
         """Check; raise `EnvironmentUnavailableError` if git can't commit or nothing builds.
@@ -110,8 +115,22 @@ class CheckWorkingTree:
                         api_base=api_base,
                     )
                 )
+            unexecuted = self._unexecuted(environment, base, subject.rev)
             tampered = environment.ensure(req.run_id)
-        return CheckWorkingTreeResult(subject.description, result, tampered)
+        return CheckWorkingTreeResult(subject.description, result, tampered, unexecuted)
+
+    def _unexecuted(
+        self, environment: VerificationCommands, base: str | None, rev: str
+    ) -> UnexecutedChanges | str | None:
+        """From the base to what was checked, what no control executed, by this check's JUnit."""
+        if base is None or self.unexecuted is None:
+            return None
+        evidence = self.evidence_dir
+
+        def reports(command: str) -> Path:
+            return evidence / f"{command}.xml"
+
+        return self.unexecuted.execute(environment, (base, rev), evidence / "sin-ejecutar", reports)
 
     def _base(self, req: CheckWorkingTreeRequest, rev: str) -> str | None:
         """Where what is checked left `--base`, or `api.base` as a run compares (H4 of 0.20.0).

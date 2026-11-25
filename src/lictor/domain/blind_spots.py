@@ -170,7 +170,8 @@ def _imported(imports: Sequence[ProjectImport]) -> str:
     return f"{where}: {', '.join(dict.fromkeys(names))}"
 
 
-def _accepted_paths(rules: StartRules) -> list[str]:
+def accepted_paths(rules: StartRules) -> list[str]:
+    """The paths the person accepted, without the entries of the CI."""
     return [entry for entry in rules.accepted if not is_ci_entry(entry)]
 
 
@@ -183,7 +184,7 @@ class _Spots:
 
     def keep(self, paths: Sequence[str]) -> list[str]:
         kept = []
-        roots = _accepted_paths(self.rules)
+        roots = accepted_paths(self.rules)
         for path in paths:
             if path_within(path, roots):
                 self.accepted_paths.add(path)
@@ -377,7 +378,7 @@ def _ci_notes(report: SurveyReport) -> list[str]:
 
 def _unjudged(tests: Sequence[SurveyedTests], rules: StartRules) -> str:
     """How many files of tests the commands that can't be read leave without a judgment."""
-    roots = _accepted_paths(rules)
+    roots = accepted_paths(rules)
     left = [t for t in tests if not t.run_by and not path_within(t.path, roots)]
     if not left:
         return ""

@@ -107,6 +107,7 @@ from lictor.domain.run_branches import (
     run_branch,
     uncommitted_left_out,
 )
+from lictor.domain.unexecuted import UNEXECUTED_TITLE, UnexecutedChanges, unexecuted_lines
 from lictor.domain.verdicts import Passed
 from lictor.orchestration.graph import (
     DURABILITY,
@@ -508,6 +509,8 @@ def check(
         only_here = {c.id for c in runtime.graph_context.check_controls}
         for line in _check_output(res.check, only_here):
             typer.echo(line)
+        for line in _unexecuted_output(res.unexecuted):
+            typer.echo(line)
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
@@ -517,6 +520,16 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+def _unexecuted_output(found: UnexecutedChanges | str | None) -> list[str]:
+    """What changed from the base that no control executed (H2 of 0.20.0), after the controls."""
+    if found is None:
+        return []
+    title = f"\n{UNEXECUTED_TITLE} desde la base:"
+    if isinstance(found, str):
+        return [title, f"- No se puede saber: {found}"]
+    return [title, *unexecuted_lines(found)]
 
 
 def _check_output(check: CheckProjectResult, only_here: Collection[str]) -> list[str]:

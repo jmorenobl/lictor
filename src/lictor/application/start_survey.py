@@ -13,9 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lictor.application.ports import CiReader, ReportReader, Vcs
+from lictor.application.ports import CiReader, ReportReader, Vcs, VerificationCommands
 from lictor.application.run_files import save_output, verification_tree, write_text
-from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.ci import CiStep, CiSteps
 from lictor.domain.reports import InvalidReport, MissingReport
 from lictor.domain.survey import SurveyReport
@@ -61,9 +60,18 @@ class StartSurvey:
     ci: CiReader | None = None
 
     def execute(
-        self, environment: VerificationEnvironment, vcs: Vcs, project_root: Path, evidence: Path
+        self,
+        environment: VerificationCommands,
+        vcs: Vcs,
+        project_root: Path,
+        evidence: Path,
+        rev: str = "HEAD",
     ) -> SurveyReport | str:
-        """Survey HEAD and return its facts, or why there are none; evidence goes to `evidence`."""
+        """Survey `rev` and return its facts, or why there are none; evidence goes to `evidence`.
+
+        HEAD at the start; the run's last commit, or what `check` verified, for what changed
+        with no control executing it (H2 of 0.20.0).
+        """
         evidence.mkdir(parents=True, exist_ok=True)
         given = evidence / INPUT_NAME
         report = evidence / REPORT_NAME
@@ -72,7 +80,7 @@ class StartSurvey:
             token.replace("{in}", str(given)).replace("{out}", str(report))
             for token in shlex.split(self.run)
         ]
-        with verification_tree(vcs, "HEAD", project_root) as tree:
+        with verification_tree(vcs, rev, project_root) as tree:
             ci = self.ci.read(tree) if self.ci is not None else CiSteps()
             payload: dict[str, object] = {
                 "commands": [{"id": c.id, "run": c.run} for c in self.commands],

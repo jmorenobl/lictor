@@ -10,6 +10,7 @@ from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
 from lictor.adapters.ci.yaml_ci import YamlCiReader
 from lictor.adapters.config.loader import (
+    Defences,
     PackagedProfiles,
     ProfileConfigInitializer,
     config_fingerprint,
@@ -54,6 +55,7 @@ from lictor.application.skill import (
 )
 from lictor.application.spec_history import SpecHistory
 from lictor.application.start_survey import StartSurvey, SurveyedCommandSpec
+from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.build_report import BuildReport
 from lictor.application.usecases.check_red import CheckRed
 from lictor.application.usecases.check_working_tree import CheckWorkingTree
@@ -206,6 +208,52 @@ def unconfigured_preconditions(project_root: Path) -> tuple[CheckPreconditions, 
     return checks, SystemClock()
 
 
+def _start_survey(config: LictorConfig, defences: Defences) -> StartSurvey | None:
+    """The profile's survey, asked about every command control of both stages and the
+    acceptance (ADR-0015)."""
+    if defences.survey_run is None:
+        return None
+    return StartSurvey(
+        run=defences.survey_run,
+        commands=[
+            *(SurveyedCommandSpec(c.id, c.run) for c in command_controls(domain_controls(config))),
+            SurveyedCommandSpec(ACCEPTANCE_ID, config.acceptance.run),
+        ],
+        detect=defences.detect,
+        reader=SurveyReader(),
+        ci=YamlCiReader(defences.ci_hooks),
+    )
+
+
+def _start_rules(config: LictorConfig, defences: Defences) -> StartRules:
+    """Who may write what, and which controls only `check` runs: `L0-rutas`'s rules."""
+    return StartRules(
+        writable=config.paths.writable,
+        driver=config.paths.driver,
+        forbidden=defences.forbidden_paths,
+        check_only=[c.id for c in controls_of_stage(domain_controls(config), CHECK)],
+        accepted=config.blind_spots.accepted,
+    )
+
+
+def _unexecuted(
+    vcs: GitCli, root: Path, config: LictorConfig, defences: Defences, readers: ReportReaders
+) -> UnexecutedSurvey | None:
+    """The survey of the start, and what tells a change no control executed with it (H2)."""
+    survey = _start_survey(config, defences)
+    if survey is None:
+        return None
+    rules = _start_rules(config, defences)
+    return UnexecutedSurvey(vcs, root, survey, rules, readers.junit, _junit_ids(config))
+
+
+def _junit_ids(config: LictorConfig) -> tuple[str, ...]:
+    """The commands whose JUnit says which test files ran: the controls with one, and the
+    acceptance."""
+    junit = (c.id for c in command_controls(domain_controls(config)) if c.report == "junit")
+    return (*junit, ACCEPTANCE_ID)
+
+
 def _api_baseline(config: LictorConfig, readers: ReportReaders) -> ApiBaseline | None:
     """How the public API of a base is measured (ADR-0017): with the API control, if any."""
     api = api_control(domain_controls(config))
@@ -320,8 +368,10 @@ def bootstrap_runtime(
         clock=active_clock,
     )
 
-    check_dir = aside_dir(resolved_root, CHECK_DIR)
-    check_audit = AuditSink(JsonlEventLog(check_dir / "journal.jsonl"), active_clock)
+    unexecuted = _unexecuted(vcs, resolved_root, active_config, defences, readers)
+    check_audit = AuditSink(
+        JsonlEventLog(aside_dir(resolved_root, CHECK_DIR) / "journal.jsonl"), active_clock
+    )
     check_working_tree_uc = CheckWorkingTree(
         vcs=vcs,
         environment=VerificationEnvironment(
@@ -330,6 +380,7 @@ def bootstrap_runtime(
         readers=readers,
         project_root=resolved_root,
         api=_api_baseline(active_config, readers),
+        unexecuted=unexecuted,
     )
 
     # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.
@@ -355,27 +406,8 @@ def bootstrap_runtime(
         ),
         spec_source=spec_source,
         needs_plugins=defences.needs_plugins,
-        survey=(
-            StartSurvey(
-                run=defences.survey_run,
-                commands=[
-                    *(SurveyedCommandSpec(c.id, c.run) for c in command_controls(controls)),
-                    SurveyedCommandSpec(ACCEPTANCE_ID, active_config.acceptance.run),
-                ],
-                detect=defences.detect,
-                reader=SurveyReader(),
-                ci=YamlCiReader(defences.ci_hooks),
-            )
-            if defences.survey_run is not None
-            else None
-        ),
-        start_rules=StartRules(
-            writable=active_config.paths.writable,
-            driver=active_config.paths.driver,
-            forbidden=defences.forbidden_paths,
-            check_only=[c.id for c in check_controls],
-            accepted=active_config.blind_spots.accepted,
-        ),
+        survey=unexecuted.survey if unexecuted is not None else None,
+        start_rules=_start_rules(active_config, defences),
         head_controls=attempt_controls,
         readers=readers,
         api=_api_baseline(active_config, readers),
@@ -393,6 +425,7 @@ def bootstrap_runtime(
         hints=active_config.hints,
         conventions=active_config.conventions.text,
         api_base_ref=active_config.api.base,
+        unexecuted=unexecuted,
         check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,

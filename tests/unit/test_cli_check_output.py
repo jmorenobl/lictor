@@ -1,7 +1,7 @@
 """How `lictor check` shows a reader: «lee unit», its score, the mark and its control's log."""
 
 from lictor.application.usecases.check_project import CheckProjectResult, ControlFailure
-from lictor.cli import _check_lines, _check_output
+from lictor.cli import _check_lines, _check_output, _unexecuted_output
 from lictor.domain.api import API_ACCEPT_HINT
 from lictor.domain.controls import Added, CommandControl, ReaderControl
 from lictor.domain.reports import (
@@ -24,6 +24,7 @@ from lictor.domain.results import (
     Read,
     ReaderEntry,
 )
+from lictor.domain.unexecuted import Unexecuted, UnexecutedChanges
 from lictor.domain.verdicts import Execution, Failed, Passed
 
 _UNIT = CommandControl("unit", "L2", "pytest {out}", "junit", mode="measure")
@@ -130,3 +131,15 @@ def test_a_failed_control_says_why_under_its_line_and_where_all_of_it_is() -> No
         "  salida: .lictor/check/unit.log",
         "  completo: .lictor/check/api.error.txt",
     ]
+
+
+def test_check_with_a_base_says_what_changed_that_no_control_executed() -> None:
+    """H2 of 0.20.0: after the controls, by kind; or why it can't be told; or nothing at all."""
+    found = UnexecutedChanges(files=(Unexecuted("README.md", "no_es_codigo"),))
+
+    assert _unexecuted_output(found) == [
+        "\nCambios que ningún control ejecutó desde la base:",
+        "- No es Python: ningún control lo lee: `README.md`",
+    ]
+    assert _unexecuted_output("sin survey")[-1] == "- No se puede saber: sin survey"
+    assert _unexecuted_output(None) == []
