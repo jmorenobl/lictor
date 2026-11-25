@@ -23,6 +23,7 @@ from lictor.application.usecases.agent_events import (
 )
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
 from lictor.domain.controls import agent_tools_with_files
+from lictor.domain.conventions import conventions_block
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.rules import (
@@ -62,6 +63,7 @@ class PrepareDriverRequest:
     max_driver_attempts: int = 0  # only to tell whoever watches; the graph decides
     suppressions: Sequence[str] = ()
     check_commands: Sequence[str] = ()  # the only commands Bash admits
+    conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
 
 
 @dataclass(frozen=True)
@@ -175,6 +177,8 @@ class PrepareDriver:
             "{driver_hints}": request.driver_hints,
             "{hints}": request.hints,
             "{bloque_de_error}": error_block,
+            # Last: the person's text mustn't be read as a placeholder.
+            "{conventions}": conventions_block(request.conventions, "driver"),
         }
         prompt = raw_template
         for k, v in replacements.items():

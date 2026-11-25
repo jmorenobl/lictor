@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from lictor.application.conventions import rule_files_warnings
 from lictor.application.ports import Executor, SpecSource, Vcs
 from lictor.application.run_files import prepare_scratch
 from lictor.application.skill import skill_stub_warning
@@ -24,6 +25,7 @@ from lictor.domain.blind_spots import (
     missing_plugins,
     program_problems,
 )
+from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import PreconditionProblem
 from lictor.domain.rules import (
@@ -80,6 +82,8 @@ class PreconditionsRequest:
     # Where the survey of the start contract leaves its evidence (ADR-0015); without it, what
     # the project needs and what its controls don't see aren't checked.
     survey_dir: Path | None = None
+    # `doctor` tells the rule files whose content the person hasn't reviewed (F79).
+    conventions: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,9 @@ class CheckPreconditions:
     needs_plugins: Mapping[str, str] = field(default_factory=dict)
     survey: StartSurvey | None = None
     start_rules: StartRules | None = None
+    # The profile's rule files, and the hash of each one the person reviewed (F79).
+    rule_files: Sequence[str] = ()
+    reviewed: Mapping[str, str] = field(default_factory=dict)
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
@@ -136,6 +143,8 @@ class CheckPreconditions:
             checks.append(self._features())
         if req.skill and (warning := skill_stub_warning(self.project_root)):
             checks.append(PreconditionCheck("Skill de Lictor", warnings=(warning,)))
+        if req.conventions and has_commits and (rules := self._conventions()) is not None:
+            checks.append(rules)
         if req.check_stage and self.check_stage_ids:
             checks.append(self._check_stage())
         checks.append(self._identity())
@@ -191,6 +200,11 @@ class CheckPreconditions:
             tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking),
             warnings=tuple(str(p) for p in problems if not p.blocking),
         )
+
+    def _conventions(self) -> PreconditionCheck | None:
+        """The rule files of HEAD not reviewed as they are now; nothing without any (F79)."""
+        warnings = rule_files_warnings(self.vcs, self.rule_files, self.reviewed)
+        return None if warnings is None else PreconditionCheck(CONVENTIONS_CHECK, warnings=warnings)
 
     def _check_stage(self) -> PreconditionCheck:
         """Warn, without stopping anything, that a run leaves some controls to `lictor check`."""

@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import sqlite3
 import subprocess
 import threading
@@ -356,6 +357,24 @@ def test_a_run_lists_its_check_controls_once_and_says_they_are_left(tmp_path: Pa
     ]
     finished = next(e for e in events if e.type == "lictor.run.finished.v1")
     assert finished.data["reason"] == final["exit_reason"]
+    assert started.data["conventions"] is None
+
+
+def test_a_run_records_the_projects_rules_with_their_hash(tmp_path: Path) -> None:
+    # F79: `report.md` reads only the journal, so the rules the agents got go in `run.started`.
+    executor = FakeExecutor(mode="good", files_to_write=GOOD_FILES)
+    context = dataclasses.replace(
+        _setup_test_environment(tmp_path, executor), conventions="Todo en inglés."
+    )
+
+    _run_to_the_end(context, "20261113-100000-0003")
+
+    events = context.event_log.events(run_id="20261113-100000-0003")
+    started = next(e for e in events if e.type == "lictor.run.started.v1")
+    assert started.data["conventions"] == {
+        "text": "Todo en inglés.",
+        "sha256": hashlib.sha256("Todo en inglés.".encode()).hexdigest(),
+    }
 
 
 def test_in_a_linked_worktree_the_hint_names_the_worktree_and_what_is_left(

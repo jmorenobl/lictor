@@ -1,7 +1,7 @@
 import hashlib
 import json
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -695,6 +695,36 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
     )
 
 
+def rule_files(config: LictorConfig, profiles_dir: Path | None = None) -> tuple[str, ...]:
+    """The profile's rule files (F79). Only `doctor` and `lictor conventions` read them, so they
+    stay out of the defences and of the fingerprint: a new name mustn't keep a run from resuming.
+    """
+    return tuple(load_profile(config.profile, profiles_dir).rule_files)
+
+
+def write_reviewed_conventions(project_dir: Path, reviewed: Mapping[str, str]) -> None:
+    """Write `conventions.reviewed` into `lictor.json` and leave every other key as it is.
+
+    It is written in `init`'s form; the file is replaced at once, so a kill leaves one or the
+    other. The file must load first: a broken one is the person's to fix, not to overwrite.
+    """
+    target = project_dir / CONFIG_FILENAME
+    load_config(target)
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    conventions = raw.get("conventions")
+    written = dict(conventions) if isinstance(conventions, dict) else {}
+    written["reviewed"] = dict(sorted(reviewed.items()))
+    raw["conventions"] = written
+    payload = json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
+    partial = target.with_name(f".{CONFIG_FILENAME}.tmp")
+    try:
+        partial.write_text(payload, encoding="utf-8")
+        partial.replace(target)
+    except OSError as exc:
+        msg = f"No se pudo escribir '{target}': {exc}"
+        raise ConfigError(msg) from exc
+
+
 def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
     """Hash what a run depends on: the resolved values, whatever file each one came from.
 
@@ -706,8 +736,12 @@ def config_fingerprint(config: LictorConfig, defences: Defences) -> str:
         for source in defences.verification.files
     }
     # Retention is read only when a run starts: changing it mustn't keep one from resuming.
-    # So are the blind spots a person accepts: only the reports read them (ADR-0015).
-    project = config.model_dump(mode="json", exclude={"retention", "blind_spots"})
+    # So are the blind spots a person accepts: only the reports read them (ADR-0015), and the
+    # rule files the person reviewed: only `doctor` reads them. The rules themselves count (F79).
+    project = config.model_dump(
+        mode="json",
+        exclude={"retention": True, "blind_spots": True, "conventions": {"reviewed"}},
+    )
     payload = {"config": project, "defences": resolved}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 

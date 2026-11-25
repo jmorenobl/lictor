@@ -11,6 +11,7 @@ from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
+from lictor.domain.conventions import conventions_report_lines
 from lictor.domain.driver_measures import (
     DriverMeasures,
     InterfaceMeasure,
@@ -627,6 +628,7 @@ class BuildReport:
             "attempts": [],
             "check_controls": [],
             "blind_spots": None,
+            "conventions": None,
             "measures": [],
             "scores": [],
             "skipped_controls": [],
@@ -688,6 +690,7 @@ class BuildReport:
             if isinstance(c, dict)
         ]
         info["blind_spots"] = blind_spot_lines(ev.data.get("blind_spots"))
+        info["conventions"] = ev.data.get("conventions")
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
         scens = ev.data.get("scenarios", [])
@@ -979,7 +982,14 @@ class BuildReport:
             info["check_controls"] or ["- *Ninguno: todos los controles corren en cada intento.*"]
         )
 
-        lines.extend(["", "## Lo que los controles no ven", *_blind_spot_section(info)])
+        lines.extend(
+            [
+                "",
+                "## Lo que los controles no ven",
+                *_blind_spot_section(info),
+                *conventions_report_lines(info["conventions"]),
+            ]
+        )
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])

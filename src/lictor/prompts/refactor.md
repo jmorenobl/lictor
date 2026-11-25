@@ -30,7 +30,7 @@ Reglas:
 
 {medidas_del_codigo}
 
-Contexto del proyecto: {hints}
+{conventions}Contexto del proyecto: {hints}
 
 Si la verificación no pasa, Lictor descarta tu cambio y el escenario sigue en verde: un descarte no
 le cuesta nada al escenario. Se descarta un refactor que cambie el comportamiento, toque lo que no

@@ -1,5 +1,6 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
+import hashlib
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
@@ -235,11 +236,20 @@ class GraphContext:
     refactor_hints: str = ""
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
+    # The project's rules of code (F79): every agent gets them, and nothing checks them.
+    conventions: str = ""
 
     @property
     def refactor(self) -> bool:
         """Whether every implemented green goes through a refactor."""
         return self.refactor_scenario is not None and self.commit_refactor is not None
+
+
+def _conventions_record(text: str) -> dict[str, str] | None:
+    """The rules the run's agents get, for `report.md` to say them once, with their hash."""
+    if not text.strip():
+        return None
+    return {"text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
 
 
 def _baseline_of(res: VerifyResult) -> dict[str, Any]:
@@ -358,6 +368,7 @@ class _GraphNodes:
                     for control in self.ctx.check_controls
                 ],
                 "blind_spots": blind_spots_record(report.blind_spots),
+                "conventions": _conventions_record(self.ctx.conventions),
             },
         )
         self.ctx.event_log.append(event)
@@ -449,6 +460,7 @@ class _GraphNodes:
                 paths_protected=self.ctx.paths_protected,
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
+                conventions=self.ctx.conventions,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
@@ -592,6 +604,7 @@ class _GraphNodes:
                     green_ids=green_ids,
                     check_commands=self.ctx.check_commands,
                     hints=self.ctx.hints,
+                    conventions=self.ctx.conventions,
                     last_error=state.get("last_error"),
                     failed_at=state.get("last_failed_at"),
                     agent_failures=state.get("agent_failures", 0),
@@ -781,6 +794,7 @@ class _GraphNodes:
                     green_ids=[sid for sid, st in state.get("status", {}).items() if st == "green"],
                     check_commands=self.ctx.check_commands,
                     hints=self.ctx.hints,
+                    conventions=self.ctx.conventions,
                     refactor_hints=self.ctx.refactor_hints,
                     forbidden_paths=self.ctx.forbidden_paths,
                     controls=self.ctx.controls,

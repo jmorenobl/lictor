@@ -28,6 +28,7 @@ from lictor.domain.controls import (
     code_controls,
     runnable_command,
 )
+from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import implementer_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
@@ -71,6 +72,7 @@ class ImplementScenarioRequest:
     installed_plugins: Sequence[str] = ()
     # The profile's files, copied next to the call when a control the agent must meet names them.
     agent_files: Sequence[Path] = ()
+    conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
 
 
 @dataclass(frozen=True)
@@ -215,6 +217,8 @@ class ImplementScenario:
             "{medidas}": _measures_text(measures, blocking, files),
             "{hints}": request.hints,
             "{bloque_de_error}": _error_block(request),
+            # Last: the person's text mustn't be read as a placeholder.
+            "{conventions}": conventions_block(request.conventions, "implement"),
         }
         prompt = template
         for key, value in replacements.items():

@@ -784,3 +784,27 @@ def test_the_implementer_hears_of_duplication_only_when_it_blocks(
     prompt = executor.run.call_args.args[0].prompt
     assert ("no haya código repetido" in prompt) is told
     assert ("/repetido.py src`, que dice en su primera línea" in prompt) is told
+
+
+def test_the_projects_rules_reach_the_prompt_before_the_task_with_their_order(
+    tmp_path: Path,
+) -> None:
+    # F79: the rules of code of the project, apart from the task's hints, which win over them.
+    _, executor, _ = _execute(
+        tmp_path, AgentResult(status="ok"), hints="Tarea.", conventions="Todo en inglés."
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "Reglas del proyecto:\nTodo en inglés.\n" in prompt
+    assert prompt.index("Todo en inglés.") < prompt.index("Contexto del proyecto: Tarea.")
+    assert "los valores literales del escenario" in prompt
+    assert "contradice una regla del proyecto, sigue la indicación" in prompt
+    assert "idioma del Gherkin" not in prompt
+
+
+def test_without_rules_of_the_project_the_prompt_has_no_block(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), conventions="  ")
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "Reglas del proyecto" not in prompt
+    assert "{conventions}" not in prompt

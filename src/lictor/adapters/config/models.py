@@ -24,6 +24,7 @@ from lictor.domain.controls import (
     complexity_limit_message,
     reader_problems,
 )
+from lictor.domain.conventions import MAX_CONVENTIONS_CHARS, too_long_message
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
@@ -238,6 +239,41 @@ class BlindSpotsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     accepted: list[str] = Field(default_factory=list)
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class ConventionsConfig(BaseModel):
+    """The project's rules of code, which the agents get (F79), and the rule files they came from.
+
+    `reviewed` is the hash of each rule file's content as the person read it, written by
+    `lictor conventions --reviewed`: only `doctor` reads it, so it stays out of the fingerprint.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str = ""
+    reviewed: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("text")
+    @classmethod
+    def _check_length(cls, text: str) -> str:
+        if len(text) > MAX_CONVENTIONS_CHARS:
+            raise ValueError(too_long_message(len(text)))
+        return text
+
+    @field_validator("reviewed")
+    @classmethod
+    def _check_digests(cls, reviewed: dict[str, str]) -> dict[str, str]:
+        for path, digest in reviewed.items():
+            if not _SHA256.fullmatch(digest):
+                msg = (
+                    f"conventions.reviewed['{path}'] no es un sha256 en hexadecimal: lo escribe "
+                    "`lictor conventions --reviewed`, no se escribe a mano"
+                )
+                raise ValueError(msg)
+        return reviewed
 
 
 class ProfileVerification(BaseModel):
@@ -748,6 +784,9 @@ class Profile(BaseModel):
     hints: str = ""
     # The goals every refactor of the profile is told to reach (ADR-0010): only the profile's.
     refactor_hints: str = ""
+    # The files where a project of this profile keeps rules for people and agents (F79), at any
+    # depth: `doctor` tells the ones whose content the person hasn't reviewed into `conventions`.
+    rule_files: list[str] = Field(default_factory=list)
     # What `{name}` in `hints` stands for, read from the project when the hints are written.
     hint_values: dict[str, HintValue] = Field(default_factory=dict)
     gitignore: list[str] = Field(default_factory=list)
@@ -851,6 +890,7 @@ class LictorConfig(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -904,6 +944,7 @@ class LictorFile(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)

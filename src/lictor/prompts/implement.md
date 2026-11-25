@@ -22,7 +22,7 @@ Reglas:
 - Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
 {medidas}
 
-Contexto del proyecto: {hints}
+{conventions}Contexto del proyecto: {hints}
 
 {bloque_de_error}
 
