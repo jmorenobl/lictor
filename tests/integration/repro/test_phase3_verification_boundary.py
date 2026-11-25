@@ -728,9 +728,11 @@ def test_project_code_only_runs_where_the_tests_import_it(
 ) -> None:
     """Lint and types read the sources: nothing of the project may execute during them."""
     log = tmp_path / "ejecuciones"
+    # Formatted as the profile's `format` control wants it, which runs before the others.
     trace = (
-        '"""Interfaz."""\nimport sys\n\n'
-        f'with open({str(log)!r}, "a", encoding="utf-8") as trace:\n'
+        '"""Interfaz."""\n\nimport sys\n\n'
+        f"LOG = {json.dumps(str(log))}\n"
+        'with open(LOG, "a", encoding="utf-8") as trace:\n'
         '    trace.write(sys.argv[0] + "\\n")\n'
     )
     root = make_project(allowed_paths=CUSTOMIZE_FILES)
@@ -738,7 +740,8 @@ def test_project_code_only_runs_where_the_tests_import_it(
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         write(task.cwd, "src/sitecustomize.py", trace)
         write(task.cwd, "src/usercustomize.py", trace)
-        write(task.cwd, MODULE_PATH, trace + GOOD_BY_SCENARIO[scenario_id].split('"""', 2)[2])
+        rest = GOOD_BY_SCENARIO[scenario_id].split('"""', 2)[2].lstrip("\n")
+        write(task.cwd, MODULE_PATH, f"{trace}\n\n{rest}")
 
     assert run_lictor(root, Agent(impl=impl)) == Outcome(0)
 
@@ -857,7 +860,7 @@ def test_project_without_pythonpath_of_its_own_reaches_the_sources(
 def test_type_control_still_reads_the_sources(make_project: ProjectFactory) -> None:
     def impl(task: AgentTask, scenario_id: str, _attempt: int) -> None:
         good_impl(task, scenario_id)
-        write(task.cwd, "src/iva/malo.py", '"""M."""\nvalor: int = "a"\n')
+        write(task.cwd, "src/iva/malo.py", '"""M."""\n\nvalor: int = "a"\n')
 
     root = make_project()
     run_lictor(root, Agent(impl=impl))
