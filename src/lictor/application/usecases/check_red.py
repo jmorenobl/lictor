@@ -28,6 +28,8 @@ from lictor.domain.driver_measures import (
     DriverMeasures,
     interface_measures,
     measures_record,
+    red_check_phase,
+    red_check_timing,
     red_measures,
     stub_measures,
 )
@@ -274,6 +276,10 @@ class CheckRed:
         self.spec_source: SpecSource = history.spec_source
         self.event_log = audit.event_log
         self.clock = audit.clock
+        # Each run of the acceptance in the red check in progress, with its phase (F52).
+        self._runs: list[tuple[str, int]] = []
+        self._started = self.clock.now()
+        self._step_name = ""
 
     def execute(self, request: CheckRedRequest) -> CheckRedResult:
         """Run acceptance tests, check red rule, and seal driver if fresh and valid."""
@@ -281,6 +287,9 @@ class CheckRed:
             request.project_root, request.run_id, DRIVER_OWNER, request.driver_attempts
         )
         step_dir = new_step_dir(prefix.with_name(f"{prefix.name}-red"))
+        self._runs = []
+        self._started = self.clock.now()
+        self._step_name = step_dir.name
 
         env_problem = self.environment.ensure(request.run_id)
         if env_problem:
@@ -480,6 +489,7 @@ class CheckRed:
                     "attempt": request.driver_attempts,
                     "step": relative_to_project(step_dir, request.project_root),
                     **measures_record(measures),
+                    **self._timing(),
                 },
             )
         )
@@ -495,6 +505,7 @@ class CheckRed:
                     "attempt": request.driver_attempts,
                     "scenario_status": dict(result.scenario_status),
                     "evidence": step_evidence(step_dir, request.project_root),
+                    **self._timing(),
                 },
             )
         )
@@ -946,7 +957,14 @@ class CheckRed:
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
         output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s, extra_env)
         snapshot.verify_and_restore()
+        phase = red_check_phase(out_file.parent.name, self._step_name)
+        self._runs.append((phase, output.duration_ms))
         return cmd_args, output, snapshot.changes
+
+    def _timing(self) -> dict[str, object]:
+        """How long the red check has taken so far, and each of its phases."""
+        elapsed = self.clock.now() - self._started
+        return red_check_timing(self._runs, int(elapsed.total_seconds() * 1000))
 
     def _reject_or_raise(
         self,
@@ -998,6 +1016,7 @@ class CheckRed:
                     "final": final,
                     "error": condensed,
                     "error_path": relative_to_project(error_path, request.project_root),
+                    **self._timing(),
                     "evidence": step_evidence(step_dir, request.project_root),
                 },
             )
@@ -1095,6 +1114,7 @@ class CheckRed:
                 "stub_unchecked": list(registration.stub_unchecked),
                 "already_met": list(registration.already_met),
                 "evidence": step_evidence(step_dir, request.project_root),
+                **self._timing(),
             },
         )
         self.event_log.append(event)

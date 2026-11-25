@@ -95,7 +95,20 @@ ejecutar, y el run lo salta.
    el modelo, el `hints` que escribió y lo que añadió al `.gitignore`. Revisa con la persona:
    - `backend.model`: el modelo que usará el agente.
    - `hints`: ajústalo al proyecto. Dónde vive el código, la interfaz y cómo se prueba. Lo que la
-     persona quiera decirle al agente va aquí.
+     persona quiera decirle al agente para esta tarea va aquí; caduca con la tarea.
+   - **Reglas del proyecto** (`conventions.text`), que duran. Al adoptar, o cuando `lictor doctor`
+     avisa en «Reglas del proyecto», lee con la persona cada fichero que nombra (`AGENTS.md`,
+     `CLAUDE.md`, `CONTRIBUTING.md`…) y propón solo las reglas de código: el idioma de
+     identificadores, mensajes y docstrings; las bibliotecas y patrones que el código usa
+     (excepciones propias, validación, cómo se obtiene una dependencia); lo que una capa no
+     importa; lo que es contrato público. Deja fuera el flujo (git, ramas, revisiones, Spec Kit,
+     «sin flujos autónomos»), el entorno (qué comandos lanzar y con qué opciones) y la descripción
+     del proyecto: el agente de Lictor no debe seguirlos. Si dos ficheros se contradicen o uno
+     está desfasado, pregunta cuál vale. Hasta 4000 caracteres; llegan a los tres agentes y Lictor
+     no comprueba que se sigan: lo que importa de verdad, como escenario o control. Con el texto
+     aprobado, `lictor conventions --reviewed` guarda el hash de cada fichero como está en HEAD y
+     el aviso calla hasta que cambie; revisado y sin nada que cambiar, la misma orden.
+     `lictor conventions` enseña el texto y el estado de cada fichero.
    - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
      `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
    - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
@@ -137,7 +150,10 @@ ejecutar, y el run lo salta.
    en verde sin llamar al agente. Lo que devuelve objetos, fechas o estado no lo puede alterar:
    para eso, `lictor register <ID>…`, antes del primer run
    y lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
-5. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
+5. Antes de dar el comando, compara `features/` y `hints` con `conventions`, y dile a la persona
+   cada choque: en el prompt gana un valor literal del escenario (claves en español de una salida),
+   y después `hints`, sobre las reglas del proyecto. Que decida qué cambia.
+6. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
    `lictor status`, en otra terminal, dice por dónde va. Tras cada verde que implementa, un
    refactor aparte mejora el diseño sin cambiar el comportamiento: entra como un commit

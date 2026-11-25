@@ -264,3 +264,139 @@ tipo, sí sale. No entra en `config_fingerprint`: solo lo leen los informes.
   selecciona con `-m`; las copias de `demo-iva` y `prestamos-biblioteca`, sin avisos.
 - **Las funciones nuevas no pasan de complejidad 10** en la medida del propio perfil, y no añaden
   clones.
+
+## Enmienda 0.19.0: la CI, `--cov`, el `pythonpath` y los controles en HEAD
+
+Sale de F76 y F78 (uso real, `.audits/qa/0-19-0/diseno.md`), con los hallazgos #6, #7, #8, #17,
+#18 y #19 de su revisión (`.audits/qa/0-19-0/revision-fable.md`).
+
+### `--cov` es una opción de valor opcional (F78)
+
+En 0.16.0 un `--cov` en un comando o en `addopts` hacía el comando «no se sabe», y en bookwright
+(`addopts = "... --cov=bookwright ..."`) eso callaba los 1052 tests que ningún control ejecuta. Ahora
+el módulo lo lee como pytest-cov lo declara: un `--cov` toma por valor la palabra que lo sigue, si la
+hay, siempre; `--cov=X` toma `X`. Se lee sobre `addopts` y el comando juntos, en el orden en que los
+ve pytest (`addopts` delante), después de encontrar la configuración con las rutas del comando, como
+pytest. De ahí salen tres hechos:
+
+| Hecho | Regla | Gravedad |
+|:--|:--|:--|
+| `--cov=X` en `addopts` | no cambia lo que se ejecuta: el comando se entiende | — |
+| `--cov` al final de `addopts` | se come la primera ruta del comando (`addopts = -ra --cov` + `pytest tests/unit` ejecuta todo, comprobado en pytest 8.4 y 9.0): el informe lo dice (`eaten`) y las rutas son las que pytest usa de verdad | ✗ `config`: «Escribe `--cov=<paquete>` en addopts» |
+| `--cov` en `addopts` con un mínimo | el `--cov-fail-under` de `addopts`, o el `fail_under` del fichero de coverage.py que pytest-cov toma (`--cov-config`, o el primero de `.coveragerc`, `setup.cfg`, `tox.ini`, `pyproject.toml` que tenga su sección): un subconjunto que pasa sale con 1 y ningún test fallido, y la aceptación nunca pasaría (bookwright: 22 passed, `failures="0"`, exit 1). Un `--no-cov` o un `--cov-fail-under` del propio comando lo anulan | ✗ `config`, uno por configuración, con los comandos a los que afecta: «Saca `--cov` de addopts y ponlo en la orden de la CI» |
+
+Los dos ✗ van en «Dependencias de la verificación»: como un plugin que falta, son del proyecto, la
+verificación no puede hacer lo que dice y el agente no puede tocar esa configuración. No hay código
+de salida nuevo: es `config`, 10.
+
+Cuando un comando «no se sabe» apaga avisos, la comprobación dice además cuántos ficheros de tests
+(y cuántos tests) quedan sin juzgar: «no se puede saber» ya no parece un proyecto sin avisos.
+
+### La CI del proyecto, frente a los controles (F76)
+
+Dos de los cuatro proyectos medidos no tienen GitHub Actions: su barrera es pre-commit. Se leen los
+dos, desde el mismo clon limpio de HEAD que el módulo:
+
+- **Lo lee Lictor, con un analizador de YAML** (`adapters/ci/yaml_ci.py`, PyYAML con `SafeLoader`;
+  `PyYAML` pasa a dependencia de Lictor, no del proyecto). Por líneas se acertaba en los 12 ficheros
+  reales y se fallaba en silencio en YAML válido: un escalar en dos líneas, un paso en flujo
+  `{run: …}`, una clave entre comillas, un `run:` dentro del `script:` de otro paso (#17). La línea
+  de cada comando sale de los nodos de `yaml.compose`.
+- **De un workflow** (`.github/workflows/*.yml|yaml`), cada comando del `run:` de cada paso: un
+  guion se corta en comandos por saltos de línea y por `;`, `&&`, `||`, `|` y `&` fuera de comillas,
+  sin comentarios ni redirecciones, cada uno con su línea. Un paso o un trabajo con
+  `continue-on-error: true` no exige nada y no se lee.
+- **De pre-commit** (`.pre-commit-config.yaml`), cada hook: `entry` + `args` en un repositorio
+  `local`; en uno remoto, el comando que el perfil conoce para su `id` (`survey.ci_hooks`:
+  `ruff`, `ruff-check`, `ruff-format`, `mypy`) + `args`; cualquier otro no se compara. Se leen
+  `pass_filenames`, `files` y `exclude` (también los globales) y `stages` (un hook solo `manual` no
+  exige nada) (#18).
+- **Los reconoce el módulo del perfil**, con las reglas de los controles: Lictor le pasa los pasos en
+  `{in}` (`ci`), con fichero y línea, y el informe dice de cada uno la herramienta y el subcomando que
+  comprueba (`pytest`, `ruff check`, `ruff format`, `mypy`) y los ficheros de Python que alcanza.
+  Un hook que recibe los ficheros cambiados alcanza todos los que eligen sus patrones; uno con
+  `pass_filenames: false`, sus rutas (sus patrones solo deciden cuándo corre). Un `mypy` sin rutas
+  alcanza los `files` de su configuración; un `ruff` sin rutas, todo. `ruff format` sin `--check`
+  cuenta como comprobación en un hook (falla si cambia algo), no en un workflow ni en un control.
+  Un `make`, `tox`, `nox`, `hatch run`, `sh -c` o un `${{ … }}` es «no se sabe». El informe dice
+  también, de cada control, su herramienta y los ficheros que alcanza, así que un control se
+  reconoce por su comando, no por su `id`.
+- **El juicio es del dominio** (`blind_spots`), en «Lo que los controles no ven», siempre ⚠: la CI es
+  del proyecto y Lictor no la ejecuta.
+
+| Aviso | Regla | En los proyectos medidos |
+|:--|:--|:--|
+| La CI comprueba algo que ningún control hace (`ci_sin_control`) | una herramienta y subcomando de la CI sin ningún control con los mismos | pyverifactu: «La CI comprueba `uv run ruff format --check src/` (`.github/workflows/test.yml:31`), `ruff format` (`.pre-commit-config.yaml:16`) y ningún control lo hace»; bookwright, lo mismo |
+| La CI comprueba más ficheros que el control (`ci_mas_ficheros`) | los ficheros que alcanza un paso y no alcanza ningún control de su herramienta, agrupados por su primer directorio | bookwright: `ruff check .` frente a `ruff check src`, 162 ficheros; `mypy` (con `files` en su configuración), 161 |
+| Los tests que ejecuta la CI | no son un aviso aparte: «Tests que ningún control ejecuta» nombra los pasos de la CI que sí los ejecutan | bookwright: «La CI sí los ejecuta: `uv run pytest` (`.github/workflows/tests.yml:35`)» |
+
+Lo que no se puede saber de la CI se nombra en una línea, con el motivo y el sitio; un fichero que no
+se puede leer, en otra. Un comando que no es una comprobación (`uv sync`, `uv build`, `mkdocs build`)
+no se compara ni se nombra.
+
+**Se acepta por fichero y comando**, no por fichero (#19): `blind_spots.accepted` admite entradas
+`"<fichero>: <comando>"` (`".github/workflows/test.yml: uv run ruff format --check src/"`), que se
+comparan por las palabras del comando. Una ruta sola no acepta ningún paso: uno que se añada después a
+ese fichero vuelve a avisar. Las rutas aceptadas siguen valiendo para los ficheros que nombra
+`ci_mas_ficheros`. `run.started` guarda los avisos nuevos en `blind_spots`, como los demás, y la
+cuenta de pasos aceptados (`accepted_ci`).
+
+### Lo que queda fuera
+
+- Una comprobación de la CI que no es de las cuatro herramientas (`mkdocs build --strict`,
+  `uv lock --check`, `pyright`) no se compara: decir «ningún control lo hace» de cada orden de la CI
+  sería ruido, y el perfil no sabe qué comprueban.
+- La configuración propia de ruff (`extend-exclude`) no se lee: un fichero que ruff excluye pero que
+  está bajo las rutas de un paso puede salir en `ci_mas_ficheros`.
+- Las acciones compuestas, los workflows reutilizables y los `matrix` no se expanden: un comando con
+  `${{ … }}` es «no se sabe».
+
+### El `pythonpath` del proyecto, detrás de las dependencias (F77)
+
+El perfil anula el `pythonpath` de pytest (`-o pythonpath=`) porque pytest lo aplica antes de
+importar los plugins y delante de `site-packages`: un `src/typing_extensions.py` sustituiría una
+dependencia. En agentix eso dejaba sin recoger 13 ficheros de `tests/unit`, que importan de
+`tests/support` (comprobado ejecutando `unit`). Ahora `lictor_project_path` lee el `pythonpath` del
+fichero que pytest eligió (`config.inipath`, público desde pytest 6.1), con su formato documentado
+(`[pytest]`, `[tool:pytest]`, `[tool.pytest.ini_options]`, y `[tool.pytest]` y `pytest.toml` desde
+pytest 9), y añade esas rutas **al final** de `sys.path`, tras `src`, en
+`pytest_load_initial_conftests`: después del arranque y de los plugins, detrás de las dependencias.
+Una ruta que sale del árbol verificado para la suite con un error que lo dice. La revisión proponía
+el lector privado de pytest (`load_config_dict_from_file`), que ya cambió de forma entre la 8 y la 9;
+no hace falta.
+
+En pytest 7 y 8 el `pythonpath` es un plugin propio, `python_path`, y con `-o pythonpath=` y ningún
+fichero de configuración falla una aserción antes de la 8.1 (Fable #23). El plugin del perfil lo
+bloquea (`set_blocked`, API de pluggy) en `pytest_addhooks`: su único trabajo es el que el perfil ya
+anula. En pytest 9 no existe. La matriz de `test_lictor_project_path.py` (nueve formatos, sin
+fichero, sin sección de pytest, una ruta fuera) se comprobó con pytest 7.4.4, 8.0.2, 8.4.2 y 9.0.3,
+también en Python 3.9 y con xdist `-n 2`: coincide con lo que hace pytest sin Lictor.
+
+### Los plugins se marcan antes de importarse (F81)
+
+`PYTEST_PLUGINS` importa y marca para reescribir cada plugin por turno. Si uno importa otro de la
+lista antes de su turno (`xdist.looponfail` importa `xdist.plugin`), pytest avisa de que no puede
+reescribirlo, y con `filterwarnings = ["error"]` (agentix) la suite no llega a arrancar. Con la
+carga automática, pytest marca todos antes de importar ninguno. `lictor_project_path`, el primero de
+la lista, hace lo mismo en `pytest_addhooks` con los que aún no están importados. No se toca el
+`filterwarnings` del proyecto.
+
+### Los controles que bloquean pasan en HEAD
+
+F77, F81, la metadata del propio paquete (F82: `version("agentix")` sin el proyecto instalado), el
+umbral de F78 y una base sin formatear (F75) tienen el mismo efecto: un control que bloquea falla en
+HEAD, y el primer intento lo pagaría sin que el agente pueda arreglarlo. `doctor` y un run nuevo
+(`preflight`) ejecutan una vez, en el entorno que ya construyen y en un clon limpio de HEAD, los
+controles `attempt` en `block` (`CheckProject`, con los lectores que lean de ellos), y cada uno que
+falla es ✗ `config` («Los controles pasan en HEAD»), con su error condensado y dónde está su salida
+(`<survey_dir>/controles/`). Corre código del proyecto: el estado se guarda como en un intento
+(`IntegritySnapshot`) y el entorno se comprueba después (`ensure`); un entorno cambiado es
+`environment`. La aceptación no se ejecuta: antes del driver no hay nada que juzgar, y sus
+escenarios pendientes fallan a propósito. Medido: en agentix, ✗ `unit` (los 24 casos de F82); en
+pyverifactu un commit antes del arreglo de formato, ✗ `format` con los tres ficheros que rompieron
+su CI.
+
+Un control cuyo programa no encuentra «Comandos de verificación», y un lector de uno así, no se ejecutan
+en HEAD: volverían a fallar y harían del proyecto (10) lo que puede ser de la máquina (40). Se nombran
+con ⚠, y si no queda ninguno la comprobación queda «no comprobado».
+

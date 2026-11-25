@@ -1,6 +1,6 @@
 [project]
 name = "lictor"
-version = "0.18.0"
+version = "0.19.0"
 description = "Implementa escenarios Gherkin con un agente y los verifica de forma determinista."
 readme = "README.md"
 authors = [
@@ -33,6 +33,7 @@ dependencies = [
     "langgraph>=1.2.18",
     "langgraph-checkpoint-sqlite>=3.1.2,<4",
     "pydantic>=2",
+    "pyyaml>=6.0.2",
     "typer>=0.27.3",
 ]
 
@@ -61,6 +62,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.17.3",
     "types-defusedxml>=0.7.0.20260504",
+    "types-pyyaml>=6.0.12",
 ]
 
 [tool.ruff]
@@ -127,6 +129,7 @@ source = ["lictor"]
 source_paths = [
     "src/lictor/domain/",
     "src/lictor/application/anchor.py",
+    "src/lictor/application/conventions.py",
     "src/lictor/application/events.py",
     "src/lictor/application/seal.py",
     "src/lictor/application/spec_history.py",
@@ -157,6 +160,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_gitignore.py",
     "tests/unit/test_scores.py",
     "tests/unit/test_progress.py",
+    "tests/unit/test_head_controls.py",
     "tests/unit/test_implement_scenario.py",
     "tests/unit/test_prepare_driver.py",
     "tests/unit/test_commit_green.py",
@@ -168,5 +172,9 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_results.py",
     "tests/unit/test_complexity.py",
     "tests/unit/test_duplication.py",
+    "tests/unit/test_api.py",
+    "tests/unit/test_lictor_api.py",
     "tests/unit/test_blind_spots.py",
+    "tests/unit/test_conventions.py",
+    "tests/unit/test_ci.py",
 ]

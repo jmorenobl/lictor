@@ -5,14 +5,16 @@ A reader turns a file into one of these and decides nothing: the verdict is a ru
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Literal
 
 from lictor.domain.model import CoverageScore, MutationScore, TestCaseResult
 from lictor.domain.rules import coverage_score, mutation_score
 
-ReportFormat = Literal["exit-code", "junit", "coverage", "mutation", "complexity", "duplication"]
+ReportFormat = Literal[
+    "exit-code", "junit", "coverage", "mutation", "complexity", "duplication", "api"
+]
 
 
 @dataclass(frozen=True)
@@ -154,6 +156,107 @@ class DuplicationReport:
         return sum(f.tokens for f in self.files)
 
 
+ApiKind = Literal[
+    "module",
+    "function",
+    "class",
+    "method",
+    "staticmethod",
+    "classmethod",
+    "property",
+    "constant",
+    "attribute",
+    "field",
+    "member",
+    "external",
+    "unresolved",
+]
+ParamKind = Literal[
+    "positional", "positional_or_keyword", "keyword", "var_positional", "var_keyword"
+]
+
+
+@dataclass(frozen=True)
+class ApiParam:
+    """One parameter of a public callable: its name, its kind and whether it has a default."""
+
+    name: str
+    kind: ParamKind
+    default: bool = False
+
+
+@dataclass(frozen=True)
+class ApiSymbol:
+    """One public name of the code under test and what it is (ADR-0017).
+
+    `origin` is where it is defined, by module and qualified name: two public names with one
+    origin are one object reached two ways. `params` is None when it isn't called, or when
+    something outside the project decides how (a class whose base is a library's).
+    """
+
+    name: str
+    kind: ApiKind
+    origin: str
+    file: str  # relative to the tree that was measured
+    line: int
+    is_async: bool = False
+    params: tuple[ApiParam, ...] | None = None
+
+
+@dataclass(frozen=True)
+class ApiReport:
+    """Every public name the API command found, in order of name: facts, no base."""
+
+    symbols: tuple[ApiSymbol, ...] = ()
+
+
+BreakKind = Literal[
+    "removed",
+    "kind",
+    "async",
+    "param_removed",
+    "param_kind",
+    "param_moved",
+    "param_default",
+    "param_new",
+]
+
+
+@dataclass(frozen=True)
+class ApiBreak:
+    """One way a public name of the base no longer works as it did (ADR-0017).
+
+    Two breaks are the same when they name the same thing of the same name: `detail` only says it
+    in words, and `aliases` are the other public names of the same object that break alike.
+    """
+
+    name: str
+    change: BreakKind
+    param: str = ""
+    detail: str = field(default="", compare=False)
+    aliases: tuple[str, ...] = field(default=(), compare=False)
+
+
+@dataclass(frozen=True)
+class ApiComparison:
+    """A report of the API compared with the one of the run's base commit (ADR-0017).
+
+    `broken` are the breaks the person hasn't accepted and `accepted` the ones `api.accepted`
+    names; `problem` says why there is no comparison, when the base couldn't be measured.
+    """
+
+    report: ApiReport
+    base: str  # the base commit
+    broken: tuple[ApiBreak, ...] = ()
+    accepted: tuple[ApiBreak, ...] = ()
+    problem: str | None = None
+
+    @property
+    def breaks(self) -> frozenset[ApiBreak]:
+        """Every break, accepted or not: what a refactor may not add to (ADR-0017)."""
+        return frozenset((*self.broken, *self.accepted))
+
+
 type ReportOf[R] = R | MissingReport | InvalidReport
 type Report = (
     JUnitReport
@@ -161,6 +264,8 @@ type Report = (
     | MutationReport
     | ComplexityReport
     | DuplicationReport
+    | ApiReport
+    | ApiComparison
     | MissingReport
     | InvalidReport
 )

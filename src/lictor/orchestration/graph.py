@@ -1,5 +1,6 @@
 """LangGraph state graph orchestration for Lictor v0.1 execution cycle."""
 
+import hashlib
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
@@ -175,6 +176,9 @@ class GraphState(TypedDict, total=False):
     # green's own report there (F71).
     refactor_baseline_step: str | None
     refactor_outcome: str | None
+    # The commit the run started from: the one base of the public API (ADR-0017). Only its SHA;
+    # its report is measured again from git, never read from `runs/`.
+    api_base: str | None
 
 
 @dataclass(frozen=True)
@@ -235,11 +239,20 @@ class GraphContext:
     refactor_hints: str = ""
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
+    # The project's rules of code (F79): every agent gets them, and nothing checks them.
+    conventions: str = ""
 
     @property
     def refactor(self) -> bool:
         """Whether every implemented green goes through a refactor."""
         return self.refactor_scenario is not None and self.commit_refactor is not None
+
+
+def _conventions_record(text: str) -> dict[str, str] | None:
+    """The rules the run's agents get, for `report.md` to say them once, with their hash."""
+    if not text.strip():
+        return None
+    return {"text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
 
 
 def _baseline_of(res: VerifyResult) -> dict[str, Any]:
@@ -358,10 +371,11 @@ class _GraphNodes:
                     for control in self.ctx.check_controls
                 ],
                 "blind_spots": blind_spots_record(report.blind_spots),
+                "conventions": _conventions_record(self.ctx.conventions),
             },
         )
         self.ctx.event_log.append(event)
-        return {"anchor": self._anchor()}
+        return {"anchor": self._anchor(), "api_base": self.ctx.vcs.get_head_sha()}
 
     def _anchor(self) -> dict[str, str]:
         return observe_anchor(self.ctx.vcs, self.ctx.project_root)
@@ -449,6 +463,7 @@ class _GraphNodes:
                 paths_protected=self.ctx.paths_protected,
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
+                conventions=self.ctx.conventions,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
@@ -592,6 +607,7 @@ class _GraphNodes:
                     green_ids=green_ids,
                     check_commands=self.ctx.check_commands,
                     hints=self.ctx.hints,
+                    conventions=self.ctx.conventions,
                     last_error=state.get("last_error"),
                     failed_at=state.get("last_failed_at"),
                     agent_failures=state.get("agent_failures", 0),
@@ -671,6 +687,8 @@ class _GraphNodes:
 
         res = self.ctx.verify_attempt.execute(
             VerifyAttemptRequest(
+                # The public API is compared with the commit the run started from (ADR-0017).
+                api_base=state.get("api_base"),
                 scenario_id=current_id,
                 run_id=state["run_id"],
                 role="implement",
@@ -781,6 +799,7 @@ class _GraphNodes:
                     green_ids=[sid for sid, st in state.get("status", {}).items() if st == "green"],
                     check_commands=self.ctx.check_commands,
                     hints=self.ctx.hints,
+                    conventions=self.ctx.conventions,
                     refactor_hints=self.ctx.refactor_hints,
                     forbidden_paths=self.ctx.forbidden_paths,
                     controls=self.ctx.controls,
@@ -854,6 +873,7 @@ class _GraphNodes:
                 link=self.ctx.map_link,
                 refactor_of=state.get("refactor_of") or "",
                 baseline=_baseline(state),
+                api_base=state.get("api_base"),
             )
         )
         self._verified(state, current_id, "refactor", self._green_slot(state), res)

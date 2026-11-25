@@ -226,6 +226,27 @@ def test_report_gives_the_reason_of_the_exit(tmp_path: Path) -> None:
     assert "**Motivo**: Árbol sucio" in report
 
 
+def test_report_says_how_long_each_red_check_took(tmp_path: Path) -> None:
+    timing = {"duration_ms": 12_000, "phases": {"red": {"runs": 1, "duration_ms": 9_000}}}
+    events = [
+        _event("lictor.run.started.v1", {}),
+        _event("lictor.driver.rejected.v1", {"attempt": 1, "reason": "no_llama", **timing}),
+        _event("lictor.driver.sealed.v1", {"commit": "abc", **timing}),
+    ]
+
+    report = _report(tmp_path, events)
+
+    assert "## Comprobaciones del rojo" in report
+    assert "- intento 1, rechazado (no_llama): rojo en 12 s: aceptación 9 s" in report
+    assert "- sellado: rojo en 12 s: aceptación 9 s" in report
+
+
+def test_a_report_without_timed_red_checks_says_so(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_event("lictor.driver.sealed.v1", {"commit": "abc"})])
+
+    assert "- *Ninguna comprobación del rojo dice su duración.*" in report
+
+
 def test_report_omits_the_reason_when_there_is_none(tmp_path: Path) -> None:
     assert "Motivo" not in _report(tmp_path, [_event("lictor.run.finished.v1", {"exit_code": 0})])
 
@@ -1281,3 +1302,89 @@ def test_report_says_what_the_controls_didnt_see_at_the_start(
 
     section = report.split("## Lo que los controles no ven")[1].split("##")[0]
     assert [line for line in section.splitlines() if line] == expected
+
+
+def test_report_says_the_projects_rules_once_and_that_they_arent_checked(tmp_path: Path) -> None:
+    # F79, Fable #12: rules nothing verifies are said to be so.
+    conventions = {"text": "Todo en inglés.", "sha256": "0" * 64}
+    report = _report(tmp_path, [_started(conventions=conventions), _verify_event({})])
+
+    assert report.count("## Reglas del proyecto") == 1
+    section = report.split("## Reglas del proyecto")[1].split("##")[0]
+    assert "no comprueba que se sigan" in section
+    assert "> Todo en inglés." in section
+
+
+def test_report_without_rules_has_no_section_for_them(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_started(conventions=None), _verify_event({})])
+
+    assert "## Reglas del proyecto" not in report
+
+
+class _Search:
+    """Where each word is written in HEAD, as a search of the commit would say."""
+
+    def __init__(self, found: dict[str, list[str]]) -> None:
+        self.found = found
+        self.asked: list[str] = []
+
+    def cited_in(self, word: str) -> list[str]:
+        self.asked.append(word)
+        return self.found.get(word, [])
+
+
+def _api_record(**fields: object) -> dict[str, object]:
+    removed = {"name": "p.storage.save_chain", "change": "removed", "detail": "ya no existe"}
+    api: dict[str, object] = {
+        "symbols": 40,
+        "base": "c" * 40,
+        "broken": [removed],
+        "accepted": [],
+        "problem": None,
+        **fields,
+    }
+    return _executed(mode="measure", passed=False, output="r/api.log", api=api)
+
+
+def test_report_says_what_the_run_broke_of_the_public_api_and_where_it_is_cited(
+    tmp_path: Path,
+) -> None:
+    """ADR-0017: what the last passing verification broke, and where it is still named."""
+    search = _Search({"save_chain": ["CHANGELOG.md", "docs/storage.md", "src/p/storage.py"]})
+    log = InMemoryEventLog([_verify_event({"api": _api_record()})])
+    use_case = BuildReport(log, search, ["src/"])
+
+    report = use_case.execute(BuildReportRequest(project_root=tmp_path, run_id="run-1")).content
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert section.strip().splitlines() == [
+        f"- **api**: 40 nombres públicos; 1 rotura respecto a {'c' * 12}",
+        "- `p.storage.save_chain`: ya no existe",
+        "  - citado fuera de lo escribible en: CHANGELOG.md, docs/storage.md",
+    ]
+    assert search.asked == ["save_chain"]
+    scores = report.split("## Puntuaciones")[1].split("\n## ")[0]
+    assert "**api** (IVA-001, intento 1): fallo, 40 nombres públicos; 1 rotura" in scores
+
+
+def test_report_marks_an_accepted_break_and_ignores_a_failed_verification(tmp_path: Path) -> None:
+    accepted = {"name": "p.f", "change": "removed", "detail": "ya no existe"}
+    events = [
+        _verify_event({"api": _api_record(broken=[], accepted=[accepted])}),
+        _verify_event({"api": _api_record()}, ok=False, attempt=2),
+    ]
+
+    report = _report(tmp_path, events)
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert "- `p.f`: ya no existe (aceptada en `api.accepted`)" in section
+    assert "save_chain" not in section
+
+
+def test_report_without_a_comparison_says_so(tmp_path: Path) -> None:
+    facts = _executed(mode="measure", api={"symbols": 3, "base": None})
+
+    report = _report(tmp_path, [_verify_event({"api": facts})])
+
+    section = report.split("## API pública")[1].split("\n## ")[0]
+    assert section.strip() == "- *Ningún control de API comparó con la base del run.*"

@@ -1,0 +1,28 @@
+on: [push]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cmd: ["ruff format --check .", "mypy src"]
+    steps:
+      - run: uv run ruff check src  # lint
+      - run: >-
+          uv run pytest
+          tests/unit -q
+      - run: uv run pytest
+          tests/integration
+      - name: plegado con comillas
+        run: "uv run mypy --strict src # no es comentario"
+      - {name: flujo, run: uv run ruff format --check src}
+      - run: uv run ${{ matrix.cmd }}
+      - run: |
+          uv run pytest -m "not slow" \
+            --cov=pkg
+        continue-on-error: true
+      - name: Test
+        "run": uv run pytest tests/e2e
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            run: echo no

@@ -131,6 +131,9 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     assert "evidence" not in measured.data
     assert measured.data["red"] == {"IVA-002": {"step": None, "caught": "no_aserta"}}
     assert (measured.data["stubs"], measured.data["interface"]) == (None, None)
+    # How long the red check took, and each of its runs by phase (F52): here the red alone.
+    assert sealed.data["phases"] == {"red": {"runs": 1, "duration_ms": 500}}
+    assert isinstance(sealed.data["duration_ms"], int)
 
 
 def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) -> None:

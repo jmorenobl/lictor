@@ -8,6 +8,7 @@ from pathlib import Path
 from lictor import __version__
 from lictor.adapters.agents.claude_cli import ClaudeCLI
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.adapters.ci.yaml_ci import YamlCiReader
 from lictor.adapters.config.loader import (
     PackagedProfiles,
     ProfileConfigInitializer,
@@ -16,8 +17,11 @@ from lictor.adapters.config.loader import (
     load_config,
     project_root_of,
     resolve_defences,
+    rule_files,
+    write_reviewed_conventions,
 )
-from lictor.adapters.config.models import LictorConfig, domain_controls
+from lictor.adapters.config.models import LictorConfig, RetentionConfig, domain_controls
+from lictor.adapters.readers.api import ApiReader
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
@@ -29,6 +33,8 @@ from lictor.adapters.spec.gherkin_source import GherkinSource
 from lictor.adapters.store.clock import SystemClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.application.api_baseline import ApiBaseline, api_control
+from lictor.application.conventions import rule_files_at
 from lictor.application.events import ObservedEventLog
 from lictor.application.ports import (
     AuditSink,
@@ -64,9 +70,15 @@ from lictor.application.usecases.verify_attempt import VerifyAttempt
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.blind_spots import StartRules
 from lictor.domain.controls import ACCEPTANCE_ID, Control, command_controls, controls_of_stage
+from lictor.domain.conventions import (
+    RuleFile,
+    describe_conventions,
+    describe_recorded,
+    reviewed_record,
+)
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
-from lictor.domain.rules import RedOracle, control_label
+from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
 from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
 
@@ -141,6 +153,41 @@ def checkout_repository(project_root: Path) -> GitCli:
     return GitCli(project_root.resolve())
 
 
+def retired_runs_kept(project_root: Path) -> int:
+    """How many retired runs the checkout keeps: its `lictor.json`'s, or the default if it fails.
+
+    `retire` reads it in the person's checkout, whose configuration may not load: losing a run's
+    evidence because of a broken `lictor.json` would be worse than keeping the default number.
+    """
+    try:
+        return load_config(project_root).retention.keep_retired
+    except ConfigError:
+        return RetentionConfig().keep_retired
+
+
+def project_conventions(project_root: Path) -> str:
+    """What `lictor conventions` prints: the project's rules and each rule file's state (F79)."""
+    root = project_root.resolve()
+    config = load_config(root)
+    files = _head_rule_files(root, config)
+    return describe_conventions(config.conventions.text, files, config.conventions.reviewed)
+
+
+def record_reviewed_conventions(project_root: Path) -> str:
+    """Take HEAD's rule files as reviewed, as they are now, in `lictor.json` (F79)."""
+    root = project_root.resolve()
+    files = _head_rule_files(root, load_config(root))
+    write_reviewed_conventions(root, reviewed_record(files))
+    return describe_recorded(files)
+
+
+def _head_rule_files(root: Path, config: LictorConfig) -> tuple[RuleFile, ...]:
+    vcs = GitCli(root)
+    if not vcs.has_commits():
+        raise ConfigError(f"Los ficheros de reglas se leen de HEAD. {NO_COMMITS}")
+    return rule_files_at(vcs, "HEAD", rule_files(config))
+
+
 def new_run_id() -> str:
     """Name a run before its worktree exists: the branch may be named after it."""
     return SystemClock().generate_run_id()
@@ -157,6 +204,14 @@ def unconfigured_preconditions(project_root: Path) -> tuple[CheckPreconditions, 
         GitCli(resolved_root), None, None, resolved_root, spec_source=GherkinSource()
     )
     return checks, SystemClock()
+
+
+def _api_baseline(config: LictorConfig, readers: ReportReaders) -> ApiBaseline | None:
+    """How the public API of a base is measured (ADR-0017): with the API control, if any."""
+    api = api_control(domain_controls(config))
+    if api is None:
+        return None
+    return ApiBaseline(api.run, api.timeout_s, readers.api, tuple(config.api.accepted))
 
 
 def bootstrap_runtime(
@@ -185,6 +240,7 @@ def bootstrap_runtime(
         mutation=MutationReader(),
         complexity=ComplexityReader(),
         duplication=DuplicationReader(),
+        api=ApiReader(),
     )
     spec_source = GherkinSource()
 
@@ -206,7 +262,9 @@ def bootstrap_runtime(
 
     initializer = ProfileConfigInitializer()
     init_uc = InitProject(initializer=initializer)
-    report_uc = BuildReport(event_log=active_event_log)
+    report_uc = BuildReport(
+        event_log=active_event_log, search=vcs, writable=active_config.paths.writable
+    )
 
     prepare_driver_uc = PrepareDriver(
         vcs=vcs,
@@ -246,6 +304,7 @@ def bootstrap_runtime(
         environment=environment,
         readers=readers,
         project_root=resolved_root,
+        api=_api_baseline(active_config, readers),
     )
 
     commit_green_uc = CommitGreen(
@@ -268,7 +327,7 @@ def bootstrap_runtime(
         ),
         readers=readers,
         project_root=resolved_root,
-        evidence_dir=check_dir,
+        api=_api_baseline(active_config, readers),
     )
 
     # A run never runs the `check` controls (ADR-0007): it gets them apart, only to name them.
@@ -303,6 +362,7 @@ def bootstrap_runtime(
                 ],
                 detect=defences.detect,
                 reader=SurveyReader(),
+                ci=YamlCiReader(defences.ci_hooks),
             )
             if defences.survey_run is not None
             else None
@@ -314,6 +374,10 @@ def bootstrap_runtime(
             check_only=[c.id for c in check_controls],
             accepted=active_config.blind_spots.accepted,
         ),
+        head_controls=attempt_controls,
+        readers=readers,
+        rule_files=rule_files(active_config),
+        reviewed=active_config.conventions.reviewed,
     )
 
     graph_context = GraphContext(
@@ -324,6 +388,7 @@ def bootstrap_runtime(
         suppressions=defences.suppressions,
         driver_hints=defences.driver_hints,
         hints=active_config.hints,
+        conventions=active_config.conventions.text,
         check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,

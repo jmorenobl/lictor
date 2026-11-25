@@ -46,6 +46,7 @@ from lictor.adapters.config.models import (
     domain_controls,
 )
 from lictor.adapters.config.profiles.python_uv import (
+    lictor_api,
     lictor_complexity,
     lictor_coverage,
     lictor_doubles,
@@ -76,11 +77,13 @@ def test_load_python_uv_profile() -> None:
     assert "tests/acceptance/" in profile.paths.protected
     assert [c.id for c in profile.controls] == [
         "lint",
+        "format",
         "types",
         "unit",
         "coverage",
         "complexity",
         "duplication",
+        "api",
     ]
 
 
@@ -552,6 +555,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_duplication.py",
         "lictor_coverage.py",
         "lictor_survey.py",
+        "lictor_api.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -562,7 +566,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "path", ["primero"])
-    config = SimpleNamespace(invocation_params=SimpleNamespace(dir=tmp_path))
+    config = SimpleNamespace(invocation_params=SimpleNamespace(dir=tmp_path), inipath=None)
 
     pytest_load_initial_conftests(cast(pytest.Config, config))
 
@@ -572,7 +576,10 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
 @pytest.mark.parametrize(
     ("plugin", "expected"),
     [
-        (lictor_project_path.__file__, {"pytest", "sys", "typing"}),
+        (
+            lictor_project_path.__file__,
+            {"configparser", "importlib", "os", "pathlib", "pytest", "sys", "typing"},
+        ),
         (lictor_outcome.__file__, {"pytest", "pathlib", "sys", "typing", "collections"}),
         (
             lictor_impostor.__file__,
@@ -618,6 +625,10 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
         ),
         (lictor_doubles.__file__, {"collections", "math", "pytest", "sys"}),
         (lictor_complexity.__file__, {"ast", "collections", "json", "pathlib", "sys"}),
+        (
+            lictor_api.__file__,
+            {"argparse", "ast", "collections", "dataclasses", "json", "pathlib", "sys"},
+        ),
         (
             lictor_duplication.__file__,
             {
@@ -932,6 +943,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_duplication.__file__,
         lictor_coverage.__file__,
         lictor_survey.__file__,
+        lictor_api.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 

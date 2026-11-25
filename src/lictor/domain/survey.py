@@ -29,8 +29,32 @@ class LaunchedProgram:
 
 
 @dataclass(frozen=True)
+class CoverageGate:
+    """A minimum of coverage a command of tests inherits from the configuration (F78).
+
+    `cov` is the option of `addopts` (in the file `addopts`) that turns coverage on, and
+    `threshold` the minimum `source` sets: a part of the tests that passes stays below it.
+    """
+
+    cov: str
+    addopts: str
+    threshold: str
+    source: str
+
+    def minimum(self) -> str:
+        """Where the minimum is set and what it is: `<file> exige un mínimo (80 %)`."""
+        return f"{self.source} exige un mínimo ({self.threshold} %)"
+
+
+@dataclass(frozen=True)
 class SurveyedCommand:
-    """What one command runs or reads, or, when `understood` is False, why that isn't known."""
+    """What one command runs or reads, or, when `understood` is False, why that isn't known.
+
+    `tool` is the check it is (its program and subcommand, as the profile names them) and
+    `covers` the files of code it reads, for a check that runs no tests. For one that runs them,
+    `config` is the file of configuration it reads, `eaten` the path of the command an option of
+    that file takes as its value, and `gate` the minimum of coverage it inherits.
+    """
 
     id: str
     understood: bool
@@ -39,6 +63,35 @@ class SurveyedCommand:
     paths: tuple[str, ...] = ()
     selects: bool = False
     program: LaunchedProgram | None = None
+    tool: str | None = None
+    covers: tuple[str, ...] = ()
+    config: str | None = None
+    eaten: str | None = None
+    gate: CoverageGate | None = None
+
+
+@dataclass(frozen=True)
+class SurveyedCi:
+    """A step of the project's CI as the survey recognised it (F76).
+
+    `tool` is the check it is, None for a command that checks nothing a control compares with;
+    `tests` says whether it runs tests, and `covers` the files of code it reads, for one that
+    doesn't. When `understood` is False, `reason` says why it can't be
+    known, and the step is only named.
+    """
+
+    file: str
+    line: int
+    run: str
+    origin: str
+    understood: bool
+    reason: str = ""
+    tool: str | None = None
+    covers: tuple[str, ...] = ()
+    tests: bool = False
+
+    def place(self) -> str:
+        return f"{self.file}:{self.line}"
 
 
 @dataclass(frozen=True)
@@ -57,6 +110,7 @@ class SurveyedTests:
     path: str
     tests: int
     run_by: tuple[str, ...] = ()
+    ci_run_by: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +144,8 @@ class SurveyReport:
     code_users: tuple[CodeUser, ...] = ()
     projects: tuple[str, ...] = ()
     unreadable: tuple[str, ...] = ()
+    ci: tuple[SurveyedCi, ...] = ()
+    ci_unreadable: tuple[str, ...] = ()
 
 
 class _BadSurveyError(Exception):
@@ -173,7 +229,59 @@ def _command(raw: object, index: int) -> SurveyedCommand:
         paths=_paths(data.get("paths"), f"{what}.paths"),
         selects=_flag(data.get("selects"), f"{what}.selects"),
         program=program,
+        tool=_optional(data.get("tool"), f"{what}.tool", _text),
+        covers=_paths(data.get("covers", []), f"{what}.covers"),
+        config=_optional(data.get("config"), f"{what}.config", _path),
+        eaten=_optional(data.get("eaten"), f"{what}.eaten", _path),
+        gate=_gate(data.get("gate"), f"{what}.gate"),
     )
+
+
+def _optional(raw: object, what: str, parse: Callable[[object, str], str]) -> str | None:
+    return None if raw is None else parse(raw, what)
+
+
+def _gate(raw: object, what: str) -> CoverageGate | None:
+    if raw is None:
+        return None
+    data = _map(raw, what)
+    return CoverageGate(
+        cov=_text(data.get("cov"), f"{what}.cov"),
+        addopts=_path(data.get("addopts"), f"{what}.addopts"),
+        threshold=_text(data.get("threshold"), f"{what}.threshold"),
+        source=_path(data.get("source"), f"{what}.source"),
+    )
+
+
+def _ci(raw: object, index: int) -> SurveyedCi:
+    what = f"el paso de la CI {index}"
+    data = _map(raw, what)
+    status = data.get("status")
+    if status not in ("understood", "unknown"):
+        raise _BadSurveyError(f"{what} tiene un estado que no existe: {status!r}")
+    understood = status == "understood"
+    return SurveyedCi(
+        file=_path(data.get("file"), f"{what}.file"),
+        line=_count(data.get("line"), f"{what}.line", 1),
+        run=_text(data.get("run"), f"{what}.run"),
+        origin=_text(data.get("origin"), f"{what}.origin"),
+        understood=understood,
+        reason="" if understood else _text(data.get("reason"), f"{what}.reason"),
+        tool=_optional(data.get("tool"), f"{what}.tool", _text),
+        covers=_paths(data.get("covers", []), f"{what}.covers"),
+        tests=_flag(data.get("tests", False), f"{what}.tests"),
+    )
+
+
+def _ci_steps(root: Mapping[str, object]) -> tuple[SurveyedCi, ...]:
+    return tuple(_ci(raw, index) for index, raw in enumerate(_list(root.get("ci", []), "ci")))
+
+
+def _step_indexes(raw: object, what: str, steps: int) -> tuple[int, ...]:
+    indexes = tuple(_count(item, what, 0) for item in _list(raw, what))
+    if any(index >= steps for index in indexes):
+        raise _BadSurveyError(f"{what} nombra un paso de la CI que no se le dio")
+    return indexes
 
 
 def _imports(raw: object, what: str) -> tuple[ProjectImport, ...]:
@@ -198,13 +306,14 @@ def _ids(raw: object, what: str, known: set[str]) -> tuple[str, ...]:
     return ids
 
 
-def _test_file(raw: object, index: int, known: set[str]) -> SurveyedTests:
+def _test_file(raw: object, index: int, known: set[str], steps: int) -> SurveyedTests:
     what = f"el fichero de tests {index}"
     data = _map(raw, what)
     return SurveyedTests(
         path=_path(data.get("path"), f"{what}.path"),
         tests=_count(data.get("tests"), f"{what}.tests", 1),
         run_by=_ids(data.get("run_by"), f"{what}.run_by", known),
+        ci_run_by=_step_indexes(data.get("ci_run_by", []), f"{what}.ci_run_by", steps),
     )
 
 
@@ -268,7 +377,11 @@ def survey_report(data: object) -> SurveyReport | InvalidReport:
         code = _map(root.get("code"), "code")
         commands = _commands(root)
         known = {command.id for command in commands}
-        tests = _each(root, "tests", _test_file, known)
+        ci = _ci_steps(root)
+        tests = tuple(
+            _test_file(raw, index, known, len(ci))
+            for index, raw in enumerate(_list(root.get("tests"), "tests"))
+        )
         loaded = _each(root, "loaded", _loaded, known)
         users = _each(root, "code_users", _user, known)
         _unique(
@@ -285,6 +398,7 @@ def survey_report(data: object) -> SurveyReport | InvalidReport:
             code_users=users,
             projects=_paths(skipped.get("projects"), "skipped.projects"),
             unreadable=_paths(skipped.get("unreadable"), "skipped.unreadable"),
+            ci=ci,
         )
     except _BadSurveyError as bad:
         return InvalidReport(str(bad))

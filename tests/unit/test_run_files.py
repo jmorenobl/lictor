@@ -1,6 +1,7 @@
 """Unit tests for where a run keeps its evidence."""
 
 import os
+import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -9,10 +10,12 @@ import pytest
 
 from lictor.application.run_files import (
     _scratch_root,
+    archive_run_evidence,
     attempt_prefix,
     exclusive_run,
     holding_project,
     new_step_dir,
+    own_dir,
     prune_runs,
     relative_to_project,
     save_output,
@@ -334,3 +337,68 @@ def test_a_link_shaped_like_a_run_is_left_alone(tmp_path: Path) -> None:
 
     assert prune_runs(tmp_path, 0, (), lambda _pruned: None) == [RUN_IDS[1]]
     assert (target / "dato").is_dir()
+
+
+def test_lictors_directory_is_ignored_by_git_whatever_the_project_ignores(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+
+    with exclusive_run(tmp_path, "lictor run"):
+        (tmp_path / ".lictor" / "checkpoints.sqlite").write_text("x", encoding="utf-8")
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    assert status.stdout == ""
+
+
+def test_lictors_own_gitignore_is_left_as_it_is_once_written(tmp_path: Path) -> None:
+    own_dir(tmp_path)
+    (tmp_path / ".lictor" / ".gitignore").write_text("*\n!algo\n", encoding="utf-8")
+
+    own_dir(tmp_path)
+
+    assert (tmp_path / ".lictor" / ".gitignore").read_text(encoding="utf-8") == "*\n!algo\n"
+
+
+def _worktree_with_evidence(root: Path, run_id: str) -> Path:
+    lictor = root / ".lictor"
+    (lictor / "runs" / run_id).mkdir(parents=True)
+    (lictor / "runs" / run_id / "prueba.txt").write_text("e", encoding="utf-8")
+    (lictor / "journal.jsonl").write_text("{}\n", encoding="utf-8")
+    (lictor / "checkpoints.sqlite").write_text("c", encoding="utf-8")
+    return root
+
+
+def test_archiving_keeps_journal_report_and_runs_but_not_the_resume_state(tmp_path: Path) -> None:
+    worktree = _worktree_with_evidence(tmp_path / "wt", "20261125-120000-abcd")
+
+    kept = archive_run_evidence(worktree, tmp_path / "main", "uno-20261125-120000-abcd", 10)
+
+    assert kept == tmp_path / "main" / ".lictor" / "retired" / "uno-20261125-120000-abcd"
+    assert sorted(p.name for p in kept.iterdir()) == ["journal.jsonl", "runs"]
+    assert (kept / "runs" / "20261125-120000-abcd" / "prueba.txt").read_text("utf-8") == "e"
+    assert not list(kept.parent.glob(".*.partial"))
+
+
+def test_archiving_a_worktree_without_evidence_keeps_nothing(tmp_path: Path) -> None:
+    (tmp_path / "wt" / ".lictor").mkdir(parents=True)
+
+    assert archive_run_evidence(tmp_path / "wt", tmp_path / "main", "uno-x", 10) is None
+    assert not (tmp_path / "main" / ".lictor" / "retired").exists()
+
+
+def test_archiving_keeps_only_the_most_recent_retired_runs(tmp_path: Path) -> None:
+    ids = [f"2026112{d}-120000-abcd" for d in range(1, 5)]
+    for rid in ids:
+        worktree = _worktree_with_evidence(tmp_path / rid, rid)
+        archive_run_evidence(worktree, tmp_path / "main", f"uno-{rid}", 2)
+
+    retired = tmp_path / "main" / ".lictor" / "retired"
+    assert sorted(p.name for p in retired.iterdir() if p.is_dir()) == [
+        f"uno-{ids[2]}",
+        f"uno-{ids[3]}",
+    ]

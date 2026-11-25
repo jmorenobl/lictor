@@ -118,7 +118,7 @@ with_refactor = pytest.mark.with_refactor
 """Part of the small group that proves, with the whole configuration, that everything fits."""
 all_controls = pytest.mark.all_controls
 """The defence is about a control the light project drops: without it the case proves nothing."""
-LIGHT_DISABLED = ("lint", "types", "unit", "coverage")
+LIGHT_DISABLED = ("lint", "format", "types", "unit", "coverage")
 # `coverage` reads the run of `unit` (ADR-0008): dropping one alone would leave the other refused.
 LIGHT_PAIRS = (frozenset({"unit", "coverage"}),)
 

@@ -76,7 +76,7 @@ def _use_case(project: Path, runner: FakeRunner) -> CheckWorkingTree:
     vcs = GitCli(project)
     environment = VerificationEnvironment(vcs, runner, audit, project, VerificationEnvSpec())
     readers = all_readers()
-    return CheckWorkingTree(vcs, environment, readers, project, project / ".lictor" / "check")
+    return CheckWorkingTree(vcs, environment, readers, project)
 
 
 def _request(**changes: object) -> CheckWorkingTreeRequest:

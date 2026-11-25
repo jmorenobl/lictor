@@ -24,10 +24,13 @@ from lictor.domain.controls import (
     complexity_limit_message,
     reader_problems,
 )
+from lictor.domain.conventions import MAX_CONVENTIONS_CHARS, too_long_message
 from lictor.domain.stages import ATTEMPT, Stage
 
 ControlLevel = Literal["L1", "L2", "L4", "L5"]
-ReportFormat = Literal["exit-code", "junit", "mutation", "coverage", "complexity", "duplication"]
+ReportFormat = Literal[
+    "exit-code", "junit", "mutation", "coverage", "complexity", "duplication", "api"
+]
 ControlMode = Literal["block", "measure"]
 # When a control runs: in every attempt of a run, or only in `lictor check` (ADR-0007).
 ProfileStatus = Literal["stable", "beta", "alpha"]
@@ -221,6 +224,9 @@ class SurveyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: str = Field(min_length=1)
+    # The command each known remote hook of pre-commit runs, by its id (F76): Lictor reads the
+    # CI, and only the profile knows which hooks are its tools'.
+    ci_hooks: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_placeholders(self) -> Self:
@@ -233,7 +239,55 @@ class SurveyConfig(BaseModel):
 
 
 class BlindSpotsConfig(BaseModel):
-    """What the person accepts that no control sees: paths whose warnings are only counted."""
+    """What the person accepts that no control sees, only counted: paths, and «file: command»
+    for a step of the CI."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: list[str] = Field(default_factory=list)
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class ConventionsConfig(BaseModel):
+    """The project's rules of code, which the agents get (F79), and the rule files they came from.
+
+    `reviewed` is the hash of each rule file's content as the person read it, written by
+    `lictor conventions --reviewed`: only `doctor` reads it, so it stays out of the fingerprint.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str = ""
+    reviewed: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("text")
+    @classmethod
+    def _check_length(cls, text: str) -> str:
+        if len(text) > MAX_CONVENTIONS_CHARS:
+            raise ValueError(too_long_message(len(text)))
+        return text
+
+    @field_validator("reviewed")
+    @classmethod
+    def _check_digests(cls, reviewed: dict[str, str]) -> dict[str, str]:
+        for path, digest in reviewed.items():
+            if not _SHA256.fullmatch(digest):
+                msg = (
+                    f"conventions.reviewed['{path}'] no es un sha256 en hexadecimal: lo escribe "
+                    "`lictor conventions --reviewed`, no se escribe a mano"
+                )
+                raise ValueError(msg)
+        return reviewed
+
+
+class ApiConfig(BaseModel):
+    """What the person accepts to break of the public API that existed (ADR-0017).
+
+    Qualified names, as the report names them: a break of one of them, or of a name under it, is
+    told apart and doesn't fail the control.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -748,6 +802,9 @@ class Profile(BaseModel):
     hints: str = ""
     # The goals every refactor of the profile is told to reach (ADR-0010): only the profile's.
     refactor_hints: str = ""
+    # The files where a project of this profile keeps rules for people and agents (F79), at any
+    # depth: `doctor` tells the ones whose content the person hasn't reviewed into `conventions`.
+    rule_files: list[str] = Field(default_factory=list)
     # What `{name}` in `hints` stands for, read from the project when the hints are written.
     hint_values: dict[str, HintValue] = Field(default_factory=dict)
     gitignore: list[str] = Field(default_factory=list)
@@ -837,6 +894,8 @@ class RetentionConfig(BaseModel):
 
     # Counting the run that starts: it is only read then, so it doesn't decide a resume.
     keep_runs: int = Field(default=10, ge=1)
+    # The evidence `lictor retire` keeps in the checkout's .lictor/retired/, counting the new one.
+    keep_retired: int = Field(default=10, ge=1)
 
 
 class LictorConfig(BaseModel):
@@ -851,6 +910,8 @@ class LictorConfig(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig
     acceptance: AcceptanceConfig
     controls: list[ControlConfig]
@@ -904,6 +965,8 @@ class LictorFile(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     refactor: RefactorConfig = Field(default_factory=RefactorConfig)
     blind_spots: BlindSpotsConfig = Field(default_factory=BlindSpotsConfig)
+    conventions: ConventionsConfig = Field(default_factory=ConventionsConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathsConfig | None = None
     acceptance: AcceptanceConfig | None = None
     controls: list[ControlChange] = Field(default_factory=list)

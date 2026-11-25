@@ -5,7 +5,7 @@ shows (F11), so both say the same thing: what the journal recorded, never a gues
 """
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -14,6 +14,9 @@ from lictor.domain.model import Event
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     VERIFY_FINISHED,
+    RecordedControl,
+    RecordedExecuted,
+    RecordedJudged,
     acceptance_from_record,
     recorded_controls,
     recorded_duration,
@@ -66,6 +69,35 @@ def cost_text(usd: float, decimals: int = 2) -> str:
     return f"{usd:.{decimals}f} $".replace(".", ",")
 
 
+_RED_PHASE_TEXT = {
+    "red": "aceptación",
+    "stubs": "stubs",
+    "interface": "interfaz",
+    "gherkin": "Gherkin",
+}
+
+
+def red_timing_text(data: Mapping[str, object]) -> str | None:
+    """How long a red check took and where, from its event (F52): None if it doesn't say."""
+    total = data.get("duration_ms")
+    if not isinstance(total, int):
+        return None
+    phases = data.get("phases")
+    parts: list[str] = []
+    if isinstance(phases, Mapping):
+        for phase, label in _RED_PHASE_TEXT.items():
+            entry = phases.get(phase)
+            if not isinstance(entry, Mapping):
+                continue
+            runs, took = entry.get("runs"), entry.get("duration_ms")
+            if not isinstance(runs, int) or not isinstance(took, int):
+                continue
+            times = "" if runs == 1 else f" en {runs} ejecuciones"
+            parts.append(f"{label} {duration_text(took)}{times}")
+    detail = f": {'; '.join(parts)}" if parts else ""
+    return f"rojo en {duration_text(total)}{detail}"
+
+
 def duration_text(ms: int) -> str:
     """A duration as a person says it: `59 s`, `2 min 5 s`, `1 h 1 min`."""
     seconds = round(ms / _MS_PER_S)
@@ -97,6 +129,26 @@ class Spend:
     verify_ms: int = 0
 
 
+# How many broken names a warning of the public API names before it only counts the rest.
+_API_NAMED: Final[int] = 3
+
+
+def api_warning(controls: Iterable[RecordedControl]) -> str | None:
+    """What a passing verification broke of the public API of the run's base (ADR-0017), in one
+    line, or None if it broke nothing the person hasn't accepted."""
+    for control in controls:
+        if not isinstance(control, RecordedExecuted):
+            continue
+        judged = control.judgement
+        if not isinstance(judged, RecordedJudged) or judged.api is None or not judged.api.broken:
+            continue
+        broken = judged.api.broken
+        names = ", ".join(f"`{b.name}` ({b.detail})" for b in broken[:_API_NAMED])
+        more = f" y {len(broken) - _API_NAMED} más" if len(broken) > _API_NAMED else ""
+        return f"rompe la API pública de la base: {names}{more}; lo detalla report.md."
+    return None
+
+
 def _number(raw: object) -> float:
     return float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else 0.0
 
@@ -120,6 +172,9 @@ class RunProgress:
     _refactor_spend: dict[str, Spend] = field(default_factory=dict)
     _held: list[str] = field(default_factory=list)  # collateral greens not told yet
     _held_met: list[str] = field(default_factory=list)  # those already met, not told yet
+    # What the passing verification of a scenario broke of the public API (ADR-0017), told with
+    # its green.
+    _api_broken: dict[str, str | None] = field(default_factory=dict)
 
     def _all_spend(self) -> list[Spend]:
         return [*self._spend.values(), *self._refactor_spend.values()]
@@ -274,6 +329,8 @@ class RunProgress:
         acceptance = acceptance_from_record(event.data.get("acceptance"))
         self._owner(event).verify_ms += recorded_duration(controls, acceptance)
         # A refactor that fails tells it once, with `scenario.refactored`.
+        if event.data.get("ok") and event.data.get("role") != REFACTOR_ROLE:
+            self._api_broken[str(event.scenarioid)] = api_warning(controls.values())
         if event.data.get("ok") or event.data.get("role") == REFACTOR_ROLE:
             return []
         failed_at = event.data.get("failed_at")
@@ -282,11 +339,15 @@ class RunProgress:
 
     def _driver_rejected(self, event: Event) -> list[str]:
         attempt, reason = event.data.get("attempt"), event.data.get("reason")
-        return [f"driver: el intento {attempt} se rechazó ({reason})."]
+        timing = red_timing_text(event.data)
+        took = f"; {timing}" if timing else ""
+        return [f"driver: el intento {attempt} se rechazó ({reason}{took})."]
 
-    def _driver_sealed(self, _: Event) -> list[str]:
+    def _driver_sealed(self, event: Event) -> list[str]:
         spend = self.spend(DRIVER_OWNER)
-        return [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)})."]
+        timing = red_timing_text(event.data)
+        took = f", {timing}" if timing else ""
+        return [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)}{took})."]
 
     def _reregistered(self, event: Event) -> list[str]:
         sid = str(event.scenarioid)
@@ -307,7 +368,9 @@ class RunProgress:
         spend = self.spend(sid)
         took = duration_text(spend.agent_ms + spend.verify_ms)
         attempt = event.data.get("attempt")
-        return [f"{sid}: verde, intento {attempt}, {took}, {cost_text(spend.cost_usd)}."]
+        lines = [f"{sid}: verde, intento {attempt}, {took}, {cost_text(spend.cost_usd)}."]
+        warning = self._api_broken.pop(sid, None)
+        return [*lines, f"⚠ {sid}: {warning}"] if warning else lines
 
     def _quarantined(self, event: Event) -> list[str]:
         sid = str(event.scenarioid)

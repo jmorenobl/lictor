@@ -33,6 +33,21 @@
       "title": "AcceptanceConfig",
       "type": "object"
     },
+    "ApiConfig": {
+      "additionalProperties": false,
+      "description": "What the person accepts to break of the public API that existed (ADR-0017).\n\nQualified names, as the report names them: a break of one of them, or of a name under it, is\ntold apart and doesn't fail the control.",
+      "properties": {
+        "accepted": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Accepted",
+          "type": "array"
+        }
+      },
+      "title": "ApiConfig",
+      "type": "object"
+    },
     "BackendConfig": {
       "additionalProperties": false,
       "description": "Configuración del backend de agente.",
@@ -78,7 +93,7 @@
     },
     "BlindSpotsConfig": {
       "additionalProperties": false,
-      "description": "What the person accepts that no control sees: paths whose warnings are only counted.",
+      "description": "What the person accepts that no control sees, only counted: paths, and «file: command»\nfor a step of the CI.",
       "properties": {
         "accepted": {
           "items": {
@@ -139,7 +154,8 @@
             "mutation",
             "coverage",
             "complexity",
-            "duplication"
+            "duplication",
+            "api"
           ],
           "title": "Report",
           "type": "string"
@@ -244,6 +260,26 @@
         "id"
       ],
       "title": "ControlChange",
+      "type": "object"
+    },
+    "ConventionsConfig": {
+      "additionalProperties": false,
+      "description": "The project's rules of code, which the agents get (F79), and the rule files they came from.\n\n`reviewed` is the hash of each rule file's content as the person read it, written by\n`lictor conventions --reviewed`: only `doctor` reads it, so it stays out of the fingerprint.",
+      "properties": {
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "reviewed": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Reviewed",
+          "type": "object"
+        }
+      },
+      "title": "ConventionsConfig",
       "type": "object"
     },
     "LimitsConfig": {
@@ -360,6 +396,12 @@
           "minimum": 1,
           "title": "Keep Runs",
           "type": "integer"
+        },
+        "keep_retired": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Keep Retired",
+          "type": "integer"
         }
       },
       "title": "RetentionConfig",
@@ -393,6 +435,12 @@
     },
     "blind_spots": {
       "$ref": "#/$defs/BlindSpotsConfig"
+    },
+    "conventions": {
+      "$ref": "#/$defs/ConventionsConfig"
+    },
+    "api": {
+      "$ref": "#/$defs/ApiConfig"
     },
     "paths": {
       "anyOf": [

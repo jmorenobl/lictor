@@ -50,7 +50,9 @@ ONE = (
 )
 
 
-UTIL = "src/iva/util.py"
+# Private like its functions: removing a public module is a break of the API the refactor may
+# not add (ADR-0017), and these cases are about the suppressions, not the API.
+UTIL = "src/iva/_util.py"
 
 
 def _adopted(make_project: ProjectFactory) -> Path:

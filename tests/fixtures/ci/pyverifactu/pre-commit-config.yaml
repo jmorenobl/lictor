@@ -1,0 +1,54 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+repos:
+  # Ruff for linting and formatting
+  # Version matches ruff>=0.14.4 in pyproject.toml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      # Ruff linting (reads from pyproject.toml)
+      - id: ruff
+        name: ruff (linting)
+        args: [--fix]
+        types_or: [python, pyi]
+      # Ruff formatting (reads from pyproject.toml)
+      - id: ruff-format
+        name: ruff (formatting)
+        types_or: [python, pyi]
+
+  # MyPy for type checking
+  # Version matches mypy>=1.18.2 in pyproject.toml
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        name: mypy (type checking)
+        additional_dependencies: [
+          pydantic>=2.12.4,
+          httpx>=0.28.0,
+          zeep>=4.3.0,
+          types-python-dateutil,
+          types-requests>=2.32.0,
+          lxml-stubs>=0.5.0,
+        ]
+        args: [--config-file=pyproject.toml, src/]
+        types: [python]
+        pass_filenames: false
+        files: ^src/verifactu_py/
+        exclude: ^(ref/|build/|dist/)
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: debug-statements

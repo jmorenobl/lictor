@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from lictor.domain.ci import CiSteps
+from lictor.domain.conventions import TreeEntry
 from lictor.domain.model import (
     AgentResult,
     AgentTask,
@@ -19,6 +21,7 @@ from lictor.domain.model import (
     TreeChange,
 )
 from lictor.domain.reports import (
+    ApiReport,
     ComplexityReport,
     CoverageReport,
     DuplicationReport,
@@ -102,6 +105,15 @@ class Worktrees(Protocol):
 
     def delete_branch(self, branch: str) -> None:
         """Delete a branch only if it is integrated into HEAD, as `git branch -d` does."""
+        ...
+
+
+class TextSearch(Protocol):
+    """Where a word is written in the committed project: `report.md` says where a broken public
+    name is still cited (ADR-0017)."""
+
+    def cited_in(self, word: str) -> list[str]:
+        """The files of HEAD that hold `word` as a whole word, relative to the project."""
         ...
 
 
@@ -192,6 +204,14 @@ class Vcs(Protocol):
         """Return the content of a file in the tree of `rev`."""
         ...
 
+    def tree_entries(self, rev: str) -> list[TreeEntry]:
+        """Return every file and link of the tree of `rev`, at any depth, with its mode."""
+        ...
+
+    def read_bytes(self, rev: str, path: str) -> bytes:
+        """Return the bytes of a file, or of a link's target, in the tree of `rev`."""
+        ...
+
     def parent_of(self, rev: str) -> str:
         """Return the first parent of a commit, or "" for a root commit."""
         ...
@@ -264,6 +284,15 @@ class ReportReader[R](Protocol):
     def read(self, path: Path) -> ReportOf[R]: ...
 
 
+class CiReader(Protocol):
+    """Reads the commands of the project's CI from a tree: its workflows and its pre-commit.
+
+    It reads files and runs nothing; a file it can't read is named in `unreadable`, never raised.
+    """
+
+    def read(self, root: Path) -> CiSteps: ...
+
+
 @dataclass(frozen=True)
 class ReportReaders:
     """One reader per format that leaves a report; `exit-code` leaves none and needs no reader."""
@@ -273,6 +302,7 @@ class ReportReaders:
     mutation: ReportReader[MutationReport]
     complexity: ReportReader[ComplexityReport]
     duplication: ReportReader[DuplicationReport]
+    api: ReportReader[ApiReport]
 
 
 @runtime_checkable

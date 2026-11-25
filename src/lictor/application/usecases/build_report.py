@@ -1,16 +1,18 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from lictor.application.ports import EventLog
+from lictor.application.ports import EventLog, TextSearch
 from lictor.application.seal import hash_file, hash_tree
+from lictor.domain.api import break_line, describe_api
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
+from lictor.domain.conventions import conventions_report_lines
 from lictor.domain.driver_measures import (
     DriverMeasures,
     InterfaceMeasure,
@@ -26,12 +28,14 @@ from lictor.domain.progress import (
     calls_text,
     cost_text,
     duration_text,
+    red_timing_text,
     status_text,
 )
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     OLDER_EVENTS,
     VERIFY_FINISHED,
+    RecordedApi,
     RecordedControl,
     RecordedExecuted,
     RecordedJudged,
@@ -45,7 +49,7 @@ from lictor.domain.results import (
     recorded_duration,
     recorded_from_failed_run,
 )
-from lictor.domain.rules import describe_score, minimum_text
+from lictor.domain.rules import describe_score, minimum_text, path_within
 from lictor.domain.stub_proof import unchecked_note
 
 _MS_PER_SECOND: Final[int] = 1000
@@ -73,6 +77,54 @@ def _seconds_between(start: str, end: str) -> int | None:
     return int(elapsed.total_seconds() * _MS_PER_SECOND)
 
 
+def _verified_owner(
+    info: dict[str, Any], sid: str | None, *, refactor: bool
+) -> dict[str, Any] | None:
+    """Whose verification it is: the scenario's, or its refactor's."""
+    if refactor and sid:
+        return _refactor_of(info, sid)
+    found: dict[str, Any] | None = info["scenarios"].get(sid or "")
+    return found
+
+
+def _note_api(info: dict[str, Any], controls: Mapping[str, Any]) -> None:
+    """Keep the API comparison of a passing verification: what the run leaves broken."""
+    for control_id, recorded in controls.items():
+        api = _compared_api(recorded)
+        if api is not None:
+            info["api"] = (control_id, api)
+
+
+def _note_red_check(info: dict[str, Any], outcome: str, ev: Event) -> None:
+    """Keep how long a red check took, if its event says it (F52)."""
+    timing = red_timing_text(ev.data)
+    if timing is None:
+        return
+    attempt = ev.data.get("attempt")
+    which = f"intento {attempt}, " if attempt is not None else ""
+    took = ev.data.get("duration_ms")
+    info["red_checks"].append(
+        (f"- {which}{outcome}: {timing}", took if isinstance(took, int) else 0)
+    )
+
+
+def _quarantine_lines(info: dict[str, Any]) -> list[str]:
+    if not info["quarantines"]:
+        return ["- *Ningún escenario en cuarentena.*"]
+    lines: list[str] = []
+    for q_id, q_data in sorted(info["quarantines"].items()):
+        lines.append(f"- **{q_id}**: {q_data['reason']}")
+        if q_data.get("last_error"):
+            lines.extend(["  ```", f"  {q_data['last_error']}", "  ```"])
+    return lines
+
+
+def _red_check_lines(info: dict[str, Any]) -> list[str]:
+    if not info["red_checks"]:
+        return ["- *Ninguna comprobación del rojo dice su duración.*"]
+    return [line for line, _ in info["red_checks"]]
+
+
 def _total_duration(info: dict[str, Any]) -> str:
     """The run's wall clock, from its start to its end, and how much of it went where.
 
@@ -86,6 +138,9 @@ def _total_duration(info: dict[str, Any]) -> str:
         f"agente {duration_text(int(owners['agent_ms']))}, "
         f"verificación {duration_text(int(owners['verify_ms']))}"
     )
+    red_ms = sum(took for _, took in info["red_checks"])
+    if red_ms:
+        split += f", rojo {duration_text(red_ms)}"
     start, end = info["started_at"], info["finished_at"]
     wall = _seconds_between(start, end) if start and end else None
     if wall is None:
@@ -193,7 +248,31 @@ def _judged_score(judged: RecordedJudged) -> str:
     if judged.duplication is not None:
         d = judged.duplication
         return f", {describe_duplication(d.clones, d.in_clones, d.code_tokens)}"
+    if judged.api is not None:
+        a = judged.api
+        described = describe_api(a.symbols, a.base, len(a.broken), len(a.accepted), a.problem)
+        return f", {described}"
     return f", {describe_score(judged.score)}" if judged.score else ""
+
+
+def _api_section(
+    found: tuple[str, RecordedApi] | None, cited: Mapping[str, Sequence[str]]
+) -> list[str]:
+    """What the run broke of the public API it started with (ADR-0017), as its last passing
+    verification measured it, and where each broken name is still cited outside what the agent
+    may write."""
+    if found is None:
+        return ["- *Ningún control de API comparó con la base del run.*"]
+    control_id, api = found
+    described = describe_api(api.symbols, api.base, len(api.broken), len(api.accepted), api.problem)
+    lines = [f"- **{control_id}**: {described}"]
+    for item, accepted in [*((b, False) for b in api.broken), *((b, True) for b in api.accepted)]:
+        mark = " (aceptada en `api.accepted`)" if accepted else ""
+        lines.append(f"- {break_line(item)}{mark}")
+        places = cited.get(item.name, ())
+        if places:
+            lines.append(f"  - citado fuera de lo escribible en: {', '.join(places)}")
+    return lines
 
 
 def _blind_spot_section(info: dict[str, Any]) -> list[str]:
@@ -204,6 +283,16 @@ def _blind_spot_section(info: dict[str, Any]) -> list[str]:
     return [f"- {line}" for line in spots] or [
         "- *Nada: algún control ve cada test y cada fichero que usa el código.*"
     ]
+
+
+def _compared_api(recorded: RecordedControl) -> RecordedApi | None:
+    """What an API control compared with the run's base, if it did."""
+    if not isinstance(recorded, RecordedExecuted):
+        return None
+    judged = recorded.judgement
+    if not isinstance(judged, RecordedJudged) or judged.api is None or judged.api.base is None:
+        return None
+    return judged.api
 
 
 @dataclass(frozen=True)
@@ -559,8 +648,16 @@ def _scenario_table(
 class BuildReport:
     """Use case to aggregate journal events and write report.md."""
 
-    def __init__(self, event_log: EventLog) -> None:
+    def __init__(
+        self,
+        event_log: EventLog,
+        search: TextSearch | None = None,
+        writable: Sequence[str] = (),
+    ) -> None:
         self.event_log = event_log
+        # Where a broken public name is still cited, outside what the agent may write (ADR-0017).
+        self.search = search
+        self.writable = tuple(writable)
 
     def execute(self, req: BuildReportRequest) -> BuildReportResult:
         """Read journal events, deduplicate, aggregate metrics, and write report.md."""
@@ -609,7 +706,21 @@ class BuildReport:
         data["retired_evidence"] = _retirement_notes(events, retired)
         older = sum(1 for ev in events if ev.type in OLDER_EVENTS)
         data["journal_damage"] = replace(self.event_log.damage(), older=older)
+        data["api_cited"] = self._cited(data["api"])
         return self._format_markdown(data)
+
+    def _cited(self, found: tuple[str, RecordedApi] | None) -> dict[str, list[str]]:
+        """Each broken name's files in HEAD outside `paths.writable`, by its last part."""
+        if found is None or self.search is None:
+            return {}
+        api = found[1]
+        cited: dict[str, list[str]] = {}
+        for item in (*api.broken, *api.accepted):
+            word = item.name.rsplit(".", 1)[-1]
+            places = [f for f in self.search.cited_in(word) if not path_within(f, self.writable)]
+            if places:
+                cited[item.name] = places
+        return cited
 
     def _aggregate_metrics(self, events: list[Event]) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -627,11 +738,15 @@ class BuildReport:
             "attempts": [],
             "check_controls": [],
             "blind_spots": None,
+            "conventions": None,
+            # The last API comparison of a passing verification: what the run leaves broken.
+            "api": None,
             "measures": [],
             "scores": [],
             "skipped_controls": [],
             "rejected_drivers": [],
             "driver_measures": [],
+            "red_checks": [],
             "reopened": [],
             "reregistered": [],
             "by_hand": [],
@@ -688,6 +803,7 @@ class BuildReport:
             if isinstance(c, dict)
         ]
         info["blind_spots"] = blind_spot_lines(ev.data.get("blind_spots"))
+        info["conventions"] = ev.data.get("conventions")
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
         scens = ev.data.get("scenarios", [])
@@ -756,6 +872,7 @@ class BuildReport:
         info["exit_reason"] = str(ev.data.get("reason", "") or "")
 
     def _on_driver_sealed(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, "sellado", ev)
         info["driver_seen"] = True
         info["driver"]["status"] = "sellado"
         info["driver"]["commit"] = str(ev.data.get("commit", "-"))
@@ -763,7 +880,8 @@ class BuildReport:
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]
 
-    def _on_driver_checked(self, _: Event, info: dict[str, Any]) -> None:
+    def _on_driver_checked(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, "comprobado", ev)
         info["driver_seen"] = True
         info["driver"]["status"] = "comprobado"
 
@@ -777,6 +895,7 @@ class BuildReport:
             )
 
     def _on_driver_rejected(self, ev: Event, info: dict[str, Any]) -> None:
+        _note_red_check(info, f"rechazado ({ev.data.get('reason')})", ev)
         info["driver_seen"] = True
         if ev.data.get("final"):
             info["driver"]["status"] = "rechazado"
@@ -851,15 +970,14 @@ class BuildReport:
         controls = recorded_controls(ev.data.get("controls"))
         acceptance = acceptance_from_record(ev.data.get("acceptance"))
         refactor = ev.data.get("role") == REFACTOR_ROLE
-        owner = _refactor_of(info, sid) if refactor and sid else info["scenarios"].get(sid or "")
+        owner = _verified_owner(info, sid, refactor=refactor)
         if owner is not None:
             owner["verify_ms"] += recorded_duration(controls, acceptance)
 
         # A refactor's failure costs no attempt: it is told in its own section.
-        if not ev.data.get("ok") and not refactor:
-            failed_at = ev.data.get("failed_at")
-            if failed_at:
-                info["failed_by_level"][str(failed_at)] += 1
+        failed_at = ev.data.get("failed_at")
+        if not ev.data.get("ok") and not refactor and failed_at:
+            info["failed_by_level"][str(failed_at)] += 1
 
         attempt = f"{ev.data.get('attempt')} (refactor)" if refactor else ev.data.get("attempt")
         outcome = "verde" if ev.data.get("ok") else str(ev.data.get("failed_at") or "falló")
@@ -870,6 +988,8 @@ class BuildReport:
         for control_id, recorded in controls.items():
             where = f"**{control_id}** ({sid}, intento {attempt})"
             self._process_control(info, where, recorded, controls)
+        if ev.data.get("ok"):
+            _note_api(info, controls)
 
     @staticmethod
     def _process_control(
@@ -945,17 +1065,9 @@ class BuildReport:
             *_scenario_table(info, owners, totals),
         ]
 
-        lines.extend(["", "## Cuarentenas"])
-        if not info["quarantines"]:
-            lines.append("- *Ningún escenario en cuarentena.*")
-        else:
-            for q_id, q_data in sorted(info["quarantines"].items()):
-                lines.append(f"- **{q_id}**: {q_data['reason']}")
-                if q_data.get("last_error"):
-                    lines.append("  ```")
-                    lines.append(f"  {q_data['last_error']}")
-                    lines.append("  ```")
+        lines.extend(["", "## Cuarentenas", *_quarantine_lines(info)])
 
+        lines.extend(["", "## Comprobaciones del rojo", *_red_check_lines(info)])
         lines.extend(_green_sections(info))
         lines.extend(["", "## Refactors", *_refactor_lines(info)])
 
@@ -979,7 +1091,15 @@ class BuildReport:
             info["check_controls"] or ["- *Ninguno: todos los controles corren en cada intento.*"]
         )
 
-        lines.extend(["", "## Lo que los controles no ven", *_blind_spot_section(info)])
+        lines.extend(
+            [
+                "",
+                "## Lo que los controles no ven",
+                *_blind_spot_section(info),
+                *conventions_report_lines(info["conventions"]),
+                *["", "## API pública", *_api_section(info["api"], info["api_cited"])],
+            ]
+        )
 
         lines.extend(["", "## Controles en medición"])
         lines.extend(info["measures"] or ["- *Ningún control en medición.*"])

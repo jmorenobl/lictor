@@ -156,6 +156,33 @@ def test_a_sealed_driver_says_its_calls_and_cost() -> None:
     assert lines == ["driver: sellado (2 llamadas, 0,07 $)."]
 
 
+_TIMED = {
+    "duration_ms": 75_000,
+    "phases": {
+        "red": {"runs": 1, "duration_ms": 9_000},
+        "interface": {"runs": 2, "duration_ms": 16_000},
+    },
+}
+
+
+def test_a_sealed_driver_says_how_long_its_red_took_and_where() -> None:
+    lines = _lines(RunProgress(), _finished(None, 0.03, 1000), _event("driver.sealed", **_TIMED))
+
+    assert lines == [
+        "driver: sellado (1 llamada, 0,03 $, rojo en 1 min 15 s: aceptación 9 s; "
+        "interfaz 16 s en 2 ejecuciones)."
+    ]
+
+
+def test_a_rejected_driver_says_how_long_its_red_took() -> None:
+    event = _event("driver.rejected", attempt=1, reason="sobrevive", **_TIMED)
+
+    assert RunProgress().observe(event) == [
+        "driver: el intento 1 se rechazó (sobrevive; rojo en 1 min 15 s: aceptación 9 s; "
+        "interfaz 16 s en 2 ejecuciones)."
+    ]
+
+
 def test_a_green_says_its_attempt_time_and_cost() -> None:
     progress = RunProgress()
 

@@ -27,6 +27,6 @@ Reglas:
 
 Instrucciones del perfil: {driver_hints}
 
-Contexto del proyecto: {hints}
+{conventions}Contexto del proyecto: {hints}
 
 {bloque_de_error}

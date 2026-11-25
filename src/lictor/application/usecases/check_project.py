@@ -10,6 +10,7 @@ from typing import assert_never
 from lictor.application.control_reports import (
     ControlEvidence,
     ControlRun,
+    Judging,
     Readings,
     failure_reason,
     lent_note,
@@ -26,6 +27,7 @@ from lictor.application.run_files import (
     save_output,
 )
 from lictor.application.usecases.verify_attempt import describe_tampering
+from lictor.domain.api import ApiBase
 from lictor.domain.controls import (
     ACCEPTANCE_ID,
     Added,
@@ -62,6 +64,9 @@ from lictor.domain.verdicts import (
     trust,
 )
 
+# What each blocked control keeps of its failure: its reason and its first cases.
+BLOCKED_CHARS = 800
+
 
 @dataclass(frozen=True)
 class CheckAcceptanceSpec:
@@ -93,6 +98,8 @@ class CheckProjectRequest:
     keep_going: bool = False
     control_ids: Sequence[str] | None = None
     deleted: Sequence[str] = ()
+    # The base the public API is compared with (`--base`), measured already (ADR-0017).
+    api_base: ApiBase | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +115,8 @@ class CheckProjectResult:
     added: tuple[Added, ...] = ()
     # The note of each control that ran with the arguments of a reader that only runs in check.
     lent: Mapping[str, str] = field(default_factory=dict)
+    # Each control that failed blocking, with why, in the order they ran.
+    blocked: tuple[tuple[str, str], ...] = ()
 
     @property
     def acceptance_verdict(self) -> Verdict | None:
@@ -141,6 +150,7 @@ class CheckProject:
         readings = Readings()
         lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
+        blocked: list[tuple[str, str]] = []
 
         for step in steps:
             ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
@@ -151,6 +161,17 @@ class CheckProject:
             if failure is not None:
                 reason = failure_reason(step, ctrl_run.entry, failure.reason)
                 failure = replace(failure, reason=reason)
+                blocked.append(
+                    (
+                        step.control.id,
+                        condense_error(
+                            failed_at=step.control.id,
+                            raw_error=reason,
+                            test_cases=failure.cases,
+                            max_chars=BLOCKED_CHARS,
+                        ),
+                    )
+                )
                 first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
@@ -173,6 +194,7 @@ class CheckProject:
             acceptance=accepted,
             added=selection.added,
             lent=lent,
+            blocked=tuple(blocked),
         )
         if first_failure is None:
             return done
@@ -210,7 +232,9 @@ class CheckProject:
             # `check` keeps no snapshot: nothing it runs is trusted to leave the state alone.
             return self.runner.run(cmd=command, cwd=tree, timeout_s=timeout_s), ()
 
-        return run_control(step, self.readers, partial(self._evidence, req), execute, readings)
+        evidence = partial(self._evidence, req)
+        judging = Judging(self.readers, req.api_base)
+        return run_control(step, judging, evidence, execute, readings)
 
     def _evidence(self, req: CheckProjectRequest, step_id: str) -> ControlEvidence:
         evidence_dir = req.evidence_dir or aside_dir(req.project_root, CHECK_DIR)

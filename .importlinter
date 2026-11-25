@@ -44,6 +44,7 @@ name = Los adaptadores no se conocen entre sí
 type = independence
 modules =
     lictor.adapters.agents
+    lictor.adapters.ci
     lictor.adapters.vcs
     lictor.adapters.runner
     lictor.adapters.readers

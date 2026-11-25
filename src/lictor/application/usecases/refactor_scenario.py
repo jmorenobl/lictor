@@ -21,6 +21,7 @@ from lictor.application.run_files import (
 )
 from lictor.application.usecases.agent_events import AgentCall
 from lictor.application.usecases.agent_turn import AgentTurns
+from lictor.domain.api import REFACTOR_API
 from lictor.domain.complexity import OverLimit, refactor_complexity_text
 from lictor.domain.controls import (
     GREEN_COVERAGE,
@@ -33,6 +34,7 @@ from lictor.domain.controls import (
     refactor_measures_text,
     runnable_command,
 )
+from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
@@ -75,6 +77,7 @@ class RefactorScenarioRequest:
     # The directory of that verification: the refactor's coverage measure compares with the
     # green's report there (F71). None leaves it to the counts in the prompt.
     baseline_step: Path | None = None
+    conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,8 @@ class RefactorScenario:
             "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
             "{medidas_del_codigo}": _code_text(request, code, files, changed),
             "{hints}": request.hints,
+            # Last: the person's text mustn't be read as a placeholder.
+            "{conventions}": conventions_block(request.conventions, "refactor"),
         }
         prompt = template
         for key, value in replacements.items():
@@ -219,7 +224,7 @@ def _code_text(
     """What the green left of each control that measures the code, and how to measure it.
 
     One block per control, in the order they were declared: the functions above a complexity
-    limit (ADR-0013) and the clones (ADR-0014).
+    limit (ADR-0013) and the clones (ADR-0014); then the rule of the public API (ADR-0017).
     """
     texts = []
     for control in controls:
@@ -234,6 +239,9 @@ def _code_text(
             text = refactor_complexity_text(over, command)
         if text:
             texts.append(text)
+    # The public API has no findings to name: only what the green already broke (ADR-0017).
+    if any(m.breaks is not None for m in request.baseline.values()):
+        texts.append(REFACTOR_API)
     return "\n\n".join(texts)
 
 

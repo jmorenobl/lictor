@@ -20,6 +20,8 @@ from lictor.application.events import new_event
 from lictor.application.ports import Clock
 from lictor.application.run_files import (
     DOCTOR_DIR,
+    RETIRED_DIR,
+    archive_run_evidence,
     aside_dir,
     exclusive_run,
     holding_project,
@@ -50,9 +52,13 @@ from lictor.bootstrap import (
     checkout_repository,
     new_run_id,
     observed_journal,
+    project_conventions,
+    record_reviewed_conventions,
+    retired_runs_kept,
     skill_content,
     unconfigured_preconditions,
 )
+from lictor.domain.api import describe_api
 from lictor.domain.complexity import describe_over, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.duplication import describe_duplication
@@ -65,7 +71,12 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
-from lictor.domain.reports import ComplexityReport, DuplicationReport
+from lictor.domain.reports import (
+    ApiComparison,
+    ApiReport,
+    ComplexityReport,
+    DuplicationReport,
+)
 from lictor.domain.results import (
     ControlEntry,
     Executed,
@@ -82,6 +93,7 @@ from lictor.domain.rules import (
     baseline_head_accepted,
     describe_score,
     precondition_exit_code,
+    retired_name,
 )
 from lictor.domain.run_branches import (
     branch_name_problem,
@@ -301,6 +313,44 @@ def skill_command(
     _safe_run(_execute)
 
 
+@app.command("conventions")
+def conventions_command(
+    reviewed: Annotated[
+        bool,
+        typer.Option(
+            "--reviewed",
+            help=(
+                "Dar por revisados los ficheros de reglas tal como están en HEAD: escribe su hash "
+                "en conventions.reviewed de lictor.json, sin tocar lo demás"
+            ),
+        ),
+    ] = False,
+    cwd: Annotated[
+        Path,
+        typer.Option(
+            "--cwd",
+            help="Directorio de trabajo del proyecto",
+            hidden=True,
+        ),
+    ] = DEFAULT_CWD,
+) -> None:
+    """Muestra las reglas del proyecto (conventions) y si cada fichero de reglas está revisado.
+
+    Lictor da esas reglas a sus agentes y no comprueba que se sigan.
+    """
+
+    def _execute() -> int:
+        if not reviewed:
+            typer.echo(project_conventions(cwd), nl=False)
+            return 0
+        # It rewrites `lictor.json`, which a run in progress guards as its own state.
+        with exclusive_run(cwd, "lictor conventions --reviewed"):
+            typer.echo(record_reviewed_conventions(cwd), nl=False)
+        return 0
+
+    _safe_run(_execute)
+
+
 def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
     """The checks `doctor` makes, and why the configuration didn't load, if it didn't."""
     try:
@@ -369,6 +419,7 @@ def doctor(
                 config_problem=config_problem,
                 check_stage=True,
                 survey_dir=log_dir / "survey",
+                conventions=True,
             )
             report = preconditions.execute(request)
         return _echo_checks(report)
@@ -401,6 +452,14 @@ def check(
             help="Seguir tras el primer fallo y mostrar el resultado de todos los controles",
         ),
     ] = False,
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base",
+            help="Comparar la API pública con la de este commit (p. ej. main); sin él, solo "
+            "cuenta sus nombres",
+        ),
+    ] = None,
     cwd: Annotated[
         Path,
         typer.Option(
@@ -435,6 +494,7 @@ def check(
                     control_ids=control or None,
                     keep_going=keep_going,
                     error_max_chars=config.limits.error_max_chars,
+                    api_base=base,
                 )
             )
 
@@ -510,9 +570,21 @@ def _executed_lines(
         score = (
             f": {describe_duplication(len(report.clones), report.in_clones, report.code_tokens)}"
         )
+    score = _api_phrase(judgement.report) or score
     if isinstance(judgement.verdict, Passed):
         return [f"✓ {name}{stage} {took}{score}"]
     return [f"✗ {name}{stage} {took}{score}", f"  salida: {ran.log}"]
+
+
+def _api_phrase(report: object) -> str | None:
+    """What an API control found, as facts: how many names, and against `--base` what broke."""
+    if isinstance(report, ApiReport):
+        return f": {describe_api(len(report.symbols), None, 0, 0)}"
+    if isinstance(report, ApiComparison):
+        symbols = len(report.report.symbols)
+        broken, accepted = len(report.broken), len(report.accepted)
+        return f": {describe_api(symbols, report.base, broken, accepted, report.problem)}"
+    return None
 
 
 def _read_lines(name: str, stage: str, read: Read, entries: Sequence[ControlEntry]) -> list[str]:
@@ -1134,7 +1206,7 @@ def retire(
         if isinstance(found, int):
             return found
         with exclusive_run(main_root, "lictor retire"):
-            refused = _remove_run_worktree(found, name)
+            refused = _remove_run_worktree(found, name, main_root)
             if refused is not None:
                 return refused
             remove_from_run_index(main_root, found.branch)
@@ -1143,8 +1215,12 @@ def retire(
     _safe_run(_execute)
 
 
-def _remove_run_worktree(run: RunEntry, name: str) -> int | None:
-    """Take the worktree away, holding it, unless something in it could still be lost."""
+def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | None:
+    """Take the worktree away, holding it, unless something in it could still be lost.
+
+    Its journal, report and evidence go to the checkout first: without them a retired run left
+    nothing to measure or explain (F56). If they can't be copied, nothing is removed.
+    """
     worktree = Path(run.worktree)
     if not worktree.is_dir():
         return None
@@ -1166,7 +1242,24 @@ def _remove_run_worktree(run: RunEntry, name: str) -> int | None:
                 err=True,
             )
             return int(ExitCode.PRECONDITION)
+        try:
+            kept = archive_run_evidence(
+                worktree,
+                main_root,
+                retired_name(name, run.run_id),
+                retired_runs_kept(main_root),
+            )
+        except OSError as exc:
+            typer.echo(
+                f"Error: no se ha podido guardar la evidencia del run en .lictor/{RETIRED_DIR}/ "
+                f"({exc}). No se ha tocado nada: libera espacio o corrige los permisos y vuelve a "
+                "lanzar.",
+                err=True,
+            )
+            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         repository.remove_worktree(worktree)
+    if kept is not None:
+        typer.echo(f"Evidencia guardada en {kept.relative_to(main_root)}/")
     typer.echo(f"Worktree retirado: {worktree}")
     return None
 

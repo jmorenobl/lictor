@@ -62,8 +62,8 @@ solo lo ve:
   ["tests/integration/"]}`. Deja de repetirse y solo se cuenta. Luego, `lictor register` de lo que el
   código ya cumple, antes del primer run.
 
-**Controles del perfil:** `lint` (ruff), `types` (mypy) y `unit` (pytest de `tests/unit`), y la
-aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` en modo
+**Controles del perfil:** `lint` (ruff), `format` (`ruff format --check src`), `types` (mypy) y
+`unit` (pytest de `tests/unit`), y la aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` en modo
 `measure`: no bloquea nada, y su porcentaje sale en «Puntuaciones» de `report.md` y en
 `lictor check`. No ejecuta nada: lee la ejecución de `unit`, que recibe al final de su comando
 `--cov=src --cov-branch --cov-fail-under=0 --cov-report=json:{out}`, así que los unitarios corren
@@ -99,8 +99,10 @@ mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
   herramienta, escribe también `"when_plugin": null`, o se saltará por un plugin que no usa. Solo
   tiene sentido si mide otra suite que `unit`.
 
-**Cuándo corre cada control:** los cuatro del perfil (`lint`, `types`, `unit` y `coverage`) van
-en cada intento. Si la persona añade una mutación (por ejemplo, con `mutmut`) o una auditoría de
+**Cuándo corre cada control:** los del perfil (`lint`, `format`, `types`, `unit` y `coverage`) van
+en cada intento. Los que bloquean tienen que pasar en HEAD antes del primer run: si `doctor` dice
+«Los controles pasan en HEAD» con ✗, es del proyecto (un proyecto sin formatear se formatea en un
+commit de la persona, o se desactiva `format`). Si la persona añade una mutación (por ejemplo, con `mutmut`) o una auditoría de
 dependencias (`pip-audit`), propón `"stage": "check"`: la mutación es demasiado lenta para cada
 intento, y el agente no puede cambiar las dependencias que se auditan. Por ejemplo, con
 `pip-audit` añadido antes del run con `uv add --dev pip-audit`:

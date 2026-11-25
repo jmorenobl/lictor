@@ -12,6 +12,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
     ImplementScenarioResult,
 )
+from lictor.domain.api import IMPLEMENTER_API
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
@@ -784,3 +785,50 @@ def test_the_implementer_hears_of_duplication_only_when_it_blocks(
     prompt = executor.run.call_args.args[0].prompt
     assert ("no haya código repetido" in prompt) is told
     assert ("/repetido.py src`, que dice en su primera línea" in prompt) is told
+
+
+def test_the_projects_rules_reach_the_prompt_before_the_task_with_their_order(
+    tmp_path: Path,
+) -> None:
+    # F79: the rules of code of the project, apart from the task's hints, which win over them.
+    _, executor, _ = _execute(
+        tmp_path, AgentResult(status="ok"), hints="Tarea.", conventions="Todo en inglés."
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "Reglas del proyecto:\nTodo en inglés.\n" in prompt
+    assert prompt.index("Todo en inglés.") < prompt.index("Contexto del proyecto: Tarea.")
+    assert "los valores literales del escenario" in prompt
+    assert "contradice una regla del proyecto, sigue la indicación" in prompt
+    assert "idioma del Gherkin" not in prompt
+
+
+def test_without_rules_of_the_project_the_prompt_has_no_block(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), conventions="  ")
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "Reglas del proyecto" not in prompt
+    assert "{conventions}" not in prompt
+
+
+_API_CONTROL = CommandControl(
+    id="api", level="L1", run="api src --out {out}", report="api", mode="measure"
+)
+
+
+@pytest.mark.parametrize("mode", ["measure", "block"])
+def test_the_implementer_always_hears_not_to_break_the_public_api(
+    tmp_path: Path, mode: ControlMode
+) -> None:
+    """ADR-0017: in either mode, since what breaks goes to the report."""
+    _, executor, _ = _execute(
+        tmp_path, AgentResult(status="ok"), controls=[replace(_API_CONTROL, mode=mode)]
+    )
+
+    assert IMPLEMENTER_API in executor.run.call_args.args[0].prompt
+
+
+def test_without_an_api_control_the_implementer_hears_nothing_of_it(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[])
+
+    assert "API pública" not in executor.run.call_args.args[0].prompt

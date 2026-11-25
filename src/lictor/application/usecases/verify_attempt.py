@@ -10,9 +10,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+from lictor.application.api_baseline import ApiBaseline
 from lictor.application.control_reports import (
     ControlEvidence,
     ControlRun,
+    Judging,
     Readings,
     failure_reason,
     not_run,
@@ -33,6 +35,7 @@ from lictor.application.run_files import (
     write_text,
 )
 from lictor.application.seal import collect_monitored_files
+from lictor.domain.api import ApiBase
 from lictor.domain.controls import (
     Control,
     RunStep,
@@ -125,6 +128,9 @@ class VerifyAttemptRequest:
     # A refactor (ADR-0010): the green it starts from, and what its verification measured.
     refactor_of: str = ""
     baseline: Mapping[str, Measure] = field(default_factory=dict)
+    # The commit the run started from, against which the public API is compared (ADR-0017).
+    api_base: str | None = None
+    api: ApiBase | None = None  # filled in by VerifyAttempt.execute
     step_dir: Path | None = None  # filled in by VerifyAttempt.execute
     tree_dir: Path | None = None  # filled in by VerifyAttempt.execute
 
@@ -253,11 +259,13 @@ class VerifyAttempt:
         environment: VerificationCommands,
         readers: ReportReaders,
         project_root: Path,
+        api: ApiBaseline | None = None,
     ) -> None:
         self.vcs = vcs
         self.environment = environment
         self.readers = readers
         self.project_root = project_root
+        self.api = api
 
     def execute(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run verification steps L0 to Acceptance sequentially."""
@@ -280,6 +288,7 @@ class VerifyAttempt:
             return self._fail(req, _Failure("L0-entorno", env_problem))
 
         candidate = self._create_candidate(req, scenario)
+        req = replace(req, api=self._api_base(req))
         with verification_tree(self.vcs, candidate.sha, self.project_root) as tree:
             result = self._run_commands(replace(req, tree_dir=tree))
         if not result.ok:
@@ -321,6 +330,26 @@ class VerifyAttempt:
             empty=True,
         )
         return Candidate(chained.sha, candidate.tree, candidate.parent)
+
+    def _api_base(self, req: VerifyAttemptRequest) -> ApiBase | None:
+        """The run's base for an API control the verification runs, measured once per run.
+
+        Its command is Lictor's module, but a project may change it, so it runs as any control.
+        """
+        if self.api is None or req.api_base is None:
+            return None
+        if not any(control.report == "api" for control in req.controls):
+            return None
+
+        def run_in(
+            command: Sequence[str], tree: Path, timeout_s: int
+        ) -> tuple[CommandOutput, tuple[str, ...]]:
+            snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
+            output = self.environment.run(command, tree, timeout_s)
+            snapshot.verify_and_restore()
+            return output, tuple(snapshot.changes)
+
+        return self.api.base(req.api_base, self.vcs, self.project_root, run_in, self._step_dir(req))
 
     def _run_gates(self, req: VerifyAttemptRequest) -> VerifyResult:
         """Run L0 over what the agent left: the tree read from its copy, before any project code."""
@@ -571,7 +600,7 @@ class VerifyAttempt:
             snapshot.verify_and_restore()
             return output, tuple(snapshot.changes)
 
-        return run_control(step, self.readers, evidence_of, execute, readings)
+        return run_control(step, Judging(self.readers, req.api), evidence_of, execute, readings)
 
     def _run_acceptance(
         self, req: VerifyAttemptRequest, controls: tuple[ControlEntry, ...]

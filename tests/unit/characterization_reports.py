@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from lictor.adapters.readers.api import ApiReader
 from lictor.adapters.readers.complexity import ComplexityReader
 from lictor.adapters.readers.coverage import CoverageReader
 from lictor.adapters.readers.duplication import DuplicationReader
@@ -32,7 +33,7 @@ from lictor.application.ports import ReportReaders
 from lictor.application.run_files import describe_crash
 from lictor.domain.complexity import over_limit
 from lictor.domain.model import CommandOutput, CoverageScore, MutationScore, Score
-from lictor.domain.reports import ComplexityReport, DuplicationReport, ReportFormat
+from lictor.domain.reports import ApiReport, ComplexityReport, DuplicationReport, ReportFormat
 from lictor.domain.results import Judged
 from lictor.domain.verdicts import (
     Crashed,
@@ -53,6 +54,7 @@ READERS = ReportReaders(
     mutation=MutationReader(),
     complexity=ComplexityReader(),
     duplication=DuplicationReader(),
+    api=ApiReader(),
 )
 
 RAISES = "raises"
@@ -95,6 +97,8 @@ def _seen(call: Callable[[], Judged]) -> Seen:
             f"duplication {len(report.clones)} clones, {report.in_clones} de "
             f"{report.code_tokens} tokens"
         )
+    if isinstance(judged.report, ApiReport):
+        score = f"api {len(judged.report.symbols)} nombres"
     return Seen(isinstance(verdict, Passed), error, len(judged.cases), score)
 
 
@@ -441,6 +445,52 @@ def duplication_control(report: Path, code: int) -> Seen:
     return _seen(lambda: read_and_judge(READERS, _rule("duplication"), report, _output(code)))
 
 
+def _api(*names: str, params: object = None) -> bytes:
+    """An API report with one function per name, in `src/p/m.py`."""
+    symbols = [
+        {
+            "name": name,
+            "kind": "function",
+            "origin": name,
+            "file": "src/p/m.py",
+            "line": 1,
+            "async": False,
+            "params": params,
+        }
+        for name in names
+    ]
+    return json.dumps({"symbols": symbols}).encode()
+
+
+# New with ADR-0017: an API control reads every public name. Without a base it only gives facts,
+# so a report it can read passes; what breaks against a base is `test_api.py`'s.
+API_REPORTS: dict[str, bytes | str] = {
+    "ausente": ABSENT,
+    "directorio": DIRECTORY,
+    "vacío": b"",
+    "no es JSON": b"{x",
+    "lista JSON": b"[]",
+    "sin symbols": b'{"names": []}',
+    "nombre repetido": _api("p.f", "p.f"),
+    "clase desconocida": _api("p.f").replace(b'"function"', b'"lambda"'),
+    "fichero fuera del árbol": _api("p.f").replace(b"src/p/m.py", b"../m.py"),
+    "línea 0": _api("p.f").replace(b'"line": 1', b'"line": 0'),
+    "async que no es booleano": _api("p.f").replace(b'"async": false', b'"async": 1'),
+    "parámetros que no son una lista": _api("p.f", params="x"),
+    "parámetro sin clase": _api("p.f", params=[{"name": "x", "default": False}]),
+    "UTF-8 con BOM": b"\xef\xbb\xbf" + _api("p.f"),
+    "bytes no UTF-8": b'{"symbols": [], "x": "\xff"}',
+    "sin nombres": _api(),
+    "dos nombres": _api(
+        "p.f", "p.g", params=[{"name": "x", "kind": "positional_or_keyword", "default": True}]
+    ),
+}
+
+
+def api_control(report: Path, code: int) -> Seen:
+    return _seen(lambda: read_and_judge(READERS, _rule("api"), report, _output(code)))
+
+
 def _coverage_score(percent: float | None) -> CoverageScore | None:
     if percent is None:
         return None
@@ -479,6 +529,7 @@ TIMED_OUT_FORMATS: tuple[ReportFormat, ...] = (
     "mutation",
     "complexity",
     "duplication",
+    "api",
 )
 _LEFT_BEHIND: dict[ReportFormat, bytes] = {
     "junit": PASS1,
@@ -486,6 +537,7 @@ _LEFT_BEHIND: dict[ReportFormat, bytes] = {
     "mutation": json.dumps({"killed": 1, "total": 2}).encode(),
     "complexity": _functions(12),
     "duplication": _duplication((0, 60)),
+    "api": _api("p.f"),
 }
 
 

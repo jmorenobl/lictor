@@ -7,6 +7,74 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.19.0] - 2026-11-25
+
+Lo que estorbó llevar la fase 4a de pyverifactu a su repositorio (PR #1 de verifactu-py) y lo que
+sale al pasar `doctor` por otros proyectos reales (agentix, bookwright, local-llm-bench). Medido en
+clones de los cuatro antes de diseñar, revisado por Fable con sus hallazgos comprobados
+ejecutándolos (`.audits/qa/0-19-0/`). Cambia el perfil (dos controles nuevos) y `lictor.json` (dos
+campos nuevos): un run a medias no se reanuda.
+
+### Añadido
+
+- **Reglas del proyecto (`conventions`, F79).** `lictor.json` acepta `conventions.text`: las reglas
+  de código del proyecto (idioma, bibliotecas, capas…), hasta 4000 caracteres. Llegan a los
+  agentes del driver, del implementador y del refactor como «Reglas del proyecto», con un orden fijo
+  para cuando chocan: las reglas de Lictor > los valores del escenario > `hints` > `conventions` >
+  `refactor_hints`. Al driver se le dice que los nombres del código siguen esas reglas, no el idioma
+  del Gherkin. `lictor doctor` avisa (⚠) de cada `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` o
+  `.github/copilot-instructions.md` de HEAD sin revisar o que cambió desde la revisión, por hash de
+  contenido. `lictor conventions` enseña las reglas y el estado de cada fichero, y
+  `lictor conventions --reviewed` los da por revisados. La skill extrae con la persona solo las
+  reglas de código. `report.md` las imprime y dice que no se verifican.
+- **Control `api` (L1, `measure`; ADR-0017, F80).** Mide la API pública alcanzable desde los
+  módulos públicos de `src` (reexportes, `__all__`, herencia, constantes, campos, miembros de
+  `Enum`, y de cada invocable sus parámetros y si es `async`) con `python_uv/lictor_api.py`, sin
+  dependencias, y la compara con el commit en que empezó el run. Mover una definición y
+  reexportarla no es rotura. En `block` el intento falla nombrando lo roto; en `measure` el
+  implementador oye una frase fija y el verde que rompe algo sale con ⚠. En pyverifactu da
+  exactamente lo que rompió la fase 4a: 4 símbolos eliminados y `register` sin `--blockchain`.
+  `api.accepted` en `lictor.json` acepta roturas por nombre. `report.md` tiene «API pública», con
+  dónde se cita cada nombre roto fuera de `paths.writable`; `lictor check --base <rev>` compara.
+- **Control `format` (L1, `block`, F75):** `uv run ruff format --check src`, y
+  `uv run ruff format src` el primero de `agent_commands`. Un proyecto que no lo usa escribe
+  `{"id": "format", "enabled": false}`.
+- **«Los controles pasan en HEAD».** `doctor` y un run nuevo ejecutan una vez en HEAD los
+  controles que bloquean, antes de ningún agente: lo que falla ahí es del proyecto (✗, 10), con su
+  error y dónde está su salida. En agentix lo da `unit` (el paquete lee su propia metadata y no está
+  instalado en el entorno de verificación, F82); en pyverifactu antes del arreglo, `format`.
+  Un control cuyo programa no se encuentra no se ejecuta ahí: ya lo dice «Comandos de
+  verificación», como de la máquina (40).
+- **La CI del proyecto frente a los controles (F76).** `doctor` y un run nuevo leen
+  `.github/workflows/` y `.pre-commit-config.yaml` (con PyYAML) y avisan, con fichero y línea, de lo
+  que la CI comprueba con `pytest`, `ruff check`, `ruff format` o `mypy` y ningún control hace, o
+  hace en menos ficheros. Un paso se acepta en `blind_spots.accepted` como `"fichero: comando"`.
+- **`lictor retire` guarda la evidencia (F56)**: `journal.jsonl`, `report.md` y `runs/` del run van
+  a `.lictor/retired/<nombre>-<run>/` del checkout antes de retirar el worktree, con
+  `retention.keep_retired` (10). Si no se puede copiar, no se toca nada y sale con 40.
+- **La duración del rojo (F52).** `driver.sealed`, `driver.rejected`, `driver.checked` y
+  `driver.measured` llevan `duration_ms` y `phases` (rojo, stubs, interfaz, Gherkin: ejecuciones y
+  duración). La línea del sello lo dice, y `report.md` suma el rojo y tiene «Comprobaciones del
+  rojo».
+
+### Cambiado
+
+- **El `pythonpath` del proyecto vuelve, al final del path (F77).** `lictor_project_path` lo lee
+  del fichero que pytest eligió y lo añade tras `src`, detrás de las dependencias: en agentix
+  recogía 13 ficheros menos de `tests/unit`. En pytest 7/8 bloquea el plugin `python_path`, que
+  fallaba sin fichero de configuración antes de la 8.1.
+- **Los plugins se marcan para reescribir antes de importarse (F81)**, como hace pytest con los
+  suyos: con xdist y `filterwarnings = ["error"]` la suite no arrancaba.
+- **`--cov` ya no ciega la inspección (F78):** se lee como opción de valor opcional sobre `addopts`
+  y el comando. En bookwright salen los 1052 tests que tapaba. Dos casos nuevos dan 10 (✗ en
+  «Dependencias de la verificación»): un `--cov` al final de `addopts`, que se come la ruta del
+  comando, y un `--cov` en `addopts` con un mínimo de cobertura, con el que la aceptación nunca
+  pasaría.
+- **`.lictor/` lleva su propio `.gitignore` con `*` (F53):** `run` ya no avisa de su propio
+  cerrojo como cambio sin confirmar, y `git worktree remove` acepta el worktree.
+- El refactor se descarta en `L0-regresión` si rompe algo de la API pública que su verde no rompía.
+- Nueva dependencia: `PyYAML`.
+
 ## [0.18.0] - 2026-11-25
 
 Un escenario cuyo resultado es un objeto se prueba, y el Entonces tiene que leer el valor de su
@@ -1010,7 +1078,9 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.17.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/jmorenobl/lictor/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/jmorenobl/lictor/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/jmorenobl/lictor/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/jmorenobl/lictor/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/jmorenobl/lictor/compare/v0.15.0...v0.15.1
