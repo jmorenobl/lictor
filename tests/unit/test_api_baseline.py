@@ -9,13 +9,16 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from lictor.adapters.readers.api import ApiReader
 from lictor.adapters.runner.fake import FakeRunner
-from lictor.application.api_baseline import ApiBaseline, RunIn, api_control
+from lictor.application.api_baseline import ApiBaseline, RunIn, api_control, resolve_base
+from lictor.application.ports import Vcs
 from lictor.application.usecases.verify_attempt import VerifyAttempt, VerifyAttemptRequest
+from lictor.domain.api import UnresolvedBase
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.model import CommandOutput
 from lictor.domain.refactor import Measure
@@ -230,7 +233,7 @@ def test_a_blocking_api_control_fails_naming_what_broke(tmp_path: Path) -> None:
 
     assert result.failed_at == "api"
     assert "`p.f`: ya no existe" in (result.condensed_error or "")
-    assert "LICTOR: SPEC_CONFLICT" in (result.condensed_error or "")
+    assert "SPEC_CONFLICT" not in (result.condensed_error or ""), "the verdict gives facts"
 
 
 def test_what_the_person_accepts_doesnt_block(tmp_path: Path) -> None:
@@ -276,3 +279,34 @@ def test_a_refactor_may_keep_what_its_green_broke(tmp_path: Path) -> None:
     verifier, req = _verify(tmp_path, runner, green=green)
 
     assert verifier.execute(req).ok
+
+
+def test_the_base_is_where_head_left_the_reference() -> None:
+    vcs = MagicMock(spec=Vcs)
+    vcs.resolve_commit.return_value = "r" * 40
+    vcs.merge_base.return_value = _BASE
+
+    assert resolve_base(vcs, "h" * 40, "origin/main") == _BASE
+    vcs.merge_base.assert_called_once_with("h" * 40, "origin/main")
+
+
+def test_a_reference_that_names_no_commit_says_so() -> None:
+    vcs = MagicMock(spec=Vcs)
+    vcs.resolve_commit.return_value = None
+
+    found = resolve_base(vcs, "h" * 40, "origin/main")
+
+    assert isinstance(found, UnresolvedBase)
+    assert "«origin/main», no es ningún commit" in found.message
+    vcs.merge_base.assert_not_called()
+
+
+def test_no_common_ancestor_points_to_a_shallow_clone() -> None:
+    vcs = MagicMock(spec=Vcs)
+    vcs.resolve_commit.return_value = "r" * 40
+    vcs.merge_base.return_value = None
+
+    found = resolve_base(vcs, "h" * 40, "origin/main")
+
+    assert isinstance(found, UnresolvedBase)
+    assert "git fetch --deepen" in found.message

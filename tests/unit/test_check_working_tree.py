@@ -11,15 +11,18 @@ import pytest
 
 from lictor.adapters.runner.fake import FakeRunner
 from lictor.adapters.vcs.git_cli import GitCli
+from lictor.application.api_baseline import ApiBaseline
 from lictor.application.ports import AuditSink, Clock, EventLog
 from lictor.application.usecases.check_working_tree import (
     CheckWorkingTree,
     CheckWorkingTreeRequest,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
+from lictor.domain.api import ApiBase
 from lictor.domain.controls import CommandControl
 from lictor.domain.errors import EnvironmentUnavailableError, PreconditionError
 from lictor.domain.model import CommandOutput
+from lictor.domain.reports import ApiReport
 from tests import results
 from tests.readers import all_readers
 
@@ -184,3 +187,47 @@ def test_an_environment_that_changes_under_the_commands_is_reported(project: Pat
 
     assert result.tampered == "cambió el entorno"
     assert changed.ensure.call_count == 2
+
+
+def _with_api(
+    project: Path, runner: FakeRunner, ref: str | None
+) -> tuple[CheckWorkingTree, MagicMock]:
+    api = MagicMock(spec=ApiBaseline)
+    api.ref = ref
+    api.base.side_effect = lambda sha, *_: ApiBase(sha, ApiReport(()))
+    use_case = _use_case(project, runner)
+    use_case.api = api
+    return use_case, api
+
+
+def test_check_compares_the_api_where_head_left_api_base(project: Path) -> None:
+    """H4 of 0.20.0: without `--base`, `check` compares as a run does."""
+    fork = _git(project, "rev-parse", "HEAD")
+    _git(project, "checkout", "-qb", "trabajo")
+    (project / "src" / "b.py").write_text("b = 1\n", encoding="utf-8")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-qm", "trabajo")
+    use_case, api = _with_api(project, FakeRunner(), "main")
+
+    use_case.execute(_request())
+
+    assert api.base.call_args.args[0] == fork
+
+
+def test_base_replaces_api_base(project: Path) -> None:
+    head = _git(project, "rev-parse", "HEAD")
+    use_case, api = _with_api(project, FakeRunner(), "no-existe")
+
+    use_case.execute(_request(api_base="main"))
+
+    assert api.base.call_args.args[0] == head
+
+
+def test_a_base_that_names_nothing_stops_before_building_anything(project: Path) -> None:
+    runner = FakeRunner()
+    use_case, _ = _with_api(project, runner, "origin/main")
+
+    with pytest.raises(PreconditionError, match="«origin/main», no es ningún commit"):
+        use_case.execute(_request())
+
+    assert runner.calls == []

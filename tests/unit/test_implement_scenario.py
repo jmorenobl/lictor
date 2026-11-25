@@ -12,7 +12,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioRequest,
     ImplementScenarioResult,
 )
-from lictor.domain.api import IMPLEMENTER_API
+from lictor.domain.api import IMPLEMENTER_API, IMPLEMENTER_API_BLOCKS
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
@@ -825,7 +825,10 @@ def test_the_implementer_always_hears_not_to_break_the_public_api(
         tmp_path, AgentResult(status="ok"), controls=[replace(_API_CONTROL, mode=mode)]
     )
 
-    assert IMPLEMENTER_API in executor.run.call_args.args[0].prompt
+    prompt = executor.run.call_args.args[0].prompt
+    assert IMPLEMENTER_API in prompt
+    # The conflict only makes sense where a break fails every attempt (R10 of 0.20.0).
+    assert (IMPLEMENTER_API_BLOCKS in prompt) == (mode == "block")
 
 
 def test_without_an_api_control_the_implementer_hears_nothing_of_it(tmp_path: Path) -> None:

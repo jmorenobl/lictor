@@ -308,6 +308,24 @@ def test_what_the_person_accepts_to_break_is_read_and_decides_a_resume(tmp_path:
     assert _fingerprint(accepting) != _fingerprint(nothing)
 
 
-def test_the_api_takes_nothing_but_what_is_accepted(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="base"):
-        load_config(_with_api(tmp_path, {"base": "main"}))
+def test_the_api_takes_nothing_but_what_is_accepted_and_its_base(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="otra"):
+        load_config(_with_api(tmp_path, {"otra": "main"}))
+
+
+def test_the_base_of_the_api_is_in_the_fingerprint(tmp_path: Path) -> None:
+    """H4 of 0.20.0: with `api` in block, the base changes verdicts."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    based = _with_api(tmp_path / "a", {"base": "origin/main"})
+    unbased = _with_api(tmp_path / "b", {})
+
+    assert load_config(based).api.base == "origin/main"
+    assert load_config(unbased).api.base is None
+    assert _fingerprint(based) != _fingerprint(unbased)
+
+
+@pytest.mark.parametrize("ref", ["-x", "a..b", "a b", "rama.lock", "rama/", "HEAD@{1}", ""])
+def test_a_base_of_the_api_git_couldnt_name_is_refused(tmp_path: Path, ref: str) -> None:
+    with pytest.raises(ConfigError, match="no vale como base de la API"):
+        load_config(_with_api(tmp_path, {"base": ref}))

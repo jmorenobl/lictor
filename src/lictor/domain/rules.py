@@ -454,25 +454,77 @@ def _case_details(case: TestCaseResult) -> str:
     return "\n".join(["  Detalle:", *(f"    {line}" for line in kept)]) if kept else ""
 
 
-def _condense_cases(cases: Sequence[TestCaseResult], limit: int) -> str:
-    """List as many cases as fit, then share what is left among their details."""
-    summaries: list[str] = []
-    used = 0
+def _cause(case: TestCaseResult) -> str:
+    """The last line of a case's details, where a traceback names its exception."""
+    lines = [line for line in (case.details or "").splitlines() if line.strip()]
+    return lines[-1].strip() if lines else ""
+
+
+def same_error_groups(cases: Sequence[TestCaseResult]) -> list[list[TestCaseResult]]:
+    """Group the cases that failed with the same message and the same last line of detail.
+
+    Each group keeps the place of its first case. A case with neither message nor detail says
+    nothing it shares, so it stays alone.
+    """
+    groups: dict[tuple[str, str], list[TestCaseResult]] = {}
+    alone: list[list[TestCaseResult]] = []
+    order: list[list[TestCaseResult]] = []
     for case in cases:
-        summary = _case_summary(case)
-        if used + len(summary) + 2 > limit - _OMISSION_RESERVE:
+        key = ((case.message or "").strip(), _cause(case))
+        if key == ("", ""):
+            alone.append([case])
+            order.append(alone[-1])
+            continue
+        if key not in groups:
+            groups[key] = []
+            order.append(groups[key])
+        groups[key].append(case)
+    return order
+
+
+def _group_summary(group: Sequence[TestCaseResult], room: int) -> str:
+    """One line for cases that failed alike: as many of their names as fit in `room`."""
+    first = group[0]
+    tail = ""
+    if first.message:
+        tail += f"\n  Mensaje: {_clip(first.message.strip(), _MAX_MESSAGE_CHARS)}"
+    if cause := _cause(first):
+        tail += f"\n  Causa: {_clip(cause, _MAX_MESSAGE_CHARS)}"
+    head = f"- {len(group)} casos con el mismo error: "
+    names: list[str] = []
+    for index, case in enumerate(group):
+        candidate = ", ".join([*names, case.name])
+        left = len(group) - index - 1
+        if names and len(head) + len(candidate) + len(f" y {left} más") + len(tail) > room:
+            return f"{head}{', '.join(names)} y {len(group) - index} más{tail}"
+        names.append(case.name)
+    return f"{head}{', '.join(names)}{tail}"
+
+
+def _condense_cases(cases: Sequence[TestCaseResult], limit: int) -> str:
+    """List as many cases as fit, those that failed alike once, then share what is left among
+    their details."""
+    summaries: list[tuple[str, TestCaseResult, int]] = []
+    used = 0
+    shown = 0
+    for group in same_error_groups(cases):
+        room = limit - _OMISSION_RESERVE - used - 2
+        summary = _case_summary(group[0]) if len(group) == 1 else _group_summary(group, room)
+        if len(summary) > room:
             break
-        summaries.append(summary)
+        summaries.append((summary, group[0], len(group)))
         used += len(summary) + 2
+        shown += len(group)
 
     items: list[str] = []
-    for index, summary in enumerate(summaries):
+    for index, (summary, case, size) in enumerate(summaries):
         share = (limit - _OMISSION_RESERVE - used) // (len(summaries) - index)
-        details = _clip(_case_details(cases[index]), share - 1) if share > 1 else ""
+        # A group already says its cause; a lone case gets its share of the details.
+        details = _clip(_case_details(case), share - 1) if share > 1 and size == 1 else ""
         used += len(details) + 1 if details else 0
         items.append(f"{summary}\n{details}" if details else summary)
 
-    omitted = len(cases) - len(summaries)
+    omitted = len(cases) - shown
     if omitted:
         items.append(f"… y {omitted} casos fallidos más")
     return "\n\n".join(items)

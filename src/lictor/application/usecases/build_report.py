@@ -51,6 +51,13 @@ from lictor.domain.results import (
 )
 from lictor.domain.rules import describe_score, minimum_text, path_within
 from lictor.domain.stub_proof import unchecked_note
+from lictor.domain.unexecuted import (
+    UNEXECUTED,
+    UNEXECUTED_TITLE,
+    UnexecutedChanges,
+    unexecuted_from_record,
+    unexecuted_lines,
+)
 
 _MS_PER_SECOND: Final[int] = 1000
 _SHORT_SHA: Final[int] = 12
@@ -739,6 +746,9 @@ class BuildReport:
             "check_controls": [],
             "blind_spots": None,
             "conventions": None,
+            # What the run changed that no control executed (H2), and whether it reached the end.
+            "unexecuted": None,
+            "reached_finish": False,
             # The last API comparison of a passing verification: what the run leaves broken.
             "api": None,
             "measures": [],
@@ -785,6 +795,7 @@ class BuildReport:
             "lictor.scenario.reopened.v1": self._on_scenario_reopened,
             "lictor.scenario.reregistered.v1": self._on_scenario_reregistered,
             REFACTORED: self._on_scenario_refactored,
+            UNEXECUTED: self._on_unexecuted,
         }
         handler = handlers.get(ev.type)
         if handler is not None:
@@ -921,7 +932,11 @@ class BuildReport:
             f"en `{commit[:12]}`"
         )
 
+    def _on_unexecuted(self, ev: Event, info: dict[str, Any]) -> None:
+        info["unexecuted"] = unexecuted_from_record(ev.data)
+
     def _on_run_finished(self, ev: Event, info: dict[str, Any]) -> None:
+        info["reached_finish"] = True
         self._on_run_stopped(ev, info)
         totals = ev.data.get("totals", {})
         if isinstance(totals, dict):
@@ -1098,6 +1113,7 @@ class BuildReport:
                 *_blind_spot_section(info),
                 *conventions_report_lines(info["conventions"]),
                 *["", "## API pública", *_api_section(info["api"], info["api_cited"])],
+                *["", f"## {UNEXECUTED_TITLE}", *_unexecuted_section(info)],
             ]
         )
 
@@ -1143,3 +1159,15 @@ class BuildReport:
 
         lines.append("")
         return "\n".join(lines)
+
+
+def _unexecuted_section(info: Mapping[str, Any]) -> list[str]:
+    """What the run changed that no control executed (H2 of 0.20.0), or why it isn't said."""
+    found = info["unexecuted"]
+    if isinstance(found, UnexecutedChanges):
+        return unexecuted_lines(found)
+    if isinstance(found, str):
+        return [f"- No se puede saber: {found}"]
+    if not info["reached_finish"]:
+        return ["- *El run no ha terminado: se dirá cuando termine.*"]
+    return ["- *El run no movió la rama.*"]

@@ -1,7 +1,8 @@
 """How `lictor check` shows a reader: «lee unit», its score, the mark and its control's log."""
 
-from lictor.application.usecases.check_project import CheckProjectResult
-from lictor.cli import _check_lines, _check_output
+from lictor.application.usecases.check_project import CheckProjectResult, ControlFailure
+from lictor.cli import _check_lines, _check_output, _unexecuted_output
+from lictor.domain.api import API_ACCEPT_HINT
 from lictor.domain.controls import Added, CommandControl, ReaderControl
 from lictor.domain.reports import (
     ApiBreak,
@@ -23,6 +24,7 @@ from lictor.domain.results import (
     Read,
     ReaderEntry,
 )
+from lictor.domain.unexecuted import Unexecuted, UnexecutedChanges
 from lictor.domain.verdicts import Execution, Failed, Passed
 
 _UNIT = CommandControl("unit", "L2", "pytest {out}", "junit", mode="measure")
@@ -109,3 +111,35 @@ def test_check_with_a_base_says_what_broke_against_it() -> None:
     lines = _api_line(compared, Failed("roto"))
 
     assert lines[0] == f"✗ api (7ms): 1 nombre público; 1 rotura respecto a {'d' * 12}"
+
+
+def test_a_failed_control_says_why_under_its_line_and_where_all_of_it_is() -> None:
+    """H1 of 0.20.0: an API's breaks by name, what the person can do, and the whole list."""
+    compared = ApiComparison(ApiReport((_SYMBOL,)), "d" * 40, (ApiBreak("p.g", "removed"),))
+    entry = CommandEntry(_API, Executed(_RAN, Judged(compared, Failed("Se rompe:\n- `p.g`"))))
+    check = CheckProjectResult(
+        ok=True,
+        controls=(entry,),
+        failures=(ControlFailure("api", "measure", "Se rompe:\n- `p.g`"),),
+    )
+
+    assert _check_output(check, set()) == [
+        f"✗ api (7ms): 1 nombre público; 1 rotura respecto a {'d' * 12}",
+        "  Se rompe:",
+        "  - `p.g`",
+        f"  {API_ACCEPT_HINT}",
+        "  salida: .lictor/check/unit.log",
+        "  completo: .lictor/check/api.error.txt",
+    ]
+
+
+def test_check_with_a_base_says_what_changed_that_no_control_executed() -> None:
+    """H2 of 0.20.0: after the controls, by kind; or why it can't be told; or nothing at all."""
+    found = UnexecutedChanges(files=(Unexecuted("README.md", "no_es_codigo"),))
+
+    assert _unexecuted_output(found) == [
+        "\nCambios que ningún control ejecutó desde la base:",
+        "- No es Python: ningún control lo ejecuta: `README.md`",
+    ]
+    assert _unexecuted_output("sin survey")[-1] == "- No se puede saber: sin survey"
+    assert _unexecuted_output(None) == []

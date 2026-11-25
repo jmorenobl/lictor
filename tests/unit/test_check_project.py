@@ -536,3 +536,28 @@ def test_check_doesnt_mark_a_skipped_unit_with_the_arguments_it_never_got(tmp_pa
 
     assert seen(result, "unit").skipped is not None
     assert result.lent == {}
+
+
+def test_every_control_that_fails_says_why_whatever_its_mode(tmp_path: Path) -> None:
+    """H1 of 0.20.0: a measure that fails is said too, and its whole failure is kept."""
+    runner = FakeRunner()
+    runner.set_response("echo mut", CommandOutput(returncode=1, stdout="sobrevive m1", stderr=""))
+    runner.set_response("echo fail", CommandOutput(returncode=1, stdout="lint error", stderr=""))
+    controls = [
+        CommandControl(
+            id="mutation", level="L5", run="echo mut", report="exit-code", mode="measure"
+        ),
+        CommandControl(id="lint", level="L1", run="echo fail", report="exit-code", mode="block"),
+    ]
+    req = CheckProjectRequest(
+        project_root=tmp_path, controls=controls, installed_plugins=(), keep_going=True
+    )
+
+    res = CheckProject(runner=runner, readers=all_readers()).execute(req)
+
+    assert [(f.id, f.mode) for f in res.failures] == [("mutation", "measure"), ("lint", "block")]
+    assert [f.id for f in res.blocked] == ["lint"]
+    assert "sobrevive m1" in res.failures[0].condensed()
+    assert not res.failures[0].condensed().startswith("Falló")
+    whole = tmp_path / ".lictor" / "check" / "mutation.error.txt"
+    assert whole.read_text(encoding="utf-8").startswith("Falló mutation\n")

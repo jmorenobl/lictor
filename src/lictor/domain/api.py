@@ -11,6 +11,7 @@ to a base class, keeps every name, so it breaks nothing.
 Which break a scenario asks for can't be told apart: the person accepts it in `api.accepted`.
 """
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -83,9 +84,10 @@ REFACTOR_API: Final[str] = (
     "definición y reexportarla con el mismo nombre, o subir un método a una clase base, no la "
     "rompe."
 )
-_CONFLICT: Final[str] = (
-    "Si el escenario no se puede cumplir sin romperla, declara `LICTOR: SPEC_CONFLICT`. Una "
-    "rotura que la persona acepta se apunta en `api.accepted` de lictor.json."
+# Only when the control blocks: a break then fails every attempt, and only the person can accept it.
+IMPLEMENTER_API_BLOCKS: Final[str] = (
+    "- Esa API bloquea: si el escenario no se puede cumplir sin romperla, declara "
+    "`LICTOR: SPEC_CONFLICT`."
 )
 
 
@@ -369,16 +371,72 @@ def break_line(item: ApiBreak) -> str:
     return f"`{item.name}`: {item.detail}"
 
 
-def named_breaks(breaks: Sequence[ApiBreak]) -> list[str]:
-    """The lines of a list of breaks, the first `NAMED` by name and the rest counted."""
-    lines = [f"- {break_line(b)}" for b in breaks[:NAMED]]
-    if len(breaks) > NAMED:
-        lines.append(f"- y {len(breaks) - NAMED} más")
+def named_breaks(breaks: Sequence[ApiBreak], named: int | None = NAMED) -> list[str]:
+    """The lines of a list of breaks, the first `named` by name and the rest counted; every one
+    with `None`."""
+    shown = breaks if named is None else breaks[:named]
+    lines = [f"- {break_line(b)}" for b in shown]
+    if len(breaks) > len(shown):
+        lines.append(f"- y {len(breaks) - len(shown)} más")
     return lines
 
 
-def broken_reason(comparison: ApiComparison) -> str:
-    """Why an API control fails: what of the base's public API breaks, and what to do."""
+_REFERENCE = re.compile(r"[^\s~^:?*\[\\]+")
+
+
+def reference_name_problem(ref: str) -> str | None:
+    """Why a text can't name the base of the API as git names a reference, or None if it can.
+
+    Roughly `git check-ref-format`: never an option, and nothing git would read as a range, a
+    reflog entry or a pattern.
+    """
+    if (
+        _REFERENCE.fullmatch(ref)
+        and not ref.startswith(("-", "/"))
+        and not ref.endswith(("/", ".", ".lock"))
+        and not any(bad in ref for bad in ("..", "@{", "//"))
+    ):
+        return None
+    return (
+        f"«{ref}» no vale como base de la API: escribe el nombre de una rama o una etiqueta, "
+        "como `origin/main`."
+    )
+
+
+@dataclass(frozen=True)
+class UnresolvedBase:
+    """Why `api.base` (or `check --base`) gives no commit to compare with (H4 of 0.20.0)."""
+
+    message: str
+
+
+def missing_base(ref: str) -> UnresolvedBase:
+    """The reference names no commit of this repository."""
+    return UnresolvedBase(
+        f"La base de la API, «{ref}», no es ningún commit de este repositorio: corrige "
+        "`api.base` en lictor.json, o trae esa rama (`git fetch`)."
+    )
+
+
+def no_common_base(ref: str) -> UnresolvedBase:
+    """The reference exists, but shares no ancestor here with what is verified."""
+    return UnresolvedBase(
+        f"Lo verificado no comparte ningún antepasado con la base de la API, «{ref}», en este "
+        "repositorio. Suele ser un clon superficial: trae más historia con "
+        "`git fetch --deepen=<n>` o `git fetch --unshallow`."
+    )
+
+
+# What the person can do with a break, where Lictor speaks to them and never to the agent.
+API_ACCEPT_HINT: Final[str] = "Una rotura que aceptas se apunta en `api.accepted` de lictor.json."
+
+
+def broken_reason(comparison: ApiComparison, named: int | None = NAMED) -> str:
+    """Why an API control fails: what of the base's public API breaks, as facts.
+
+    What to do about it depends on who reads it: the implementer hears it in its measures
+    (`IMPLEMENTER_API_BLOCKS`), the person where Lictor speaks to them.
+    """
     count = len(comparison.broken)
     base = comparison.base[:SHORT_SHA]
     head = (
@@ -386,7 +444,7 @@ def broken_reason(comparison: ApiComparison) -> str:
         if count == 1
         else f"Se rompen {count} nombres de la API pública de la base ({base}):"
     )
-    return "\n".join([head, *named_breaks(comparison.broken), _CONFLICT])
+    return "\n".join([head, *named_breaks(comparison.broken, named)])
 
 
 def describe_api(

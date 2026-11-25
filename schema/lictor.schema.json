@@ -43,6 +43,18 @@
           },
           "title": "Accepted",
           "type": "array"
+        },
+        "base": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base"
         }
       },
       "title": "ApiConfig",

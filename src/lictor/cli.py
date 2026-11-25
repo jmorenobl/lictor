@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable, Collection, Sequence
 from contextlib import closing
 from importlib.metadata import PackageNotFoundError, distribution
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, assert_never
 from urllib.parse import unquote, urlparse
 
@@ -37,7 +37,11 @@ from lictor.application.run_index import (
 )
 from lictor.application.skill import SKILL_FILE, install_skill_stub
 from lictor.application.usecases.build_report import BuildReportRequest
-from lictor.application.usecases.check_project import CheckAcceptanceSpec, CheckProjectResult
+from lictor.application.usecases.check_project import (
+    CheckAcceptanceSpec,
+    CheckProjectResult,
+    ControlFailure,
+)
 from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
@@ -58,9 +62,9 @@ from lictor.bootstrap import (
     skill_content,
     unconfigured_preconditions,
 )
-from lictor.domain.api import describe_api
+from lictor.domain.api import API_ACCEPT_HINT, describe_api
 from lictor.domain.complexity import describe_over, over_limit
-from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.controls import ACCEPTANCE_ID, CommandControl, ReaderControl
 from lictor.domain.duplication import describe_duplication
 from lictor.domain.errors import (
     CandidateError,
@@ -80,7 +84,9 @@ from lictor.domain.reports import (
 from lictor.domain.results import (
     ControlEntry,
     Executed,
+    Judged,
     NotExecuted,
+    Ran,
     Read,
     Skipped,
     Unjudged,
@@ -101,6 +107,7 @@ from lictor.domain.run_branches import (
     run_branch,
     uncommitted_left_out,
 )
+from lictor.domain.unexecuted import UNEXECUTED_TITLE, UnexecutedChanges, unexecuted_lines
 from lictor.domain.verdicts import Passed
 from lictor.orchestration.graph import (
     DURABILITY,
@@ -502,17 +509,27 @@ def check(
         only_here = {c.id for c in runtime.graph_context.check_controls}
         for line in _check_output(res.check, only_here):
             typer.echo(line)
+        for line in _unexecuted_output(res.unexecuted):
+            typer.echo(line)
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
             return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
         if not res.check.ok:
-            if res.check.condensed_error:
-                typer.echo(f"\n{res.check.condensed_error}", err=True)
             return int(ExitCode.PRECONDITION)
         return 0
 
     _safe_run(_execute)
+
+
+def _unexecuted_output(found: UnexecutedChanges | str | None) -> list[str]:
+    """What changed from the base that no control executed (H2 of 0.20.0), after the controls."""
+    if found is None:
+        return []
+    title = f"\n{UNEXECUTED_TITLE} desde la base:"
+    if isinstance(found, str):
+        return [title, f"- No se puede saber: {found}"]
+    return [title, *unexecuted_lines(found)]
 
 
 def _check_output(check: CheckProjectResult, only_here: Collection[str]) -> list[str]:
@@ -522,14 +539,36 @@ def _check_output(check: CheckProjectResult, only_here: Collection[str]) -> list
     read control that ran with the arguments of a reader the run never runs (ADR-0008).
     """
     lines = [f"{added.sentence}." for added in check.added]
+    failures = {failure.id: failure for failure in check.failures}
     for entry in check.controls:
         name = entry.control.id
         stage = " (solo en check)" if name in only_here else ""
         stage += check.lent.get(name, "")
-        lines += _check_lines(name, stage, entry, check.controls)
+        shown = _check_lines(name, stage, entry, check.controls)
+        if isinstance(entry.outcome, Executed) and name in failures:
+            shown = _with_failure(shown, failures[name], entry.outcome.ran, entry.outcome)
+        lines += shown
     if check.acceptance is not None:
-        lines += _acceptance_lines(check)
+        shown = _acceptance_lines(check)
+        if ACCEPTANCE_ID in failures:
+            shown = _with_failure(shown, failures[ACCEPTANCE_ID], check.acceptance.ran, None)
+        lines += shown
     return lines
+
+
+def _with_failure(
+    lines: list[str], failure: ControlFailure, ran: Ran, outcome: Executed | None
+) -> list[str]:
+    """A failed control's line, why it failed, indented, and where all of it is (H1 of 0.20.0).
+
+    The whole failure is beside the control's log, as `<id>.error.txt`.
+    """
+    why = [f"  {line}" if line else "" for line in failure.condensed().splitlines()]
+    judgement = outcome.judgement if outcome is not None else None
+    if isinstance(judgement, Judged) and isinstance(judgement.report, ApiComparison):
+        why.append(f"  {API_ACCEPT_HINT}")
+    whole = PurePosixPath(ran.log).with_name(f"{failure.id}.error.txt")
+    return [lines[0], *why, *lines[1:], f"  completo: {whole}"]
 
 
 def _check_lines(

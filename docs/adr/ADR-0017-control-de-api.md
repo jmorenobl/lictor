@@ -5,7 +5,8 @@ Aceptada (2026-11-25), en la 0.19.0. Sale de F80 (el primer uso real: la PR #1 d
 verifactu-py, fase 4a de pyverifactu) y del diseño `.audits/qa/0-19-0/diseno.md`, revisado por su
 cuenta en `.audits/qa/0-19-0/revision-fable.md` (hallazgos #1–#5, que cambiaron la definición y la
 base). Sigue el patrón de las ADR-0013 y 0014: un módulo del perfil da hechos, el dominio da el
-veredicto (ADR-0009) y el refactor no puede empeorar lo medido (ADR-0010).
+veredicto (ADR-0009) y el refactor no puede empeorar lo medido (ADR-0010). Enmendada en la 0.20.0:
+la base se puede fijar en la rama a la que se integra (`api.base`).
 
 ## Contexto
 En la fase 4a de pyverifactu el run dejó en verde todos sus escenarios y su rama no se podía
@@ -140,3 +141,44 @@ commit y lo que hace con ella una verificación del implementador y del refactor
 Queda por medir en una pasada real: una pasada de pyverifactu con `api` en `block` y
 `api.accepted` vacío, para ver si el implementador declara el conflicto o busca una forma
 compatible, y cuántos refactors descarta este control.
+
+## Enmienda 0.20.0: la base es la rama a la que se integra
+
+Sale de H4 de `.audits/qa/0-19-0/siguientes-pasos-fable.md`, diseñada en
+`.audits/qa/0-19-1/diseno.md` y revisada en `revision-fable.md` (R6, R10–R13).
+
+**El problema.** El punto 4 fijaba la base en el commit en que empezó cada run. La fase 4a fueron
+más de diez runs, cada uno integrado en la rama del trabajo antes del siguiente: la tanda 2 se
+comparaba con lo que dejó la 1, y lo que la 1 rompió no volvía a verse hasta `check --base`, que
+además no decía qué nombres.
+
+**La decisión.** Sigue habiendo una sola base, ahora configurable. `lictor.json` acepta `api.base`,
+una referencia (`"origin/main"`), validada como nombre de git (sin opciones, rangos ni entradas del
+reflog). `preflight` guarda en `api_base` el `merge-base` de HEAD con ella (`resolve_base`,
+`Vcs.merge_base`): el punto en que el trabajo salió de la rama a la que va, como `git diff
+ref...HEAD`. Con HEAD por detrás de ella, es HEAD, como antes. Sin el campo, el arranque del run,
+como antes. `api.base` entra en `config_fingerprint`: con `api` en `block` cambia veredictos.
+
+- **`lictor check`** la usa sin `--base`, para verificar lo que el run (R6); `--base <rev>` la
+  sustituye, y compara también desde el `merge-base`.
+- **Tres errores, tres mensajes** (R11): la referencia no es ningún commit (corrige `api.base` o trae
+  la rama); existe y no comparte antepasado con HEAD en el repositorio, típico de un clon superficial
+  (`git fetch --deepen`); la base no se pudo medir. Los dos primeros son ✗ `config` en `doctor` y
+  en el arranque, y en `check` paran antes de construir nada.
+- **«La API frente a su base»**, una comprobación nueva del contrato de arranque (ADR-0015), mide
+  HEAD contra esa base una vez. Con `api` en `block`, una rotura de HEAD que nadie aceptó es ✗
+  `config` con su mensaje propio (R13): cada intento fallaría haga lo que haga el agente, y solo la
+  persona la acepta en `api.accepted` o cambia el modo. En `measure`, aviso. «Los controles pasan en
+  HEAD» deja de ejecutar `api` cuando la hay.
+- **Lo que ya estaba roto se dice una vez** (R12): `run.started` lleva `api_start` (la base y los
+  nombres rotos al arrancar), y el ⚠ de `RunProgress` tras un verde solo nombra lo que no estaba
+  roto al arrancar ni lo rompió un verde anterior del mismo run.
+
+**El veredicto da solo hechos** (R10). La frase «declara `LICTOR: SPEC_CONFLICT`» tenía dos
+lectores y salía en el veredicto, que el agente lee en el reintento: ahora el implementador la
+oye en sus medidas (`IMPLEMENTER_API_BLOCKS`), y solo cuando `api` bloquea; que una rotura aceptada
+se apunta en `api.accepted` lo dice `check` a la persona (`API_ACCEPT_HINT`). `check` imprime los
+nombres rotos bajo la línea del control, y la lista entera en `.lictor/check/api.error.txt`.
+
+Descartado: que `report.md` compare además con la bifurcación de la rama. Serían dos bases y dos
+respuestas a la misma pregunta.

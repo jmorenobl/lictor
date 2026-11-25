@@ -2,12 +2,14 @@
 
 import contextlib
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
 
+from lictor.application.api_baseline import ApiBaseline
 from lictor.application.ports import Executor, ReportReaders, Vcs
 from lictor.application.skill import install_skill_stub
 from lictor.application.start_survey import StartSurvey
@@ -18,10 +20,12 @@ from lictor.application.usecases.preconditions import (
     PreconditionsRequest,
 )
 from lictor.application.verification_env import VerificationEnvironment
+from lictor.domain.api import ApiBase
 from lictor.domain.blind_spots import StartRules
-from lictor.domain.controls import CommandControl, ReaderControl
+from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import CommandOutput, Health, PreconditionProblem
+from lictor.domain.reports import ApiReport, ApiSymbol
 from lictor.domain.rules import NO_COMMITS
 from lictor.domain.survey import LaunchedProgram, SurveyedCommand, SurveyedTests, SurveyReport
 
@@ -718,3 +722,102 @@ def test_a_control_that_changes_the_environment_on_head_is_the_machines(
     report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
 
     assert report.checks[-1].problems == (PreconditionProblem("environment", "el entorno cambió"),)
+
+
+_HEAD = "h" * 40
+_FORK = "f" * 40
+
+
+def _symbols(*names: str) -> ApiReport:
+    return ApiReport(tuple(ApiSymbol(n, "function", n, "src/p.py", 1) for n in names))
+
+
+@dataclass(frozen=True)
+class _Apis:
+    """What HEAD measures, what where it left the base measures, and that commit."""
+
+    base: ApiReport | str
+    head: ApiReport | str
+    fork: str | None = _FORK
+
+
+_HEAD_LOST_G = _Apis(base=_symbols("p.f", "p.g"), head=_symbols("p.f"))
+
+
+def _against_base(
+    tmp_path: Path, bin_dir: Path, apis: _Apis = _HEAD_LOST_G, mode: ControlMode = "block"
+) -> PreconditionsReport:
+    """`api.base` set, with an API control in `mode`."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.head_controls = [
+        CommandControl(id="api", level="L1", run="herramienta api", report="api", mode=mode)
+    ]
+    parts.use_case.readers = MagicMock(spec=ReportReaders)
+    parts.environment.ensure.return_value = None
+    parts.environment.run.return_value = CommandOutput(returncode=0, stdout="", stderr="")
+    parts.vcs.get_head_sha.return_value = _HEAD
+    parts.vcs.resolve_commit.return_value = "r" * 40
+    parts.vcs.merge_base.return_value = apis.fork
+    api = MagicMock(spec=ApiBaseline)
+    api.ref = "origin/main"
+    measures = {_FORK: apis.base, _HEAD: apis.head}
+    api.base.side_effect = lambda sha, *_: ApiBase(sha, measures[sha])
+    parts.use_case.api = api
+    return parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path / "s"))
+
+
+def test_with_api_base_head_is_compared_where_it_left_it(tmp_path: Path, bin_dir: Path) -> None:
+    report = _against_base(tmp_path, bin_dir, replace(_HEAD_LOST_G, head=_symbols("p.f", "p.g")))
+
+    assert report.checks[-1].name == preconditions.API_BASE
+    assert report.checks[-1].problems == ()
+    assert report.api_start is not None
+    assert report.api_start.base == _FORK
+    assert report.api_start.broken == ()
+
+
+def test_a_break_head_already_has_fails_every_attempt_when_api_blocks(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    report = _against_base(tmp_path, bin_dir)
+
+    (problem,) = report.checks[-1].problems
+    assert problem.kind == "config"
+    assert "HEAD ya rompe 1 nombre de la API pública respecto a «origin/main»" in problem.message
+    assert "- `p.g`" in problem.message
+    assert "api.accepted" in problem.message
+
+
+def test_a_break_head_already_has_only_warns_when_api_measures(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    report = _against_base(tmp_path, bin_dir, mode="measure")
+
+    assert report.checks[-1].problems == ()
+    assert "El run solo avisará de lo que rompa de nuevo." in report.checks[-1].warnings[0]
+    assert report.api_start is not None
+    assert [b.name for b in report.api_start.broken] == ["p.g"]
+
+
+def test_a_base_with_no_common_ancestor_is_the_projects_to_fix(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    report = _against_base(tmp_path, bin_dir, replace(_HEAD_LOST_G, fork=None))
+
+    (problem,) = report.checks[-1].problems
+    assert problem.kind == "config"
+    assert "git fetch --deepen" in problem.message
+    assert report.api_start is None
+
+
+def test_a_base_that_cant_be_measured_blocks_only_where_api_blocks(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    unmeasured = replace(_HEAD_LOST_G, base="la medida no dejó informe")
+    blocking = _against_base(tmp_path / "b", bin_dir, unmeasured)
+    measuring = _against_base(tmp_path / "m", bin_dir, unmeasured, mode="measure")
+
+    assert "la medida no dejó informe" in blocking.checks[-1].problems[0].message
+    assert measuring.checks[-1].problems == ()
+    assert "la medida no dejó informe" in measuring.checks[-1].warnings[0]
