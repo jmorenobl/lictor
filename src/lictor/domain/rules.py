@@ -517,9 +517,10 @@ def _condense_cases(cases: Sequence[TestCaseResult], limit: int) -> str:
         shown += len(group)
 
     items: list[str] = []
-    for index, (summary, case, _size) in enumerate(summaries):
+    for index, (summary, case, size) in enumerate(summaries):
         share = (limit - _OMISSION_RESERVE - used) // (len(summaries) - index)
-        details = _clip(_case_details(case), share - 1) if share > 1 else ""
+        # A group already says its cause; a lone case gets its share of the details.
+        details = _clip(_case_details(case), share - 1) if share > 1 and size == 1 else ""
         used += len(details) + 1 if details else 0
         items.append(f"{summary}\n{details}" if details else summary)
 

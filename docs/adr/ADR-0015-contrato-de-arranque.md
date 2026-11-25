@@ -400,3 +400,39 @@ Un control cuyo programa no encuentra «Comandos de verificación», y un lector
 en HEAD: volverían a fallar y harían del proyecto (10) lo que puede ser de la máquina (40). Se nombran
 con ⚠, y si no queda ninguno la comprobación queda «no comprobado».
 
+## Enmienda 0.20.0: lo que un cambio deja sin ejecutar, y la API frente a su base
+
+Sale de H2 y H4 de `.audits/qa/0-19-0/siguientes-pasos-fable.md`, diseñadas en
+`.audits/qa/0-19-1/diseno.md` y revisadas en `revision-fable.md` (R1–R5, R16).
+
+### «Cambios que ningún control ejecutó»
+
+El contrato mira HEAD al arrancar; un run cambia el árbol, y lo que añade (un test en
+`tests/integration/` que `unit` no recoge) no existía entonces. Al terminar un run que movió su
+rama, Lictor pasa el mismo survey por el HEAD final y cruza el diff desde `started_at` (un campo
+nuevo del estado con el HEAD de `preflight`; no `api_base`, que con `api.base` es otra cosa, R2) con
+la misma regla, `blind_spots`, y no con una segunda (R3): lo que ningún control ejecuta
+(`sin_control`), lo que solo ejecuta `check` (`solo_check`) y lo que importa el código sin que
+ningún control lo lea (`sin_lector`). `cargado` y `sin_cambiar` no cuentan: se ejecutan, aunque el
+agente no los alcance.
+
+Dos hechos que el survey no tiene lo completan. `run_by` no es «lo ejecuta» (R1): el comando nombra
+la ruta, y puede no correr ningún caso de ella (`-m "not integration"` con el fichero marcado
+entero); en la fase 4a eran tres ficheros con `run_by: [unit]` y cero casos en `unit.xml`. El JUnit
+de cada control de la última verificación que pasó (`verified_step`) dice qué ficheros tuvieron
+casos, por el `classname`; un comando sin JUnit se juzga por el survey, y con un comando que no se
+entiende no se juzga ningún test. Y lo que no es Python lo ejecuta ningún control. Las features y el
+driver los ejecuta la aceptación, y el código de `code_dir` no se lista: un linter lo lee entero, y
+decir «comprobado» por eso prometía más de lo que hace (R4). Los borrados van aparte, lo aceptado
+en `blind_spots.accepted` solo se cuenta, y con el diff vacío no hay survey (R5).
+
+Son hechos (ADR-0009): el evento `lictor.run.unexecuted.v1` y la sección de `report.md`, sin
+veredicto ni código de salida. Un run que para sin terminar lo dice al terminar. `lictor check` con
+base (`--base` o `api.base`) hace el mismo cruce con el survey de lo verificado y los JUnit de ese
+mismo `check` (R16): diez informes de diez tandas no responden a la pregunta de la PR.
+
+### La API frente a su base
+
+Con `api.base` (enmienda 0.20.0 de la ADR-0017), tras «Los controles pasan en HEAD» se compara la
+API de HEAD con el punto en que salió de esa rama, una vez: una referencia que no resuelve, o una
+rotura que nadie aceptó con `api` en `block`, es ✗ `config`, porque cada intento la pagaría.

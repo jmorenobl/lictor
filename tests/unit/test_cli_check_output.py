@@ -139,7 +139,7 @@ def test_check_with_a_base_says_what_changed_that_no_control_executed() -> None:
 
     assert _unexecuted_output(found) == [
         "\nCambios que ningún control ejecutó desde la base:",
-        "- No es Python: ningún control lo lee: `README.md`",
+        "- No es Python: ningún control lo ejecuta: `README.md`",
     ]
     assert _unexecuted_output("sin survey")[-1] == "- No se puede saber: sin survey"
     assert _unexecuted_output(None) == []

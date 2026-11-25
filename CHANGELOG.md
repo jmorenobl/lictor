@@ -7,6 +7,53 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.20.0] - 2026-11-25
+
+Lo que la 0.19.0 dejó a medias y la repetición de la fase 4a de pyverifactu necesita para leerse:
+qué rompió el trabajo entero y qué cambió sin que ningún control lo ejecutara. Medido en los clones
+de la 0.19.0 antes de diseñar, revisado por Fable con sus hallazgos de peso comprobados
+ejecutándolos (`.audits/qa/0-19-1/`). `lictor.json` gana un campo (`api.base`) y el diario un
+evento: un run a medias no se reanuda.
+
+### Añadido
+
+- **`api.base`: la base de la API pública es la rama a la que se integra.** Con `"api": {"base":
+  "origin/main"}`, cada run compara la API con el punto en que HEAD salió de esa rama
+  (`merge-base`), no con su propio arranque: la segunda tanda de un trabajo ve lo que rompió la
+  primera. Sin el campo, como antes. `lictor check` la usa sin `--base`, y `--base` compara también
+  desde el punto en que lo verificado se separó de esa referencia. Entra en la huella de la
+  configuración.
+- **«La API frente a su base», en `doctor` y al arrancar un run.** Con `api.base`, compara HEAD con
+  ella antes del primer intento: una referencia que no existe o sin antepasado común (un clon
+  superficial: trae más historia) es ✗ del proyecto; con `api` en `block`, una rotura que HEAD ya
+  tiene y nadie aceptó también, porque cada intento fallaría haga lo que haga el agente; en
+  `measure` es un aviso. Lo que ya estaba roto queda en `run.started` (`api_start`), y el progreso
+  solo avisa (⚠) de lo que un verde rompe de nuevo.
+- **«Cambios que ningún control ejecutó».** Al terminar un run que movió su rama, `report.md` lista
+  lo que cambió desde su arranque que ningún control ejecuta, con la regla del contrato de arranque
+  sobre el árbol final: tests que ningún control ejecuta o que solo ejecuta `lictor check`, ficheros
+  que importan el código y ningún control lee, Python fuera del código que nadie lee, lo que no es
+  Python, y los borrados aparte. Un test que un control nombra y del que su JUnit no tiene ningún
+  caso (un `-m "not integration"`) cuenta como no ejecutado: en la fase 4a eran tres ficheros de
+  `tests/integration` que el arranque daba por cubiertos. `lictor check` con base dice lo mismo
+  desde ella. Son hechos: no bloquean ni cambian el código de salida.
+
+### Cambiado
+
+- **`lictor check` dice por qué falla cada control**, bloquee o mida: bajo su línea, la razón (los
+  nombres rotos de la API, las funciones complejas, los casos fallidos) y dónde está entera
+  (`.lictor/check/<id>.error.txt`; la de la API, con todas sus roturas). Ya no repite al final el
+  primer fallo.
+- **Los fallos iguales se cuentan una vez.** El error que lee el agente, y el de «Los controles
+  pasan en HEAD», agrupan los casos con el mismo mensaje y la misma última línea del detalle: «24
+  casos con el mismo error», con todos los nombres que quepan y la causa
+  (`PackageNotFoundError`). Antes, 24 veces «collection failure» y la causa fuera del límite.
+- **El veredicto de `api` da solo los hechos.** La frase de `LICTOR: SPEC_CONFLICT` sale de él: el
+  implementador la oye en sus medidas, y solo cuando `api` bloquea; que una rotura aceptada se
+  apunta en `api.accepted` lo lee la persona en `check`, no el agente.
+- **«Los controles pasan en HEAD» no ejecuta `api` cuando hay `api.base`**: lo compara «La API
+  frente a su base», una sola vez.
+
 ## [0.19.0] - 2026-11-25
 
 Lo que estorbó llevar la fase 4a de pyverifactu a su repositorio (PR #1 de verifactu-py) y lo que
@@ -1078,7 +1125,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.19.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/jmorenobl/lictor/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/jmorenobl/lictor/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/jmorenobl/lictor/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/jmorenobl/lictor/compare/v0.16.0...v0.17.0

@@ -64,6 +64,8 @@ _PRESENT = frozenset(
         "scripts/suelto.py",
         "README.md",
         "docs/aceptado/a.md",
+        "features/iva.feature",
+        "tests/acceptance/test_iva.py",
     }
 )
 # `unit` ran cases of test_a only; `raro` leaves no JUnit to read.
@@ -83,7 +85,9 @@ def _kinds(changed: list[str], report: SurveyReport = _REPORT) -> dict[str, str]
         ("tests/unit/test_a.py", None),  # ran; out of reach, but executed
         ("tests/otros/test_c.py", None),  # no JUnit to read: the survey is trusted
         ("tests/fuera/test_d.py", "sin_control"),
-        ("tests/conftest.py", "cargado"),
+        ("tests/conftest.py", None),  # loaded by the tests: it runs, out of the agent's reach
+        ("features/iva.feature", None),  # the acceptance runs the scenarios
+        ("tests/acceptance/test_iva.py", None),  # and the driver
         ("examples/uso.py", "sin_lector"),
         ("scripts/visto.py", None),  # a static check reads it
         ("scripts/suelto.py", "sin_leer"),
@@ -159,7 +163,7 @@ def test_the_record_reads_back_and_the_lines_group_by_kind() -> None:
     assert unexecuted_lines(found) == [
         "- Tests que un control nombra y no ejecutó: ningún caso suyo en su informe: "
         "`tests/integration/test_m.py`",
-        "- No es Python: ningún control lo lee: `README.md`",
+        "- No es Python: ningún control lo ejecuta: `README.md`",
         "- Borrados: `src/x.py`",
         "- Aceptados en blind_spots.accepted, solo contados: 2",
         f"- {CODE_NOTE}",

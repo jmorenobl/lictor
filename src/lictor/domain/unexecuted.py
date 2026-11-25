@@ -19,6 +19,7 @@ from typing import Final, Literal
 
 from lictor.domain.blind_spots import BlindSpots, StartRules, accepted_paths
 from lictor.domain.rules import path_within
+from lictor.domain.spec_rules import FEATURES_DIR
 from lictor.domain.survey import SurveyedTests, SurveyReport
 
 # How `report.md` and `check` title the facts.
@@ -30,7 +31,6 @@ UnexecutedKind = Literal[
     "sin_control",
     "solo_check",
     "sin_ejecutar",
-    "cargado",
     "sin_lector",
     "sin_leer",
     "no_es_codigo",
@@ -40,14 +40,13 @@ KIND_TEXT: Final[Mapping[UnexecutedKind, str]] = {
     "sin_control": "tests que ningún control ejecuta",
     "solo_check": "tests que solo ejecuta `lictor check`",
     "sin_ejecutar": "tests que un control nombra y no ejecutó: ningún caso suyo en su informe",
-    "cargado": "ficheros que cargan los tests, importan el código y el agente no puede cambiar",
     "sin_lector": "ficheros que importan el código y ningún control lee",
     "sin_leer": "Python fuera del código que ningún control lee",
-    "no_es_codigo": "no es Python: ningún control lo lee",
+    "no_es_codigo": "no es Python: ningún control lo ejecuta",
 }
-# The kinds of `blind_spots` that say a file isn't executed or read; the rest are about the CI, or
-# about tests that do run.
-_FROM_SPOTS: Final[Collection[str]] = ("sin_control", "solo_check", "cargado", "sin_lector")
+# The kinds of `blind_spots` that say a file isn't executed; the rest are about the CI, or about
+# files that do run out of the agent's reach (`sin_cambiar`, `cargado`).
+_FROM_SPOTS: Final[Collection[str]] = ("sin_control", "solo_check", "sin_lector")
 CODE_NOTE: Final[str] = (
     "El código del proyecto no se lista: los controles estáticos lo leen entero, y eso no dice "
     "que algo lo ejecute."
@@ -97,6 +96,7 @@ class _Facts:
     tests: Mapping[str, SurveyedTests]
     read: Collection[str]  # loaded by the tests, importing the code, or read by a static check
     code_dir: str
+    oracle: Sequence[str]
     ran: Mapping[str, frozenset[str] | None]
     unknown: bool
 
@@ -107,6 +107,8 @@ class _Facts:
         test = self.tests.get(path)
         if test is not None:
             return None if self.unknown or self._executed(test) else "sin_ejecutar"
+        if path_within(path, self.oracle):
+            return None  # the scenarios and the driver: the acceptance runs them
         if not path.endswith(".py"):
             return "no_es_codigo"
         if path_within(path, [self.code_dir]) or path in self.read:
@@ -161,6 +163,7 @@ def unexecuted_changes(
         | {u.path for u in report.code_users}
         | {path for c in report.commands for path in c.covers},
         code_dir=report.code_dir,
+        oracle=(FEATURES_DIR, *rules.driver),
         ran=ran,
         unknown=any(not c.understood for c in report.commands),
     )

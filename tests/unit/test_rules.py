@@ -1706,6 +1706,7 @@ def test_condense_error_counts_cases_that_failed_alike_once_with_every_name_that
     assert "tests.unit.test_23" in condensed
     assert "Causa: E   PackageNotFoundError: agentix" in condensed
     assert "más" not in condensed.split("Mensaje")[0]
+    assert "Detalle" not in condensed  # the cause says it
 
 
 def test_condense_error_names_that_dont_fit_are_counted() -> None:

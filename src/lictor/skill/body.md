@@ -109,6 +109,12 @@ ejecutar, y el run lo salta.
      aprobado, `lictor conventions --reviewed` guarda el hash de cada fichero como está en HEAD y
      el aviso calla hasta que cambie; revisado y sin nada que cambiar, la misma orden.
      `lictor conventions` enseña el texto y el estado de cada fichero.
+   - **La rama a la que se integra** (`api.base`). Pregunta adónde va el trabajo (`origin/main`, de
+     ordinario) y escríbelo: `"api": {"base": "origin/main"}`. Cada run compara la API pública con
+     el punto en que el trabajo salió de esa rama, no con su propio arranque, así que la segunda
+     tanda de un trabajo ve lo que rompió la primera; `lictor check` la usa también, y dice qué
+     cambió desde ahí sin que ningún control lo ejecutara. Lo que la persona acepta romper va en
+     `api.accepted`. En un clon superficial, `lictor doctor` pide traer más historia.
    - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
      `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
    - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
