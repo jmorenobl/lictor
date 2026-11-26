@@ -324,8 +324,13 @@ def _entries(value: str) -> tuple[str, ...]:
     return tuple(entry for entry in value.split(",") if entry)
 
 
+def _number(value: str) -> bool:
+    """Whether a plugin reported a whole number: ASCII digits only, never `٣` or `-1`."""
+    return value.isascii() and value.isdigit()
+
+
 def _numbers(value: str) -> tuple[int, ...]:
-    return tuple(int(n) for n in _entries(value) if n.isascii() and n.isdigit())
+    return tuple(int(n) for n in _entries(value) if _number(n))
 
 
 @dataclass(frozen=True)
@@ -350,10 +355,10 @@ def statements_from_text(value: str) -> tuple[Statement, ...]:
     """The statements a plugin reported, up to the first it didn't say whole."""
     found: list[Statement] = []
     for entry in value.split(";"):
-        path, _, rest = entry.partition(":")
-        line, _, fed = rest.partition(":")
-        if not path or not (line.isascii() and line.isdigit()):
+        parts = entry.rsplit(":", 2)  # from the right: the path is what is left
+        if len(parts) != len(fields(Statement)) or not parts[0] or not _number(parts[1]):
             break
+        path, line, fed = parts
         found.append(Statement(path, int(line), frozenset(_numbers(fed))))
     return tuple(found)
 

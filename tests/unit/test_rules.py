@@ -1786,3 +1786,13 @@ def test_same_error_groups_parts_cases_that_failed_alike_in_two_places() -> None
         ["b"],
         ["d", "e"],
     ]
+
+
+def test_same_error_groups_keeps_going_after_a_case_with_nothing_to_share() -> None:
+    cases = [
+        TestCaseResult("a", status="failure"),
+        TestCaseResult("b", status="failure", message="m"),
+        TestCaseResult("c", status="failure", message="m"),
+    ]
+
+    assert [[c.name for c in g] for g in same_error_groups(cases)] == [["a"], ["b", "c"]]

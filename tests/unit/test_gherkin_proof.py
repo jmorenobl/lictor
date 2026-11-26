@@ -505,3 +505,38 @@ def test_the_statements_stop_at_the_first_outside_the_driver() -> None:
     case = _broke(f"{STEP}:727:;src/pkg/mod.py:10:;{STEP}:713:")
 
     assert driver_statements(case, (STEP,)) == (Statement(STEP, 727),)
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        GherkinFacts(2, survived=(0,)),
+        GherkinFacts(2, inputs=(0,)),
+        GherkinFacts(2, errors=(0,)),
+        GherkinFacts(2, read=(0,), survived=(1,)),
+    ],
+)
+def test_a_then_that_couldn_t_read_it_is_ilegible_only_when_nothing_was_weighed(
+    facts: GherkinFacts,
+) -> None:
+    """A value that survived, went in or failed otherwise was weighed: it stays as before."""
+    proof = interface_proof(_iface(), COR_006, (STEP,))
+
+    assert weighed_proof(proof, facts, _iface()).outcome == "no_aserta"
+
+
+def test_the_note_of_what_couldn_t_be_read_names_each_with_why() -> None:
+    proofs = {"A-1": InterfaceProof("ilegible", "x"), "B-2": InterfaceProof("ilegible", "y")}
+
+    assert unreadable_result_note(proofs) == (
+        "Lictor no pudo comprobar A-1 (x); B-2 (y): con lo que devuelve la interfaz alterado, su "
+        "Entonces no pudo leerlo, y el escenario no le da ningún valor con el que ver qué "
+        "compara. Léelo."
+    )
+
+
+def test_where_nothing_was_read_there_is_no_place() -> None:
+    failed = _case("failure", trace=TRACE, altered=True, kind="error", step="then")
+    facts = _facts(mas_0=failed, menos_0=failed, mas_1=None, menos_1=None)
+
+    assert (facts.place, facts.read_at) == ("", ())

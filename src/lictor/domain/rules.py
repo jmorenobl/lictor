@@ -468,7 +468,7 @@ def same_error_groups(cases: Sequence[TestCaseResult]) -> list[list[TestCaseResu
     nothing it shares, so it stays alone. Two assertions that fail alike in two places are two
     failures (M2 of 0.20.0); what a missing package breaks fails where it is imported, one place.
     """
-    groups: dict[tuple[str, str, str], list[TestCaseResult]] = {}
+    groups: dict[tuple[str, str, str, int | None], list[TestCaseResult]] = {}
     alone: list[list[TestCaseResult]] = []
     order: list[list[TestCaseResult]] = []
     for case in cases:
@@ -477,7 +477,7 @@ def same_error_groups(cases: Sequence[TestCaseResult]) -> list[list[TestCaseResu
             alone.append([case])
             order.append(alone[-1])
             continue
-        key = (message, cause, f"{case.frame}:{case.frame_line}" if case.frame else "")
+        key = (message, cause, case.frame, case.frame_line)
         if key not in groups:
             groups[key] = []
             order.append(groups[key])
