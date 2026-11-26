@@ -989,6 +989,17 @@ class LictorConfig(BaseModel):
         _check_readers(self.controls)
         return self
 
+    @model_validator(mode="after")
+    def _validate_api_base(self) -> Self:
+        """`api.base` is what the API control compares with: without one it decides nothing, and
+        a reference that doesn't resolve would stop a run for it (M3 of 0.20.0)."""
+        if self.api.base is not None and not any(c.report == "api" for c in self.controls):
+            raise ValueError(
+                f"api.base ({self.api.base!r}) es la base con la que compara el control de la "
+                'API, y no hay ninguno activo: quita api.base, o activa el control con report "api"'
+            )
+        return self
+
 
 def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
     """The resolved controls as the domain sees them, in the order they were declared.

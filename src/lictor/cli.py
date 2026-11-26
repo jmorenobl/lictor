@@ -3,7 +3,7 @@
 import json
 import shutil
 import sys
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from contextlib import closing
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path, PurePosixPath
@@ -511,6 +511,8 @@ def check(
             typer.echo(line)
         for line in _unexecuted_output(res.unexecuted):
             typer.echo(line)
+        if res.api_uncompared:
+            typer.echo(f"\n{API_UNCOMPARED}")
 
         if res.tampered:
             typer.echo(f"\nL0-entorno: {res.tampered}", err=True)
@@ -520,6 +522,12 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+# `--base` without an API control: the rest compares with it, the API doesn't (M4 of 0.20.0).
+API_UNCOMPARED = (
+    "La API pública no se compara con la base: no hay ningún control activo con report «api»."
+)
 
 
 def _unexecuted_output(found: UnexecutedChanges | str | None) -> list[str]:
@@ -699,18 +707,28 @@ def run(
     _safe_run(_execute)
 
 
-def _progress_printer() -> Callable[[Event], None]:
+class _ProgressPrinter:
     """Tell each step of the run on stderr, as the journal records it (F10)."""
-    progress = RunProgress()
 
-    def show(event: Event) -> None:
-        for line in progress.observe(event):
+    def __init__(self) -> None:
+        self.progress = RunProgress()
+
+    def __call__(self, event: Event) -> None:
+        for line in self.progress.observe(event):
             try:
                 typer.echo(line, err=True)
             except OSError:
                 return  # nobody is reading stderr any more: the run goes on without telling
 
-    return show
+    def catch_up(self, events: Iterable[Event]) -> None:
+        """Fold, without telling, what a resumed run had already done: what the API had broken,
+        and the calls and costs its totals add up (M1 of 0.20.0)."""
+        for event in events:
+            self.progress.observe(event)
+
+
+def _progress_printer() -> Callable[[Event], None]:
+    return _ProgressPrinter()
 
 
 def _record_stop(runtime: BootstrapResult, run_id: str, code: int, reason: str) -> None:
@@ -1119,6 +1137,8 @@ def _run_holding_project(
     resumable = None if force_new else _resumable_run(graph, current_run_file)
     if resumable is not None:
         run_id, state_snapshot = resumable
+        if isinstance(progress, _ProgressPrinter):
+            progress.catch_up(runtime.event_log.events(run_id=run_id))
         return _resume_run(runtime, graph, run_id, resolved_cwd, state_snapshot)
 
     return _start_new_run(runtime, graph, current_run_file, resolved_cwd, run_id)

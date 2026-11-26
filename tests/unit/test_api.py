@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from lictor import cli
 from lictor.domain.api import (
     IMPLEMENTER_API,
     NAMED,
@@ -899,3 +900,23 @@ def test_a_start_without_api_base_knows_nothing_broken() -> None:
     assert api_start_names(None) == frozenset()
     assert api_start_names({"broken": "p.f"}) == frozenset()
     assert api_start_names(api_start_record("b", ["p.g", "p.f"])) == {"p.f", "p.g"}
+
+
+def test_a_resumed_run_knows_what_it_had_broken_and_tells_nothing_of_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M1 of 0.20.0: a resume starts a new printer, which caught up silently with the journal."""
+    printer = cli._ProgressPrinter()
+    printer.catch_up(
+        [
+            _event("lictor.run.started.v1", {"api_start": api_start_record("b", [])}),
+            _verify(ok=True),
+            _green(),
+        ]
+    )
+
+    assert capsys.readouterr().err == ""
+    printer(_verify(ok=True))
+    printer(_green())
+
+    assert "⚠" not in capsys.readouterr().err

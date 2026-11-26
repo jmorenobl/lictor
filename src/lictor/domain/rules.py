@@ -461,20 +461,23 @@ def _cause(case: TestCaseResult) -> str:
 
 
 def same_error_groups(cases: Sequence[TestCaseResult]) -> list[list[TestCaseResult]]:
-    """Group the cases that failed with the same message and the same last line of detail.
+    """Group the cases that failed with the same message and the same last line of detail, at
+    the same place when their runner says where.
 
     Each group keeps the place of its first case. A case with neither message nor detail says
-    nothing it shares, so it stays alone.
+    nothing it shares, so it stays alone. Two assertions that fail alike in two places are two
+    failures (M2 of 0.20.0); what a missing package breaks fails where it is imported, one place.
     """
-    groups: dict[tuple[str, str], list[TestCaseResult]] = {}
+    groups: dict[tuple[str, str, str], list[TestCaseResult]] = {}
     alone: list[list[TestCaseResult]] = []
     order: list[list[TestCaseResult]] = []
     for case in cases:
-        key = ((case.message or "").strip(), _cause(case))
-        if key == ("", ""):
+        message, cause = (case.message or "").strip(), _cause(case)
+        if (message, cause) == ("", ""):
             alone.append([case])
             order.append(alone[-1])
             continue
+        key = (message, cause, f"{case.frame}:{case.frame_line}" if case.frame else "")
         if key not in groups:
             groups[key] = []
             order.append(groups[key])

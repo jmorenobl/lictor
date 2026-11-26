@@ -76,3 +76,13 @@ def test_a_survey_that_fails_says_why() -> None:
 
     assert isinstance(found, str)
     assert "el análisis no dejó informe" in found
+
+
+def test_git_failing_is_the_reason_not_the_end_of_the_run() -> None:
+    """M5 of 0.20.0: it runs in `_finish`, once the branch moved; it tells, it never breaks."""
+    finder, _ = _finder(["src/a.py"])
+    vcs = finder.vcs
+    assert isinstance(vcs, MagicMock)
+    vcs.changed_paths.side_effect = OSError("git no está")
+
+    assert _run(finder) == "no se pudo leer lo que cambió (OSError: git no está)"

@@ -1762,3 +1762,27 @@ def test_condense_error_cases_with_nothing_to_share_are_not_grouped() -> None:
 def test_same_error_groups_needs_message_or_cause() -> None:
     by_message = [TestCaseResult(n, status="failure", message="m") for n in "ab"]
     assert [[c.name for c in g] for g in same_error_groups(by_message)] == [["a", "b"]]
+
+
+def test_same_error_groups_parts_cases_that_failed_alike_in_two_places() -> None:
+    """M2 of 0.20.0: `AssertionError` with no message in two tests are two failures."""
+
+    def failed(name: str, frame: str = "", line: str = "") -> TestCaseResult:
+        properties = {"lictor.frame": frame, "lictor.line": line} if frame else {}
+        return TestCaseResult(
+            name, status="failure", details="E   AssertionError", properties=properties
+        )
+
+    cases = [
+        failed("a", "tests/test_x.py", "3"),
+        failed("b", "tests/test_x.py", "9"),
+        failed("c", "tests/test_x.py", "3"),
+        failed("d"),
+        failed("e"),
+    ]
+
+    assert [[c.name for c in g] for g in same_error_groups(cases)] == [
+        ["a", "c"],
+        ["b"],
+        ["d", "e"],
+    ]
