@@ -99,7 +99,7 @@ The CI gives the green. Locally, run what fails fast, once; never the whole of `
 - **The whole `tests` at once** (`uv run pytest tests -n auto`, as the nightly does) needs `--dist worksteal`: the `repro` cases are collected first, and with the default distribution each worker starts with a run of consecutive tests, so one worker got every `repro` case and ran them one after another while the rest sat idle (macOS went from 36 to over 90 min). A run of `-m "not repro"` or of only `repro` doesn't need it.
 - **A new test slower than 10 s** needs the `repro` mark and a reason: something only seen with everything set up. The CI lists the others as warnings.
 
-Budget, measured in the CI. Going over is an issue, like a broken test. `scripts/ci_budget.py` holds the CI's figures and warns, never fails; `timeout-minutes` is only the cut against a hung job, about 2.5 times what a job takes.
+Budget, measured in the CI. Going over is an issue, like a broken test. `scripts/ci_budget.py` holds the CI's figures and warns, never fails; `timeout-minutes` is only the cut against a hung job, about 2.5 times what a job takes (a `lictor check` step's comes from its controls' `timeout_s`: see below the table).
 
 | When | Budget |
 |:-----|:-------|

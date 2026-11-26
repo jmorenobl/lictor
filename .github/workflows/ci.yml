@@ -140,9 +140,10 @@ jobs:
       - run: uv sync --all-groups --frozen
       # Its own cut, below the job's: if Lictor hangs, only this step stops, and the next one still
       # keeps `.lictor/check/`. A cancelled job runs no step after it, so it would leave no log.
-      # Lictor cuts first: each control's `timeout_s` (600 s by default) stays at least 2 min under
-      # this cut, so a hung control fails with its log and its verdict and `--keep-going` goes on.
-      # 15 min: a hung `unit` cut at 600 s with `coverage` still behind it.
+      # Lictor cuts first: each control's `timeout_s` (600 s by default) stays under this cut by what
+      # the rest of the step takes on a slow runner (4.5 min, CHECK_STEP_MARGINS_S in
+      # test_config.py), so a hung control fails with its log and its verdict and `--keep-going`
+      # goes on. 15 min: a hung `unit` cut at 600 s with `coverage` still behind it.
       - run: uv run lictor check --keep-going --level L1,L2,L4
         timeout-minutes: 15
       # Logs and reports: what tells two passes or two platforms apart.

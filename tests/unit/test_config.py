@@ -472,8 +472,8 @@ def test_load_config_from_repo_root_lictor_json() -> None:
 CHECK_STEP_MARGINS_S = {frozenset({"L1", "L2", "L4"}): 270, frozenset({"L5"}): 120}
 
 
-def _ci_check_steps() -> list[tuple[str, frozenset[str], int]]:
-    """Each `lictor check` step of ci.yml: its job, the levels it runs and its cut in seconds."""
+def _ci_check_steps() -> list[tuple[str, frozenset[str], int, int]]:
+    """Each `lictor check` step of ci.yml: its job, its levels, and its and its job's cut in s."""
     ci = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
     found = []
     for job_id, job in ci["jobs"].items():
@@ -483,14 +483,15 @@ def _ci_check_steps() -> list[tuple[str, frozenset[str], int]]:
             tokens = shlex.split(step["run"])
             levels = frozenset(tokens[tokens.index("--level") + 1].split(","))
             assert "--keep-going" in tokens, job_id
-            found.append((job_id, levels, int(step["timeout-minutes"]) * 60))
+            cuts = (int(step["timeout-minutes"]) * 60, int(job["timeout-minutes"]) * 60)
+            found.append((job_id, levels, *cuts))
     return found
 
 
 def test_the_ci_self_verification_runs_every_control_of_lictor_json_once() -> None:
     """The CI filters by level to skip the acceptance; a control at another level would be lost."""
     steps = _ci_check_steps()
-    run_by = [levels for _, levels, _ in steps]
+    run_by = [levels for _, levels, _, _ in steps]
     controls = load_config(REPO_ROOT / "lictor.json").controls
 
     assert all("L3" not in levels for levels in run_by), steps
@@ -503,8 +504,10 @@ def test_lictor_cuts_a_hung_control_before_the_ci_cuts_its_step() -> None:
     controls = load_config(REPO_ROOT / "lictor.json").controls
     steps = _ci_check_steps()
 
-    assert {levels for _, levels, _ in steps} == set(CHECK_STEP_MARGINS_S)
-    for job_id, levels, cut_s in steps:
+    assert {levels for _, levels, _, _ in steps} == set(CHECK_STEP_MARGINS_S)
+    for job_id, levels, cut_s, job_cut_s in steps:
+        # Below the job's, so a hung step still leaves the next one to upload `.lictor/check/`.
+        assert cut_s < job_cut_s, (job_id, cut_s, job_cut_s)
         slowest = max(
             c.timeout_s
             for c in controls

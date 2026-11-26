@@ -16,8 +16,8 @@ en su significado se anota en «Cambiado».
   regla de AGENTS.md. Los `timeout_s` del `lictor.json` de Lictor quedan por debajo del corte de su
   paso (`coverage`, el de por defecto, 600 s; `mutation`, 900 s), así que un control colgado lo
   corta Lictor, con su log y su veredicto, y `--keep-going` sigue. Un test lo comprueba leyendo
-  `ci.yml`. Los dos jobs dicen qué runner les tocó (`lscpu`). Solo cambia la CI de Lictor, no
-  Lictor.
+  `ci.yml`. Los dos jobs dicen qué runner les tocó (`lscpu`). No cambia el paquete: solo la CI y
+  el `lictor.json` del repositorio, así que un `lictor check` local corta `coverage` a los 600 s.
 
 ## [0.21.0] - 2026-11-26
 
