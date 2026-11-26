@@ -218,6 +218,7 @@ JOBS = {
         _job("Puertas (ubuntu-24.04, Python 3.12)", "00:00", "00:06", "01:06"),
         _job("Repro (macos-15, Python 3.14, parte 1 de 3)", "00:00", "10:00", "21:00"),
         _job("Lictor se verifica a sí mismo", "00:00", "00:06", "05:06"),
+        _job("Mutación", "00:00", "00:06", "10:36"),
         _job("Presupuesto", "00:00", "21:10", None),
     ]
 }
@@ -240,10 +241,12 @@ def test_a_job_over_its_budget_warns_and_its_queue_is_shown_apart() -> None:
         "Puertas (ubuntu-24.04, Python 3.12)",
         "Repro (macos-15, Python 3.14, parte 1 de 3)",
         "Lictor se verifica a sí mismo",
+        "Mutación",
     ]
     assert budget.job_warnings(jobs) == [
         "Repro (macos-15, Python 3.14, parte 1 de 3): 11.0 min, presupuesto 10 min "
         "(cola aparte: 10.0 min)",
+        "Mutación: 10.5 min, presupuesto 10 min (cola aparte: 0.1 min)",
     ]
 
 
@@ -269,7 +272,8 @@ def test_the_summary_shows_every_job_and_the_path_with_and_without_queue() -> No
     text = budget.summary(budget.finished_jobs(JOBS))
 
     assert "| Repro (macos-15, Python 3.14, parte 1 de 3) | 11.0 | 10.0 | 10 |" in text
-    assert "| Lictor se verifica a sí mismo | 5.0 | 0.1 | 8 |" in text
+    assert "| Lictor se verifica a sí mismo | 5.0 | 0.1 | 6 |" in text
+    assert "| Mutación | 10.5 | 0.1 | 10 |" in text
     assert text.endswith("Camino crítico: 11.0 min sin cola (presupuesto 12), 21.0 min con ella.\n")
 
 

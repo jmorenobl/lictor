@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
@@ -464,16 +465,55 @@ def test_load_config_from_repo_root_lictor_json() -> None:
     assert any(c.id == "architecture" for c in cfg.controls)
 
 
-def test_the_ci_self_verification_runs_every_control_of_lictor_json() -> None:
+# What else a self-verification step may take on a runner 1.4 times slower, besides its slowest
+# control, in seconds: if one control hangs and the rest take what they usually do, Lictor cuts it,
+# and not the CI. L1, L2 and L4: the whole step, about 4.5 min. L5: only the mutation, plus building
+# the environment and reading the report, under 1 min; 2 min is the least any step leaves.
+CHECK_STEP_MARGINS_S = {frozenset({"L1", "L2", "L4"}): 270, frozenset({"L5"}): 120}
+
+
+def _ci_check_steps() -> list[tuple[str, frozenset[str], int, int]]:
+    """Each `lictor check` step of ci.yml: its job, its levels, and its and its job's cut in s."""
+    ci = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
+    found = []
+    for job_id, job in ci["jobs"].items():
+        for step in job["steps"]:
+            if "lictor check" not in step.get("run", ""):
+                continue
+            tokens = shlex.split(step["run"])
+            levels = frozenset(tokens[tokens.index("--level") + 1].split(","))
+            assert "--keep-going" in tokens, job_id
+            cuts = (int(step["timeout-minutes"]) * 60, int(job["timeout-minutes"]) * 60)
+            found.append((job_id, levels, *cuts))
+    return found
+
+
+def test_the_ci_self_verification_runs_every_control_of_lictor_json_once() -> None:
     """The CI filters by level to skip the acceptance; a control at another level would be lost."""
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    commands = [line for line in ci.splitlines() if "lictor check" in line]
-    assert len(commands) == 1, commands
-    tokens = shlex.split(commands[0].split("run:", 1)[1])
-    levels = set(tokens[tokens.index("--level") + 1].split(","))
-    assert "L3" not in levels
+    steps = _ci_check_steps()
+    run_by = [levels for _, levels, _, _ in steps]
     controls = load_config(REPO_ROOT / "lictor.json").controls
-    assert {c.id: c.level for c in controls if c.level not in levels} == {}
+
+    assert all("L3" not in levels for levels in run_by), steps
+    assert {c.id: c.level for c in controls if not any(c.level in s for s in run_by)} == {}
+    assert {c.id for c in controls if sum(c.level in s for s in run_by) > 1} == set()
+
+
+def test_lictor_cuts_a_hung_control_before_the_ci_cuts_its_step() -> None:
+    """A cut of the CI leaves no log or verdict of the control, and stops `--keep-going`."""
+    controls = load_config(REPO_ROOT / "lictor.json").controls
+    steps = _ci_check_steps()
+
+    assert {levels for _, levels, _, _ in steps} == set(CHECK_STEP_MARGINS_S)
+    for job_id, levels, cut_s, job_cut_s in steps:
+        # Below the job's, so a hung step still leaves the next one to upload `.lictor/check/`.
+        assert cut_s < job_cut_s, (job_id, cut_s, job_cut_s)
+        slowest = max(
+            c.timeout_s
+            for c in controls
+            if c.level in levels and isinstance(c, CommandControlConfig)
+        )
+        assert slowest + CHECK_STEP_MARGINS_S[levels] <= cut_s, (job_id, slowest, cut_s)
 
 
 def test_load_config_errors_on_missing_or_invalid_json(tmp_path: Path) -> None:

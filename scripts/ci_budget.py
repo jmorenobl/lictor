@@ -43,7 +43,9 @@ REPRO_CLASSNAME = "tests.integration.repro"
 JOB_BUDGETS_MIN = (
     ("Puertas", 3.0),
     ("Repro", 10.0),
-    ("Lictor se verifica", 8.0),
+    ("Lictor se verifica", 6.0),
+    # Linear in mutants, about 38 ms each on the runner: it warns long before its cut of 18 min.
+    ("Mutación", 10.0),
     ("Dependencias", 3.0),
     # The full suite's, each night and before a release; called from release.yml its jobs are
     # «Suite completa / Suite completa (...)», which starts the same.
