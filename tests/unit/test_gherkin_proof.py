@@ -530,8 +530,8 @@ def test_the_note_of_what_couldn_t_be_read_names_each_with_why() -> None:
 
     assert unreadable_result_note(proofs) == (
         "Lictor no pudo comprobar A-1 (x); B-2 (y): con lo que devuelve la interfaz alterado, su "
-        "Entonces no pudo leerlo, y el escenario no le da ningún valor con el que ver qué "
-        "compara. Léelo."
+        "Entonces no pudo leerlo, y el escenario no le da ningún valor que Lictor pueda cambiar "
+        "para ver qué compara. Léelo."
     )
 
 

@@ -161,19 +161,23 @@ def _frames(tb: TracebackType | None) -> list[tuple[CodeType, int]]:
     return found
 
 
-def _chain(frames: list[tuple[CodeType, int]], codes: tuple[Any, ...], root: Path) -> Iterator[str]:
+def _chain(frames: list[tuple[CodeType, int]], codes: tuple[Any, ...], root: Path) -> list[str]:
+    """Each frame's statement from the step's own, up to the first outside the project; none at
+    all if a frame of the project can't be named, since a shorter chain joins more easily."""
     start = next(
         (i for code in codes for i, (frame, _) in enumerate(frames) if frame is code), None
     )
-    if start is None:
-        return
-    for code, line in frames[start:]:
+    chain: list[str] = []
+    for code, line in frames[start:] if start is not None else []:
         inside = _relative(code.co_filename, root)
-        named = _statement_at(code.co_filename, line) if inside and line else None
+        if not inside:
+            break
+        named = _statement_at(code.co_filename, line) if line else None
         if named is None:
-            return
+            return []
         first, fed = named
-        yield f"{inside}:{first}:{','.join(str(n) for n in sorted(fed))}"
+        chain.append(f"{inside}:{first}:{','.join(str(n) for n in sorted(fed))}")
+    return chain
 
 
 _TREES: dict[str, ast.Module | None] = {}
@@ -218,19 +222,24 @@ def _statement_at(path: str, line: int) -> tuple[int, frozenset[int]] | None:
 
 def _innermost(tree: ast.Module, line: int) -> tuple[ast.stmt, ast.AST | None] | None:
     """The innermost statement holding `line` and the function it is in, or None: none holds it,
-    or two do on that line (`a; b`), and which one raised can't be told by it."""
+    or two do on that line (`a; b`, `if x: assert y`), and which one raised can't be told by it."""
     statement: ast.stmt | None = None
     function: ast.AST | None = None
-    children = list(_child_statements(tree))
-    while True:
-        holding = [s for s in children if s.lineno <= line <= (s.end_lineno or s.lineno)]
-        if len(holding) > 1:
-            return None
-        if not holding:
-            return None if statement is None else (statement, function)
+    holding = _holding(tree, line)
+    while len(holding) == 1:
         statement = holding[0]
         function = statement if isinstance(statement, _FUNCTIONS) else function
-        children = list(_child_statements(statement))
+        holding = _holding(statement, line)
+        if holding and holding[0].lineno == statement.lineno:
+            return None  # its body starts on its own line
+    if holding or statement is None:
+        return None
+    return statement, function
+
+
+def _holding(node: ast.AST, line: int) -> list[ast.stmt]:
+    """The statements right inside `node` that hold `line`."""
+    return [s for s in _child_statements(node) if s.lineno <= line <= (s.end_lineno or s.lineno)]
 
 
 def _flat(statements: list[ast.stmt]) -> Iterator[ast.stmt]:
@@ -278,6 +287,8 @@ def _header(statement: ast.stmt) -> list[ast.AST]:
         return [statement.test]
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         return [item.context_expr for item in statement.items]
+    if isinstance(statement, ast.Assert):
+        return [statement.test]  # its message is evaluated only once the test failed
     subject = getattr(statement, "subject", None)  # `match`
     return [subject] if subject is not None else [statement]
 

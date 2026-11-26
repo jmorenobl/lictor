@@ -490,7 +490,8 @@ def unreadable_result_note(proofs: Mapping[str, InterfaceProof]) -> str:
     each = "; ".join(f"{sid} ({proof.detail})" for sid, proof in proofs.items())
     return (
         f"Lictor no pudo comprobar {each}: con lo que devuelve la interfaz alterado, su Entonces "
-        "no pudo leerlo, y el escenario no le da ningún valor con el que ver qué compara. Léelo."
+        "no pudo leerlo, y el escenario no le da ningún valor que Lictor pueda cambiar para ver "
+        "qué compara. Léelo."
     )
 
 

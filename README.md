@@ -509,7 +509,7 @@ Cambiarlo impide reanudar un run empezado con el otro valor. Los objetivos son d
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`, `driver_exempt_paths`, `code_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
 | Proyecto | `paths`, `acceptance`, `agent_tools`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
 | Proyecto | `controls` | Cambios por `id` sobre los del perfil: cambian campos, quitan (`enabled: false`) o añaden |

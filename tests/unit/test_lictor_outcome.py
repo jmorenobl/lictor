@@ -305,6 +305,23 @@ def dos_en_una(xml, v):
     a = 1; ElementTree.fromstring(xml)  # DOS
 
 
+def en_el_mensaje(xml, v):
+    root = ElementTree.fromstring(xml)  # MENSAJE
+    assert v == "S", f"en {root.tag}"
+
+
+def if_en_una_linea(xml, v):
+    if ElementTree.fromstring(xml): assert v == "S"  # IF_LINEA
+
+
+def _dos_en_una(xml):
+    a = 1; ElementTree.fromstring(xml)
+
+
+def llama_a_dos_en_una(xml, v):
+    assert _dos_en_una(xml) == v  # LLAMA
+
+
 def aserta(xml, v):
     assert v == "otro"  # DIRECTA
 
@@ -357,6 +374,18 @@ def test_reasignado(request):
 
 def test_dos_en_una(request):
     ejecuta(request, dos_en_una, xml=BAD, v="S")
+
+
+def test_en_el_mensaje(request):
+    ejecuta(request, en_el_mensaje, xml=BAD, v="S")
+
+
+def test_if_en_una_linea(request):
+    ejecuta(request, if_en_una_linea, xml=BAD, v="S")
+
+
+def test_llama_a_dos_en_una(request):
+    ejecuta(request, llama_a_dos_en_una, xml=BAD, v="S")
 
 
 def test_aserta(request):
@@ -427,6 +456,11 @@ def _element(mark: str, *fed: str) -> str:
         ),
         # Two statements on one line can't be told apart by it.
         ("test_dos_en_una", []),
+        ("test_if_en_una_linea", []),
+        # A frame of the project it can't name leaves no chain: a shorter one would join more.
+        ("test_llama_a_dos_en_una", []),
+        # An assertion's message is evaluated only once it failed: it reads nothing.
+        ("test_en_el_mensaje", [_element("MENSAJE")]),
         ("test_fuera_de_un_paso", []),
     ],
 )

@@ -722,7 +722,8 @@ class _ProgressPrinter:
 
     def catch_up(self, events: Iterable[Event]) -> None:
         """Fold, without telling, what a resumed run had already done: what the API had broken,
-        and the calls and costs its totals add up (M1 of 0.20.0)."""
+        and the calls and costs its totals add up (M1 of 0.20.0). A collateral still held at the
+        end of the journal was never told (any other event tells it first): the resume does."""
         for event in events:
             self.progress.observe(event)
 

@@ -176,5 +176,7 @@ No hay falsos probados nuevos, y los `solo_el_valor` de los 317 pasan de 9 a 5.
 - Una sentencia que usa el resultado para llegar a otra cosa y compara el valor con lo que guardó
   un Dado (`assert system.invoices[record.number].total == total`) queda probada. La regla 3 ya
   prueba la misma idea escrita con `.get()`.
-- La salida de un `with` cae en otra línea en Python 3.9. Dos sentencias en una línea no se nombran.
-  Una fixture que lee el resultado no deja marco del paso.
+- La salida de un `with` cae en otra línea en Python 3.9. Dos sentencias en una línea (`a; b`,
+  `if x: assert y`) no se nombran, y un marco del proyecto sin nombre deja la cadena vacía. Una
+  fixture que lee el resultado no deja marco del paso. El mensaje de un `assert` no cuenta como
+  lectura: solo se evalúa si la condición falla.
