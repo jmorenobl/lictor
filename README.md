@@ -692,8 +692,10 @@ uv run pytest tests -n auto -q -m smoke
 # verificación, sin parar en el primer fallo; cada test corre una vez, y tarda lo que la suite entera
 uv run lictor check --keep-going
 
-# Lo que ejecuta la autoverificación del CI: todo salvo la aceptación, que el CI reparte en partes
-uv run lictor check --keep-going --level L1,L2,L4,L5
+# Lo que ejecuta la autoverificación del CI, en dos jobs a la vez: todo salvo la aceptación, que el
+# CI reparte en partes, y aparte la mutación (L5)
+uv run lictor check --keep-going --level L1,L2,L4
+uv run lictor check --keep-going --level L5
 
 # O filtrar por niveles o por control
 uv run lictor check --level L1,L2

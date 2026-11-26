@@ -15,6 +15,8 @@ concurrency:
 # The time budget of each job is in scripts/ci_budget.py and in AGENTS.md («What to run and
 # when»). `timeout-minutes` is only the cut against a hung job, about 2.5 times what a job usually
 # takes: runners differ up to 1.8 times, and a cut near the budget would fail work that didn't grow.
+# A `lictor check` step's cut comes from the `timeout_s` of its controls instead: the slowest plus
+# what the rest of the step takes, so Lictor cuts a hung control first (test_config.py holds it).
 # The `budget` job at the end is the alarm: it warns, and never fails.
 
 jobs:
@@ -108,10 +110,16 @@ jobs:
           rm gitleaks.tar.gz
       - run: '"$RUNNER_TEMP/gitleaks" detect --no-banner'
 
+  # The self-verification runs every control but the acceptance (L3), in two jobs that run at once:
+  # L1, L2 and L4 here, the mutation (L5) in the next one. Split by level, not by id, so a new L5
+  # control goes to its place by itself. Together they run exactly one `lictor check` of L1-L5. The
+  # acceptance is the `repro` cases, which the `repro` jobs run in parts, and the `coverage` control
+  # runs everything else: no test runs twice. A control declared at L3 in lictor.json would be
+  # skipped too: Lictor declares none, and test_config.py checks the two steps cover the rest.
   self-verification:
     name: Lictor se verifica a sí mismo
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 17
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -120,6 +128,8 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.12.18"
+      # Which runner it got: a slow one explains a duration the code doesn't.
+      - run: lscpu
       - name: Instalar gitleaks
         run: |
           curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
@@ -128,15 +138,14 @@ jobs:
           rm gitleaks.tar.gz
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: uv sync --all-groups --frozen
-      # Every control, without the acceptance (L3): it is the `repro` cases, which the `repro` jobs
-      # run in parts, and the `coverage` control runs everything else. The acceptance runs no test
-      # the `coverage` control runs. A control declared at L3 in lictor.json would be skipped here
-      # too: Lictor declares none.
-      # Its own cut, below the job's: if it hangs, only this step stops, and the next one still
+      # Its own cut, below the job's: if Lictor hangs, only this step stops, and the next one still
       # keeps `.lictor/check/`. A cancelled job runs no step after it, so it would leave no log.
-      - run: uv run lictor check --keep-going --level L1,L2,L4,L5
-        timeout-minutes: 12
-      # Logs, reports and the mutation survivors: what tells two passes or two platforms apart.
+      # Lictor cuts first: each control's `timeout_s` (600 s by default) stays at least 2 min under
+      # this cut, so a hung control fails with its log and its verdict and `--keep-going` goes on.
+      # 15 min: a hung `unit` cut at 600 s with `coverage` still behind it.
+      - run: uv run lictor check --keep-going --level L1,L2,L4
+        timeout-minutes: 15
+      # Logs and reports: what tells two passes or two platforms apart.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -144,9 +153,38 @@ jobs:
           path: .lictor/check/
           retention-days: 30
 
+  # The mutation is linear in mutants (about 38 ms each on this runner, with 4 children), and grows
+  # with the domain. Its budget warns long before its cut; split it in shards at about 13 000.
+  mutation:
+    name: Mutación
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # The whole history, like the self-verification: `check` has never run on a shallow clone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+      - run: lscpu
+      - run: uv sync --all-groups --frozen
+      # The `mutation` control's `timeout_s` (900 s) cuts before this step: its log ends at the last
+      # progress line of mutmut, and its verdict says it was cut.
+      - run: uv run lictor check --keep-going --level L5
+        timeout-minutes: 18
+      # The log, the score and the survivors (`mutation-survivors.txt`).
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutacion
+          path: .lictor/check/
+          retention-days: 30
+
   budget:
     name: Presupuesto
-    needs: [gates, repro, supply-chain, self-verification]
+    needs: [gates, repro, supply-chain, self-verification, mutation]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

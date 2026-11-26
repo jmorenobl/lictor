@@ -7,6 +7,18 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Cambiado
+
+- **La autoverificación de la CI va en dos jobs a la vez: L1, L2 y L4 por un lado y la mutación
+  (L5) por otro.** El paso único tardaba 10 min y se cortaba a los 12: en un runner un 20–40 % más
+  lento se cortó tres veces en seis runs, siempre durante la mutación y sin dejar su log. Cada
+  job tiene su presupuesto (6 y 10 min) y su corte (15 y 18 min el paso, 17 y 20 el job), con la
+  regla de AGENTS.md. Los `timeout_s` del `lictor.json` de Lictor quedan por debajo del corte de su
+  paso (`coverage`, el de por defecto, 600 s; `mutation`, 900 s), así que un control colgado lo
+  corta Lictor, con su log y su veredicto, y `--keep-going` sigue. Un test lo comprueba leyendo
+  `ci.yml`. Los dos jobs dicen qué runner les tocó (`lscpu`). Solo cambia la CI de Lictor, no
+  Lictor.
+
 ## [0.21.0] - 2026-11-26
 
 ### Cambiado
