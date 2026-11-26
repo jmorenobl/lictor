@@ -17,6 +17,18 @@ en su significado se anota en «Cambiado».
   se puede empeorar sigue siendo de todo el proyecto. Enmienda de la ADR-0010.
 - **El informe de complejidad lleva `end_line`** por función: uno sin él no es válido (ADR-0013).
   El checkpoint guarda todos los clones del verde, no solo los 20 que se imprimen (ADR-0014).
+- **Las órdenes del agente salen de los controles (F83, ADR-0018).** `agent_commands` desaparece:
+  el agente comprueba su trabajo con cada control que bloquea en cada intento (su `agent_run`, o su
+  `run` sin el informe) y con la aceptación, así que un control que el proyecto cambia llega al
+  agente tal cual. En la 4a de pyverifactu, `lint` leía más que la orden fija del perfil y se
+  perdieron un intento y un refactor. La orden dice qué admite Bash por los prefijos de
+  `agent_tools` y lista las comprobaciones una por línea. **Incompatible:** un `lictor.json` con
+  `agent_commands` sale con exit 10, y también uno que cambia el `run` de un control (o el `adds`
+  de `coverage`, o el `run` de `unit` que lee) y hereda el `agent_run` o el `agent_fix` del perfil:
+  hay que escribirlos, o `null`.
+- **La orden de formatear es el `agent_fix` de `format`,** y solo se da mientras ese control
+  bloquea en cada intento: con `format` apagado nadie formatea, y el refactor no cae en
+  `L0-alcance` por reescribir ficheros ajenos. Sale de `refactor_hints`.
 - **`refactor_of` es obligatorio** en los nodos del refactor: si falta, el run sale con un error
   interno en lugar de comparar con un HEAD que, tras un colateral, es un commit vacío.
 
@@ -26,6 +38,8 @@ en su significado se anota en «Cambiado».
   mueve o borra un fichero de código que ya existía y que su escenario no cambió, salvo el otro lado
   de un clon que la orden le nombra; los ficheros nuevos y los tests unitarios pueden seguir al
   código. El verde se queda, como en cualquier descarte.
+- **`agent_fix` en los controles:** la orden con la que el agente deja hecho lo que un control
+  comprueba, validada contra `agent_tools` como `agent_run`.
 - **`code_paths` en el perfil** (`python-uv`: `src/`): dónde está el código, solo del perfil y en la
   huella. Un `lictor.json` que lo declare sale con exit 10, y también uno cuyo `paths.writable` no
   alcance ninguna de esas rutas, porque la puerta no comprobaría nada.

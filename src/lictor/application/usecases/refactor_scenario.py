@@ -26,9 +26,11 @@ from lictor.domain.api import REFACTOR_API
 from lictor.domain.complexity import OverLimit, refactor_complexity_text
 from lictor.domain.controls import (
     GREEN_COVERAGE,
+    AgentFix,
     CommandControl,
     Control,
     agent_command,
+    agent_command_lines,
     agent_tools_with_files,
     code_controls,
     refactor_measures,
@@ -63,9 +65,10 @@ class RefactorScenarioRequest:
     paths_driver: Sequence[str]
     suppressions: Sequence[str]
     green_ids: Sequence[str]
-    check_commands: Sequence[str]
+    check_commands: Sequence[str]  # what checks its work, from the controls (F83)
     hints: str
     refactor_hints: str
+    fixes: Sequence[AgentFix] = ()  # what it runs after its last change, before the checks
     forbidden_paths: Sequence[str] = ()
     controls: Sequence[Control] = ()
     installed_plugins: Sequence[str] = ()
@@ -188,9 +191,6 @@ class RefactorScenario:
         measures = _runnable_measures(request, files)
         code = code_controls(request.controls)
         own = [cmd for c in code if (cmd := agent_command(c, files)) is not None]
-        commands = list(
-            dict.fromkeys([*request.check_commands, *(cmd for _, cmd in measures), *own])
-        )
         parent = self.vcs.parent_of(request.refactor_of)
         changed = self.vcs.changed_paths(parent, request.refactor_of) if parent else []
         scope = green_scope(self.vcs, request.refactor_of, request.baseline, request.code_paths)
@@ -208,7 +208,13 @@ class RefactorScenario:
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
-            "{check_commands}": ", ".join(commands) or "los tests del proyecto",
+            **agent_command_lines(
+                request.allowed_tools,
+                request.check_commands,
+                request.fixes,
+                files,
+                [*(cmd for _, cmd in measures), *own],
+            ),
             "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
             "{medidas_del_codigo}": _code_text(request, code, files, scope),
             "{hints}": request.hints,

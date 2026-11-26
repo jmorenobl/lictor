@@ -19,10 +19,12 @@ from lictor.domain.api import IMPLEMENTER_API, IMPLEMENTER_API_BLOCKS
 from lictor.domain.complexity import implementer_complexity_text
 from lictor.domain.controls import (
     AGENT_FILES,
+    AgentFix,
     AgentMeasure,
     CommandControl,
     Control,
     agent_command,
+    agent_command_lines,
     agent_measures,
     agent_measures_text,
     agent_tools_with_files,
@@ -58,8 +60,9 @@ class ImplementScenarioRequest:
     paths_driver: Sequence[str]
     suppressions: Sequence[str]
     green_ids: Sequence[str]
-    check_commands: Sequence[str]
+    check_commands: Sequence[str]  # what checks its work, from the controls (F83)
     hints: str
+    fixes: Sequence[AgentFix] = ()  # what it runs after its last change, before the checks
     last_error: str | None = None
     failed_at: str | None = None
     prompt_template: str | None = None
@@ -200,9 +203,6 @@ class ImplementScenario:
             if (command := runnable_command(measure.command, files)) is not None
         ]
         own = [cmd for c in blocking if (cmd := agent_command(c, files)) is not None]
-        commands = list(
-            dict.fromkeys([*request.check_commands, *(m.command for m in measures), *own])
-        )
         replacements = {
             "{repo}": request.project_root.name,
             "{id}": request.scenario.id.value,
@@ -214,7 +214,13 @@ class ImplementScenario:
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{suppressions}": ", ".join(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
-            "{check_commands}": ", ".join(commands) or "los tests del proyecto",
+            **agent_command_lines(
+                request.allowed_tools,
+                request.check_commands,
+                request.fixes,
+                files,
+                [*(m.command for m in measures), *own],
+            ),
             "{medidas}": _measures_text(measures, blocking, files, _measures_api(request)),
             "{hints}": request.hints,
             "{bloque_de_error}": _error_block(request),
@@ -271,9 +277,14 @@ def _measures_text(
 def _profile_files(
     request: ImplementScenarioRequest, blocking: Sequence[CommandControl]
 ) -> Sequence[Path]:
-    """The profile's files the call needs: a control of the code that blocks, or a minimum whose
-    command is one of the profile's modules (F71)."""
+    """The profile's files the call needs: a control of the code that blocks, or a command of the
+    agent's that names one of the profile's modules (F71, F83)."""
     measures = agent_measures(request.controls, request.installed_plugins)
-    if blocking or any(AGENT_FILES in measure.command for measure in measures):
+    commands = [
+        *request.check_commands,
+        *(f.command for f in request.fixes),
+        *(m.command for m in measures),
+    ]
+    if blocking or any(AGENT_FILES in command for command in commands):
         return request.agent_files
     return ()

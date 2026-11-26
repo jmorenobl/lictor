@@ -293,6 +293,7 @@ def test_d26_agent_gets_runnable_commands_including_acceptance(
     run_lictor(root, agent)
 
     require(agent.prompts["IVA-001"], "el agente debía recibir el prompt")
-    rules = next(line for line in agent.prompts["IVA-001"][0].splitlines() if "Comprueba" in line)
+    # One command a line after the rule (F83).
+    rules = agent.prompts["IVA-001"][0].split("antes de terminar:\n")[1].split("\n\n")[0]
     assert "{out}" not in rules, rules
-    assert "tests/acceptance" in rules, rules
+    assert "  - `uv run pytest tests/acceptance -q`" in rules.splitlines(), rules

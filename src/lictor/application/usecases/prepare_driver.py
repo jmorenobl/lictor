@@ -22,7 +22,7 @@ from lictor.application.usecases.agent_events import (
     tamper_event,
 )
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
-from lictor.domain.controls import agent_tools_with_files
+from lictor.domain.controls import agent_command_lines, agent_tools_with_files
 from lictor.domain.conventions import conventions_block
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
@@ -171,7 +171,8 @@ class PrepareDriver:
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
             "{suppressions}": ", ".join(request.suppressions) or "ninguna",
-            "{check_commands}": ", ".join(request.check_commands) or "los tests del proyecto",
+            # The driver's call has no copy of the profile's files: what names them can't run.
+            **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,

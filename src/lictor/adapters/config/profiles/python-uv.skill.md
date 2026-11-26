@@ -49,7 +49,12 @@ solo lo ve:
   añade su directorio a `paths.writable`. Por ejemplo, para todos los tests sin la marca
   `integration`: `{"id": "unit", "run": "uv run pytest tests -m \"not integration\"
   --ignore=tests/acceptance -q --junitxml {out}", "when_exists": "tests"}`, y el `agent_run` de
-  `coverage` con los mismos argumentos. Lo que `-m` deja fuera no se ve.
+  `coverage` con los mismos argumentos: sin él, `lictor.json` no carga. Lo que `-m` deja fuera no
+  se ve.
+- **Otro `run` de `lint` o de `format`.** El agente comprueba con el `run` de cada control que
+  bloquea, así que basta con cambiarlo. `format` además le da la orden de formatear
+  (`agent_fix`): quien cambia su `run` escribe también su `agent_fix` con los mismos ficheros, o
+  `lictor.json` no carga.
 - **Tests que el run ejecuta y el agente no puede cambiar.** Su directorio va a `paths.writable`, o
   se sacan del `run`: si no, cambiar la API que usan para el run a la espera de una persona.
 - **Ficheros que cargan los tests e importan el código** (un `conftest.py`, o un módulo que importan
@@ -77,14 +82,15 @@ mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
   `fail_under` de `[tool.coverage.report]` no se aplica: si se aplicara, haría fallar `unit` sin
   ningún test en rojo.
 - **Otro `run` de `unit`.** Si la persona lo cambia (otro directorio, `-n auto`), `coverage` lee
-  esa ejecución igual, y tiene que seguir siendo de pytest.
+  esa ejecución igual, y tiene que seguir siendo de pytest. Se escribe también el `agent_run` de
+  `coverage` con los mismos argumentos, o `null`: si no, `lictor.json` no carga.
 - **Para medir otra cosa, el `adds` completo.** Se escribe entero, y lo que no se escriba no se
   añade: `{"id": "coverage", "adds": "--cov=src/mipaquete --cov-branch --cov-fail-under=0
   --cov-report=json:{out}"}`. Quitar `--cov-fail-under=0` vuelve a aplicar el `fail_under` del
   proyecto.
   El agente mide la cobertura con el `agent_run` de `coverage`, que usa el módulo del perfil
   `lictor_coverage.py`: cuenta lo que queda sin cubrir como Lictor y, en un refactor, dice dónde
-  sube frente al verde. Si se cambia `adds`, se cambia también `agent_run` (por ejemplo,
+  sube frente al verde. Si se cambia `adds`, se cambia también `agent_run`, o no carga (por ejemplo,
   `"uv run python -I -B {lictor_files}/lictor_coverage.py tests/unit -q --cov=src/mipaquete"`), para
   que mida lo mismo.
 - **Medir solo en `lictor check`:** `{"id": "coverage", "stage": "check"}`. El run ejecuta `unit`

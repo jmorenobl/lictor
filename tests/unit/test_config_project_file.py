@@ -187,7 +187,9 @@ def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> No
 
 
 def test_an_added_control_goes_after_the_one_written_before_it(tmp_path: Path) -> None:
-    path = _with_controls(tmp_path, [{"id": "lint"}, {**ADDED, "id": "format"}, {"id": "unit"}])
+    # Its run changes, so the profile's fix for it is refused unless written (F83).
+    changed = {**ADDED, "id": "format", "agent_fix": None}
+    path = _with_controls(tmp_path, [{"id": "lint"}, changed, {"id": "unit"}])
 
     assert _ids(path) == [
         "lint",

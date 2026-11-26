@@ -250,8 +250,22 @@
             }
           ],
           "default": null,
-          "description": "La orden con la que el agente mide este control por su cuenta, tal como la ejecutaría: con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, y tiene que estar permitida por agent_tools.",
+          "description": "La orden con la que el agente comprueba o mide este control por su cuenta, tal como la ejecutaría. Sin ella, el agente comprueba un control que bloquea con su run sin el informe. Con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, y tiene que estar permitida por agent_tools. Quien cambia run la escribe también, o null.",
           "title": "Agent Run"
+        },
+        "agent_fix": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "La orden con la que el agente deja hecho lo que este control comprueba (un formateador), que se le da solo mientras el control bloquea en cada intento. La verificación nunca la ejecuta, y tiene que estar permitida por agent_tools. Quien cambia run la escribe también, o null.",
+          "title": "Agent Fix"
         },
         "limit": {
           "anyOf": [
@@ -500,21 +514,6 @@
       ],
       "default": null,
       "title": "Agent Tools"
-    },
-    "agent_commands": {
-      "anyOf": [
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Agent Commands"
     },
     "hints": {
       "anyOf": [

@@ -58,7 +58,7 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.domain.api import UnresolvedBase
 from lictor.domain.blind_spots import blind_spots_record
-from lictor.domain.controls import ACCEPTANCE_ID, Control
+from lictor.domain.controls import ACCEPTANCE_ID, AgentCommands, Control, agent_commands
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -203,7 +203,6 @@ class GraphContext:
     suppressions: Sequence[str]
     driver_hints: str
     hints: str
-    check_commands: Sequence[str]
     model: str
     allowed_tools: Sequence[str]
     max_turns: int
@@ -510,6 +509,13 @@ class _GraphNodes:
             )
         )
 
+    def _agent_commands(self) -> AgentCommands:
+        """What the agent runs before it ends, from the controls the run verifies (F83)."""
+        installed = self.ctx.environment.installed_plugins if self.ctx.environment else ()
+        return agent_commands(
+            self.ctx.controls, self.ctx.acceptance_run, self.ctx.allowed_tools, installed
+        )
+
     def build_driver(self, state: GraphState) -> dict[str, Any]:
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
         res = self.ctx.prepare_driver.execute(
@@ -535,7 +541,9 @@ class _GraphNodes:
                 forbidden_paths=self.ctx.forbidden_paths,
                 driver_exempt_paths=self.ctx.driver_exempt_paths,
                 max_driver_attempts=self.ctx.max_driver_attempts,
-                check_commands=self.ctx.check_commands,
+                # The driver gets the fixes in its list, not the line that asks for them: what it
+                # leaves unformatted in the code the first implementer formats (F83).
+                check_commands=self._agent_commands().all,
                 suppressions=self.ctx.suppressions,
             )
         )
@@ -667,7 +675,8 @@ class _GraphNodes:
                     paths_driver=self.ctx.paths_driver,
                     suppressions=self.ctx.suppressions,
                     green_ids=green_ids,
-                    check_commands=self.ctx.check_commands,
+                    check_commands=self._agent_commands().checks,
+                    fixes=self._agent_commands().fixes,
                     hints=self.ctx.hints,
                     conventions=self.ctx.conventions,
                     last_error=state.get("last_error"),
@@ -865,7 +874,8 @@ class _GraphNodes:
                     paths_driver=self.ctx.paths_driver,
                     suppressions=self.ctx.suppressions,
                     green_ids=[sid for sid, st in state.get("status", {}).items() if st == "green"],
-                    check_commands=self.ctx.check_commands,
+                    check_commands=self._agent_commands().checks,
+                    fixes=self._agent_commands().fixes,
                     hints=self.ctx.hints,
                     conventions=self.ctx.conventions,
                     refactor_hints=self.ctx.refactor_hints,

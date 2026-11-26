@@ -13,7 +13,7 @@ from lictor.application.usecases.implement_scenario import (
     ImplementScenarioResult,
 )
 from lictor.domain.api import IMPLEMENTER_API, IMPLEMENTER_API_BLOCKS
-from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
+from lictor.domain.controls import AgentFix, CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import CandidateError, SealTamperedError
 from lictor.domain.model import (
     AgentResult,
@@ -242,7 +242,26 @@ def test_error_block_is_shown_even_if_a_failed_call_kept_the_attempt_at_zero(
 def test_prompt_falls_back_when_the_profile_has_no_commands(tmp_path: Path) -> None:
     _, executor, _ = _execute(tmp_path, AgentResult(status="ok"))
 
-    assert "ejecutando: los tests del proyecto" in executor.run.call_args.args[0].prompt
+    prompt = executor.run.call_args.args[0].prompt
+    assert "antes de terminar:\n  - los tests del proyecto\n" in prompt
+    assert "Bash solo admite órdenes que empiecen por: ninguna." in prompt
+
+
+def test_the_fixes_go_after_the_last_change_and_before_the_checks(tmp_path: Path) -> None:
+    """F83: a formatter the control that blocks gives, in one line that says the order."""
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["fmt --check", "tests"],
+        fixes=[AgentFix("format", "fmt")],
+    )
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert (
+        "- Tras tu último cambio, ejecuta `fmt` (el control format bloquea) y después las "
+        "comprobaciones."
+    ) in prompt.splitlines()
+    assert "  - `fmt --check`\n  - `tests`\n" in prompt
 
 
 def test_implement_scenario_seal_tampered_raises_before_the_agent(tmp_path: Path) -> None:
@@ -509,7 +528,7 @@ def test_implement_scenario_handles_curly_braces_in_hints_and_errors(tmp_path: P
 
     template = (
         "{repo} {id} {gherkin_del_escenario} {writable} {protected} "
-        "{suppressions} {green_ids} {check_commands} {hints} "
+        "{suppressions} {green_ids} {comprobaciones} {arreglos} {bash_admite} {hints} "
         "{bloque_de_error} literal {'literal_token': 1}"
     )
 
@@ -627,10 +646,17 @@ def test_the_start_of_the_call_is_in_the_journal_before_the_agent_runs(tmp_path:
 
 def test_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> None:
     """F37: the implementer tried an interpreter through Bash to rewrite a file, and was denied."""
-    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), check_commands=["make test"])
+    _, executor, _ = _execute(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["make test"],
+        allowed_tools=["Bash(make:*)", "Read"],
+    )
 
     prompt = executor.run.call_args.args[0].prompt
-    assert "Bash solo admite: make test." in prompt
+    # F83: what Bash admits comes from the tools, by prefix; what checks the work, one per line.
+    assert "Bash solo admite órdenes que empiecen por: `make`." in prompt
+    assert "antes de terminar:\n  - `make test`\n" in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
 
@@ -658,7 +684,7 @@ def test_the_prompt_tells_each_minimum_and_lets_the_agent_measure_it(tmp_path: P
 
     prompt = executor.run.call_args.args[0].prompt
     assert "  - coverage: al menos 80 %, con `tests --cov --table`." in prompt
-    assert "Bash solo admite: tests, tests --cov --table." in prompt
+    assert "  - `tests`\n  - `tests --cov --table`\n" in prompt
 
 
 def test_a_minimum_measured_with_a_profile_module_gets_the_profiles_files(
@@ -752,7 +778,8 @@ def test_one_that_blocks_tells_the_implementer_its_limit_and_how_to_measure(
     assert "ninguna función supere una complejidad ciclomática de 10. Mídela con `" in task.prompt
     [rule] = task.allowed_tools
     assert "{lictor_files}" not in rule
-    assert "Bash solo admite: tests, uv run python " in task.prompt
+    assert "  - `tests`\n  - `uv run python " in task.prompt
+    assert "Bash solo admite órdenes que empiecen por: `uv run python /" in task.prompt
 
 
 def _duplication(mode: ControlMode) -> CommandControl:

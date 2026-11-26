@@ -3,7 +3,7 @@ import shlex
 from collections.abc import Sequence
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -22,6 +22,7 @@ from lictor.domain.controls import (
     CommandControl,
     Control,
     ReaderControl,
+    allowed_by,
     complexity_limit_message,
     reader_problems,
 )
@@ -150,6 +151,25 @@ def needs_plugins_message() -> str:
     return (
         "lictor.json no puede declarar acceptance.needs_plugins: lo que necesita la aceptación lo "
         "declara el perfil, cuyo driver lo usa. Bórralo."
+    )
+
+
+def agent_commands_message() -> str:
+    """Why `lictor.json` can't list the agent's commands: they come from the controls (F83)."""
+    return (
+        "lictor.json no puede declarar agent_commands: las órdenes del agente salen de los "
+        "controles que bloquean y de la aceptación. Bórralo; lo que la tuya cambie va en el "
+        "agent_run o el agent_fix de su control."
+    )
+
+
+def stale_agent_command_message(control_id: str, field: str, inherited: str) -> str:
+    """What a project is told when it changes a control's run and inherits its agent's command."""
+    what = "arreglar" if field == "agent_fix" else "comprobar"
+    return (
+        f"El control '{control_id}' cambia lo que ejecuta y hereda {field} del perfil "
+        f"(`{inherited}`), que puede no {what} lo mismo: escríbelo en lictor.json, o null si el "
+        "agente no debe usarlo."
     )
 
 
@@ -488,9 +508,16 @@ LIMIT_DESCRIPTION = (
 )
 
 AGENT_RUN_DESCRIPTION = (
-    "La orden con la que el agente mide este control por su cuenta, tal como la ejecutaría: "
-    "con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, "
-    "y tiene que estar permitida por agent_tools."
+    "La orden con la que el agente comprueba o mide este control por su cuenta, tal como la "
+    "ejecutaría. Sin ella, el agente comprueba un control que bloquea con su run sin el informe. "
+    "Con min_score, el prompt le dice el mínimo y esta orden. La verificación nunca la ejecuta, "
+    "y tiene que estar permitida por agent_tools. Quien cambia run la escribe también, o null."
+)
+AGENT_FIX_DESCRIPTION = (
+    "La orden con la que el agente deja hecho lo que este control comprueba (un formateador), "
+    "que se le da solo mientras el control bloquea en cada intento. La verificación nunca la "
+    "ejecuta, y tiene que estar permitida por agent_tools. Quien cambia run la escribe también, "
+    "o null."
 )
 
 
@@ -513,6 +540,7 @@ class CommandControlConfig(BaseModel):
     # The lowest score that passes, in percent; only a mutation or a coverage report has one.
     min_score: float | None = Field(default=None, ge=0, le=100)
     agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
+    agent_fix: str | None = Field(default=None, min_length=1, description=AGENT_FIX_DESCRIPTION)
     limit: int | None = Field(default=None, gt=0, description=LIMIT_DESCRIPTION)
 
     @model_validator(mode="before")
@@ -650,6 +678,7 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
         when_plugin=control.when_plugin,
         min_score=control.min_score,
         agent_run=control.agent_run,
+        agent_fix=control.agent_fix,
         limit=control.limit,
     )
 
@@ -661,28 +690,36 @@ def _check_readers(controls: Sequence[CommandControlConfig | ReaderControlConfig
         raise ValueError("\n".join(problems))
 
 
+_AGENT_FIELDS: Final = ("agent_run", "agent_fix")
+
+
 def agent_run_problems(
     controls: Sequence[CommandControlConfig | ReaderControlConfig], agent_tools: Sequence[str]
 ) -> list[str]:
-    """The `agent_run` of each control that the agent's tools wouldn't let it run (F55).
+    """The `agent_run` and `agent_fix` of each control the agent's tools wouldn't let it run.
 
-    A rule `Bash(<prefix>:*)` allows what starts with that prefix and `Bash(<command>)` that
-    exact command: what the backend allows, so the prompt never names a command it denies.
+    What the backend allows (`allowed_by`), so the prompt never names a command it denies (F55,
+    F83).
     """
-    prefixes = [
-        t[len("Bash(") : -len(":*)")]
-        for t in agent_tools
-        if t.startswith("Bash(") and t.endswith(":*)")
-    ]
-    exact = {t[len("Bash(") : -1] for t in agent_tools if t.startswith("Bash(")}
     return [
-        f"El agent_run del control '{c.id}' ({c.agent_run}) no lo permite agent_tools: el agente "
+        f"El {name} del control '{c.id}' ({command}) no lo permite agent_tools: el agente "
         "no podría ejecutarlo. Escribe una orden que empiece como una de sus reglas Bash(...)."
         for c in controls
-        if c.agent_run is not None
-        and c.agent_run not in exact
-        and not any(c.agent_run.startswith(prefix) for prefix in prefixes)
+        for name in _AGENT_FIELDS
+        if (command := getattr(c, name, None)) is not None and not allowed_by(command, agent_tools)
     ]
+
+
+def _unrunnable(
+    control: CommandControlConfig | ReaderControlConfig, agent_tools: Sequence[str]
+) -> dict[str, None]:
+    """The agent's commands of a control its tools don't allow, to drop them."""
+    return {
+        name: None
+        for name in _AGENT_FIELDS
+        if (command := getattr(control, name, None)) is not None
+        and not allowed_by(command, agent_tools)
+    }
 
 
 def _no_default(schema: JsonDict) -> None:
@@ -735,6 +772,7 @@ class ControlChange(BaseModel):
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
     agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
+    agent_fix: str | None = Field(default=None, min_length=1, description=AGENT_FIX_DESCRIPTION)
     limit: int | None = Field(default=None, gt=0, description=LIMIT_DESCRIPTION)
 
     @model_validator(mode="before")
@@ -818,7 +856,6 @@ class Profile(BaseModel):
     oracle: ProfileOracle = Field(default_factory=ProfileOracle)
     survey: SurveyConfig | None = None
     agent_tools: list[str] = Field(default_factory=list)
-    agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     # The goals every refactor of the profile is told to reach (ADR-0010): only the profile's.
     refactor_hints: str = ""
@@ -939,7 +976,6 @@ class LictorConfig(BaseModel):
     controls: list[ControlConfig]
     verification: ProjectVerification = Field(default_factory=ProjectVerification)
     agent_tools: list[str] = Field(default_factory=list)
-    agent_commands: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
 
@@ -958,15 +994,11 @@ def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
     """The resolved controls as the domain sees them, in the order they were declared.
 
     This is the only conversion: the run and `lictor check` get what it returns (ADR-0009).
-    An `agent_run` the agent's tools don't allow is dropped: it would name a command the backend
-    denies. One the project writes is refused at load instead (`load_config`).
+    An `agent_run` or `agent_fix` the agent's tools don't allow is dropped: it would name a command
+    the backend denies. One the project writes is refused at load instead (`load_config`).
     """
     return tuple(
-        domain_control(
-            control.model_copy(update={"agent_run": None})
-            if agent_run_problems([control], config.agent_tools)
-            else control
-        )
+        domain_control(control.model_copy(update=_unrunnable(control, config.agent_tools)))
         for control in config.controls
     )
 
@@ -994,7 +1026,6 @@ class LictorFile(BaseModel):
     controls: list[ControlChange] = Field(default_factory=list)
     verification: ProjectVerification = Field(default_factory=ProjectVerification)
     agent_tools: list[str] | None = None
-    agent_commands: list[str] | None = None
     hints: str | None = None
     gitignore: list[str] | None = None
 

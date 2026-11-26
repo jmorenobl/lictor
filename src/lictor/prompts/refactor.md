@@ -24,9 +24,12 @@ Reglas:
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
-- Bash solo admite: {check_commands}. Cualquier otra orden, un intérprete o un script incluidos,
-  se deniega y te cuesta turnos.
-- Comprueba siempre tu trabajo ejecutando: {check_commands}. Asegúrate de que todos pasen sin errores antes de terminar.
+- Bash solo admite órdenes que empiecen por: {bash_admite}. Cualquier otra orden,
+  un intérprete o un script incluidos, se deniega y te cuesta turnos.
+- Comprueba siempre tu trabajo con estas órdenes, y asegúrate de que todas pasen sin errores
+  antes de terminar:
+{comprobaciones}
+{arreglos}
 {medidas}
 
 {medidas_del_codigo}

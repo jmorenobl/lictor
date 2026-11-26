@@ -122,7 +122,7 @@ def test_every_measure_it_can_take_is_offered_with_its_command(tmp_path: Path) -
 
     prompt = _task(executor).prompt
     assert "  - coverage: `pruebas --cov`." in prompt
-    assert "Bash solo admite: pruebas, pruebas --cov." in prompt
+    assert "  - `pruebas`\n  - `pruebas --cov`\n" in prompt
 
 
 def test_a_call_that_changes_nothing_says_so(tmp_path: Path) -> None:
@@ -200,7 +200,7 @@ def test_the_refactor_hears_what_its_green_left_above_the_limit(tmp_path: Path) 
     assert "{lictor_files}" not in task.prompt
     command = next(line for line in task.prompt.splitlines() if line.startswith("Mídela tú"))
     assert "/medir.py src`, sola" in command
-    assert "Bash solo admite: pruebas, uv run python " in task.prompt
+    assert "  - `pruebas`\n  - `uv run python " in task.prompt
     assert seen == {"copy": "print('mide')\n", "outside": True}
 
 
@@ -283,7 +283,8 @@ def test_the_refactor_hears_both_measures_of_the_code_in_their_order(tmp_path: P
     assert "más tokens en clones que el verde en todo el proyecto (300)" in prompt
     assert sum(line.startswith("Mídel") for line in lines) == 2
     assert "{medidas_del_codigo}" not in prompt
-    assert "/repetido.py src" in prompt.split("Bash solo admite:")[1].splitlines()[0]
+    checks = prompt.split("antes de terminar:\n")[1].split("\n\n")[0]
+    assert "/repetido.py src`" in checks
 
 
 def test_a_green_without_a_measure_of_duplication_says_nothing_of_it(tmp_path: Path) -> None:

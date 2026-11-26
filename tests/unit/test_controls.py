@@ -1,11 +1,14 @@
 """A control as the domain sees it, which run when, and how one reads another (ADR-0007/8/9)."""
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from lictor.domain.controls import (
     REPORT_PATHS_NOTE,
+    AgentCommands,
+    AgentFix,
     AgentMeasure,
     CommandControl,
     CommandPart,
@@ -14,19 +17,28 @@ from lictor.domain.controls import (
     ReaderControl,
     ReadStep,
     RunStep,
+    agent_command_lines,
+    agent_commands,
     agent_measures,
     agent_measures_text,
+    allowed_by,
+    bash_prefixes,
     check_selection,
     command_controls,
+    commands_list,
     controls_of_stage,
+    counts_for_agent,
     effective_command,
     executed_as,
+    fixes_text,
     lent_by_check,
     reader_of,
     reader_problems,
     refactor_measures,
     refactor_measures_text,
+    runnable_fixes,
     verification_steps,
+    without_report,
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.stages import ATTEMPT, CHECK, Stage
@@ -398,3 +410,215 @@ def test_the_refactor_measures_read_whole() -> None:
         "  - a: `x`.\n"
         "  - b: `y`."
     )
+
+
+# The agent's commands come from the controls (F83, ADR-0018).
+
+
+def _block(cid: str, run: str, **fields: Any) -> CommandControl:
+    return CommandControl(id=cid, level="L1", run=run, report="exit-code", **fields)
+
+
+def _junit(cid: str, run: str, **fields: Any) -> CommandControl:
+    return CommandControl(id=cid, level="L2", run=run, report="junit", **fields)
+
+
+_TOOLS = ("Bash(uv run ruff:*)", "Bash(uv run pytest:*)", "Bash(make lint)", "Read")
+
+
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("uv run ruff check src", True),
+        ("uv run pytest", True),
+        ("make lint", True),
+        ("make lint src", False),
+        ("make", False),
+        ("uv run mypy src", False),
+        ("Read", False),
+    ],
+)
+def test_the_agents_tools_allow_by_prefix_or_exact_command(command: str, allowed: bool) -> None:
+    assert allowed_by(command, _TOOLS) is allowed
+
+
+def test_what_bash_admits_is_each_rule_once() -> None:
+    tools = (*_TOOLS, "Bash(uv run ruff:*)", "Bash(*)")
+
+    assert bash_prefixes(tools) == ["uv run ruff", "uv run pytest", "make lint", "*"]
+
+
+@pytest.mark.parametrize(
+    ("control", "counts"),
+    [
+        (_block("l", "l"), True),
+        (_block("l", "l", mode="measure"), False),
+        (_block("l", "l", stage="check"), False),
+        (_block("l", "l", when_plugin="falta.plugin"), False),
+        (_block("l", "l", when_plugin="esta.plugin"), True),
+        (_block("l", "l", when_exists="no/existe"), True),
+        (ReaderControl(id="c", level="L2", reads="u", adds="--c {out}"), True),
+    ],
+)
+def test_what_counts_for_the_agent_blocks_every_attempt(control: Control, counts: bool) -> None:
+    assert counts_for_agent(control, ("esta.plugin",)) is counts
+
+
+@pytest.mark.parametrize(
+    ("run", "command"),
+    [
+        ("uv run ruff check src", "uv run ruff check src"),
+        ('uv run pytest -m "not x" -q', 'uv run pytest -m "not x" -q'),
+        ("uv run pytest tests -q --junitxml {out}", "uv run pytest tests -q"),
+        ("medir src --out {out} -q", "medir src -q"),
+        ("pytest --cov-report=json:{out} -q", "pytest -q"),
+        ('pytest -m "not x" --junitxml {out}', "pytest -m 'not x'"),
+        ("mutation_score.py {out}", None),
+        ("script.py -v {out}", "script.py"),  # known limit: an option without value goes too
+    ],
+)
+def test_a_run_without_its_report_is_how_the_agent_runs_it(run: str, command: str | None) -> None:
+    assert without_report(run) == command
+
+
+def test_the_profiles_order_gives_the_fixes_and_then_each_check() -> None:
+    controls: list[Control] = [
+        _block("lint", "uv run ruff check src"),
+        _block("format", "uv run ruff format --check src", agent_fix="uv run ruff format src"),
+        _block("types", "uv run mypy src"),
+        _junit("unit", "uv run pytest tests/unit -q --junitxml {out}"),
+        ReaderControl(id="coverage", level="L2", reads="unit", adds="--cov {out}", mode="measure"),
+        _block("api", "uv run python -m api src --out {out}", mode="measure"),
+    ]
+    tools = (*_TOOLS, "Bash(uv run mypy:*)")
+
+    found = agent_commands(
+        controls, "uv run pytest tests/acceptance -q --junitxml {out}", tools, ()
+    )
+
+    assert found.fixes == (AgentFix("format", "uv run ruff format src"),)
+    assert found.checks == (
+        "uv run ruff check src",
+        "uv run ruff format --check src",
+        "uv run mypy src",
+        "uv run pytest tests/unit -q",
+        "uv run pytest tests/acceptance -q",
+    )
+    assert found.all == ("uv run ruff format src", *found.checks)
+
+
+def test_a_read_control_is_checked_without_its_readers_arguments() -> None:
+    """F83: measuring has its own command, and the agent would leave reports in its copy."""
+    unit = _junit("unit", "uv run pytest tests -q --junitxml {out}")
+    reader = ReaderControl(id="coverage", level="L2", reads="unit", adds="--cov=src --cov {out}")
+
+    found = agent_commands([unit, reader], "", _TOOLS, ())
+
+    assert found.checks == ("uv run pytest tests -q",)
+
+
+def test_a_blocking_reader_gives_its_agent_run_or_nothing() -> None:
+    unit = _junit("unit", "uv run pytest tests -q --junitxml {out}")
+    measured = ReaderControl(
+        id="cov", level="L2", reads="unit", adds="--c {out}", agent_run="uv run pytest --cov"
+    )
+    silent = ReaderControl(id="cov", level="L2", reads="unit", adds="--c {out}")
+
+    assert agent_commands([unit, measured], "", _TOOLS, ()).checks == (
+        "uv run pytest tests -q",
+        "uv run pytest --cov",
+    )
+    assert agent_commands([unit, silent], "", _TOOLS, ()).checks == ("uv run pytest tests -q",)
+
+
+def test_what_counts_nothing_or_the_tools_deny_gives_no_command() -> None:
+    controls: list[Control] = [
+        _block("a", "uv run ruff a", mode="measure", agent_fix="uv run ruff fix-a"),
+        _block("b", "uv run ruff b", stage="check"),
+        _block("c", "uv run ruff c", when_plugin="falta", agent_fix="uv run ruff fix-c"),
+        _block("d", "make d", agent_fix="make fix-d"),
+        _block("e", "mutation_score.py {out}"),
+        _block("f", "uv run ruff f", agent_run="uv run ruff f --x"),
+        _block("g", "uv run ruff f", agent_run="uv run ruff f --x"),
+    ]
+
+    found = agent_commands(controls, "", _TOOLS, ())
+
+    assert found == AgentCommands((), ("uv run ruff f --x",))
+
+
+def test_the_acceptance_goes_last_and_without_its_report() -> None:
+    found = agent_commands([], "uv run pytest acc --junitxml {out}", _TOOLS, ())
+
+    assert found.checks == ("uv run pytest acc",)
+    assert agent_commands([], "", _TOOLS, ()) == AgentCommands()
+
+
+def test_the_fixes_are_asked_after_the_last_change_and_before_the_checks() -> None:
+    assert fixes_text([]) == ""
+    assert fixes_text([AgentFix("format", "fmt"), AgentFix("lint", "fix")]) == (
+        "- Tras tu último cambio, ejecuta `fmt` (el control format bloquea) y `fix` (el control "
+        "lint bloquea) y después las comprobaciones."
+    )
+
+
+def test_the_prompt_lists_one_command_a_line_and_says_what_bash_admits() -> None:
+    lines = agent_command_lines(
+        ["Bash(make:*)", "Bash(uv run python {lictor_files}/m.py:*)"],
+        ["make a", "uv run python {lictor_files}/m.py x", "make b"],
+        [AgentFix("format", "make fmt")],
+        "/f",
+        ["make b", "medir"],
+    )
+
+    assert lines == {
+        "{bash_admite}": "`make`, `uv run python /f/m.py`",
+        "{comprobaciones}": "  - `make a`\n  - `uv run python /f/m.py x`\n  - `make b`\n"
+        "  - `medir`",
+        "{arreglos}": "- Tras tu último cambio, ejecuta `make fmt` (el control format bloquea) y "
+        "después las comprobaciones.",
+    }
+    assert (
+        "lictor_files"
+        not in agent_command_lines(
+            ["Bash(uv run python {lictor_files}/m.py:*)"],
+            ["uv run python {lictor_files}/m.py"],
+            [],
+            None,
+        )["{comprobaciones}"]
+    )
+    empty = agent_command_lines([], [], [], None)
+    assert empty == {
+        "{bash_admite}": "ninguna",
+        "{comprobaciones}": "  - los tests del proyecto",
+        "{arreglos}": "",
+    }
+    assert commands_list(["x"]) == "  - `x`"
+
+
+def test_a_fix_naming_the_profiles_files_runs_only_with_them() -> None:
+    fixes = [AgentFix("a", "uv run python {lictor_files}/f.py"), AgentFix("b", "fmt")]
+
+    assert runnable_fixes(fixes, None) == [AgentFix("b", "fmt")]
+    assert runnable_fixes(fixes, "/c") == [
+        AgentFix("a", "uv run python /c/f.py"),
+        AgentFix("b", "fmt"),
+    ]
+
+
+def test_only_a_bash_rule_allows_a_command() -> None:
+    """Another tool whose rule looks the same allows nothing in Bash."""
+    assert not allowed_by("uv run ruff check", ("Task(uv run ruff:*)",))
+    assert bash_prefixes(("Task(uv run ruff:*)", "Bash(make:*)")) == ["make"]
+
+
+def test_without_an_acceptance_there_is_no_empty_command() -> None:
+    assert agent_commands([], "", ("Bash(:*)",), ()) == AgentCommands()
+
+
+def test_a_fix_naming_the_profiles_files_is_asked_with_them() -> None:
+    fix = [AgentFix("format", "uv run python {lictor_files}/fmt.py")]
+
+    lines = agent_command_lines(["Bash(uv run python {lictor_files}/fmt.py:*)"], [], fix, "/f")
+
+    assert "`uv run python /f/fmt.py`" in lines["{arreglos}"]

@@ -264,8 +264,9 @@ Límites conocidos:
   que se pide;
 - las rutas del informe y las de git se comparan como texto: un informe de un control propio debe
   nombrar los ficheros como git, relativos a la raíz;
-- con `format` deshabilitado, la orden de formatear `src` reescribiría ficheros ajenos y la puerta
-  descartaría el refactor: se resuelve con F83 (las órdenes del agente que siguen a los controles).
+- con `format` deshabilitado, la orden de formatear `src` reescribía ficheros ajenos y la puerta
+  descartaba el refactor. Lo resuelve la ADR-0018: la orden de formatear es el `agent_fix` de
+  `format` y solo se da mientras ese control bloquea en cada intento.
 
 Deuda: es la octava vez que el perfil escribe `src` (el survey, seis controles y
 `lictor_project_path`); unificarlo en `code_paths` queda para otra versión.
