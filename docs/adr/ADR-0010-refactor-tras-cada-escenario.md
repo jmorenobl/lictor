@@ -3,7 +3,7 @@
 ## Estado
 Aceptada (2026-11-18). Sale del roadmap tras la 0.4.0 (fase 2) y de la pasada de referencia de la
 fase 1. Un revisor independiente comprobó el borrador contra el código, y esta versión recoge sus
-hallazgos (punto 12). Enmendada el 2026-11-22 por F71 y F72 (al final).
+hallazgos (punto 12). Enmendada el 2026-11-22 por F71 y F72, y el 2026-11-26 por F84 (al final).
 
 ## Contexto
 Lictor lleva cada escenario a verde con la llamada más corta que lo consigue. El agente implementa
@@ -207,3 +207,65 @@ conocidos, con un agente que no es adversario: quitar una supresión y poner la 
 código suma cero; mover `# pragma: no cover` a un `def` excluye el bloque y baja lo que queda sin
 cubrir; un patrón al principio de una llamada partida en varias líneas solo cuenta esa línea.
 
+## Enmienda F84 (2026-11-26): el refactor mejora lo que cambió su escenario
+
+En la 4a de `pyverifactu` con la 0.20.0, 9 de los 21 refactors aplicados cambiaron ficheros de
+código que ya existían y que su escenario no había tocado. Ninguno cambió el comportamiento, pero
+entre todos sumaron unas 1 000 líneas al diff de la PR, y dos de ellos (CLI-001 y COR-001)
+reescribieron el envío antiguo de `aeat_soap.py`, que los `hints` del proyecto mandaban no tocar; hubo
+que revertirlos a mano. Al cruzar cada refactor con su orden, 8 de los 9 tocaron un fichero que la
+orden les pedía arreglar: la complejidad y los clones que se nombraban eran los de todo `src`, y lo
+que Lictor manda va por encima de los `hints`. En CLI-001 y COR-001, la lista de complejidad eran
+justo las cuatro funciones del envío antiguo. Revisado por Fable, que rehízo el cruce y confirmó
+los datos.
+
+| | Por fichero | Por líneas (lo que se hace) |
+|:--|--:|--:|
+| Refactors con alguna función nombrada, de los 21 | 2 | 0 |
+| Refactors con algún clon nombrado | 8 | 2 |
+
+**Se pide lo que cambió el escenario, por funciones; se permite trabajar por ficheros; y una puerta
+descarta lo que salga de ahí.** Las guardas de `refactor_regressions` siguen siendo de todo el
+proyecto: cambia lo que se pide y dónde, no lo que no se puede empeorar.
+
+- **Lo que se pide.** De la verificación del verde, la orden nombra solo las funciones por encima del
+  límite con alguna línea que el verde cambió y los clones con algún sitio en esas líneas; el resto
+  lo cuenta en una línea («no son de este refactor»). Las líneas salen de `Vcs.changed_lines`, en la
+  numeración del commit verde, que es el árbol que su verificación midió. Un tramo que solo borra
+  cuenta para la línea anterior. Una función anidada y la que la contiene se nombran las dos. El
+  informe de complejidad lleva `end_line` por función (ADR-0013) y el checkpoint guarda todos los
+  clones (ADR-0014), porque el alcance se saca de ellos.
+- **Dónde puede trabajar.** El perfil declara dónde está el código (`code_paths`, `python-uv`:
+  `src/`), solo en el perfil y en la huella; un `lictor.json` que lo declare, o un `paths.writable`
+  que no alcance ninguna de esas rutas, sale con exit 10. Dentro del código, el refactor puede
+  cambiar los ficheros que cambió el verde y los que comparten con ellos un clon que la orden nombra
+  (quitarlo exige editar los dos lados, y abre ese fichero entero), y crear ficheros nuevos. Fuera
+  del código (los tests unitarios) puede seguir al código: EXP-001, legítimo, cambió un test que su
+  verde no tocó, y `refactor_regressions` ya descarta el que pasa menos casos. Borrar o mover un
+  fichero que ya existía cuenta como cambiarlo (`Vcs.changes` divide los renombrados).
+- **`L0-alcance`.** Tras `L0-rutas` y antes de `L0-sello`, solo en el refactor: descarta el que
+  cambia un fichero de código fuera de ese alcance, nombrándolo (también en `reverted_files`). El
+  verde se queda, como en cualquier descarte. La orden y la puerta llaman a la misma función,
+  `green_scope`, que no se guarda en el estado: depende de `refactor_of`, `baseline` y `code_paths`,
+  y los objetos de git no cambian, así que una reanudación saca el mismo alcance. `refactor_of` es
+  obligatorio en los dos nodos: con un colateral encadenado, HEAD es un commit vacío.
+- **La orden** lo dice con una regla propia, que incluye no hacer un cambio que obligue a tocar
+  otro fichero de código (quien importa lo que se mueve). Los objetivos de calidad se acotan a lo que
+  cambió el escenario, y `refactor_hints` ya no invita a reorganizar `__init__.py`.
+
+No se añade una decisión del proyecto para excluir código (`refactor.exclude`): los dos casos del
+envío antiguo venían de que la orden lo nombraba, y por líneas ENR-001, el único refactor dentro de
+`aeat_soap.py`, no lo nombra. La puerta es por fichero porque una por función tendría que seguir el
+código que se mueve dentro del fichero, y eso no se explica en una línea.
+
+Límites conocidos:
+- dentro de un fichero del escenario, la puerta no ve lo que el refactor hace de más;
+- «tocado» no es «escrito»: una línea del verde en una función antigua mete toda la función en lo
+  que se pide;
+- las rutas del informe y las de git se comparan como texto: un informe de un control propio debe
+  nombrar los ficheros como git, relativos a la raíz;
+- con `format` deshabilitado, la orden de formatear `src` reescribiría ficheros ajenos y la puerta
+  descartaría el refactor: se resuelve con F83 (las órdenes del agente que siguen a los controles).
+
+Deuda: es la octava vez que el perfil escribe `src` (el survey, seis controles y
+`lictor_project_path`); unificarlo en `code_paths` queda para otra versión.

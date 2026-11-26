@@ -20,6 +20,7 @@ from lictor.domain.model import (
     Scenario,
     TreeChange,
 )
+from lictor.domain.refactor_scope import LineSpan
 from lictor.domain.reports import (
     ApiReport,
     ComplexityReport,
@@ -143,6 +144,12 @@ class Vcs(Protocol):
 
     def changed_paths(self, base: str, head: str) -> list[str]:
         """Return the paths that differ between two commits, deleted ones included."""
+        ...
+
+    def changed_lines(self, base: str, head: str) -> dict[str, tuple[LineSpan, ...]]:
+        """Return each path `head` still has and that differs from `base`, with the lines it adds
+        or changes in its own numbering; a path with no lines (an empty file added, a change of
+        mode) is there with none."""
         ...
 
     def commit_tree(

@@ -153,6 +153,15 @@ def needs_plugins_message() -> str:
     )
 
 
+def code_paths_message() -> str:
+    """Why `lictor.json` can't declare where the code is: the profile's tools measure it there."""
+    return (
+        "lictor.json no puede declarar code_paths: dónde está el código es del perfil, que lo "
+        "mide ahí y con eso acota el refactor. Bórralo; lo que el agente puede escribir va en "
+        "paths.writable."
+    )
+
+
 def survey_message() -> str:
     """Why `lictor.json` can't declare the survey: it is the profile's reading of its tools."""
     return (
@@ -813,6 +822,8 @@ class Profile(BaseModel):
     hints: str = ""
     # The goals every refactor of the profile is told to reach (ADR-0010): only the profile's.
     refactor_hints: str = ""
+    # Where the code is: a refactor may change only what its scenario changed there (F84).
+    code_paths: list[str] = Field(default_factory=list)
     # The files where a project of this profile keeps rules for people and agents (F79), at any
     # depth: `doctor` tells the ones whose content the person hasn't reviewed into `conventions`.
     rule_files: list[str] = Field(default_factory=list)

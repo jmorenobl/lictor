@@ -25,7 +25,7 @@ from lictor.domain.model import (
 
 
 def _changed(path: str) -> TreeChange:
-    return TreeChange(path, "100644")
+    return TreeChange(path, "100644", "100644")
 
 
 def _driver_request(tmp_path: Path) -> PrepareDriverRequest:
@@ -390,7 +390,7 @@ def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) 
 def test_prepare_driver_discards_links_even_in_its_own_paths(tmp_path: Path) -> None:
     (tmp_path / "features").mkdir()
     vcs = MagicMock(spec=Vcs)
-    vcs.changes.return_value = [TreeChange("tests/acceptance/enlace.py", "120000")]
+    vcs.changes.return_value = [TreeChange("tests/acceptance/enlace.py", "120000", "000000")]
     executor = MagicMock(spec=Executor)
     executor.run.return_value = AgentResult(status="ok")
     use_case = PrepareDriver(

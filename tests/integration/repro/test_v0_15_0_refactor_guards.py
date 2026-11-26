@@ -64,6 +64,13 @@ def _adopted(make_project: ProjectFactory) -> Path:
     return root
 
 
+def _touches_util(task: AgentTask, scenario_id: str, attempt: int) -> None:
+    """The green of IVA-001 also touches the adopted module, so its refactor may change it (F84)."""
+    good_impl(task, scenario_id, attempt)
+    if scenario_id == "IVA-001":
+        write(task.cwd, UTIL, '"""Utilidades del IVA."""\n' + THREE)
+
+
 def _outcomes(root: Path) -> dict[str, tuple[str, str | None]]:
     return {
         e["scenarioid"]: (e["data"]["outcome"], e["data"]["failed_at"])
@@ -86,7 +93,7 @@ def test_a_refactor_that_joins_three_suppressions_into_one_is_applied(
         if scenario_id == "IVA-001":
             write(task.cwd, UTIL, '"""Utilidades."""\n' + ONE)
 
-    assert run_lictor(root, Agent(impl=good_impl, refactor=refactor)) == Outcome(0)
+    assert run_lictor(root, Agent(impl=_touches_util, refactor=refactor)) == Outcome(0)
 
     assert green_ids(root) == ALL
     assert _outcomes(root)["IVA-001"] == ("applied", None)
@@ -107,7 +114,7 @@ def test_a_refactor_that_moves_a_suppressed_function_to_a_new_module_is_applied(
         write(task.cwd, "src/iva/serializa.py", '"""Serializa."""\n' + THREE)
         (task.cwd / UTIL).unlink()
 
-    assert run_lictor(root, Agent(impl=good_impl, refactor=refactor)) == Outcome(0)
+    assert run_lictor(root, Agent(impl=_touches_util, refactor=refactor)) == Outcome(0)
 
     assert _outcomes(root)["IVA-001"] == ("applied", None)
     assert (root / "src" / "iva" / "serializa.py").read_text(encoding="utf-8").count("noqa") == 3
@@ -123,7 +130,7 @@ def test_a_refactor_that_widens_a_suppression_is_discarded(make_project: Project
         if scenario_id == "IVA-001":
             write(task.cwd, UTIL, '"""Utilidades."""\n' + wide)
 
-    assert run_lictor(root, Agent(impl=good_impl, refactor=refactor)) == Outcome(0)
+    assert run_lictor(root, Agent(impl=_touches_util, refactor=refactor)) == Outcome(0)
 
     assert _outcomes(root)["IVA-001"] == ("discarded", "L0-supresiones")
     reasons = [

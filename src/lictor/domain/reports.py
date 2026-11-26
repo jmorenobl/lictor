@@ -90,6 +90,7 @@ class FunctionComplexity:
     function: str  # qualified by its class or its enclosing function: `Clase.metodo`
     line: int
     complexity: int
+    last_line: int  # where it ends: what a change of the scenario touches of it (F84)
 
 
 @dataclass(frozen=True)
@@ -339,7 +340,12 @@ def _function_complexity(index: int, raw: object) -> FunctionComplexity | Invali
         return InvalidReport(
             f"la complejidad de la función {index} no es válida: {raw.get('complexity')!r}"
         )
-    return FunctionComplexity(where[0], where[1], line, value)
+    last = _count(raw.get("end_line"))
+    if last is None or last < line:
+        return InvalidReport(
+            f"el final de la función {index} no es válido: {raw.get('end_line')!r}"
+        )
+    return FunctionComplexity(where[0], where[1], line, value, last)
 
 
 def _function_place(index: int, raw: dict[str, object]) -> tuple[str, str] | InvalidReport:

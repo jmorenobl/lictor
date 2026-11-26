@@ -196,3 +196,11 @@ Y con sus casos, al implementarla:
 | 100 copias de una función en un fichero | 0 clones: los pares solapados se fundían en un sitio | un trozo que repite una unidad larga cuenta como sus copias |
 | dos tablas o dos `dataclass` sin relación | contaban: la cabecera rompía la periodicidad | una tabla ni cuenta ni une |
 | seis `if` iguales seguidos | según dónde acabara el clon, contaba o no | la tabla exige no tener palabras clave de sentencia |
+
+## Enmienda F84 (2026-11-26)
+
+El checkpoint guarda todos los clones del verde, no solo los 20 que se imprimen: el alcance del
+refactor se saca de ellos, y un clon del escenario en el puesto 21 tiene que contar. El refactor
+nombra solo los clones con algún sitio en las líneas que cambió su verde, sus otros sitios abren
+sus ficheros a la puerta `L0-alcance`, y el resto se cuenta en una línea (ADR-0010, enmienda F84).
+La guarda no cambia: sigue comparando los tokens en clones de todo el proyecto.

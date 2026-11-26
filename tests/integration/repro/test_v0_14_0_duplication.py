@@ -107,12 +107,12 @@ def test_the_refactor_hears_the_clones_its_green_left_and_removing_one_is_applie
     assert " y src/iva/__init__.py:" in clone
     assert clone.endswith(": 50 tokens")
     assert "Quita al menos uno" in first
-    assert "más tokens en clones que el verde (100)" in first
+    assert "más tokens en clones que el verde en todo el proyecto (100)" in first
     assert "{lictor_files}" not in first
     assert measured[0].splitlines()[1].startswith("100 tokens en clones")
     assert _outcomes(root)["IVA-001"] == ("applied", None)
     [second] = agent.prompts["refactor:IVA-002"]
-    assert "- Ningún clon." in second
+    assert "- Ningún clon en lo que cambió este escenario." in second
     assert false_greens(root) == []
 
 

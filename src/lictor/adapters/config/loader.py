@@ -1,10 +1,11 @@
 import hashlib
 import json
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -23,6 +24,7 @@ from lictor.adapters.config.models import (
     ReaderControlConfig,
     agent_run_problems,
     allow_empty_message,
+    code_paths_message,
     driver_hints_message,
     needs_plugins_message,
     plugin_without_list_message,
@@ -35,6 +37,7 @@ from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.controls import complexity_limit_message
 from lictor.domain.errors import ConfigError
 from lictor.domain.interface_proof import InterfaceImpostor
+from lictor.domain.refactor_scope import code_paths_problem
 from lictor.domain.rules import Impostors, MapLink, StubConstant
 
 CONFIG_FILENAME = "lictor.json"
@@ -61,6 +64,7 @@ class Defences:
     driver_exempt_paths: Sequence[str] = ()
     driver_hints: str = ""
     refactor_hints: str = ""
+    code_paths: Sequence[str] = ()
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -532,15 +536,7 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg)
 
     _reject_allow_empty(parsed, profiles_dir)
-    acceptance = parsed.get("acceptance")
-    if isinstance(acceptance, dict) and "driver_hints" in acceptance:
-        raise ConfigError(driver_hints_message())
-    if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
-        raise ConfigError(needs_plugins_message())
-    if "survey" in parsed:
-        raise ConfigError(survey_message())
-    if "refactor_hints" in parsed:
-        raise ConfigError(refactor_hints_message())
+    _reject_profile_fields(parsed)
     try:
         written = LictorFile.model_validate(parsed)
     except ValidationError as exc:
@@ -554,6 +550,30 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg) from exc
     _reject_unrunnable_agent_runs(config, written, config_path)
     return config
+
+
+# What only the profile declares, each with the message that says where the project's own goes.
+_PROFILE_ONLY: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
+    ("survey", survey_message),
+    ("refactor_hints", refactor_hints_message),
+    ("code_paths", code_paths_message),
+)
+_PROFILE_ONLY_ACCEPTANCE: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
+    ("driver_hints", driver_hints_message),
+    ("needs_plugins", needs_plugins_message),
+)
+
+
+def _reject_profile_fields(parsed: dict[str, object]) -> None:
+    """Refuse a field only the profile declares, with its own message."""
+    acceptance = parsed.get("acceptance")
+    written = acceptance if isinstance(acceptance, dict) else {}
+    for key, message in _PROFILE_ONLY_ACCEPTANCE:
+        if key in written:
+            raise ConfigError(message())
+    for key, message in _PROFILE_ONLY:
+        if key in parsed:
+            raise ConfigError(message())
 
 
 def _reject_unrunnable_agent_runs(
@@ -655,6 +675,9 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         for control in config.controls:
             if control.when_plugin is not None:
                 raise ConfigError(plugin_without_list_message(control.id))
+    problem = code_paths_problem(profile.code_paths, config.paths.writable)
+    if problem is not None:
+        raise ConfigError(problem)
     return Defences(
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,
@@ -675,6 +698,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         driver_exempt_paths=profile.driver_exempt_paths,
         driver_hints=profile.acceptance.driver_hints,
         refactor_hints=profile.refactor_hints,
+        code_paths=tuple(profile.code_paths),
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

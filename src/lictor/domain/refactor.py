@@ -17,7 +17,7 @@ from typing import Final, Literal
 from lictor.domain.api import break_line, break_record, breaks_from_record
 from lictor.domain.complexity import OverLimit, over_limit
 from lictor.domain.controls import CommandControl, ReaderControl
-from lictor.domain.duplication import Duplication, duplication_of, kept
+from lictor.domain.duplication import Duplication, duplication_of
 from lictor.domain.model import AgentSignal, AgentStatus, CoverageScore, Score
 from lictor.domain.reports import (
     ApiBreak,
@@ -195,12 +195,18 @@ def _breaks_or_none(value: object) -> frozenset[ApiBreak] | None:
 
 def _findings_record(findings: Findings) -> dict[str, object]:
     if isinstance(findings, Duplication):
-        return _duplication_record(kept(findings))
+        return _duplication_record(findings)
     return {
         "kind": "complexity",
         "limit": findings.limit,
         "functions": [
-            {"file": f.file, "function": f.function, "line": f.line, "complexity": f.complexity}
+            {
+                "file": f.file,
+                "function": f.function,
+                "line": f.line,
+                "last_line": f.last_line,
+                "complexity": f.complexity,
+            }
             for f in findings.functions
         ],
     }
@@ -211,7 +217,6 @@ def _duplication_record(duplication: Duplication) -> dict[str, object]:
         "kind": "duplication",
         "min_tokens": duplication.min_tokens,
         "in_clones": duplication.in_clones,
-        "count": duplication.count,
         "clones": [
             [[o.file, o.first_line, o.last_line, o.start, o.end] for o in clone.occurrences]
             for clone in duplication.clones
@@ -247,8 +252,8 @@ def _duplication_or_none(value: Mapping[str, object]) -> Duplication | None:
         _int_or_none(value.get("min_tokens")),
         _int_or_none(value.get("in_clones")),
     )
-    count, raw = _int_or_none(value.get("count")), value.get("clones")
-    if min_tokens is None or in_clones is None or count is None or not isinstance(raw, list):
+    raw = value.get("clones")
+    if min_tokens is None or in_clones is None or not isinstance(raw, list):
         return None
     clones: list[Clone] = []
     for item in raw:
@@ -256,7 +261,7 @@ def _duplication_or_none(value: Mapping[str, object]) -> Duplication | None:
         if occurrences is None:
             return None
         clones.append(Clone(occurrences))
-    return Duplication(min_tokens, in_clones, tuple(clones), count)
+    return Duplication(min_tokens, in_clones, tuple(clones))
 
 
 def _occurrences_or_none(item: object) -> tuple[CloneOccurrence, ...] | None:
@@ -293,11 +298,12 @@ def _over_or_none(value: Mapping[str, object]) -> OverLimit | None:
             return None
         file, name = item.get("file"), item.get("function")
         line, complexity = _int_or_none(item.get("line")), _int_or_none(item.get("complexity"))
+        last = _int_or_none(item.get("last_line"))
         if not isinstance(file, str) or not isinstance(name, str):
             return None
-        if line is None or complexity is None:
+        if line is None or complexity is None or last is None:
             return None
-        functions.append(FunctionComplexity(file, name, line, complexity))
+        functions.append(FunctionComplexity(file, name, line, complexity, last))
     return OverLimit(limit, tuple(functions))
 
 

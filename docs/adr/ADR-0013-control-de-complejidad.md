@@ -194,3 +194,10 @@ Segunda revisión, sobre el borrador 2:
 | Límites y divergencias sin listar | `peak` 6 → 3 / 2 → 3; `case _ if`; clase dentro de función | añadidos |
 | Definición sin `assert` ni `else` | Fable: 0 distintas en 149 y 999 | anotado |
 | `uv run python -I -B -m …` usa el entorno | probado por Fable con un entorno aparte, sin `.pyc` ni `.venv` | — |
+
+## Enmienda F84 (2026-11-26)
+
+El informe lleva también dónde acaba cada función (`end_line`, `node.end_lineno`); uno sin él, o
+con un final anterior a su línea, no es válido. Con eso el refactor nombra solo las funciones por
+encima del límite que tienen alguna línea cambiada por su verde, y cuenta el resto en una línea
+(ADR-0010, enmienda F84). La guarda no cambia: sigue comparando el total de todo el proyecto.

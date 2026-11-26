@@ -196,6 +196,7 @@ def _verify(
         all_scenario_ids=("IVA-001",),
         api_base=_BASE,
         role="refactor" if green is not None else "implement",
+        refactor_of="green-sha" if green is not None else "",
         baseline=green or {},
     )
     return verifier, req

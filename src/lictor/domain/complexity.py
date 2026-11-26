@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from lictor.domain.code_measures import ALONE, RefactorBlock
+from lictor.domain.code_measures import ALONE, WHOLE_PROJECT, RefactorBlock
 from lictor.domain.reports import ComplexityReport, FunctionComplexity
 
 # How many functions a message names before it only counts the rest.
@@ -66,26 +66,29 @@ def over_limit_reason(over: OverLimit) -> str:
     return "\n".join([head, *named_functions(over.functions)])
 
 
-def refactor_complexity_text(over: OverLimit | None, command: str | None) -> str:
+def refactor_complexity_text(
+    over: OverLimit | None, named: Sequence[FunctionComplexity], command: str | None
+) -> str:
     """The lines of the refactor's prompt on complexity: what the green left, and how to measure.
 
-    With no measure of the green there is nothing to name, and saying the list is empty would
-    be false. With one, an empty list is said: kept silent, the agent estimates by eye (F60). The
-    rule is said with it: the refactor feared the discard more than anything (F60).
+    `named` are the functions above the limit on the lines the scenario changed (F84): those are
+    what is asked; the rest is counted apart. With no measure of the green there is nothing to
+    name, and saying the list is empty would be false. With one, an empty list is said: kept
+    silent, the agent estimates by eye (F60). The rule is said with it: the refactor feared the
+    discard more than anything (F60).
     """
     if over is None:
         return ""
     return RefactorBlock(
-        f"Complejidad, con un límite de {over.limit} por función, medida en la verificación del "
-        "verde:",
-        named_functions(over.functions),
-        "Baja al menos una, empezando por las de los ficheros que cambió este escenario; no hace "
-        "falta arreglarlas todas ahora.",
-        "- Ninguna función supera el límite.",
+        f"Complejidad, con un límite de {over.limit} por función, en lo que cambió este "
+        "escenario, medida en la verificación del verde:",
+        named_functions(named),
+        "Baja al menos una; no hace falta arreglarlas todas ahora.",
+        "- Ninguna función de lo que cambió este escenario supera el límite.",
         "La verificación descarta el refactor si deja por encima del límite más que el verde, en "
-        "total o en la peor función. Por debajo del límite la complejidad no cuenta, y mejorar una "
-        "función sin llegar al límite no se descarta.",
-        f"Mídela tú con `{command}`, {ALONE}" if command else None,
+        "total o en la peor función, en todo el proyecto. Por debajo del límite la complejidad no "
+        "cuenta, y mejorar una función sin llegar al límite no se descarta.",
+        f"Mídela tú con `{command}`, {ALONE} {WHOLE_PROJECT}" if command else None,
     ).text()
 
 

@@ -100,6 +100,7 @@ def functions(tree: ast.AST, file: str) -> Iterator[dict[str, object]]:
                     "file": file,
                     "function": name,
                     "line": child.lineno,
+                    "end_line": child.end_lineno or child.lineno,
                     "complexity": complexity(child),
                 }
                 yield from walk(child, f"{name}.")

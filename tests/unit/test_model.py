@@ -313,8 +313,14 @@ def test_agent_result_has_no_cli_version_by_default() -> None:
 
 
 def test_a_tree_change_tells_a_deleted_path() -> None:
-    assert TreeChange("a.py", "000000").is_deleted is True
-    assert TreeChange("a.py", "100644").is_deleted is False
+    assert TreeChange("a.py", "000000", "100644").is_deleted is True
+    assert TreeChange("a.py", "100644", "100644").is_deleted is False
+
+
+def test_a_tree_change_tells_a_path_head_didnt_have() -> None:
+    assert TreeChange("a.py", "100644", "000000").is_new is True
+    assert TreeChange("a.py", "100644", "100644").is_new is False
+    assert TreeChange("a.py", "000000", "100644").is_new is False
 
 
 @pytest.mark.parametrize(

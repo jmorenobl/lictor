@@ -7,6 +7,29 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Cambiado
+
+- **El refactor mejora lo que cambió su escenario (F84).** En la 4a de pyverifactu, 9 de 21
+  refactors cambiaron código que su escenario no tocó, y 8 de ellos porque la orden les nombraba la
+  complejidad y los clones de todo `src`. Ahora la orden nombra solo las funciones por encima del
+  límite con alguna línea que cambió el verde y los clones con algún sitio en esas líneas, y cuenta
+  el resto en una línea; los objetivos de calidad se acotan a lo que cambió el escenario. Lo que no
+  se puede empeorar sigue siendo de todo el proyecto. Enmienda de la ADR-0010.
+- **El informe de complejidad lleva `end_line`** por función: uno sin él no es válido (ADR-0013).
+  El checkpoint guarda todos los clones del verde, no solo los 20 que se imprimen (ADR-0014).
+- **`refactor_of` es obligatorio** en los nodos del refactor: si falta, el run sale con un error
+  interno en lugar de comparar con un HEAD que, tras un colateral, es un commit vacío.
+
+### Añadido
+
+- **`L0-alcance`: una puerta del refactor.** Tras `L0-rutas`, descarta el refactor que modifica,
+  mueve o borra un fichero de código que ya existía y que su escenario no cambió, salvo el otro lado
+  de un clon que la orden le nombra; los ficheros nuevos y los tests unitarios pueden seguir al
+  código. El verde se queda, como en cualquier descarte.
+- **`code_paths` en el perfil** (`python-uv`: `src/`): dónde está el código, solo del perfil y en la
+  huella. Un `lictor.json` que lo declare sale con exit 10, y también uno cuyo `paths.writable` no
+  alcance ninguna de esas rutas, porque la puerta no comprobaría nada.
+
 ## [0.20.0] - 2026-11-25
 
 Lo que la 0.19.0 dejó a medias y la repetición de la fase 4a de pyverifactu necesita para leerse:

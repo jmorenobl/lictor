@@ -144,12 +144,17 @@ def test_what_the_person_accepts_to_break_doesnt_block(make_project: ProjectFact
 def test_a_refactor_that_breaks_what_its_green_didnt_is_discarded(
     make_project: ProjectFactory,
 ) -> None:
+    def impl(task: AgentTask, scenario_id: str, attempt: int) -> None:
+        # Each green touches the module, so its refactor may change it (F84).
+        good_impl(task, scenario_id, attempt)
+        write(task.cwd, EXTRA_PATH, f'"""Tasa de {scenario_id}."""\n\n' + EXTRA)
+
     def refactor(task: AgentTask, _scenario_id: str, _attempt: int) -> None:
         write(task.cwd, EXTRA_PATH, BROKEN)
 
     root = _project(make_project)
 
-    assert run_lictor(root, Agent(impl=good_impl, refactor=refactor)) == Outcome(0)
+    assert run_lictor(root, Agent(impl=impl, refactor=refactor)) == Outcome(0)
 
     assert green_ids(root) == ALL
     outcomes = {
@@ -163,6 +168,6 @@ def test_a_refactor_that_breaks_what_its_green_didnt_is_discarded(
         for line in path.read_text(encoding="utf-8").splitlines()
     ]
     assert any("api: rompe `iva.extra.tasa`: pierde el parámetro pais" in r for r in reasons)
-    assert (root / EXTRA_PATH).read_text(encoding="utf-8") == EXTRA
+    assert (root / EXTRA_PATH).read_text(encoding="utf-8").endswith(EXTRA)
     assert (root / MODULE_PATH).is_file()
     assert false_greens(root) == []

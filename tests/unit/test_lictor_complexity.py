@@ -207,10 +207,25 @@ def test_the_command_prints_every_function_and_writes_the_report(tmp_path: Path)
     ]
     assert json.loads((tmp_path / "r.json").read_text()) == {
         "functions": [
-            {"file": "src/p/a.py", "function": "f", "line": 1, "complexity": 2},
-            {"file": "src/p/b.py", "function": "g", "line": 1, "complexity": 1},
+            {"file": "src/p/a.py", "function": "f", "line": 1, "end_line": 3, "complexity": 2},
+            {"file": "src/p/b.py", "function": "g", "line": 1, "end_line": 2, "complexity": 1},
         ]
     }
+
+
+def test_each_function_says_where_it_ends_a_nested_one_inside_its_own() -> None:
+    """F84: the lines of a function tell whether a change of the scenario touched it."""
+    source = (
+        "class A:\n    def m(self):\n        def inner():\n            return 1\n\n"
+        "        return inner\n"
+    )
+
+    found = {
+        f["function"]: (f["line"], f["end_line"])
+        for f in lictor_complexity.functions(ast.parse(source), "m.py")
+    }
+
+    assert found == {"A.m": (2, 6), "A.m.inner": (3, 4)}
 
 
 def test_a_file_that_doesnt_parse_fails_and_leaves_no_report(tmp_path: Path) -> None:

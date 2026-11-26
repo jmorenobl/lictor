@@ -7,6 +7,7 @@ from lictor.domain.complexity import (
     OverLimit,
     describe_over,
     implementer_complexity_text,
+    named_functions,
     over_limit,
     over_limit_reason,
     refactor_complexity_text,
@@ -62,8 +63,10 @@ _RAN = Ran(("medir",), Execution(0, 60), "log")
 _OK = Execution(0, 60)
 
 
-def _f(value: int, name: str = "f", file: str = "src/p/m.py", line: int = 1) -> FunctionComplexity:
-    return FunctionComplexity(file, name, line, value)
+def _f(
+    value: int, name: str = "f", file: str = "src/p/m.py", line: int = 1, last: int | None = None
+) -> FunctionComplexity:
+    return FunctionComplexity(file, name, line, value, line if last is None else last)
 
 
 def _report(*values: int) -> ComplexityReport:
@@ -182,13 +185,21 @@ def test_a_report_of_another_control_or_without_limit_is_no_complexity_measure()
 
 
 def test_a_report_is_every_function_with_its_value() -> None:
-    data = {"functions": [{"file": "src/p/m.py", "function": "A.f", "line": 3, "complexity": 4}]}
+    data = {
+        "functions": [
+            {"file": "src/p/m.py", "function": "A.f", "line": 3, "end_line": 9, "complexity": 4}
+        ]
+    }
 
-    assert complexity_report(data) == ComplexityReport((_f(4, "A.f", line=3),))
+    assert complexity_report(data) == ComplexityReport((_f(4, "A.f", line=3, last=9),))
 
 
 def test_a_path_is_kept_as_posix() -> None:
-    data = {"functions": [{"file": "src//p/./m.py", "function": "f", "line": 1, "complexity": 1}]}
+    data = {
+        "functions": [
+            {"file": "src//p/./m.py", "function": "f", "line": 1, "end_line": 1, "complexity": 1}
+        ]
+    }
 
     report = complexity_report(data)
 
@@ -205,6 +216,24 @@ def test_a_path_is_kept_as_posix() -> None:
         ({"functions": [{"file": "a", "function": "f", "line": True, "complexity": 1}]}, "línea"),
         ({"functions": [{"file": "a", "function": "f", "line": 1, "complexity": -1}]}, "complej"),
         ({"functions": [{"file": "a", "function": "f", "line": 1}]}, "complejidad"),
+        # Where it ends tells what a change of the scenario touches of it (F84).
+        ({"functions": [{"file": "a", "function": "f", "line": 1, "complexity": 1}]}, "final"),
+        (
+            {
+                "functions": [
+                    {"file": "a", "function": "f", "line": 5, "end_line": 4, "complexity": 1}
+                ]
+            },
+            "final",
+        ),
+        (
+            {
+                "functions": [
+                    {"file": "a", "function": "f", "line": 1, "end_line": "2", "complexity": 1}
+                ]
+            },
+            "final",
+        ),
     ],
 )
 def test_a_function_that_cant_be_real_invalidates_the_report(data: object, reason: str) -> None:
@@ -212,6 +241,55 @@ def test_a_function_that_cant_be_real_invalidates_the_report(data: object, reaso
 
     assert isinstance(report, InvalidReport)
     assert reason in report.reason
+
+
+@pytest.mark.parametrize(("end", "shown"), [(None, "None"), (2, "2"), ("4", "'4'")])
+def test_an_end_that_isnt_a_line_after_the_start_says_which(end: object, shown: str) -> None:
+    raw: dict[str, object] = {"file": "a", "function": "f", "line": 3, "complexity": 1}
+    if end is not None:
+        raw["end_line"] = end
+
+    report = complexity_report(
+        {
+            "functions": [
+                {"file": "a", "function": "g", "line": 1, "end_line": 1, "complexity": 1},
+                raw,
+            ]
+        }
+    )
+
+    assert report == InvalidReport(f"el final de la función 2 no es válido: {shown}")
+
+
+def test_an_end_on_its_own_line_is_valid() -> None:
+    data = {
+        "functions": [{"file": "a", "function": "f", "line": 3, "end_line": 3, "complexity": 1}]
+    }
+
+    assert complexity_report(data) == ComplexityReport((_f(1, "f", "a", 3, 3),))
+
+
+@pytest.mark.parametrize("missing", ["file", "function", "line", "last_line", "complexity"])
+def test_a_checkpoint_function_missing_a_field_keeps_no_list(missing: str) -> None:
+    function = {"file": "a", "function": "f", "line": 1, "last_line": 4, "complexity": 12}
+    findings = {"kind": "complexity", "limit": 10, "functions": [function]}
+    record = {
+        "complexity": {"passed": None, "misses": {"excess": 2, "peak": 2}, "findings": findings}
+    }
+    assert measures_from_record(record)["complexity"].findings == OverLimit(
+        10, (_f(12, last=4, file="a"),)
+    )
+
+    del function[missing]
+
+    assert measures_from_record(record)["complexity"].findings is None
+
+
+def test_exactly_as_many_functions_as_a_message_names_count_nothing_more() -> None:
+    lines = named_functions([_f(12, f"f{i}", line=i) for i in range(1, NAMED + 1)])
+
+    assert len(lines) == NAMED
+    assert not lines[-1].startswith("- y ")
 
 
 def test_the_verdict_passes_with_nothing_above_the_limit() -> None:
@@ -343,29 +421,36 @@ def test_complexity_has_its_own_lines_in_the_refactor_prompt() -> None:
     assert refactor_measures([unit, _CONTROL], ()) == (("unit", "u"),)
 
 
-def test_the_refactor_hears_which_functions_go_above_and_how_to_measure() -> None:
-    text = refactor_complexity_text(over_limit(_report(12, 3), 10), "medir src")
+def test_the_refactor_hears_the_functions_of_its_scenario_and_how_to_measure() -> None:
+    over = over_limit(_report(12, 3, 14), 10)
+
+    text = refactor_complexity_text(over, [over.functions[1]], "medir src")
 
     assert text.splitlines() == [
-        "Complejidad, con un límite de 10 por función, medida en la verificación del verde:",
+        "Complejidad, con un límite de 10 por función, en lo que cambió este escenario, medida en "
+        "la verificación del verde:",
         "- src/p/m.py:1 `f1`: 12",
-        "Baja al menos una, empezando por las de los ficheros que cambió este escenario; no hace "
-        "falta arreglarlas todas ahora.",
+        "Baja al menos una; no hace falta arreglarlas todas ahora.",
         "La verificación descarta el refactor si deja por encima del límite más que el verde, en "
-        "total o en la peor función. Por debajo del límite la complejidad no cuenta, y mejorar una "
-        "función sin llegar al límite no se descarta.",
+        "total o en la peor función, en todo el proyecto. Por debajo del límite la complejidad no "
+        "cuenta, y mejorar una función sin llegar al límite no se descarta.",
         "Mídela tú con `medir src`, sola y no detrás de otras órdenes con `&&`: una vez antes de "
-        "editar y otra al terminar.",
+        "editar y otra al terminar. Mide todo el proyecto y sirve para comprobar el total; lo que "
+        "se te pide es solo lo nombrado arriba.",
     ]
 
 
-def test_an_empty_list_is_said_and_no_measure_says_nothing() -> None:
-    text = refactor_complexity_text(OverLimit(10), None)
+def test_an_empty_scope_is_said_and_no_measure_says_nothing() -> None:
+    over = over_limit(_report(12), 10)
 
-    assert "- Ninguna función supera el límite." in text.splitlines()
-    assert "Baja al menos una" not in text
-    assert "Mídela" not in text
-    assert refactor_complexity_text(None, "medir") == ""
+    for measured in (OverLimit(10), over):
+        text = refactor_complexity_text(measured, [], None)
+        assert "- Ninguna función de lo que cambió este escenario supera el límite." in (
+            text.splitlines()
+        )
+        assert "Baja al menos una" not in text
+        assert "Mídela" not in text
+    assert refactor_complexity_text(None, [], "medir") == ""
 
 
 def test_the_implementer_hears_the_limit_only_of_a_control_that_blocks() -> None:

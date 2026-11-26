@@ -26,6 +26,7 @@ from lictor.domain.controls import CommandControl, Control, ReaderControl
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 from lictor.domain.refactor import Measure
+from lictor.domain.refactor_scope import LineSpan
 from lictor.domain.reports import CoverageReport
 from tests.environments import PlainEnvironment
 from tests.readers import FlagRunner, Leaves, ReportingRunner, all_readers, coverage_json
@@ -50,6 +51,9 @@ class FakeVcs(Vcs):
         self.moved: list[str] = []
         self.exported: list[str] = []
         self.deleted: list[str] = []
+        # What the green a refactor starts from changed, by file (F84): every changed file by
+        # default, so a refactor's gate lets the usual changes through.
+        self.green_lines: dict[str, tuple[LineSpan, ...]] | None = None
 
     def pin(self) -> RepoPin:
         """Pin what is there now: a move nobody caught stops being a change, as in a real repo."""
@@ -68,13 +72,21 @@ class FakeVcs(Vcs):
 
     def changes(self, tree: str) -> list[TreeChange]:
         found = [
-            TreeChange(path, "120000" if path in self.links else "100644")
+            TreeChange(path, "120000" if path in self.links else "100644", "100644")
             for path in self._changed_files
         ]
-        return found + [TreeChange(path, "000000") for path in self.deleted]
+        return found + [TreeChange(path, "000000", "100644") for path in self.deleted]
 
     def added_lines(self, tree: str) -> list[str]:
         return list(self._added)
+
+    def parent_of(self, rev: str) -> str:
+        return "fake-green-parent"
+
+    def changed_lines(self, base: str, head: str) -> dict[str, tuple[LineSpan, ...]]:
+        if self.green_lines is None:
+            return {path: () for path in self._changed_files}
+        return dict(self.green_lines)
 
     def removed_lines(self, tree: str) -> list[str]:
         return list(self._removed)
@@ -309,6 +321,7 @@ def _suppressions_of(
         scenario_id="IVA-001",
         run_id=run_id,
         role=role,
+        refactor_of="green-sha" if role == "refactor" else "",
         paths_writable=("src/",),
         suppressions=("# noqa",),
         all_scenario_ids=("IVA-001",),
@@ -1959,6 +1972,7 @@ def test_a_refactor_must_keep_the_seal(tmp_path: Path) -> None:
         scenario_id="IVA-001",
         run_id=run_id,
         role="refactor",
+        refactor_of="green-sha",
         paths_writable=("src/",),
         paths_driver=("tests/acceptance/",),
         suppressions=_SUPPRESSIONS,

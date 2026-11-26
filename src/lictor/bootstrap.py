@@ -479,6 +479,7 @@ def bootstrap_runtime(
             else None
         ),
         refactor_hints=defences.refactor_hints,
+        code_paths=tuple(defences.code_paths),
         agent_files=tuple(defences.verification.files),
     )
 

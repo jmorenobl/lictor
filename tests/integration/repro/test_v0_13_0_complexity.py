@@ -110,7 +110,7 @@ def test_the_refactor_hears_what_its_green_left_and_lowering_it_is_applied(
     )
     assert _outcomes(root)["IVA-001"] == ("applied", None)
     [second] = agent.prompts["refactor:IVA-002"]
-    assert "- Ninguna función supera el límite." in second
+    assert "- Ninguna función de lo que cambió este escenario supera el límite." in second
     assert false_greens(root) == []
 
 

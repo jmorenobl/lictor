@@ -162,7 +162,8 @@ ejecutar, y el run lo salta.
 6. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
    `lictor status`, en otra terminal, dice por dónde va. Tras cada verde que implementa, un
-   refactor aparte mejora el diseño sin cambiar el comportamiento: entra como un commit
+   refactor aparte mejora el diseño sin cambiar el comportamiento, solo en el código que cambió
+   su escenario (otro fichero que ya existía lo descarta en `L0-alcance`): entra como un commit
    `refactor(<ID>)` propio o se descarta, y el verde se queda; `"refactor": {"enabled": false}` lo
    apaga. Al acabar, la persona integra la rama (un merge o una pull request) y
    `lictor retire <nombre>` retira el worktree.

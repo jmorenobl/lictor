@@ -248,6 +248,7 @@ class GraphContext:
     refactor_scenario: RefactorScenario | None = None
     commit_refactor: CommitRefactor | None = None
     refactor_hints: str = ""
+    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
     # The project's rules of code (F79): every agent gets them, and nothing checks them.
@@ -842,6 +843,11 @@ class _GraphNodes:
         if scenario is None:
             reason = f"El escenario {current_id} no está en la spec cargada"
             return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
+        refactor_of = state.get("refactor_of")
+        if not refactor_of:
+            # `commit` always writes it: HEAD in its place is an empty commit after a collateral.
+            reason = f"El refactor de {current_id} no sabe de qué verde parte"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
         try:
             res = refactor.execute(
                 RefactorScenarioRequest(
@@ -849,7 +855,7 @@ class _GraphNodes:
                     run_id=state["run_id"],
                     scenario=scenario,
                     attempt_slot=self._green_slot(state),
-                    refactor_of=state.get("refactor_of") or self.ctx.vcs.get_head_sha(),
+                    refactor_of=refactor_of,
                     model=self.ctx.model,
                     allowed_tools=self.ctx.allowed_tools,
                     max_turns=self.ctx.max_turns,
@@ -863,6 +869,7 @@ class _GraphNodes:
                     hints=self.ctx.hints,
                     conventions=self.ctx.conventions,
                     refactor_hints=self.ctx.refactor_hints,
+                    code_paths=self.ctx.code_paths,
                     forbidden_paths=self.ctx.forbidden_paths,
                     controls=self.ctx.controls,
                     installed_plugins=(
@@ -907,6 +914,10 @@ class _GraphNodes:
         current_id = state.get("current")
         if not current_id:
             return {}
+        refactor_of = state.get("refactor_of")
+        if not refactor_of:
+            reason = f"El refactor de {current_id} no sabe de qué verde parte"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
         status = state.get("status", {})
         all_sids = [s["id"] for s in state.get("scenarios", [])]
         res = self.ctx.verify_attempt.execute(
@@ -933,8 +944,9 @@ class _GraphNodes:
                 banned_patterns=self.ctx.banned_patterns,
                 tree=state.get("attempt_tree"),
                 link=self.ctx.map_link,
-                refactor_of=state.get("refactor_of") or "",
+                refactor_of=refactor_of,
                 baseline=_baseline(state),
+                code_paths=self.ctx.code_paths,
                 api_base=state.get("api_base"),
             )
         )

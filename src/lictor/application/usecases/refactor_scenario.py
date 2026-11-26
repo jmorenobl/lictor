@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from lictor.application.ports import Clock, EventLog, Executor, SpecSource, Vcs
+from lictor.application.refactor_scope import baseline_findings, green_scope
 from lictor.application.run_files import (
     agent_files_dir,
     attempt_prefix,
@@ -39,6 +40,7 @@ from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
 from lictor.domain.refactor import Measure
+from lictor.domain.refactor_scope import RefactorScope, outside_scope, scope_rule
 
 ROLE: Final[AgentRole] = "refactor"
 
@@ -78,6 +80,8 @@ class RefactorScenarioRequest:
     # green's report there (F71). None leaves it to the counts in the prompt.
     baseline_step: Path | None = None
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
+    # Where the code is: the refactor may change only what its scenario changed there (F84).
+    code_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -189,6 +193,7 @@ class RefactorScenario:
         )
         parent = self.vcs.parent_of(request.refactor_of)
         changed = self.vcs.changed_paths(parent, request.refactor_of) if parent else []
+        scope = green_scope(self.vcs, request.refactor_of, request.baseline, request.code_paths)
         replacements = {
             "{repo}": request.project_root.name,
             "{id}": request.scenario.id.value,
@@ -196,6 +201,7 @@ class RefactorScenario:
                 request.project_root, request.scenario
             ),
             "{cambiados}": ", ".join(changed) or "nada",
+            "{alcance}": scope_rule(scope),
             "{refactor_hints}": request.refactor_hints,
             "{writable}": ", ".join(request.paths_writable),
             "{protected}": ", ".join(request.paths_protected),
@@ -204,7 +210,7 @@ class RefactorScenario:
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             "{check_commands}": ", ".join(commands) or "los tests del proyecto",
             "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
-            "{medidas_del_codigo}": _code_text(request, code, files, changed),
+            "{medidas_del_codigo}": _code_text(request, code, files, scope),
             "{hints}": request.hints,
             # Last: the person's text mustn't be read as a placeholder.
             "{conventions}": conventions_block(request.conventions, "refactor"),
@@ -219,30 +225,38 @@ def _code_text(
     request: RefactorScenarioRequest,
     controls: Sequence[CommandControl],
     files: str | None,
-    changed: Sequence[str],
+    scope: RefactorScope,
 ) -> str:
     """What the green left of each control that measures the code, and how to measure it.
 
     One block per control, in the order they were declared: the functions above a complexity
-    limit (ADR-0013) and the clones (ADR-0014); then the rule of the public API (ADR-0017).
+    limit (ADR-0013) and the clones (ADR-0014) on the lines the scenario changed, and one line
+    counting the rest (F84); then the rule of the public API (ADR-0017).
     """
-    texts = []
-    for control in controls:
-        measure = request.baseline.get(control.id)
-        findings = measure.findings if measure else None
-        command = agent_command(control, files)
-        if control.report == "duplication":
-            repeated = findings if isinstance(findings, Duplication) else None
-            text = refactor_duplication_text(repeated, command, changed)
-        else:
-            over = findings if isinstance(findings, OverLimit) else None
-            text = refactor_complexity_text(over, command)
-        if text:
-            texts.append(text)
+    texts = [
+        text for control in controls if (text := _control_text(request, control, files, scope))
+    ]
+    texts.append(outside_scope(baseline_findings(request.baseline), scope))
     # The public API has no findings to name: only what the green already broke (ADR-0017).
     if any(m.breaks is not None for m in request.baseline.values()):
         texts.append(REFACTOR_API)
-    return "\n\n".join(texts)
+    return "\n\n".join(text for text in texts if text)
+
+
+def _control_text(
+    request: RefactorScenarioRequest,
+    control: CommandControl,
+    files: str | None,
+    scope: RefactorScope,
+) -> str:
+    measure = request.baseline.get(control.id)
+    findings = measure.findings if measure else None
+    command = agent_command(control, files)
+    if control.report == "duplication":
+        repeated = findings if isinstance(findings, Duplication) else None
+        return refactor_duplication_text(repeated, scope.clones_of(repeated), command)
+    over = findings if isinstance(findings, OverLimit) else None
+    return refactor_complexity_text(over, scope.functions_of(over), command)
 
 
 def _green_left(baseline: Mapping[str, Measure]) -> dict[str, dict[str, int]]:

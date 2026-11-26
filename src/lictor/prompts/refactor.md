@@ -7,12 +7,13 @@ código sin cambiar su comportamiento: es el paso «refactor» de rojo-verde-ref
 
 El commit de ese escenario cambió: {cambiados}.
 
-Objetivos de calidad:
+Objetivos de calidad, en lo que cambió el escenario:
 {refactor_hints}
 
 Reglas:
 - No cambies el comportamiento. Todos estos escenarios funcionan y deben seguir funcionando: {green_ids}.
 - No añadas funcionalidad nueva ni adelantes la de escenarios que aún no pasan.
+{alcance}
 - Solo puedes crear o modificar archivos en: {writable}.
 - No toques {protected}, ni los tests de aceptación ni los features: cualquier cambio ahí descarta
   el refactor.
@@ -34,5 +35,6 @@ Reglas:
 
 Si la verificación no pasa, Lictor descarta tu cambio y el escenario sigue en verde: un descarte no
 le cuesta nada al escenario. Se descarta un refactor que cambie el comportamiento, toque lo que no
-puedes tocar o deje más sin probar que el verde; quitar código probado no cuenta en contra. Si el
-código ya cumple los objetivos, dejarlo como está es un resultado válido.
+puedes tocar, salga de lo que cambió el escenario o deje más sin probar que el verde; quitar código
+probado no cuenta en contra. Si el código ya cumple los objetivos, dejarlo como está es un
+resultado válido.

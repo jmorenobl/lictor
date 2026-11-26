@@ -1540,6 +1540,49 @@ def test_a_lictor_json_with_refactor_hints_is_refused_naming_hints(tmp_path: Pat
     assert "hints" in message.replace("refactor_hints", "")
 
 
+def test_where_the_code_is_is_the_profiles_and_in_the_fingerprint(tmp_path: Path) -> None:
+    """F84: the refactor stays in the code its scenario changed, and the profile says where."""
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    assert defences.code_paths == ("src/",)
+    other = replace(defences, code_paths=("lib/",))
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_a_lictor_json_with_code_paths_is_refused_naming_writable(tmp_path: Path) -> None:
+    path = _project(tmp_path, code_paths=["lib/"])
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "code_paths" in message
+    assert "paths.writable" in message
+
+
+def test_writable_paths_without_the_code_leave_the_refactor_unscoped_and_are_refused(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        _project(
+            tmp_path,
+            paths={
+                "writable": ["lib/", "tests/unit/"],
+                "driver": ["tests/acceptance/"],
+                "protected": ["features/", "tests/acceptance/", "lictor.json"],
+            },
+        )
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        resolve_defences(config)
+
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "L0-alcance" in str(exc_info.value)
+
+
 def test_the_profile_declares_the_impostor_of_the_interface() -> None:
     defences = resolve_defences(load_config(REPO_ROOT))
 

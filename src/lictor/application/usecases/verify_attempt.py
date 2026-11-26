@@ -22,6 +22,7 @@ from lictor.application.control_reports import (
     take_turn,
 )
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
+from lictor.application.refactor_scope import green_scope
 from lictor.application.run_files import (
     attempt_prefix,
     describe_crash,
@@ -58,6 +59,7 @@ from lictor.domain.refactor import (
     refactor_subject,
     regression_reason,
 )
+from lictor.domain.refactor_scope import REFACTOR_SCOPE, out_of_scope, out_of_scope_reason
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
@@ -128,6 +130,7 @@ class VerifyAttemptRequest:
     # A refactor (ADR-0010): the green it starts from, and what its verification measured.
     refactor_of: str = ""
     baseline: Mapping[str, Measure] = field(default_factory=dict)
+    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
     # The commit the run started from, against which the public API is compared (ADR-0017).
     api_base: str | None = None
     api: ApiBase | None = None  # filled in by VerifyAttempt.execute
@@ -360,6 +363,11 @@ class VerifyAttempt:
         if not routes_res.ok:
             return routes_res
 
+        if req.role == "refactor":
+            scope_res = self._check_scope(req)
+            if not scope_res.ok:
+                return scope_res
+
         if req.role != "driver":
             seal_res = self._check_seal(req)
             if not seal_res.ok:
@@ -485,6 +493,21 @@ class VerifyAttempt:
         if forbidden:
             err = routes_rejected(forbidden, req.paths_driver)
             return self._fail(req, _Failure("L0-rutas", err, reverted_files=tuple(forbidden)))
+        return VerifyResult(ok=True)
+
+    def _check_scope(self, req: VerifyAttemptRequest) -> VerifyResult:
+        """`L0-alcance`: a refactor changes only the code its scenario changed (F84)."""
+        if not req.refactor_of:
+            raise InternalLictorError("El refactor llegó a verificación sin su verde")
+        scope = green_scope(self.vcs, req.refactor_of, req.baseline, req.code_paths)
+        outside = out_of_scope(scope, self.vcs.changes(self._tree(req)), req.code_paths)
+        if outside:
+            failure = _Failure(
+                REFACTOR_SCOPE,
+                out_of_scope_reason(outside, scope),
+                reverted_files=tuple(outside),
+            )
+            return self._fail(req, failure)
         return VerifyResult(ok=True)
 
     def _check_seal(self, req: VerifyAttemptRequest) -> VerifyResult:

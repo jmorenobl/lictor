@@ -524,7 +524,7 @@ class RepoPin:
 
 _SYMLINK_MODE = "120000"
 _GITLINK_MODE = "160000"
-_DELETED_MODE = "000000"
+DELETED_MODE = "000000"
 
 
 @dataclass(frozen=True)
@@ -538,10 +538,11 @@ class Candidate:
 
 @dataclass(frozen=True)
 class TreeChange:
-    """A path that differs from HEAD in a tree, with the mode it has there."""
+    """A path that differs from HEAD in a tree, with the mode it has there and the one it had."""
 
     path: str
     mode: str
+    old_mode: str  # `000000` for a path HEAD doesn't have
 
     @property
     def is_link(self) -> bool:
@@ -551,7 +552,12 @@ class TreeChange:
     @property
     def is_deleted(self) -> bool:
         """Tell a path the tree no longer has."""
-        return self.mode == _DELETED_MODE
+        return self.mode == DELETED_MODE
+
+    @property
+    def is_new(self) -> bool:
+        """Tell a path HEAD didn't have."""
+        return self.old_mode == DELETED_MODE
 
 
 @dataclass(frozen=True)
