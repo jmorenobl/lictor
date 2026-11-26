@@ -12,9 +12,10 @@ import shlex
 from pathlib import Path
 
 from lictor.adapters.config.loader import load_config
+from lictor.adapters.config.models import domain_controls
 from lictor.adapters.config.profiles.python_uv import lictor_coverage
 from lictor.application.ports import AgentTask
-from lictor.domain.controls import with_agent_files
+from lictor.domain.controls import agent_commands, with_agent_files
 from tests.integration.repro.conftest import ProjectFactory
 from tests.integration.repro.harness import (
     Agent,
@@ -84,8 +85,11 @@ def test_the_agents_commands_leave_nothing_init_doesnt_ignore(
     config = load_config(root)
     # As each call gets them: `{lictor_files}` names the copy of the profile's modules (F71).
     files = str(Path(lictor_coverage.__file__).parent)
+    derived = agent_commands(
+        domain_controls(config), config.acceptance.run, config.agent_tools, ("pytest_cov.plugin",)
+    )
     commands = [
-        *config.agent_commands,
+        *derived.all,
         *(
             with_agent_files(control.agent_run, files)
             for control in config.controls

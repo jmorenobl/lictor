@@ -5,11 +5,11 @@ count, every copy counted, is what a refactor may not raise: it doesn't move wit
 with renaming inside a function, and removing code that isn't repeated never raises it.
 """
 
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from lictor.domain.code_measures import ALONE, RefactorBlock
+from lictor.domain.code_measures import ALONE, WHOLE_PROJECT, RefactorBlock
 from lictor.domain.reports import Clone, CloneOccurrence, DuplicationReport
 
 # How many clones a message names before it only counts the rest.
@@ -18,34 +18,25 @@ NAMED: Final[int] = 20
 
 @dataclass(frozen=True)
 class Duplication:
-    """What a duplication report leaves repeated: the tokens in clones, and the clones."""
+    """What a duplication report leaves repeated: the tokens in clones, and every clone.
+
+    All of them, also in the checkpoint: the refactor's scope is drawn from them (F84).
+    """
 
     min_tokens: int
     in_clones: int
     clones: tuple[Clone, ...] = ()
-    # How many clones there were: a measure kept in the checkpoint names only the first `NAMED`.
-    count: int = 0
 
 
 def duplication_of(report: DuplicationReport) -> Duplication:
     """The repeated code of a report, its clones largest first."""
     clones = tuple(sorted(report.clones, key=lambda c: (-c.tokens, _first(c))))
-    return Duplication(report.min_tokens, report.in_clones, clones, len(clones))
+    return Duplication(report.min_tokens, report.in_clones, clones)
 
 
 def _first(clone: Clone) -> tuple[str, int]:
     first = clone.occurrences[0]
     return first.file, first.start
-
-
-def kept(duplication: Duplication) -> Duplication:
-    """The same measure with only the clones a message names, as the checkpoint keeps it."""
-    return Duplication(
-        duplication.min_tokens,
-        duplication.in_clones,
-        duplication.clones[:NAMED],
-        duplication.count,
-    )
 
 
 def _place(occurrence: CloneOccurrence) -> str:
@@ -58,21 +49,11 @@ def clone_line(clone: Clone) -> str:
     return f"{', '.join(before)} y {last}: {clone.tokens} tokens"
 
 
-def first_where_changed(clones: Sequence[Clone], changed: Collection[str]) -> list[Clone]:
-    """The clones with a place in a file the scenario changed first, each group as it came."""
-    touched = [c for c in clones if any(o.file in changed for o in c.occurrences)]
-    return touched + [c for c in clones if c not in touched]
-
-
-def named_clones(clones: Sequence[Clone], total: int) -> list[str]:
-    """The lines of the first `NAMED` of `total` clones, and how many more there are.
-
-    A measure kept in the checkpoint has only the first ones: the total says how many it had.
-    """
+def named_clones(clones: Sequence[Clone]) -> list[str]:
+    """The lines of the first `NAMED` clones, and how many more there are."""
     lines = [f"- {clone_line(c)}" for c in clones[:NAMED]]
-    rest = total - min(len(clones), NAMED)
-    if rest:
-        lines.append(f"- y {rest} más")
+    if len(clones) > NAMED:
+        lines.append(f"- y {len(clones) - NAMED} más")
     return lines
 
 
@@ -80,10 +61,10 @@ def clones_reason(duplication: Duplication) -> str:
     """Why a duplication control fails: which code is repeated."""
     head = (
         "Hay un clon de código repetido:"
-        if duplication.count == 1
-        else f"Hay {duplication.count} clones de código repetido:"
+        if len(duplication.clones) == 1
+        else f"Hay {len(duplication.clones)} clones de código repetido:"
     )
-    return "\n".join([head, *named_clones(duplication.clones, duplication.count)])
+    return "\n".join([head, *named_clones(duplication.clones)])
 
 
 def _definition(min_tokens: int) -> str:
@@ -94,27 +75,28 @@ def _definition(min_tokens: int) -> str:
 
 
 def refactor_duplication_text(
-    duplication: Duplication | None, command: str | None, changed: Collection[str] = ()
+    duplication: Duplication | None, named: Sequence[Clone], command: str | None
 ) -> str:
     """The lines of the refactor's prompt on duplication: what the green left, and how to measure.
 
-    With no measure of the green there is nothing to name, and saying the list is empty would be
-    false. With one, an empty list is said: kept silent, the agent estimates by eye (F65).
+    `named` are the clones with a place on the lines the scenario changed (F84): those are what is
+    asked; the rest is counted apart. With no measure of the green there is nothing to name, and
+    saying the list is empty would be false. With one, an empty list is said: kept silent, the
+    agent estimates by eye (F65).
     """
     if duplication is None:
         return ""
-    ordered = first_where_changed(duplication.clones, changed)
     return RefactorBlock(
-        "Código repetido, medido en la verificación del verde "
+        "Código repetido en lo que cambió este escenario, medido en la verificación del verde "
         f"({_definition(duplication.min_tokens)}):",
-        named_clones(ordered, duplication.count),
-        "Quita al menos uno, empezando por los de los ficheros que cambió este escenario; no hace "
-        "falta quitarlos todos ahora.",
-        "- Ningún clon.",
-        f"La verificación descarta el refactor si deja más tokens en clones que el verde "
-        f"({duplication.in_clones}). El formato no cuenta, ni cambiar el nombre de una variable "
-        "dentro de una función.",
-        f"Mídelo tú con `{command}`, {ALONE} Su segunda línea dice los tokens en clones."
+        named_clones(named),
+        "Quita al menos uno; no hace falta quitarlos todos ahora.",
+        "- Ningún clon en lo que cambió este escenario.",
+        f"La verificación descarta el refactor si deja más tokens en clones que el verde en todo "
+        f"el proyecto ({duplication.in_clones}). El formato no cuenta, ni cambiar el nombre de "
+        "una variable dentro de una función.",
+        f"Mídelo tú con `{command}`, {ALONE} Su segunda línea dice los tokens en clones. "
+        f"{WHOLE_PROJECT}"
         if command
         else None,
     ).text()

@@ -11,7 +11,8 @@ from pathlib import Path
 from lictor.application.ports import TextSearch, Vcs, Worktrees
 from lictor.domain.conventions import TreeEntry
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
-from lictor.domain.model import Candidate, RepoPin, TreeChange
+from lictor.domain.model import DELETED_MODE, Candidate, RepoPin, TreeChange
+from lictor.domain.refactor_scope import LineSpan, hunk_span
 
 _MIN_PORCELAIN_LINE_LEN = 4
 _PORCELAIN_PREFIX_LEN = 3
@@ -37,6 +38,15 @@ _COMMON_DIRS = ("hooks", "info")
 _POINTERS = (".git", "commondir")
 # Per worktree: two runs in two worktrees of one repository must not move a ref they share.
 _EXPORT_REF = "refs/worktree/lictor/verified"
+
+
+def _hunk_span(header: str) -> LineSpan:
+    """The span of a hunk header `@@ -a,b +c,d @@`, where `,d` is left out when it is 1."""
+    new = header.split(" ")[2].removeprefix("+")
+    start, _, count = new.partition(",")
+    return hunk_span(int(start), int(count) if count else 1)
+
+
 _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _EXECUTABLE_MODE = "100755"
 
@@ -263,8 +273,8 @@ class GitCli(Vcs, Worktrees, TextSearch):
         fields = raw.split("\0")
         found: list[TreeChange] = []
         for header, path in zip(fields[0::2], fields[1::2], strict=False):
-            _, new_mode, *_ = header.split(" ")
-            found.append(TreeChange(path=path, mode=new_mode))
+            old_mode, new_mode, *_ = header.split(" ")
+            found.append(TreeChange(path=path, mode=new_mode, old_mode=old_mode.lstrip(":")))
         return found
 
     def changed_paths(self, base: str, head: str) -> list[str]:
@@ -273,6 +283,41 @@ class GitCli(Vcs, Worktrees, TextSearch):
             ["diff-tree", "-r", "-z", "--name-only", "--no-renames", base, head]
         ).stdout
         return [path for path in raw.split("\0") if path]
+
+    def changed_lines(self, base: str, head: str) -> dict[str, tuple[LineSpan, ...]]:
+        """Read, file by file, the lines `head` adds or changes over `base`, in its numbering.
+
+        One file per diff, so no line has to be told apart as the header of another file, and the
+        path goes as a literal pathspec, never parsed back from the patch.
+        """
+        raw = self._run_git(["diff-tree", "-r", "-z", "--raw", "--no-renames", base, head]).stdout
+        fields = raw.split("\0")
+        kept = [
+            path
+            for header, path in zip(fields[0::2], fields[1::2], strict=False)
+            if header.split(" ")[1] != DELETED_MODE
+        ]
+        return {path: self._hunks(base, head, path) for path in kept}
+
+    def _hunks(self, base: str, head: str, path: str) -> tuple[LineSpan, ...]:
+        patch = self._run_git(
+            [
+                "diff-tree",
+                "-p",
+                "-U0",
+                "--text",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                base,
+                head,
+                "--",
+                f":(literal){path}",
+            ]
+        ).stdout
+        # Every line inside a hunk starts with its sign, and no header line with `@@ `.
+        return tuple(_hunk_span(line) for line in patch.splitlines() if line.startswith("@@ "))
 
     def added_lines(self, tree: str) -> list[str]:
         """Read the added lines of the diff, binary files included: a NUL must not hide them."""

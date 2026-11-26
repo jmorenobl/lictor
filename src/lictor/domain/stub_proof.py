@@ -138,7 +138,10 @@ def stub_verdict(proof: StubProof, interface: InterfaceProof | None) -> StubVerd
         return "rechazado"
     if interface.proved:
         return "aceptado"
-    return "sin_comprobar" if interface.outcome == "sin_alterar" else "rechazado"
+    # Nothing the agent could change makes either judgeable: what it got couldn't be altered, or
+    # its Then couldn't read it altered and the scenario gives it no value to weigh (F85).
+    unjudgeable = interface.outcome in ("sin_alterar", "ilegible")
+    return "sin_comprobar" if unjudgeable else "rechazado"
 
 
 # What each outcome tells the driver's agent. None asks for a check in a Given (F64 → F63), and
@@ -231,5 +234,6 @@ def unchecked_note(ids: Sequence[str]) -> str:
     return (
         f"Lictor aceptó {', '.join(ids)} sin comprobarlos: pasan aunque los stubs no estén "
         "implementados, y lo que la interfaz les devuelve desde el Cuando y el Entonces no se "
-        "puede alterar. Revisa que su Entonces compare con assert el valor del escenario."
+        "puede alterar, o su Entonces no pudo leerlo alterado. Revisa que su Entonces compare "
+        "con assert el valor del escenario."
     )

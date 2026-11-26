@@ -426,7 +426,6 @@ def bootstrap_runtime(
         conventions=active_config.conventions.text,
         api_base_ref=active_config.api.base,
         unexecuted=unexecuted,
-        check_commands=active_config.agent_commands,
         model=active_config.backend.model,
         allowed_tools=active_config.agent_tools,
         max_turns=active_config.backend.max_turns,
@@ -479,6 +478,7 @@ def bootstrap_runtime(
             else None
         ),
         refactor_hints=defences.refactor_hints,
+        code_paths=tuple(defences.code_paths),
         agent_files=tuple(defences.verification.files),
     )
 

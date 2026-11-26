@@ -14,11 +14,14 @@ from lictor.domain.model import (
     MutationScore,
     Scenario,
     ScenarioId,
+    Statement,
     StepCounts,
     TestCaseResult,
     Tokens,
     Totals,
     TreeChange,
+    statements_from_text,
+    statements_text,
     step_property,
 )
 
@@ -313,8 +316,14 @@ def test_agent_result_has_no_cli_version_by_default() -> None:
 
 
 def test_a_tree_change_tells_a_deleted_path() -> None:
-    assert TreeChange("a.py", "000000").is_deleted is True
-    assert TreeChange("a.py", "100644").is_deleted is False
+    assert TreeChange("a.py", "000000", "100644").is_deleted is True
+    assert TreeChange("a.py", "100644", "100644").is_deleted is False
+
+
+def test_a_tree_change_tells_a_path_head_didnt_have() -> None:
+    assert TreeChange("a.py", "100644", "000000").is_new is True
+    assert TreeChange("a.py", "100644", "100644").is_new is False
+    assert TreeChange("a.py", "000000", "100644").is_new is False
 
 
 @pytest.mark.parametrize(
@@ -356,3 +365,29 @@ def test_a_total_below_its_steps_leaves_nothing_outside() -> None:
 def test_what_happened_from_the_when_on_leaves_the_givens_out() -> None:
     assert StepCounts(given=5, when=1, then=2, outside=9).from_when == 3
     assert step_property("lictor.interface.calls", "then") == "lictor.interface.calls.then"
+
+
+def test_statements_read_back_as_they_were_written() -> None:
+    chain = (
+        Statement("tests/a.py", 10, frozenset({12, 15})),
+        Statement("c:/tests/b.py", 3),
+    )
+
+    text = statements_text(chain)
+
+    assert text == "tests/a.py:10:12,15;c:/tests/b.py:3:"
+    assert statements_from_text(text) == chain
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("a.py:1:;:2:;b.py:3:", 1),  # no path
+        ("a.py:1:;b.py:٣:", 1),  # a digit that isn't ASCII
+        ("a.py:1:;b.py:-3:", 1),
+        ("a.py:1:;b.py", 1),
+        ("", 0),
+    ],
+)
+def test_statements_stop_at_the_first_not_said_whole(text: str, kept: int) -> None:
+    assert len(statements_from_text(text)) == kept

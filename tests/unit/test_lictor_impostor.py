@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from defusedxml import ElementTree
 
 from lictor.adapters.config.loader import DEFAULT_PROFILES_DIR
 from lictor.adapters.config.profiles.python_uv import lictor_impostor
@@ -262,7 +263,9 @@ def pytest_runtest_call(item):
     if outcome.excinfo is None:
         lictor_impostor.pytest_bdd_after_step()
     else:
-        lictor_outcome.pytest_bdd_step_error(item._request, step, outcome.excinfo[1])
+        lictor_outcome.pytest_bdd_step_error(
+            request=item._request, step=step, step_func=item.obj, exception=outcome.excinfo[1]
+        )
         lictor_impostor.pytest_bdd_step_error()
 """
 
@@ -649,6 +652,31 @@ _CHECKS: list[tuple[str, Any, Callable[[Any], object], str]] = [
     ("por clave", {"ana": 3, "luis": 1}, lambda d: d["ana"] == 3, "sobrevive"),
     ("el único, por índice", ["ana"], lambda x: x[0] == "ana", "no_aserta"),
     ("de cada uno, vacía", [], lambda x: [p.isbn for p in x] == [], "no_aserta"),
+    # Texts (F85): `menos` drops the last character and, if it was blank, the last that isn't.
+    ("un texto entero", "S", _strong("S"), "probado"),
+    ("un texto con salto, entero", "S\n", _strong("S\n"), "probado"),
+    ("sin los blancos", "S\n", lambda x: x.strip() == "S", "probado"),
+    ("sin el salto", "S\n", lambda x: x.rstrip("\n") == "S", "probado"),
+    ("sus líneas", "S\nT\n", lambda x: x.splitlines() == ["S", "T"], "probado"),
+    ("sus palabras", "S T\n", lambda x: x.split() == ["S", "T"], "probado"),
+    ("su última línea", "S\nT\n", lambda x: x.splitlines()[-1] == "T", "probado"),
+    ("acaba en salto", "S\n", lambda x: x.endswith("\n"), "probado"),
+    ("su largo", "S\n", lambda x: len(x) == 2, "probado"),
+    ("unos bytes con salto", b"S\n", lambda x: x.strip() == b"S", "probado"),
+    # What reads it as something else can't read it altered: the rule weighs where (F85).
+    ("como número", "12\n", lambda x: int(x) == 12, "no_aserta"),
+    ("como JSON", '{"a": 1}\n', lambda x: json.loads(x)["a"] == 1, "no_aserta"),
+    (
+        "como XML",
+        "<r><a>S</a></r>\n",
+        lambda x: ElementTree.fromstring(x).findtext("a") == "S",
+        "no_aserta",
+    ),
+    # Weak, or what only changing its end can't tell: they survive.
+    ("contiene el valor", "S\n", lambda x: "S" in x, "sobrevive"),
+    ("empieza por él", "S\n", lambda x: x.startswith("S"), "sobrevive"),
+    ("no vacío", "S\n", bool, "sobrevive"),
+    ("su primera línea", "S\nT\n", lambda x: x.splitlines()[0] == "S", "sobrevive"),
 ]
 
 

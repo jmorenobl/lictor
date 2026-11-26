@@ -16,14 +16,15 @@ test the interface can't prove that reads every value goes to the person (`solo_
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
-from lictor.domain.gherkin_proof import GherkinFacts
-from lictor.domain.model import Step, TestCaseResult, UnreadValue
+from lictor.domain.gherkin_proof import GherkinFacts, driver_statements, reads_what_broke
+from lictor.domain.model import Statement, Step, TestCaseResult, UnreadValue
 from lictor.domain.rules import path_within
 
 ASSERTION_KIND = "assertion"
+ERROR_KIND = "error"  # any other exception: the test's code couldn't go on with what it got
 IMPOSTOR_KIND = "impostor"  # the impostor raised its own error in place of the interface's
 
 # What the impostor alters, told to the plugin: what the When does and what the Then reads. What a
@@ -50,6 +51,7 @@ ProofOutcome = Literal[
     "provocada",  # a value it altered went back to the interface and made it raise
     "ignora_el_valor",  # a Then receives a value of the scenario and never reads it (ADR-0016)
     "solo_el_valor",  # it reads each value of the scenario, but nothing it checks is the code's
+    "ilegible",  # a Then couldn't read the altered result, and the scenario gives it no value
 ]
 
 # Worst first: what a mode says of the test, when the modes disagree.
@@ -74,6 +76,9 @@ _PROVOKABLE: frozenset[ProofOutcome] = frozenset({"probado", "no_aserta", "sobre
 _ONLY_THE_VALUE: frozenset[ProofOutcome] = frozenset(
     {"sobrevive", "no_aserta", "sin_alterar", "a_traves"}
 )
+# The detail of a test proved because the statement that compares its scenario's value couldn't
+# read the altered result (F85): the same assertion depends on both.
+SAME_READING = "misma_lectura"
 ONLY_FROM_A_GIVEN = "dado"  # the detail of a test that calls the interface only to prepare
 HANDED = "entrega"  # the detail of one that hands the interface to a library, which calls it
 
@@ -95,6 +100,9 @@ class InterfaceProof:
     outcome: ProofOutcome
     detail: str = ""
     libraries: tuple[str, ...] = ()  # those the test reached the interface through, if any
+    # With `no_aserta`, when every mode that objected failed with an error raised in a Then of
+    # the driver: the statements it was raised in, by mode (F85). Empty otherwise.
+    broke_at: tuple[tuple[Statement, ...], ...] = ()
 
     @property
     def proved(self) -> bool:
@@ -143,10 +151,19 @@ def _worst_objection(
         for mode, case in modes.items()
         if (objection := _objection(mode, case, driver)) is not None
     ]
-    return next(
+    worst = next(
         (found for outcome in _PRIORITY for found in objections if found.outcome == outcome),
         InterfaceProof("probado"),
     )
+    return _with_statements(worst, objections) if worst.outcome == "no_aserta" else worst
+
+
+def _with_statements(worst: InterfaceProof, objections: Sequence[InterfaceProof]) -> InterfaceProof:
+    """Only a test every objecting mode stopped reading in a Then can be weighed by its
+    statements (F85): it keeps them all, by mode; any other objection leaves none."""
+    every = all(objection.broke_at for objection in objections)
+    chains = tuple(chain for objection in objections for chain in objection.broke_at)
+    return replace(worst, broke_at=chains if every else ())
 
 
 def provoked_in(mode: str, case: TestCaseResult | None, control: TestCaseResult) -> str:
@@ -175,6 +192,8 @@ def weighed_proof(
         return proof
     if facts.unread:
         return InterfaceProof("ignora_el_valor", unread_text(facts.unread[0]))
+    if (by_statements := _weighed_by_statements(proof, facts)) is not None:
+        return by_statements
     if (
         proof.outcome in _ONLY_THE_VALUE
         and facts.every_value_read
@@ -183,6 +202,25 @@ def weighed_proof(
     ):
         return InterfaceProof("solo_el_valor", facts.place, proof.libraries)
     return proof
+
+
+def _weighed_by_statements(proof: InterfaceProof, facts: GherkinFacts) -> InterfaceProof | None:
+    """What a test whose Then couldn't read the altered result is, by where it reads its
+    scenario's values (F85); None when that decides nothing.
+
+    Proved when every value is read and each mode broke on the statement that compares one, or
+    on one that feeds it: the same assertion depends on both. With nothing of the scenario to
+    weigh, it can't be proved, nor told to change.
+    """
+    if not proof.broke_at:
+        return None
+    if facts.every_value_read and all(
+        any(reads_what_broke(broke, read) for read in facts.read_at) for broke in proof.broke_at
+    ):
+        return InterfaceProof("probado", SAME_READING)
+    if facts.read or facts.inputs or facts.survived or facts.errors:
+        return None
+    return InterfaceProof("ilegible", proof.detail)
 
 
 def weighs_the_gherkin(proof: InterfaceProof) -> bool:
@@ -257,7 +295,18 @@ def _failure_objection(
     if kind == ASSERTION_KIND:
         return InterfaceProof("no_aserta", f"una aserción {place}, que no es del driver {seen}")
     what = kind or "un fallo sin clasificar"
-    return InterfaceProof("no_aserta", f"{what} {STEP_PLACE[step]}, {place} {seen}")
+    detail = f"{what} {STEP_PLACE[step]}, {place} {seen}"
+    return InterfaceProof("no_aserta", detail, broke_at=_broke_reading(case, driver))
+
+
+def _broke_reading(
+    case: TestCaseResult, driver: Sequence[str]
+) -> tuple[tuple[Statement, ...], ...]:
+    """The statements of the driver a Then stopped on with an error, not an assertion (F85)."""
+    if case.failure_kind != ERROR_KIND or case.failed_step != CHECKING_STEP:
+        return ()
+    chain = driver_statements(case, driver)
+    return (chain,) if chain else ()
 
 
 def failure_place(case: TestCaseResult) -> str:
@@ -364,6 +413,9 @@ _REASONS: Mapping[str, str] = {
     "provocada": (
         "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
     ),
+    "ilegible": (
+        "{head}. Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
+    ),
 }
 
 
@@ -432,6 +484,17 @@ def only_the_value_note(proofs: Mapping[str, InterfaceProof]) -> str:
     )
 
 
+def unreadable_result_note(proofs: Mapping[str, InterfaceProof]) -> str:
+    """Why the impostor couldn't judge tests whose Then couldn't read the altered result and has
+    no value of its scenario to weigh (F85): only facts, for the person."""
+    each = "; ".join(f"{sid} ({proof.detail})" for sid, proof in proofs.items())
+    return (
+        f"Lictor no pudo comprobar {each}: con lo que devuelve la interfaz alterado, su Entonces "
+        "no pudo leerlo, y el escenario no le da ningún valor que Lictor pueda cambiar para ver "
+        "qué compara. Léelo."
+    )
+
+
 def provoked_note(proofs: Mapping[str, InterfaceProof]) -> str:
     """Why the impostor couldn't judge tests in which a value it altered made the code raise."""
     each = "; ".join(f"{sid}, {proof.detail}" for sid, proof in proofs.items())
@@ -450,6 +513,7 @@ def person_notes(proofs: Mapping[str, InterfaceProof]) -> list[str]:
     notes = [unalterable_note(list(found))] if (found := having("sin_alterar")) else []
     notes += [through_note(found)] if (found := having("a_traves")) else []
     notes += [only_the_value_note(found)] if (found := having("solo_el_valor")) else []
+    notes += [unreadable_result_note(found)] if (found := having("ilegible")) else []
     return notes + ([provoked_note(found)] if (found := having("provocada")) else [])
 
 

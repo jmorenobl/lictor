@@ -14,6 +14,12 @@ from typing import Final
 ALONE: Final[str] = (
     "sola y no detrás de otras órdenes con `&&`: una vez antes de editar y otra al terminar."
 )
+# The command measures the whole project, and the guard needs that total; what is asked is only
+# what the prompt names (F84).
+WHOLE_PROJECT: Final[str] = (
+    "Mide todo el proyecto y sirve para comprobar el total; lo que se te pide es solo lo "
+    "nombrado arriba."
+)
 
 
 @dataclass(frozen=True)

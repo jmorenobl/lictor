@@ -231,3 +231,25 @@ def test_a_base_that_names_nothing_stops_before_building_anything(project: Path)
         use_case.execute(_request())
 
     assert runner.calls == []
+
+
+def test_a_base_without_an_api_control_still_resolves_and_says_the_api_isnt_compared(
+    project: Path,
+) -> None:
+    """M4 of 0.20.0: `--base` decides «Cambios que ningún control ejecutó» too."""
+    unexecuted = MagicMock()
+    unexecuted.execute.return_value = "sin survey"
+    use_case = _use_case(project, FakeRunner())
+    use_case.unexecuted = unexecuted
+
+    result = use_case.execute(_request(api_base="main"))
+
+    assert unexecuted.execute.call_args.args[1][0] == _git(project, "rev-parse", "HEAD")
+    assert result.unexecuted == "sin survey"
+    assert result.api_uncompared
+    with pytest.raises(PreconditionError, match="«nada», no es ningún commit"):
+        use_case.execute(_request(api_base="nada"))
+
+
+def test_without_a_base_nothing_says_the_api_wasnt_compared(project: Path) -> None:
+    assert not _use_case(project, FakeRunner()).execute(_request()).api_uncompared

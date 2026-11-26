@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from lictor.domain.model import TestCaseResult, UnreadValue
+from lictor.domain.model import Statement, TestCaseResult, UnreadValue
 from lictor.domain.rules import path_within
 
 ASSERTION_KIND = "assertion"
@@ -48,6 +48,8 @@ class GherkinFacts:
     survived: tuple[int, ...] = ()
     errors: tuple[int, ...] = ()
     place: str = ""  # where the test's assertion caught a changed value: `file:line`
+    # The statements, from the step's own, of each assertion that caught a value read (F85).
+    read_at: tuple[tuple[Statement, ...], ...] = ()
 
     @property
     def every_value_read(self) -> bool:
@@ -81,8 +83,10 @@ def gherkin_facts(
         for number in to_change(control)
     }
     read, inputs, survived, errors = _sorted_values(by_value)
-    found = (runs.get((mode, number)) for number in read for mode in modes)
-    place = next((_place(case) for case in found if case is not None), "")
+    found = [case for n in read for m in modes if (case := runs.get((m, n))) is not None]
+    place = next((_place(case) for case in found), "")
+    chains = (driver_statements(case, driver) for case in found)
+    read_at = tuple(dict.fromkeys(chain for chain in chains if chain))
     return GherkinFacts(
         control.gherkin_values,
         control.gherkin_unread,
@@ -92,6 +96,7 @@ def gherkin_facts(
         survived,
         errors,
         place,
+        read_at,
     )
 
 
@@ -177,3 +182,35 @@ def _place(case: TestCaseResult) -> str:
     if not case.frame:
         return ""
     return f"{case.frame}:{case.frame_line}" if case.frame_line is not None else case.frame
+
+
+def driver_statements(case: TestCaseResult, driver: Sequence[str]) -> tuple[Statement, ...]:
+    """The statements of a failure inside the driver, from the step's own, up to the first that
+    isn't: what the test's own code was doing when it failed."""
+    chain: list[Statement] = []
+    for statement in case.statements:
+        if not path_within(statement.path, driver):
+            break
+        chain.append(statement)
+    return tuple(chain)
+
+
+def reads_what_broke(broke: Sequence[Statement], read: Sequence[Statement]) -> bool:
+    """Whether the statement that couldn't read an altered result is the one that compares the
+    scenario's value, or feeds it (F85).
+
+    Both chains start at the step's own statement. Where one is a prefix of the other, the failure
+    and the comparison were the same statement being evaluated. Where they part, the statement
+    that broke binds a name the comparison loads, in the same function: `root = parse(r.xml)`
+    and, below it, `assert root.findtext(…) == v`. Anything else, as a helper that parses on one
+    line and compares a Given's value on another, isn't joined.
+    """
+    common = 0
+    for mine, theirs in zip(broke, read, strict=False):
+        if (mine.path, mine.line) != (theirs.path, theirs.line):
+            break
+        common += 1
+    if common in (len(broke), len(read)):
+        return common > 0
+    mine, theirs = broke[common], read[common]
+    return mine.path == theirs.path and theirs.line in mine.feeds

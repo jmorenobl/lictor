@@ -225,7 +225,6 @@ Característica: IVA de facturas
         suppressions=["# noqa", "# type: ignore"],
         driver_hints="Escribe tests en tests/acceptance/",
         hints="Python 3.12",
-        check_commands=["check-command"],
         model="fake-agent",
         allowed_tools=["Bash(*)"],
         max_turns=40,

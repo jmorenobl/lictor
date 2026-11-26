@@ -378,3 +378,9 @@ Los dos `id` conservan su significado, así que `{"id": "coverage", "mode": "blo
 - **Mantener el perfil en `@0.1`.** Daría reglas nuevas con el nombre de las viejas, sin que el `lictor.json` que las pidió lo sepa.
 - **Que el agente reciba `--cov` en sus comandos.** Mediría cobertura en cada llamada sin necesitarla. Basta con que su error nombre el comando con que falló.
 - **Declarar ya la dependencia de `coverage-domain`.** Necesita otro tipo de control: uno que ejecuta un comando sobre el informe de otro.
+
+## Nota (2026-11-26)
+
+`agent_commands` ya no existe: las órdenes del agente salen de los controles que bloquean en cada
+intento y de la aceptación, y el arreglo de un control es su `agent_fix` (ADR-0018). Donde esta ADR
+dice `agent_commands`, se lee «las órdenes que la ADR-0018 deriva de los controles».

@@ -48,3 +48,9 @@ La auditoría de la v0.1 y el plan de corrección dejaron tres problemas en la f
 - `check` cuesta más que antes: construye un entorno sin caché y clona el árbol. A cambio, su ✓ es el de `run`. Quien quiera una respuesta rápida ejecuta sus herramientas directamente, como el agente con `agent_commands`.
 - **Un programa que falta pasa de 10 a 40.** Reintentar tras instalarlo es lo que el 40 significa. Una errata en `lictor.json` también da 40, pero el mensaje nombra el control y el comando.
 - Adoptar Lictor en un proyecto existente es un paso explícito antes de la primera ejecución. Para el driver reconstruido, un escenario registrado es un verde, así que solo tiene que pasar, y un test débil también pasa. Es el mismo riesgo que con cualquier verde (ADR-0004), ahora visible en el informe.
+
+## Nota (2026-11-26)
+
+`agent_commands` ya no existe: las órdenes del agente salen de los controles que bloquean en cada
+intento y de la aceptación, y el arreglo de un control es su `agent_fix` (ADR-0018). Donde esta ADR
+dice `agent_commands`, se lee «las órdenes que la ADR-0018 deriva de los controles».

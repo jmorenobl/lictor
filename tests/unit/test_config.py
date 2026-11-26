@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from lictor.adapters.config.loader import (
     DEFAULT_PROFILES_DIR,
     PackagedProfiles,
+    _resolve_controls,
     build_config_from_profile,
     config_fingerprint,
     declared_profile,
@@ -33,6 +34,7 @@ from lictor.adapters.config.models import (
     AcceptanceConfig,
     BackendConfig,
     CommandControlConfig,
+    ControlChange,
     LictorConfig,
     LimitsConfig,
     PathsConfig,
@@ -60,6 +62,7 @@ from lictor.adapters.config.profiles.python_uv import (
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
 )
+from lictor.domain.controls import AgentCommands, AgentFix, agent_commands
 from lictor.domain.errors import ConfigError, ExitCode
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.rules import StubConstant, banned_matches
@@ -580,7 +583,21 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
             lictor_project_path.__file__,
             {"configparser", "importlib", "os", "pathlib", "pytest", "sys", "typing"},
         ),
-        (lictor_outcome.__file__, {"pytest", "pathlib", "sys", "typing", "collections"}),
+        (
+            lictor_outcome.__file__,
+            {
+                "ast",
+                "collections",
+                "contextlib",
+                "inspect",
+                "pathlib",
+                "pytest",
+                "sys",
+                "tokenize",
+                "types",
+                "typing",
+            },
+        ),
         (
             lictor_impostor.__file__,
             {
@@ -1142,21 +1159,131 @@ def test_json_schema_export_matches_committed_schema(tmp_path: Path) -> None:
     assert json.loads(repo_schema_path.read_text(encoding="utf-8")) == schema
 
 
-def test_profile_agent_commands_are_runnable_by_the_agent() -> None:
-    profile = load_profile("python-uv")
-    prefixes = [tool[len("Bash(") : -len(":*)")] for tool in profile.agent_tools]
+def _derived(config: LictorConfig) -> AgentCommands:
+    return agent_commands(
+        domain_controls(config),
+        config.acceptance.run,
+        config.agent_tools,
+        ("pytest_cov.plugin", "pytest_bdd.plugin"),
+    )
 
-    assert profile.agent_commands
-    for command in profile.agent_commands:
-        assert "{" not in command
-        assert any(command.startswith(prefix) for prefix in prefixes), command
+
+def test_the_profiles_agent_commands_come_from_its_controls(tmp_path: Path) -> None:
+    """F83: the list `agent_commands` had, in its order, plus the check of what the fix fixes."""
+    derived = _derived(load_config(_project(tmp_path)))
+
+    assert derived.fixes == (AgentFix("format", "uv run ruff format src"),)
+    assert derived.checks == (
+        "uv run ruff check src",
+        "uv run ruff format --check src",
+        "uv run mypy src",
+        "uv run pytest tests/unit -q",
+        "uv run pytest tests/acceptance -q",
+    )
 
 
-def test_profile_agent_commands_include_the_acceptance_suite() -> None:
-    profile = load_profile("python-uv")
-    target = profile.acceptance.run.split(" --")[0]
+# What pyverifactu wrote by hand in `agent_commands` (commit 1cff89a of the 4a copy), and the
+# controls it had changed: the derivation gives the same checks, token by token.
+_PYVERIFACTU_PATHS = "src tests/unit tests/integration tests/fixtures tests/conftest.py"
+_PYVERIFACTU_CONTROLS = [
+    {"id": "lint", "run": f"uv run ruff check {_PYVERIFACTU_PATHS}"},
+    {
+        "id": "format",
+        "run": f"uv run ruff format --check {_PYVERIFACTU_PATHS}",
+        "agent_fix": f"uv run ruff format {_PYVERIFACTU_PATHS}",
+    },
+    {
+        "id": "unit",
+        "run": 'uv run pytest tests -m "not integration" --ignore=tests/acceptance -q '
+        "--junitxml {out}",
+        "when_exists": "tests",
+    },
+    {
+        "id": "coverage",
+        "agent_run": "uv run python -I -B {lictor_files}/lictor_coverage.py tests -m "
+        '"not integration" --ignore=tests/acceptance -q',
+    },
+    {"id": "api", "mode": "block"},
+]
+_PYVERIFACTU_BY_HAND = [
+    f"uv run ruff format {_PYVERIFACTU_PATHS}",
+    f"uv run ruff check {_PYVERIFACTU_PATHS}",
+    "uv run mypy src",
+    'uv run pytest tests -m "not integration" --ignore=tests/acceptance -q',
+    "uv run pytest tests/acceptance -q",
+]
 
-    assert target in profile.agent_commands
+
+def test_pyverifactus_hand_written_commands_come_from_its_controls(tmp_path: Path) -> None:
+    derived = _derived(load_config(_project(tmp_path, controls=_PYVERIFACTU_CONTROLS)))
+
+    split = [shlex.split(command) for command in derived.all]
+    assert [shlex.split(command) for command in _PYVERIFACTU_BY_HAND] == [
+        s for s in split if s[:4] != ["uv", "run", "ruff", "format"] or "--check" not in s
+    ]
+    assert "uv run python -I -B -m lictor_api src" not in derived.checks, "agent_tools no lo deja"
+
+
+def test_a_lictor_json_with_agent_commands_is_refused_naming_where_they_go(tmp_path: Path) -> None:
+    path = _project(tmp_path, agent_commands=["uv run pytest"])
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "agent_commands" in str(exc_info.value)
+    assert "agent_run o el agent_fix" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("controls", "named"),
+    [
+        ([{"id": "format", "run": "uv run ruff format --check ."}], "'format'"),
+        ([{"id": "unit", "run": "uv run pytest tests -q --junitxml {out}"}], "'coverage'"),
+        ([{"id": "coverage", "adds": "--cov=pkg --cov-report=json:{out}"}], "'coverage'"),
+    ],
+)
+def test_a_changed_run_that_inherits_the_agents_command_is_refused(
+    tmp_path: Path, controls: list[dict[str, object]], named: str
+) -> None:
+    """F83: under another run the profile's agent_run or agent_fix may check something else."""
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_project(tmp_path, controls=controls))
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert named in message
+    assert "o null si el agente no debe usarlo" in message
+
+
+def test_writing_the_agents_command_or_null_accepts_a_changed_run(tmp_path: Path) -> None:
+    controls = [
+        {"id": "format", "run": "uv run ruff format --check .", "agent_fix": None},
+        {"id": "unit", "run": "uv run pytest tests -q --junitxml {out}"},
+        {"id": "coverage", "agent_run": "uv run python -I -B {lictor_files}/lictor_coverage.py t"},
+    ]
+
+    config = load_config(_project(tmp_path, controls=controls))
+
+    assert _derived(config).fixes == ()
+
+
+def test_a_reader_has_no_fix_of_its_own(tmp_path: Path) -> None:
+    fixing = {"id": "f", "level": "L1", "run": "f --check", "report": "exit-code", "agent_fix": "f"}
+    turned = ControlChange(id="f", reads="unit", adds="--x {out}", report="coverage")
+    [resolved] = _resolve_controls([fixing], [turned])
+    assert "agent_fix" not in resolved
+
+    written = {"id": "coverage", "agent_fix": "uv run ruff format src"}
+    with pytest.raises(ConfigError, match="agent_fix es de una ejecución"):
+        load_config(_project(tmp_path, controls=[written]))
+
+
+def test_an_agent_fix_the_tools_dont_allow_is_refused_if_written(tmp_path: Path) -> None:
+    written = {"id": "format", "agent_fix": "make format"}
+
+    with pytest.raises(ConfigError, match="agent_fix del control 'format'"):
+        load_config(_project(tmp_path, controls=[written]))
 
 
 def test_python_uv_unit_control_runs_only_where_its_tests_exist() -> None:
@@ -1538,6 +1665,49 @@ def test_a_lictor_json_with_refactor_hints_is_refused_naming_hints(tmp_path: Pat
     assert exc_info.value.exit_code == ExitCode.PRECONDITION
     assert "refactor_hints" in message
     assert "hints" in message.replace("refactor_hints", "")
+
+
+def test_where_the_code_is_is_the_profiles_and_in_the_fingerprint(tmp_path: Path) -> None:
+    """F84: the refactor stays in the code its scenario changed, and the profile says where."""
+    config = load_config(_project(tmp_path))
+    defences = resolve_defences(config)
+
+    assert defences.code_paths == ("src/",)
+    other = replace(defences, code_paths=("lib/",))
+    assert config_fingerprint(config, other) != config_fingerprint(config, defences)
+
+
+def test_a_lictor_json_with_code_paths_is_refused_naming_writable(tmp_path: Path) -> None:
+    path = _project(tmp_path, code_paths=["lib/"])
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "code_paths" in message
+    assert "paths.writable" in message
+
+
+def test_writable_paths_without_the_code_leave_the_refactor_unscoped_and_are_refused(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        _project(
+            tmp_path,
+            paths={
+                "writable": ["lib/", "tests/unit/"],
+                "driver": ["tests/acceptance/"],
+                "protected": ["features/", "tests/acceptance/", "lictor.json"],
+            },
+        )
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        resolve_defences(config)
+
+    assert exc_info.value.exit_code == ExitCode.PRECONDITION
+    assert "L0-alcance" in str(exc_info.value)
 
 
 def test_the_profile_declares_the_impostor_of_the_interface() -> None:

@@ -73,6 +73,13 @@ WITH_REFACTOR = {
         "test_each_implemented_green_gets_a_refactor_that_keeps_every_green",
         "test_a_refactor_that_passes_fewer_unit_tests_is_discarded_and_the_green_stays",
     ),
+    "test_v0_21_0_agent_commands": (
+        "test_with_format_off_nothing_asks_to_format_and_the_refactor_stays_in_scope",
+    ),
+    "test_v0_21_0_refactor_scope": (
+        "test_a_refactor_that_changes_code_its_scenario_didnt_is_discarded_and_the_green_stays",
+        "test_a_refactor_of_its_scenarios_file_and_a_new_one_is_applied",
+    ),
 }
 
 

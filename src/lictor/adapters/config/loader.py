@@ -1,10 +1,11 @@
 import hashlib
 import json
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -21,12 +22,15 @@ from lictor.adapters.config.models import (
     ProfileVerification,
     ProjectVerification,
     ReaderControlConfig,
+    agent_commands_message,
     agent_run_problems,
     allow_empty_message,
+    code_paths_message,
     driver_hints_message,
     needs_plugins_message,
     plugin_without_list_message,
     refactor_hints_message,
+    stale_agent_command_message,
     survey_message,
     two_shapes_message,
 )
@@ -35,6 +39,7 @@ from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.controls import complexity_limit_message
 from lictor.domain.errors import ConfigError
 from lictor.domain.interface_proof import InterfaceImpostor
+from lictor.domain.refactor_scope import code_paths_problem
 from lictor.domain.rules import Impostors, MapLink, StubConstant
 
 CONFIG_FILENAME = "lictor.json"
@@ -44,7 +49,6 @@ _PROFILE_FALLBACK_KEYS = (
     "paths",
     "acceptance",
     "agent_tools",
-    "agent_commands",
     "hints",
     "gitignore",
 )
@@ -61,6 +65,7 @@ class Defences:
     driver_exempt_paths: Sequence[str] = ()
     driver_hints: str = ""
     refactor_hints: str = ""
+    code_paths: Sequence[str] = ()
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -245,7 +250,6 @@ def build_config_from_profile(
             ),
             controls=list(profile.controls),
             agent_tools=list(profile.agent_tools),
-            agent_commands=list(profile.agent_commands),
             hints=render_hints(profile, project_root),
             gitignore=list(profile.gitignore),
         )
@@ -349,7 +353,8 @@ def _merge_profile_defaults(
 
 
 # The fields of a run of its own, which a reader doesn't have (ADR-0008, point 2).
-RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit")
+# Fields of a run: a reader has none, so turning a control into one drops them (F83: agent_fix).
+RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit", "agent_fix")
 
 
 def _resolve_controls(
@@ -532,47 +537,125 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
         raise ConfigError(msg)
 
     _reject_allow_empty(parsed, profiles_dir)
-    acceptance = parsed.get("acceptance")
-    if isinstance(acceptance, dict) and "driver_hints" in acceptance:
-        raise ConfigError(driver_hints_message())
-    if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
-        raise ConfigError(needs_plugins_message())
-    if "survey" in parsed:
-        raise ConfigError(survey_message())
-    if "refactor_hints" in parsed:
-        raise ConfigError(refactor_hints_message())
+    _reject_profile_fields(parsed)
+    # Refused once the profile it asks for is known: a retired profile says more (F83).
+    old_commands = parsed.pop("agent_commands", None) is not None
     try:
         written = LictorFile.model_validate(parsed)
     except ValidationError as exc:
         msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
     merged = _merge_profile_defaults(parsed, written, profiles_dir, config_path.parent)
+    if old_commands:
+        raise ConfigError(agent_commands_message())
     try:
         config = LictorConfig.model_validate(merged)
     except ValidationError as exc:
         msg = f"Configuración inválida en '{config_path}': {_validation_text(exc)}"
         raise ConfigError(msg) from exc
     _reject_unrunnable_agent_runs(config, written, config_path)
+    _reject_stale_agent_commands(config, written, load_profile(config.profile, profiles_dir))
     return config
+
+
+# What only the profile declares, each with the message that says where the project's own goes.
+_PROFILE_ONLY: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
+    ("survey", survey_message),
+    ("refactor_hints", refactor_hints_message),
+    ("code_paths", code_paths_message),
+)
+_PROFILE_ONLY_ACCEPTANCE: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
+    ("driver_hints", driver_hints_message),
+    ("needs_plugins", needs_plugins_message),
+)
+
+
+def _reject_profile_fields(parsed: dict[str, object]) -> None:
+    """Refuse a field only the profile declares, with its own message."""
+    acceptance = parsed.get("acceptance")
+    written = acceptance if isinstance(acceptance, dict) else {}
+    for key, message in _PROFILE_ONLY_ACCEPTANCE:
+        if key in written:
+            raise ConfigError(message())
+    for key, message in _PROFILE_ONLY:
+        if key in parsed:
+            raise ConfigError(message())
 
 
 def _reject_unrunnable_agent_runs(
     config: LictorConfig, written: LictorFile, config_path: Path
 ) -> None:
-    """Refuse an `agent_run` the project writes and the agent couldn't run: a mistake to fix.
+    """Refuse an `agent_run` or `agent_fix` the project writes and the agent couldn't run.
 
     One inherited from the profile under tools the project narrowed is only left untold
     (`domain_controls`): nobody asked for it there.
     """
-    ids = {
-        change.id
+    asked = {
+        (change.id, name)
         for change in written.controls
-        if "agent_run" in change.model_fields_set and change.agent_run is not None
+        for name in _AGENT_COMMANDS
+        if name in change.model_fields_set and getattr(change, name) is not None
     }
-    problems = agent_run_problems([c for c in config.controls if c.id in ids], config.agent_tools)
+    problems = [
+        problem
+        for control in config.controls
+        for name in _AGENT_COMMANDS
+        if (control.id, name) in asked
+        for problem in agent_run_problems([_only(control, name)], config.agent_tools)
+    ]
     if problems:
         msg = f"Configuración inválida en '{config_path}': " + "\n".join(problems)
         raise ConfigError(msg)
+
+
+def _only(
+    control: CommandControlConfig | ReaderControlConfig, name: str
+) -> CommandControlConfig | ReaderControlConfig:
+    """The control with only one of the agent's commands, to judge that one alone."""
+    others = {other: None for other in _AGENT_COMMANDS if other != name and hasattr(control, other)}
+    return control.model_copy(update=others)
+
+
+def _changed_runs(config: LictorConfig, written: LictorFile) -> set[str]:
+    """The controls whose command the project changed: their `run`, or a reader's `adds`.
+
+    A reader also changes when the control it reads does: what its `agent_run` measures runs that.
+    """
+    changes = {change.id: change.model_fields_set for change in written.controls}
+    ran = {cid for cid, fields in changes.items() if "run" in fields}
+    readers = {
+        c.id
+        for c in config.controls
+        if isinstance(c, ReaderControlConfig)
+        and ({"adds", "reads"} & changes.get(c.id, set()) or c.reads in ran)
+    }
+    return ran | readers
+
+
+def _reject_stale_agent_commands(
+    config: LictorConfig, written: LictorFile, profile: Profile
+) -> None:
+    """Refuse an agent's command inherited from the profile by a control whose run changed (F83).
+
+    The profile's `agent_run` or `agent_fix` was written for its own `run`: under another one it
+    may check or fix something else, and the attempt it costs is how it shows. The fix is always to
+    write it, or `null`, so it is an error and not a warning.
+    """
+    fields = {change.id: change.model_fields_set for change in written.controls}
+    theirs = {control.id: control for control in profile.controls}
+    problems = [
+        stale_agent_command_message(cid, name, inherited)
+        for cid in sorted(_changed_runs(config, written))
+        if (base := theirs.get(cid)) is not None
+        for name in _AGENT_COMMANDS
+        if name not in fields.get(cid, set())
+        and (inherited := getattr(base, name, None)) is not None
+    ]
+    if problems:
+        raise ConfigError("\n".join(problems))
+
+
+_AGENT_COMMANDS: Final = ("agent_run", "agent_fix")
 
 
 def _validation_text(exc: ValidationError) -> str:
@@ -655,6 +738,9 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         for control in config.controls:
             if control.when_plugin is not None:
                 raise ConfigError(plugin_without_list_message(control.id))
+    problem = code_paths_problem(profile.code_paths, config.paths.writable)
+    if problem is not None:
+        raise ConfigError(problem)
     return Defences(
         verification=VerificationEnvSpec(
             prepare=profile.verification.prepare,
@@ -675,6 +761,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         driver_exempt_paths=profile.driver_exempt_paths,
         driver_hints=profile.acceptance.driver_hints,
         refactor_hints=profile.refactor_hints,
+        code_paths=tuple(profile.code_paths),
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=(

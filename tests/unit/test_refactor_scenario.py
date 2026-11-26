@@ -19,6 +19,7 @@ from lictor.domain.duplication import Duplication
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
 from lictor.domain.refactor import Measure
+from lictor.domain.refactor_scope import LineSpan
 from lictor.domain.reports import Clone, CloneOccurrence, FunctionComplexity
 
 SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
@@ -36,9 +37,14 @@ def _execute(
     spec_source.verify_seal.return_value = overrides.pop("sealed", True)
     vcs = MagicMock(spec=Vcs)
     vcs.capture.return_value = "arbol"
-    vcs.changes.return_value = overrides.pop("changes", [TreeChange("src/iva.py", "100644")])
+    vcs.changes.return_value = overrides.pop(
+        "changes", [TreeChange("src/iva.py", "100644", "100644")]
+    )
     vcs.parent_of.return_value = "padre"
     vcs.changed_paths.return_value = ["src/iva.py", "tests/unit/test_iva.py"]
+    vcs.changed_lines.return_value = overrides.pop(
+        "green_lines", {"src/iva.py": (LineSpan(1, 20),), "tests/unit/test_iva.py": ()}
+    )
     event_log = MagicMock(spec=EventLog)
     clock = MagicMock(spec=Clock)
     clock.now_iso.return_value = "2026-11-18T10:00:00Z"
@@ -62,6 +68,7 @@ def _execute(
         "check_commands": ["pruebas"],
         "hints": "Contexto.",
         "refactor_hints": "- Funciones cortas.",
+        "code_paths": ["src/"],
     }
     use_case = RefactorScenario(vcs, executor, spec_source, event_log, clock)
     res = use_case.execute(RefactorScenarioRequest(**{**fields, **overrides}))
@@ -115,7 +122,7 @@ def test_every_measure_it_can_take_is_offered_with_its_command(tmp_path: Path) -
 
     prompt = _task(executor).prompt
     assert "  - coverage: `pruebas --cov`." in prompt
-    assert "Bash solo admite: pruebas, pruebas --cov." in prompt
+    assert "  - `pruebas`\n  - `pruebas --cov`\n" in prompt
 
 
 def test_a_call_that_changes_nothing_says_so(tmp_path: Path) -> None:
@@ -155,7 +162,7 @@ _RULE = "Bash(uv run python {lictor_files}/medir.py:*)"
 
 def _over(*values: int) -> dict[str, Measure]:
     functions = tuple(
-        FunctionComplexity("src/iva.py", f"f{i}", i, v) for i, v in enumerate(values, 1)
+        FunctionComplexity("src/iva.py", f"f{i}", i, v, i) for i, v in enumerate(values, 1)
     )
     over = OverLimit(10, functions)
     return {
@@ -193,7 +200,7 @@ def test_the_refactor_hears_what_its_green_left_above_the_limit(tmp_path: Path) 
     assert "{lictor_files}" not in task.prompt
     command = next(line for line in task.prompt.splitlines() if line.startswith("Mídela tú"))
     assert "/medir.py src`, sola" in command
-    assert "Bash solo admite: pruebas, uv run python " in task.prompt
+    assert "  - `pruebas`\n  - `uv run python " in task.prompt
     assert seen == {"copy": "print('mide')\n", "outside": True}
 
 
@@ -208,7 +215,7 @@ def test_without_the_profiles_files_the_rule_and_the_command_go(tmp_path: Path) 
 
     task = _task(executor)
     assert list(task.allowed_tools) == ["Bash(pruebas:*)"]
-    assert "- Ninguna función supera el límite." in task.prompt
+    assert "- Ninguna función de lo que cambió este escenario supera el límite." in task.prompt
     assert "Mídela tú" not in task.prompt
 
 
@@ -234,12 +241,12 @@ def _clone(*files: str, tokens: int = 60) -> Clone:
 
 def _repeated(*clones: Clone) -> dict[str, Measure]:
     in_clones = sum(o.tokens for c in clones for o in c.occurrences)
-    duplication = Duplication(50, in_clones, clones, len(clones))
+    duplication = Duplication(50, in_clones, clones)
     return {"duplication": Measure(misses=(("duplicated", in_clones),), findings=duplication)}
 
 
 def test_the_refactor_hears_both_measures_of_the_code_in_their_order(tmp_path: Path) -> None:
-    """ADR-0014, points 6 and 7: one block per control, the clones of its files first."""
+    """ADR-0014, points 6 and 7: one block per control; F84: only what its scenario changed."""
     tools = []
     for name in ("medir.py", "repetido.py"):
         tool = tmp_path / "perfil" / name
@@ -269,14 +276,15 @@ def test_the_refactor_hears_both_measures_of_the_code_in_their_order(tmp_path: P
     assert prompt.index("Complejidad, con un límite") < prompt.index("Código repetido")
     lines = prompt.splitlines()
     first = lines.index(next(line for line in lines if line.startswith("Código repetido"))) + 1
-    assert lines[first : first + 2] == [
-        "- src/iva.py:1-9 y src/b.py:1-9: 60 tokens",
-        "- src/otro.py:1-9 y src/mas.py:1-9: 90 tokens",
-    ]
-    assert "más tokens en clones que el verde (300)" in prompt
+    assert lines[first] == "- src/iva.py:1-9 y src/b.py:1-9: 60 tokens"
+    assert "src/otro.py" not in prompt
+    assert "Fuera de lo que cambió este escenario hay 1 clon: no son de este refactor." in lines
+    assert "un clon de los que se nombran abajo (src/b.py)" in prompt
+    assert "más tokens en clones que el verde en todo el proyecto (300)" in prompt
     assert sum(line.startswith("Mídel") for line in lines) == 2
     assert "{medidas_del_codigo}" not in prompt
-    assert "/repetido.py src" in prompt.split("Bash solo admite:")[1].splitlines()[0]
+    checks = prompt.split("antes de terminar:\n")[1].split("\n\n")[0]
+    assert "/repetido.py src`" in checks
 
 
 def test_a_green_without_a_measure_of_duplication_says_nothing_of_it(tmp_path: Path) -> None:

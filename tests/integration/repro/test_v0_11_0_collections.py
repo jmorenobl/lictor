@@ -65,8 +65,16 @@ _LINES_ORACLE = {
     "IVA-002": "iva.reducido(100)[0].valor == 110",
 }
 
+_ONE_NUMBER_ORACLE = {
+    **ORACLE,
+    "IVA-001": "iva.general(100)[0] == 121",
+    "IVA-002": "iva.reducido(100)[0] == 110",
+}
 
-def _proved_at_once(make_project: ProjectFactory, code: str, check: str) -> None:
+
+def _proved_at_once(
+    make_project: ProjectFactory, code: str, check: str, oracle: dict[str, str] | None = None
+) -> None:
     root = make_project()
     _code_already_meets(root, code)
 
@@ -86,7 +94,7 @@ def _proved_at_once(make_project: ProjectFactory, code: str, check: str) -> None
     [sealed] = events_of(root, "driver.sealed")
     assert sealed["data"]["already_met"] == ["IVA-001", "IVA-002"]
     assert set(green_ids(root)) == {"IVA-001", "IVA-002", "IVA-003"}
-    assert false_greens(root, _LINES_ORACLE) == []
+    assert false_greens(root, oracle or _LINES_ORACLE) == []
 
 
 def test_a_test_that_reads_each_element_of_a_list_of_objects_is_proved(
@@ -101,32 +109,22 @@ def test_a_test_that_reads_the_first_element_is_proved(make_project: ProjectFact
     _proved_at_once(make_project, _TOTAL_FIRST, "assert calculo()[0].valor == esperado")
 
 
-def test_what_it_can_t_tell_apart_says_the_exception_and_the_line(
+def test_the_first_of_a_list_of_one_number_is_proved_by_its_statement(
     make_project: ProjectFactory,
 ) -> None:
     """The first of a list of one number: with one less, its index fails before its assertion.
 
-    With one object instead, one more is a copy of it and the first one stays: it survives, the
-    known limit of the amendment. Its Then reads the scenario's value, so it goes to the person at
-    once (`solo_el_valor`, ADR-0016) with the line: a retry would only hear what it already does.
+    It was the known limit of the amendment, sent to the person as `solo_el_valor`. Since 0.21.0
+    the `IndexError` is raised in the statement that compares the scenario's value, which the
+    Gherkin proves it reads: the test is proved (F85, amendment of ADR-0016).
     """
-    root = make_project()
-    _code_already_meets(root, _ONE_NUMBER)
-    driver = DRIVER.replace(TOTAL_CHECK, "assert calculo()[0] == esperado")
-    agent = Agent(driver=_driver_over_the_code(driver))
-
-    outcome = run_lictor(root, agent)
-
-    assert outcome == Outcome(10), agent.calls
-    assert agent.calls == ["driver"]
-    [rejected] = events_of(root, "driver.rejected")
-    assert rejected["data"]["final"] is True
-    error = str(rejected["data"]["error"])
-    line = driver.splitlines().index("    assert calculo()[0] == esperado") + 1
-    assert f"Lictor no pudo comprobar IVA-001, en tests/acceptance/test_iva.py:{line}" in error
-    assert "Este test no lo cambies" in error
-    [measured] = events_of(root, "driver.measured")
-    found = measured["data"]["interface"]["IVA-001"]
-    assert (found["outcome"], found["interface"]) == ("solo_el_valor", "no_aserta")
-    assert green_ids(root) == []
-    assert false_greens(root) == []
+    _proved_at_once(
+        make_project,
+        _ONE_NUMBER,
+        "assert calculo()[0] == esperado",
+        {
+            **ORACLE,
+            "IVA-001": "iva.general(100)[0] == 121",
+            "IVA-002": "iva.reducido(100)[0] == 110",
+        },
+    )

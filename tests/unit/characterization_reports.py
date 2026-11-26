@@ -333,7 +333,7 @@ def mutation_control(report: Path, code: int) -> Seen:
 
 def _functions(*values: int) -> bytes:
     functions = [
-        {"file": "src/p/m.py", "function": f"f{i}", "line": i, "complexity": v}
+        {"file": "src/p/m.py", "function": f"f{i}", "line": i, "end_line": i, "complexity": v}
         for i, v in enumerate(values, start=1)
     ]
     return json.dumps({"functions": functions}).encode()
@@ -360,6 +360,17 @@ COMPLEXITY_REPORTS: dict[str, bytes | str] = {
         {"functions": [{"file": "x.py", "function": "f", "line": 0, "complexity": 1}]}
     ).encode(),
     "complejidad 0": _functions(0),
+    # New with F84: where a function ends tells what a change of the scenario touches of it.
+    "sin final": json.dumps(
+        {"functions": [{"file": "x.py", "function": "f", "line": 1, "complexity": 1}]}
+    ).encode(),
+    "final antes de la línea": json.dumps(
+        {
+            "functions": [
+                {"file": "x.py", "function": "f", "line": 3, "end_line": 2, "complexity": 1}
+            ]
+        }
+    ).encode(),
     "complejidad float": json.dumps(
         {"functions": [{"file": "x.py", "function": "f", "line": 1, "complexity": 2.0}]}
     ).encode(),

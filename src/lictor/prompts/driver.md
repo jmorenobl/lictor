@@ -17,8 +17,9 @@ Reglas:
 - Trabajas en una copia sin historial: no hay git ni commits.
 - No añadas supresiones: {suppressions}. El driver queda sellado: si las lleva, se rechaza.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
-- Bash solo admite: {check_commands}. Cualquier otra orden, un intérprete o un script incluidos,
-  se deniega y te cuesta turnos.
+- Bash solo admite órdenes que empiecen por: {bash_admite}. Cualquier otra orden,
+  un intérprete o un script incluidos, se deniega y te cuesta turnos. El proyecto se comprueba con:
+{comprobaciones}
 - Cada test debe llevar el ID de su escenario en el nombre.
 - Toma los valores esperados del Gherkin, nunca de ejecutar el código: un test que copia lo que
   devuelve el código no comprueba el escenario.

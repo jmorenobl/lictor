@@ -436,6 +436,7 @@ Cada intento del agente atraviesa una tubería de verificación secuencial que *
 | :---: | :--- | :--- | :---: |
 | **L0** | `L0-sin-cambios` | Un intento cuyo árbol es igual a HEAD falla antes de ejecutar nada. | `block` |
 | **L0** | `L0-rutas` | El agente solo puede modificar `paths.writable`. Cualquier cambio en rutas protegidas o en `forbidden_paths`, un borrado incluido, y cualquier enlace simbólico o repositorio anidado, falla el intento; lo que hizo el agente se descarta con su copia. | `block` |
+| **L0** | `L0-alcance` | Solo en el refactor: descarta el que modifica, mueve o borra un fichero de código que ya existía y que su escenario no cambió, salvo el otro lado de un clon que la orden le nombra. Los ficheros nuevos y los tests unitarios pueden seguir al código. El verde se queda. | `block` |
 | **L0** | `L0-sello` | Comprueba que ningún archivo en `features/` ni en `paths.driver` haya cambiado respecto a los hashes `SHA-256` de `.lictor/seal.json`. | `block` |
 | **L0** | `L0-supresiones` | Analiza las líneas que añade el resultado del agente, también en binarios, bloqueando `suppressions` y las expresiones de `banned_patterns`, sin distinguir mayúsculas: `# noqa`, `#type:ignore`, `# ruff: noqa`, `pytest.skip(`… | `block` |
 | **L0** | `L0-estado` | Guarda en memoria el estado de `.lictor/` (con el WAL del checkpoint), `lictor.json`, HEAD y los ficheros de control de `.git` antes de cada ventana del agente y cada comando. Si algo cambió, lo restaura y falla el intento sin verificarlo, con el evento `lictor.state.tampered.v1` ([ADR-0001](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0001-estado-en-dot-lictor.md)). | `block` |
@@ -462,7 +463,7 @@ El archivo `lictor.json` define el perfil del proyecto, el backend del agente, l
 
 ### Ejemplo de `lictor.json`
 
-`lictor init` escribe solo lo que decide la persona. Lo demás (`paths`, `acceptance`, `controls`, `agent_tools`, `agent_commands`, `gitignore`, `limits`, `retention`, `refactor`) sale del perfil o del valor por defecto en cada carga, así que una mejora del perfil llega al proyecto sin editar su `lictor.json`:
+`lictor init` escribe solo lo que decide la persona. Lo demás (`paths`, `acceptance`, `controls`, `agent_tools`, `gitignore`, `limits`, `retention`, `refactor`) sale del perfil o del valor por defecto en cada carga, así que una mejora del perfil llega al proyecto sin editar su `lictor.json`:
 
 ```json
 {
@@ -508,9 +509,9 @@ Cambiarlo impide reanudar un run empezado con el otro valor. Los objetivos son d
 
 | Lado | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
+| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`, `driver_exempt_paths`, `code_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
 | Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
-| Proyecto | `paths`, `acceptance`, `agent_tools`, `agent_commands`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
+| Proyecto | `paths`, `acceptance`, `agent_tools`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
 | Proyecto | `controls` | Cambios por `id` sobre los del perfil: cambian campos, quitan (`enabled: false`) o añaden |
 
 El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Cada comando tiene además un `HOME` vacío y nuevo, fuera del proyecto, así que tu configuración de usuario (`~/.config/ruff`, `~/.config/mypy`, `~/.config/uv`) no decide ningún control. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
@@ -542,6 +543,8 @@ El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos 
 En `measure`, por debajo del mínimo el control sale como fallido sin bloquear; con `"mode": "block"` también bloquea. Una pasada sin tests, con código en `src`, puntúa un 0 %, que es una medida cierta. Solo cuando lo medido no tiene código no hay puntuación, y entonces un mínimo falla: lo que no se midió no llega a ninguno. Si `unit` falló (en `measure`, o con `lictor check --keep-going`), la puntuación sale marcada «(de un unit fallido)».
 
 **El agente mide lo que se le exige.** Un control con `min_score` y `agent_run` le dice al agente, en cada intento, el mínimo y la orden con la que medirlo él mismo antes de terminar; la orden entra en las que puede ejecutar. `agent_run` es la orden tal como la ejecutaría el agente (la de `coverage` en `python-uv` saca una tabla de lo que falta por cubrir), la verificación nunca la ejecuta. Si la escribes en `lictor.json`, `agent_tools` tiene que permitirla, o no carga; la del perfil, si tus `agent_tools` no la permiten, simplemente no se le dice al agente. Un control que el run salta, porque no corre en cada intento o porque falta su plugin, no se le dice. Si cambias `adds`, cambia también `agent_run`, para que el agente mida lo mismo que la verificación.
+
+**Las órdenes del agente salen de los controles.** No hay una lista aparte: el agente comprueba su trabajo con cada control que bloquea en cada intento, con su `agent_run` o, si no lo tiene, con su `run` sin el informe (`--junitxml {out}` y similares), y al final con la aceptación. Un control con `agent_fix` (en `python-uv`, `format`: `uv run ruff format src`) le da además la orden de arreglarlo, que el agente ejecuta tras su último cambio y antes de comprobar; solo mientras ese control bloquea, así que con `format` apagado nadie formatea. Si cambias el `run` de un control (o el `adds` de `coverage`, o el `run` de `unit` que lee) y el perfil le da un `agent_run` o un `agent_fix`, escríbelos también en `lictor.json`, o `null`: si no, no carga, porque la orden del perfil puede no comprobar o arreglar lo mismo. `agent_commands` ya no existe.
 
 ### El oráculo y el ciclo de escenarios
 

@@ -47,6 +47,8 @@ class CommandControl:
     min_score: float | None = None
     # How the agent measures this control by itself: verification never runs it (F55).
     agent_run: str | None = None
+    # How the agent leaves done what this control checks, while it blocks every attempt (F83).
+    agent_fix: str | None = None
     # The complexity no function may exceed; only, and always, with a complexity report.
     limit: int | None = None
 
@@ -92,6 +94,187 @@ class ReaderControl:
 
 
 type Control = CommandControl | ReaderControl
+
+
+# The agent's commands (F83, ADR-0018): they come from the controls, never from a list of their own,
+# which went out of date with every control a project changed.
+
+REPORT_PLACEHOLDER: Final = "{out}"
+
+
+def allowed_by(command: str, agent_tools: Sequence[str]) -> bool:
+    """Tell whether the agent's tools let it run `command`, as the backend decides.
+
+    A rule `Bash(<prefix>:*)` allows what starts with that prefix and `Bash(<command>)` that exact
+    command. The command is judged as written, `{lictor_files}` included, as its rule is.
+    """
+    for tool in agent_tools:
+        if not (tool.startswith("Bash(") and tool.endswith(")")):
+            continue
+        rule = tool[len("Bash(") : -1]
+        if rule.endswith(":*") and command.startswith(rule[: -len(":*")]):
+            return True
+        if command == rule:
+            return True
+    return False
+
+
+def bash_prefixes(agent_tools: Sequence[str]) -> list[str]:
+    """What the agent's Bash accepts, as it reads it: each rule's prefix or exact command."""
+    found = [
+        tool[len("Bash(") : -1].removesuffix(":*")
+        for tool in agent_tools
+        if tool.startswith("Bash(") and tool.endswith(")")
+    ]
+    return list(dict.fromkeys(found))
+
+
+def counts_for_agent(control: Control, installed: Collection[str]) -> bool:
+    """Tell whether the agent should check, or fix, what `control` decides before it ends.
+
+    Only what blocks every attempt: a control that measures decides nothing, one of `check` never
+    runs in a run, and one whose plugin the environment lacks is skipped.
+    """
+    return (
+        control.mode == "block"
+        and control.stage == ATTEMPT
+        and missing_plugin(control.when_plugin, installed) is None
+    )
+
+
+def without_report(run: str) -> str | None:
+    """A command with its report taken out, as the agent runs it, or None if it can't be.
+
+    The token holding `{out}` goes and, when it is exactly `{out}` after an option, the option
+    too: `--junitxml {out}`, `--out {out}`. One alone, a positional argument, can't go without
+    changing the command. Known limit: an option without value right before `{out}` goes too.
+    """
+    if REPORT_PLACEHOLDER not in run:
+        return run  # as the person wrote it, quotes and all
+    tokens = shlex.split(run)
+    kept: list[str] = []
+    for token in tokens:
+        if REPORT_PLACEHOLDER not in token:
+            kept.append(token)
+        elif token != REPORT_PLACEHOLDER:
+            continue
+        elif kept and kept[-1].startswith("-"):
+            kept.pop()
+        else:
+            return None
+    return shlex.join(kept)
+
+
+@dataclass(frozen=True)
+class AgentFix:
+    """A command with which the agent leaves done what a blocking control checks."""
+
+    control_id: str
+    command: str
+
+
+@dataclass(frozen=True)
+class AgentCommands:
+    """What the agent runs before it ends: the fixes first, then what checks its work."""
+
+    fixes: tuple[AgentFix, ...] = ()
+    checks: tuple[str, ...] = ()
+
+    @property
+    def all(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys([*(f.command for f in self.fixes), *self.checks]))
+
+
+def _check_of(control: Control) -> str | None:
+    """How the agent checks one control: its `agent_run`, or its `run` without the report.
+
+    A reader runs nothing of its own, and a read control's command is its `run`, never with the
+    reader's `adds`: measuring has its own command, and the agent would leave reports in its copy.
+    """
+    if control.agent_run is not None:
+        return control.agent_run
+    if isinstance(control, ReaderControl):
+        return None
+    return without_report(control.run)
+
+
+def agent_commands(
+    controls: Sequence[Control],
+    acceptance_run: str,
+    agent_tools: Sequence[str],
+    installed: Collection[str],
+) -> AgentCommands:
+    """The agent's commands, from the controls the run verifies and its acceptance (F83).
+
+    A control that counts gives its fix, if it has one, and its check: with both, a fix that
+    doesn't fix what the control reads shows before the verification. Only what the agent's tools
+    allow stays, each once.
+    """
+    counting = [c for c in controls if counts_for_agent(c, installed)]
+    return AgentCommands(
+        _fixes(counting, agent_tools), _checks(counting, acceptance_run, agent_tools)
+    )
+
+
+def _fixes(counting: Sequence[Control], agent_tools: Sequence[str]) -> tuple[AgentFix, ...]:
+    return tuple(
+        AgentFix(c.id, c.agent_fix)
+        for c in command_controls(counting)
+        if c.agent_fix is not None and allowed_by(c.agent_fix, agent_tools)
+    )
+
+
+def _checks(
+    counting: Sequence[Control], acceptance_run: str, agent_tools: Sequence[str]
+) -> tuple[str, ...]:
+    found = [_check_of(c) for c in counting]
+    found.append(without_report(acceptance_run) if acceptance_run else None)
+    return tuple(dict.fromkeys(c for c in found if c is not None and allowed_by(c, agent_tools)))
+
+
+def fixes_text(fixes: Sequence[AgentFix]) -> str:
+    """The line of the prompt on the fixes: run them after the last change, then the checks."""
+    if not fixes:
+        return ""
+    named = " y ".join(f"`{f.command}` (el control {f.control_id} bloquea)" for f in fixes)
+    return f"- Tras tu último cambio, ejecuta {named} y después las comprobaciones."
+
+
+def commands_list(commands: Sequence[str]) -> str:
+    """Commands as a prompt lists them: one per line, between backticks."""
+    return "\n".join(f"  - `{command}`" for command in commands) or "  - los tests del proyecto"
+
+
+def runnable_fixes(fixes: Sequence[AgentFix], files_dir: str | None) -> list[AgentFix]:
+    """The fixes the agent can run in this call, as it runs them."""
+    return [
+        AgentFix(f.control_id, command)
+        for f in fixes
+        if (command := runnable_command(f.command, files_dir)) is not None
+    ]
+
+
+def agent_command_lines(
+    agent_tools: Sequence[str],
+    checks: Sequence[str],
+    fixes: Sequence[AgentFix],
+    files_dir: str | None,
+    extra: Sequence[str] = (),
+) -> dict[str, str]:
+    """The placeholders of a prompt on the agent's commands, as this call can run them (F83).
+
+    `extra` are the call's own commands, already runnable: those that measure. What Bash admits
+    comes from the tools, by prefix: not from the commands it checks with, which are only some of
+    what it may run.
+    """
+    tools = agent_tools_with_files(agent_tools, files_dir)
+    runnable = [c for raw in checks if (c := runnable_command(raw, files_dir)) is not None]
+    admitted = ", ".join(f"`{prefix}`" for prefix in bash_prefixes(tools))
+    return {
+        "{bash_admite}": admitted or "ninguna",
+        "{comprobaciones}": commands_list(list(dict.fromkeys([*runnable, *extra]))),
+        "{arreglos}": fixes_text(runnable_fixes(fixes, files_dir)),
+    }
 
 
 @dataclass(frozen=True)

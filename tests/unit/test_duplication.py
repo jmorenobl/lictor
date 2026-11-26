@@ -10,7 +10,6 @@ from lictor.domain.duplication import (
     clones_reason,
     describe_duplication,
     duplication_of,
-    first_where_changed,
     implementer_duplication_text,
     refactor_duplication_text,
 )
@@ -395,7 +394,7 @@ def test_the_measure_keeps_the_clones_for_the_prompt() -> None:
     [measure] = _measured(_report(_SMALL, _BIG)).values()
 
     assert measure.misses == (("duplicated", 270),)
-    assert measure.findings == Duplication(50, 270, (_BIG, _SMALL), 2)
+    assert measure.findings == Duplication(50, 270, (_BIG, _SMALL))
 
 
 def test_the_measure_goes_through_the_checkpoint_and_back() -> None:
@@ -404,14 +403,15 @@ def test_the_measure_goes_through_the_checkpoint_and_back() -> None:
     assert measures_from_record(measures_record(measures)) == measures
 
 
-def test_the_checkpoint_keeps_only_the_clones_a_message_names() -> None:
+def test_the_checkpoint_keeps_every_clone() -> None:
+    """F84: the refactor's scope is drawn from them, so one past those a message names counts."""
     clones = [_clone((f"f{i}.py", 0, 60), (f"g{i}.py", 0, 60)) for i in range(NAMED + 5)]
     measures = _measured(_report(*clones))
 
     [kept] = measures_from_record(measures_record(measures)).values()
 
     assert isinstance(kept.findings, Duplication)
-    assert (len(kept.findings.clones), kept.findings.count) == (NAMED, NAMED + 5)
+    assert len(kept.findings.clones) == NAMED + 5
     assert kept.misses == (("duplicated", 120 * (NAMED + 5)),)
 
 
@@ -419,44 +419,39 @@ def test_the_checkpoint_keeps_only_the_clones_a_message_names() -> None:
     "findings",
     [
         {"kind": "duplication", "min_tokens": 50, "in_clones": 1, "count": 1},
-        {"kind": "duplication", "min_tokens": 50, "in_clones": 1, "count": 1, "clones": [[]]},
-        {"kind": "duplication", "min_tokens": 50, "in_clones": 1, "count": 1, "clones": [["x"]]},
+        {"kind": "duplication", "min_tokens": 50, "in_clones": 1, "clones": [[]]},
+        {"kind": "duplication", "min_tokens": 50, "in_clones": 1, "clones": [["x"]]},
         {
             "kind": "duplication",
             "min_tokens": 50,
             "in_clones": 1,
-            "count": 1,
             "clones": [[["a.py", 1, 2, 0, 9], ["b.py", 1, 2, 0]]],
         },
         {
             "kind": "duplication",
             "min_tokens": 50,
             "in_clones": 1,
-            "count": 1,
             "clones": [[["a.py", 1, 2, 0, 9], "b.py"]],
         },
         {
             "kind": "duplication",
             "min_tokens": 50,
             "in_clones": 1,
-            "count": 1,
             "clones": [[[1, 1, 2, 0, 9], ["b.py", 1, 2, 0, 9]]],
         },
         {
             "kind": "duplication",
             "min_tokens": 50,
             "in_clones": 1,
-            "count": 1,
             "clones": [[[1, 1, 2, 0, 9]]],
         },
         {
             "kind": "duplication",
             "min_tokens": 50,
             "in_clones": 1,
-            "count": 1,
             "clones": [[["a.py", "1", 2, 0, 9]]],
         },
-        {"kind": "duplication", "min_tokens": "50", "in_clones": 1, "count": 1, "clones": []},
+        {"kind": "duplication", "min_tokens": "50", "in_clones": 1, "clones": []},
     ],
 )
 def test_a_checkpoint_with_bad_clones_keeps_none(findings: object) -> None:
@@ -502,39 +497,51 @@ def test_duplication_has_its_own_lines_in_the_refactor_prompt() -> None:
     assert refactor_measures([unit, _CONTROL], ()) == (("unit", "u"),)
 
 
-def test_the_refactor_hears_the_clones_and_how_to_measure() -> None:
-    text = refactor_duplication_text(duplication_of(_report(_BIG)), "medir src")
+def test_the_refactor_hears_the_clones_of_its_scenario_and_how_to_measure() -> None:
+    duplication = duplication_of(_report(_BIG, _SMALL))
+
+    text = refactor_duplication_text(duplication, [_BIG], "medir src")
 
     assert text.splitlines() == [
-        "Código repetido, medido en la verificación del verde (un clon es un trozo de 50 tokens "
-        "o más que se repite en dos sitios, con los nombres y los literales cambiados de forma "
-        "coherente dentro de cada función):",
+        "Código repetido en lo que cambió este escenario, medido en la verificación del verde (un "
+        "clon es un trozo de 50 tokens o más que se repite en dos sitios, con los nombres y los "
+        "literales cambiados de forma coherente dentro de cada función):",
         "- a.py:1-6 y b.py:1-6: 80 tokens",
-        "Quita al menos uno, empezando por los de los ficheros que cambió este escenario; no hace "
-        "falta quitarlos todos ahora.",
-        "La verificación descarta el refactor si deja más tokens en clones que el verde (160). El "
-        "formato no cuenta, ni cambiar el nombre de una variable dentro de una función.",
+        "Quita al menos uno; no hace falta quitarlos todos ahora.",
+        "La verificación descarta el refactor si deja más tokens en clones que el verde en todo el "
+        "proyecto (270). El formato no cuenta, ni cambiar el nombre de una variable dentro de una "
+        "función.",
         "Mídelo tú con `medir src`, sola y no detrás de otras órdenes con `&&`: una vez antes de "
-        "editar y otra al terminar. Su segunda línea dice los tokens en clones.",
+        "editar y otra al terminar. Su segunda línea dice los tokens en clones. Mide todo el "
+        "proyecto y sirve para comprobar el total; lo que se te pide es solo lo nombrado arriba.",
     ]
 
 
-def test_the_clones_of_the_files_the_scenario_changed_come_first() -> None:
-    assert first_where_changed([_BIG, _SMALL], {"c.py"}) == [_SMALL, _BIG]
-    assert first_where_changed([_BIG, _SMALL], set()) == [_BIG, _SMALL]
+def test_an_empty_scope_is_said_and_no_measure_says_nothing() -> None:
+    for duplication in (duplication_of(_report()), duplication_of(_report(_BIG))):
+        text = refactor_duplication_text(duplication, [], None)
+        assert "- Ningún clon en lo que cambió este escenario." in text.splitlines()
+        assert "Quita al menos uno" not in text
+        assert "Mídelo" not in text
+    assert refactor_duplication_text(None, [], "medir") == ""
 
-    text = refactor_duplication_text(duplication_of(_report(_BIG, _SMALL)), None, ["c.py"])
 
-    assert text.splitlines()[1] == "- a.py:1-6 y c.py:1-6: 55 tokens"
+def test_exactly_as_many_clones_as_a_message_names_count_nothing_more() -> None:
+    clones = [_clone((f"f{i}.py", 0, 60), (f"g{i}.py", 0, 60)) for i in range(NAMED)]
+    duplication = duplication_of(_report(*clones))
+
+    lines = refactor_duplication_text(duplication, duplication.clones, None).splitlines()
+
+    assert not any(line.startswith("- y ") for line in lines)
 
 
-def test_an_empty_list_is_said_and_no_measure_says_nothing() -> None:
-    text = refactor_duplication_text(duplication_of(_report()), None)
+def test_more_clones_in_the_scope_than_a_message_names_are_counted() -> None:
+    clones = [_clone((f"f{i}.py", 0, 60), (f"g{i}.py", 0, 60)) for i in range(NAMED + 2)]
+    duplication = duplication_of(_report(*clones))
 
-    assert "- Ningún clon." in text.splitlines()
-    assert "Quita al menos uno" not in text
-    assert "Mídelo" not in text
-    assert refactor_duplication_text(None, "medir") == ""
+    lines = refactor_duplication_text(duplication, duplication.clones, None).splitlines()
+
+    assert "- y 2 más" in lines
 
 
 def test_the_implementer_hears_of_it_only_from_a_control_that_blocks() -> None:
@@ -560,21 +567,12 @@ def test_one_clone_more_than_a_message_names_is_counted() -> None:
     assert clones_reason(duplication_of(_report(*clones))).splitlines()[-1] == "- y 1 más"
 
 
-def test_a_measure_from_the_checkpoint_counts_what_it_no_longer_names() -> None:
-    clones = tuple(_clone((f"f{i}.py", 0, 60), (f"g{i}.py", 0, 60)) for i in range(NAMED))
-    kept = Duplication(50, 120 * (NAMED + 5), clones, NAMED + 5)
-
-    assert clones_reason(kept).splitlines()[-1] == "- y 5 más"
-    assert "- y 5 más" in refactor_duplication_text(kept, None).splitlines()
-
-
-@pytest.mark.parametrize("missing", ["min_tokens", "in_clones", "count", "clones"])
+@pytest.mark.parametrize("missing", ["min_tokens", "in_clones", "clones"])
 def test_a_checkpoint_missing_a_field_keeps_no_clones(missing: str) -> None:
     findings: dict[str, object] = {
         "kind": "duplication",
         "min_tokens": 50,
         "in_clones": 160,
-        "count": 1,
         "clones": [[["a.py", 1, 6, 0, 80], ["b.py", 1, 6, 10, 90]]],
     }
     record = {"duplication": {"passed": None, "misses": {"duplicated": 160}, "findings": findings}}

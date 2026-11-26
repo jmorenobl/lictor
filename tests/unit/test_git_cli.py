@@ -10,6 +10,7 @@ import pytest
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import Candidate
+from lictor.domain.refactor_scope import LineSpan
 
 GIT_BIN = shutil.which("git") or "git"
 
@@ -228,6 +229,91 @@ def test_changed_paths_name_what_a_commit_changes_renames_as_two(
 
     assert sorted(cli.changed_paths(base, commit.sha)) == ["LEEME.md", "README.md", "src/a.py"]
     assert cli.changed_paths(base, base) == []
+
+
+def test_changes_tell_a_new_path_from_one_head_had(git_repo: Path, tmp_path: Path) -> None:
+    """F84: a refactor may create files; changing or deleting one that existed is its scope's."""
+    cli = GitCli(repo_dir=git_repo)
+    workdir = _copy(cli, tmp_path)
+    (workdir / "README.md").write_text("otro\n", encoding="utf-8")
+    (workdir / ".gitignore").unlink()
+    (workdir / "nuevo.txt").write_text("n\n", encoding="utf-8")
+
+    found = {c.path: (c.is_new, c.is_deleted) for c in cli.changes(cli.capture(workdir))}
+
+    assert found == {
+        "README.md": (False, False),
+        ".gitignore": (False, True),
+        "nuevo.txt": (True, False),
+    }
+
+
+def _green(
+    cli: GitCli, tmp_path: Path, files: dict[str, str | None], mode: int | None = None
+) -> str:
+    """A commit outside the branch writing (or deleting, with None) each file over HEAD."""
+    workdir = _copy(cli, tmp_path)
+    for name, text in files.items():
+        path = workdir / name
+        if text is None:
+            path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        if mode is not None:
+            path.chmod(mode)
+    return cli.commit_tree(cli.capture(workdir), message="verde").sha
+
+
+def test_changed_lines_are_what_the_commit_adds_or_changes_in_its_numbering(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """F84: what the green touched, to scope its refactor; a hunk that only deletes is its line."""
+    cli = GitCli(repo_dir=git_repo)
+    lines = [f"l{i}" for i in range(1, 21)]
+    (git_repo / "m.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    subprocess.run([GIT_BIN, "add", "."], cwd=git_repo, check=True)
+    subprocess.run([GIT_BIN, "commit", "-qm", "base"], cwd=git_repo, check=True)
+    base = cli.get_head_sha()
+    edited = [*lines[:2], "nueva", *lines[2:4], *lines[6:9], "otra", *lines[10:]]
+    green = _green(cli, tmp_path, {"m.py": "\n".join(edited) + "\n"})
+
+    assert cli.changed_lines(base, green) == {
+        "m.py": (LineSpan(3, 3), LineSpan(5, 5), LineSpan(9, 9)),
+    }
+
+
+def test_changed_lines_name_every_file_head_has_even_without_lines(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """An empty file added, a new file, a line that adds `++` and a path with spaces and accents;
+    a deleted file isn't there, since HEAD no longer has it."""
+    cli = GitCli(repo_dir=git_repo)
+    base = cli.get_head_sha()
+    green = _green(
+        cli,
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "con espacio ñ.py": "a\n++ b\n@@ -1 +1 @@\n",
+            "README.md": None,
+        },
+    )
+
+    assert cli.changed_lines(base, green) == {
+        "con espacio ñ.py": (LineSpan(1, 3),),
+        "pkg/__init__.py": (),
+    }
+
+
+def test_changed_lines_keep_a_file_that_only_changed_its_mode(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    base = cli.get_head_sha()
+    green = _green(cli, tmp_path, {"README.md": "# Test Repo\n"}, mode=0o755)
+
+    assert cli.changed_lines(base, green) == {"README.md": ()}
 
 
 def test_added_lines_come_only_from_what_the_tree_adds(git_repo: Path, tmp_path: Path) -> None:

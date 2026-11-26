@@ -187,7 +187,9 @@ def test_an_id_the_profile_lacks_adds_a_control_at_the_end(tmp_path: Path) -> No
 
 
 def test_an_added_control_goes_after_the_one_written_before_it(tmp_path: Path) -> None:
-    path = _with_controls(tmp_path, [{"id": "lint"}, {**ADDED, "id": "format"}, {"id": "unit"}])
+    # Its run changes, so the profile's fix for it is refused unless written (F83).
+    changed = {**ADDED, "id": "format", "agent_fix": None}
+    path = _with_controls(tmp_path, [{"id": "lint"}, changed, {"id": "unit"}])
 
     assert _ids(path) == [
         "lint",
@@ -329,3 +331,21 @@ def test_the_base_of_the_api_is_in_the_fingerprint(tmp_path: Path) -> None:
 def test_a_base_of_the_api_git_couldnt_name_is_refused(tmp_path: Path, ref: str) -> None:
     with pytest.raises(ConfigError, match="no vale como base de la API"):
         load_config(_with_api(tmp_path, {"base": ref}))
+
+
+def test_a_base_of_the_api_without_an_api_control_is_refused(tmp_path: Path) -> None:
+    """M3 of 0.20.0: nothing would compare with it, and a reference that doesn't resolve would
+    still stop a run."""
+    path = tmp_path / "lictor.json"
+    payload = {
+        "profile": "python-uv@0.2",
+        "api": {"base": "origin/main"},
+        "controls": [{"id": "api", "enabled": False}],
+    }
+    path.write_text(json.dumps(payload), "utf-8")
+
+    with pytest.raises(ConfigError, match=r"api\.base \('origin/main'\) es la base"):
+        load_config(path)
+    payload["api"] = {}
+    path.write_text(json.dumps(payload), "utf-8")
+    assert load_config(path).api.base is None

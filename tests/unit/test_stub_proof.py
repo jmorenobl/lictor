@@ -155,6 +155,8 @@ def test_an_unclassified_failure_is_named_as_such() -> None:
         ("probado", None, "aceptado"),
         ("a_la_interfaz", "probado", "aceptado"),
         ("a_la_interfaz", "sin_alterar", "sin_comprobar"),
+        # Its Then couldn't read the altered result, and the scenario gives it no value (F85).
+        ("a_la_interfaz", "ilegible", "sin_comprobar"),
         ("a_la_interfaz", "sobrevive", "rechazado"),
         ("a_la_interfaz", "no_llama", "rechazado"),
         # A command that passes without the stubs: never accepted unchecked.

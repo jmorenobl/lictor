@@ -114,7 +114,8 @@ ejecutar, y el run lo salta.
      el punto en que el trabajo salió de esa rama, no con su propio arranque, así que la segunda
      tanda de un trabajo ve lo que rompió la primera; `lictor check` la usa también, y dice qué
      cambió desde ahí sin que ningún control lo ejecutara. Lo que la persona acepta romper va en
-     `api.accepted`. En un clon superficial, `lictor doctor` pide traer más historia.
+     `api.accepted`. En un clon superficial, `lictor doctor` pide traer más historia. Sin el
+     control `api` activo, `api.base` no se acepta: quítalo, o deja el control.
    - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
      `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
    - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
@@ -162,7 +163,8 @@ ejecutar, y el run lo salta.
 6. Dale el comando: `lictor run`, o `lictor run --branch <nombre>`.
    Va en su propio worktree y rama, `lictor/<nombre>`: la persona puede seguir haciendo commits.
    `lictor status`, en otra terminal, dice por dónde va. Tras cada verde que implementa, un
-   refactor aparte mejora el diseño sin cambiar el comportamiento: entra como un commit
+   refactor aparte mejora el diseño sin cambiar el comportamiento, solo en el código que cambió
+   su escenario (otro fichero que ya existía lo descarta en `L0-alcance`): entra como un commit
    `refactor(<ID>)` propio o se descarta, y el verde se queda; `"refactor": {"enabled": false}` lo
    apaga. Al acabar, la persona integra la rama (un merge o una pull request) y
    `lictor retire <nombre>` retira el worktree.

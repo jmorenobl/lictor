@@ -19,6 +19,8 @@ from lictor.domain.model import (
     StepCounts,
     TestCaseResult,
     UnreadValue,
+    statements_from_text,
+    statements_text,
 )
 from lictor.domain.stub_proof import (
     Caught,
@@ -220,6 +222,7 @@ def _gherkin_record(facts: GherkinFacts) -> dict[str, object]:
         "survived": list(facts.survived),
         "errors": list(facts.errors),
         "place": facts.place,
+        "read_at": [statements_text(chain) for chain in facts.read_at],
     }
 
 
@@ -344,11 +347,15 @@ def _gherkin_from(raw: object) -> GherkinFacts | None:
     counts = _every(raw, _GHERKIN_COUNTS, _count)
     numbers = _every(raw, _GHERKIN_NUMBERS, _numbers)
     unread, place = _unread_from(raw.get("unread")), raw.get("place")
+    read_at = raw.get("read_at", [])
     if counts is None or numbers is None or unread is None or not isinstance(place, str):
+        return None
+    if not _names(read_at):
         return None
     values, unreceived = counts
     read, inputs, survived, errors = (tuple(n) for n in numbers)
-    return GherkinFacts(values, unread, unreceived, read, inputs, survived, errors, place)
+    chains = tuple(statements_from_text(chain) for chain in read_at)
+    return GherkinFacts(values, unread, unreceived, read, inputs, survived, errors, place, chains)
 
 
 def _every[T](

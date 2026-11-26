@@ -25,7 +25,7 @@ from lictor.domain.model import (
 
 
 def _changed(path: str) -> TreeChange:
-    return TreeChange(path, "100644")
+    return TreeChange(path, "100644", "100644")
 
 
 def _driver_request(tmp_path: Path) -> PrepareDriverRequest:
@@ -390,7 +390,7 @@ def test_prepare_driver_reverts_forbidden_paths_in_project_code(tmp_path: Path) 
 def test_prepare_driver_discards_links_even_in_its_own_paths(tmp_path: Path) -> None:
     (tmp_path / "features").mkdir()
     vcs = MagicMock(spec=Vcs)
-    vcs.changes.return_value = [TreeChange("tests/acceptance/enlace.py", "120000")]
+    vcs.changes.return_value = [TreeChange("tests/acceptance/enlace.py", "120000", "000000")]
     executor = MagicMock(spec=Executor)
     executor.run.return_value = AgentResult(status="ok")
     use_case = PrepareDriver(
@@ -514,11 +514,17 @@ def test_driver_start_is_in_the_journal_before_the_call(tmp_path: Path) -> None:
 def test_driver_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> None:
     """F37: the driver tried an interpreter through Bash to count the scenarios, and was denied."""
     _, executor, _ = _execute_driver(
-        tmp_path, AgentResult(status="ok"), check_commands=["make lint", "make test"]
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["make lint", "make test", "uv run python {lictor_files}/m.py"],
+        allowed_tools=["Bash(make:*)", "Bash(uv run python {lictor_files}/m.py:*)"],
     )
 
     prompt = _prompt(executor)
-    assert "Bash solo admite: make lint, make test." in prompt
+    # F83: Bash by prefix; its call has no copy of the profile's files, so what names them goes.
+    assert "Bash solo admite órdenes que empiecen por: `make`." in prompt
+    assert "El proyecto se comprueba con:\n  - `make lint`\n  - `make test`\n" in prompt
+    assert "lictor_files" not in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
 

@@ -233,7 +233,7 @@ def duplication_verdict(report: ReportOf[DuplicationReport], execution: Executio
     if isinstance(found, Failed):
         return found
     duplication = duplication_of(found)
-    return Failed(clones_reason(duplication)) if duplication.count else Passed()
+    return Failed(clones_reason(duplication)) if duplication.clones else Passed()
 
 
 def api_verdict(report: ReportOf[ApiReport] | ApiComparison, execution: Execution) -> Verdict:

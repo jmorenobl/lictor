@@ -58,7 +58,7 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.domain.api import UnresolvedBase
 from lictor.domain.blind_spots import blind_spots_record
-from lictor.domain.controls import ACCEPTANCE_ID, Control
+from lictor.domain.controls import ACCEPTANCE_ID, AgentCommands, Control, agent_commands
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -203,7 +203,6 @@ class GraphContext:
     suppressions: Sequence[str]
     driver_hints: str
     hints: str
-    check_commands: Sequence[str]
     model: str
     allowed_tools: Sequence[str]
     max_turns: int
@@ -248,6 +247,7 @@ class GraphContext:
     refactor_scenario: RefactorScenario | None = None
     commit_refactor: CommitRefactor | None = None
     refactor_hints: str = ""
+    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
     # The project's rules of code (F79): every agent gets them, and nothing checks them.
@@ -509,6 +509,13 @@ class _GraphNodes:
             )
         )
 
+    def _agent_commands(self) -> AgentCommands:
+        """What the agent runs before it ends, from the controls the run verifies (F83)."""
+        installed = self.ctx.environment.installed_plugins if self.ctx.environment else ()
+        return agent_commands(
+            self.ctx.controls, self.ctx.acceptance_run, self.ctx.allowed_tools, installed
+        )
+
     def build_driver(self, state: GraphState) -> dict[str, Any]:
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
         res = self.ctx.prepare_driver.execute(
@@ -534,7 +541,9 @@ class _GraphNodes:
                 forbidden_paths=self.ctx.forbidden_paths,
                 driver_exempt_paths=self.ctx.driver_exempt_paths,
                 max_driver_attempts=self.ctx.max_driver_attempts,
-                check_commands=self.ctx.check_commands,
+                # The driver gets the fixes in its list, not the line that asks for them: what it
+                # leaves unformatted in the code the first implementer formats (F83).
+                check_commands=self._agent_commands().all,
                 suppressions=self.ctx.suppressions,
             )
         )
@@ -666,7 +675,8 @@ class _GraphNodes:
                     paths_driver=self.ctx.paths_driver,
                     suppressions=self.ctx.suppressions,
                     green_ids=green_ids,
-                    check_commands=self.ctx.check_commands,
+                    check_commands=self._agent_commands().checks,
+                    fixes=self._agent_commands().fixes,
                     hints=self.ctx.hints,
                     conventions=self.ctx.conventions,
                     last_error=state.get("last_error"),
@@ -842,6 +852,11 @@ class _GraphNodes:
         if scenario is None:
             reason = f"El escenario {current_id} no está en la spec cargada"
             return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
+        refactor_of = state.get("refactor_of")
+        if not refactor_of:
+            # `commit` always writes it: HEAD in its place is an empty commit after a collateral.
+            reason = f"El refactor de {current_id} no sabe de qué verde parte"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
         try:
             res = refactor.execute(
                 RefactorScenarioRequest(
@@ -849,7 +864,7 @@ class _GraphNodes:
                     run_id=state["run_id"],
                     scenario=scenario,
                     attempt_slot=self._green_slot(state),
-                    refactor_of=state.get("refactor_of") or self.ctx.vcs.get_head_sha(),
+                    refactor_of=refactor_of,
                     model=self.ctx.model,
                     allowed_tools=self.ctx.allowed_tools,
                     max_turns=self.ctx.max_turns,
@@ -859,10 +874,12 @@ class _GraphNodes:
                     paths_driver=self.ctx.paths_driver,
                     suppressions=self.ctx.suppressions,
                     green_ids=[sid for sid, st in state.get("status", {}).items() if st == "green"],
-                    check_commands=self.ctx.check_commands,
+                    check_commands=self._agent_commands().checks,
+                    fixes=self._agent_commands().fixes,
                     hints=self.ctx.hints,
                     conventions=self.ctx.conventions,
                     refactor_hints=self.ctx.refactor_hints,
+                    code_paths=self.ctx.code_paths,
                     forbidden_paths=self.ctx.forbidden_paths,
                     controls=self.ctx.controls,
                     installed_plugins=(
@@ -907,6 +924,10 @@ class _GraphNodes:
         current_id = state.get("current")
         if not current_id:
             return {}
+        refactor_of = state.get("refactor_of")
+        if not refactor_of:
+            reason = f"El refactor de {current_id} no sabe de qué verde parte"
+            return self._finish(state, int(ExitCode.INTERNAL_ERROR), reason)
         status = state.get("status", {})
         all_sids = [s["id"] for s in state.get("scenarios", [])]
         res = self.ctx.verify_attempt.execute(
@@ -933,8 +954,9 @@ class _GraphNodes:
                 banned_patterns=self.ctx.banned_patterns,
                 tree=state.get("attempt_tree"),
                 link=self.ctx.map_link,
-                refactor_of=state.get("refactor_of") or "",
+                refactor_of=refactor_of,
                 baseline=_baseline(state),
+                code_paths=self.ctx.code_paths,
                 api_base=state.get("api_base"),
             )
         )

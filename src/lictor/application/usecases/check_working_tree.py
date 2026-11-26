@@ -56,6 +56,8 @@ class CheckWorkingTreeResult:
     tampered: str | None = None
     # With a base, what changed from it that no control executed, or why it can't be told (H2).
     unexecuted: UnexecutedChanges | str | None = None
+    # With a base and no API control, the API wasn't compared with it: said, not hidden (M4).
+    api_uncompared: bool = False
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,10 @@ class CheckWorkingTree:
                 )
             unexecuted = self._unexecuted(environment, base, subject.rev)
             tampered = environment.ensure(req.run_id)
-        return CheckWorkingTreeResult(subject.description, result, tampered, unexecuted)
+        uncompared = base is not None and self.api is None
+        return CheckWorkingTreeResult(
+            subject.description, result, tampered, unexecuted, api_uncompared=uncompared
+        )
 
     def _unexecuted(
         self, environment: VerificationCommands, base: str | None, rev: str
@@ -138,7 +143,8 @@ class CheckWorkingTree:
         Raise `PreconditionError` if that names no commit, or none it shares here: before any
         environment is built for nothing.
         """
-        if self.api is None or (ref := req.api_base or self.api.ref) is None:
+        ref = req.api_base or (self.api.ref if self.api is not None else None)
+        if ref is None:
             return None
         found = resolve_base(self.vcs, rev, ref)
         if isinstance(found, UnresolvedBase):

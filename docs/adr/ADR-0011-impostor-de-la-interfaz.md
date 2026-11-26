@@ -211,8 +211,12 @@ débiles, en `test_lictor_impostor.py`, fija lo que se prueba de cada forma de c
   lo probaba.
 - El primero de una lista de un objeto: el elemento nuevo es una copia de ese objeto.
 - El primero de una lista de un número o un texto: con uno de menos, el índice falla antes que la
-  aserción.
+  aserción. Desde la 0.21.0, si esa aserción compara un valor del escenario, la ADR-0016 lo prueba
+  por su sentencia (enmienda del Entonces que no puede leer lo alterado).
 - Acceso por clave en un diccionario, `in` y `max`.
+- Un texto solo cambia por el final: `x.splitlines()[0] == v` y `x.startswith(v)` sobreviven. Desde
+  la 0.21.0, `menos` quita el último carácter y, si era un blanco, también el último que no lo es:
+  quitar solo un `\n` final no cambiaba lo que lee un test que parsea o limpia el texto (F85).
 
 Lo revisó Fable antes de implementarla. Descartó dos variantes que se habían medido:
 

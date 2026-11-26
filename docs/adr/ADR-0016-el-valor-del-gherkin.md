@@ -125,3 +125,58 @@ medidos (hoy 9 de 317, un 2,8 %). Lo semántico que quede va a la fase 2c.
 - El veto es estático y podría ir en el rojo de todo driver nuevo, no solo en el de los que ya se
   cumplen. Es el paso siguiente, no esta decisión.
 - Otros parsers y versiones de pytest-bdd: las dos funciones internas existen en 8.1 y 9.0.
+
+## Enmienda del Entonces que no puede leer lo alterado (0.21.0, 2026-11-26)
+
+En la 4a de pyverifactu con la 0.20.0, COR-006 fue a la persona como `solo_el_valor` y hubo que
+registrarlo a mano, aunque su test es correcto. Su Entonces compara un texto del XML que devuelve el
+código (`assert _texts(record, "Subsanacion") == [correction]`). En `mas`, el impostor alargó los
+bytes del XML (`+ b"\0"`), y el Entonces falló al parsearlo, con un error, no con su aserción
+(`no_aserta`). En `menos` quitó el `\n` final, que no cambia nada de lo que se lee. Diseño y medida:
+`.audits/qa/0-21-0/diseno.md`, F85; revisión: `revision-fable-f85.md`.
+
+**El criterio de parada** se mide sobre los «ya se cumplía» de todas las pasadas medidas, no de una:
+con los 317 de esta ADR y los 16 de la 4a fueron 11 de 333 (3,3 %). F85 se abre por el caso: un
+test correcto, final y registrado a mano, con otros tres de la misma forma en los datos (COR-005,
+ENR-001, ENR-002) y, en el corpus del revisor, un test correcto rechazado con reintento y un mensaje
+falso (OK-014).
+
+**Decisión.** Un modo en que un Entonces no pudo leer lo alterado cuenta como cazado si se rompió en
+la sentencia que compara un valor del escenario o en una que la alimenta. Así se prueba que esa
+aserción depende de los dos: del resultado y del valor.
+
+1. **La sentencia.** `lictor_outcome` da `lictor.statement`: una sentencia por marco, desde el de la
+   función del paso mientras esté en el proyecto, con las líneas de su función que cargan lo que ella
+   liga (definición y uso, transitivo, solo nombres simples). El dominio toma la parte del driver.
+2. **Unidas.** Una cadena es prefijo de la otra (la misma sentencia, evaluándose), o, donde se
+   separan, la sentencia rota alimenta a la que lee el valor (`root = parse(r.xml)` y, debajo,
+   `assert root.findtext(…) == v`). Un ayudante que parsea en una línea y compara en otra el valor de
+   un Dado no se une.
+3. **La regla del punto 5 gana dos filas** tras la 3. La 3b: `no_aserta` en el que todos los modos que
+   objetan fallaron con un error en un Entonces del driver, con cada valor leído y cada sentencia rota
+   unida a una lectura, se da por probado. La 3c: si el Gherkin no tiene nada que pesar, el desenlace
+   es `ilegible`, final y para la persona (en los stubs se acepta sin comprobar, como `sin_alterar`).
+4. **`menos` en un texto** (ADR-0011) quita el último carácter y, si era un blanco, también el último
+   que no lo es.
+5. `lictor.frame` y `lictor.origin` ya no toman por del proyecto una ruta relativa (la de la fuente de
+   un módulo compilado).
+
+**Medida**, con el commit anterior y con la rama sobre el corpus de esta ADR y los casos del revisor:
+
+| Corpus | Tests | Cambian |
+|:--|--:|:--|
+| Las pasadas de esta ADR | 318 | ENR-001, ENR-002 y RES-001 ×2: `solo_el_valor` → probado |
+| Sintéticos y casos del revisor | 74 | OK-014: `no_aserta` con reintento → `ilegible` |
+| La 4a, COR-001 a COR-007 | 7 | COR-005 y COR-006: `solo_el_valor` → probado |
+
+No hay falsos probados nuevos, y los `solo_el_valor` de los 317 pasan de 9 a 5.
+
+**Límites conocidos:**
+
+- Una sentencia que usa el resultado para llegar a otra cosa y compara el valor con lo que guardó
+  un Dado (`assert system.invoices[record.number].total == total`) queda probada. La regla 3 ya
+  prueba la misma idea escrita con `.get()`.
+- La salida de un `with` cae en otra línea en Python 3.9. Dos sentencias en una línea (`a; b`,
+  `if x: assert y`) no se nombran, y un marco del proyecto sin nombre deja la cadena vacía. Una
+  fixture que lee el resultado no deja marco del paso. El mensaje de un `assert` no cuenta como
+  lectura: solo se evalúa si la condición falla.

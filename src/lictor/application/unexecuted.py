@@ -45,7 +45,24 @@ class UnexecutedSurvey:
         reports: ReportOf,
     ) -> UnexecutedChanges | str:
         """What changed from `commits[0]` to `commits[1]` that no control executed, or why it
-        can't be told."""
+        can't be told.
+
+        It only tells facts, at the end of a run whose branch already moved: a failure reading
+        them, as git failing, becomes the reason, named by its kind, instead of breaking that
+        end (M5 of 0.20.0).
+        """
+        try:
+            return self._survey(environment, commits, evidence, reports)
+        except Exception as error:  # told in the report, never swallowed silently
+            return f"no se pudo leer lo que cambió ({type(error).__name__}: {error})"
+
+    def _survey(
+        self,
+        environment: VerificationCommands,
+        commits: tuple[str, str],
+        evidence: Path,
+        reports: ReportOf,
+    ) -> UnexecutedChanges | str:
         base, head = commits
         vcs = self.vcs
         changed = vcs.changed_paths(base, head)
