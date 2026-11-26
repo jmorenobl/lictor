@@ -9,14 +9,19 @@ test, which could forge them, as it could forge the whole report.
 
 from __future__ import annotations
 
+import ast
+import contextlib
+import inspect
 import sys
+import tokenize
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Iterator
+    from types import CodeType, TracebackType
 
 FAILURE = "lictor.failure"
 ORIGIN = "lictor.origin"
@@ -25,16 +30,26 @@ LINE = "lictor.line"
 SCENARIO = "lictor.scenario"
 FEATURE = "lictor.feature"
 STEP = "lictor.step"
+STATEMENT = "lictor.statement"
 
-# The exception a Gherkin step raised, and the kind of that step. The report records the kind only
-# for that same exception: the hook also sees an `xfail` raised in a step, which fails nothing.
-_STEP_ERROR = pytest.StashKey[tuple[BaseException, str]]()
+# The exception a Gherkin step raised, the kind of that step and the code of its function, real
+# one first. The report records them only for that same exception: the hook also sees an `xfail`
+# raised in a step, which fails nothing.
+_STEP_ERROR = pytest.StashKey[tuple[BaseException, str, tuple[Any, ...]]]()
 
 
 def _relative(path: object, root: Path) -> str:
-    """Return `path` relative to the project, or "" if it lies outside it."""
+    """Return `path` relative to the project, or "" if it lies outside it.
+
+    pytest gives a file that exists as an absolute path; one that doesn't, as the relative path a
+    compiled extension names its source by (`src/lxml/parser.pxi`), is of no place, and resolving
+    it against the working directory would put it inside the project.
+    """
+    candidate = Path(str(path))
+    if not candidate.is_absolute():
+        return ""
     try:
-        return Path(str(path)).resolve().relative_to(root.resolve()).as_posix()
+        return candidate.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return ""
 
@@ -70,13 +85,27 @@ def pytest_bdd_before_scenario(request: pytest.FixtureRequest, feature: Any, sce
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_bdd_step_error(
-    request: pytest.FixtureRequest, step: Any, exception: BaseException
+    request: pytest.FixtureRequest, step: Any, step_func: Any, exception: BaseException
 ) -> None:
-    """Keep the step a failure was raised in: `Given`, `When` or `Then`, «And» and «But» resolved.
+    """Keep the step a failure was raised in: `Given`, `When` or `Then`, «And» and «But» resolved,
+    and the code of its function, to find its frame.
 
     It runs inside the runner's handling of that failure, so it does nothing that could raise.
     """
-    request.node.stash[_STEP_ERROR] = (exception, str(getattr(step, "type", "")))
+    request.node.stash[_STEP_ERROR] = (
+        exception,
+        str(getattr(step, "type", "")),
+        _codes(step_func),
+    )
+
+
+def _codes(function: Any) -> tuple[Any, ...]:
+    """The code of a step's function: the one a decorator wraps first, then its own."""
+    codes: list[Any] = []
+    with contextlib.suppress(Exception):  # a cycle of `__wrapped__`, or no code: the other may do
+        codes.append(inspect.unwrap(function).__code__)
+    own = getattr(function, "__code__", None)
+    return tuple(codes + ([own] if own is not None and own not in codes else []))
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -96,12 +125,195 @@ def pytest_runtest_makereport(
         item.user_properties.append((FRAME, frame))
         item.user_properties.append((LINE, line))
         item.user_properties.append((STEP, _failed_step(item, call.excinfo.value)))
+        item.user_properties.append((STATEMENT, _failed_statements(item, call.excinfo, root)))
 
 
 def _failed_step(item: pytest.Item, failure: BaseException) -> str:
     """The kind of step that raised the test's failure, or "" if no step raised it."""
     raised = item.stash.get(_STEP_ERROR, None)
     return raised[1] if raised is not None and raised[0] is failure else ""
+
+
+def _failed_statements(
+    item: pytest.Item, excinfo: pytest.ExceptionInfo[BaseException], root: Path
+) -> str:
+    """The statements the failure was raised in, from the step's own, or "" (F85).
+
+    One per frame from the step function's, while each lies in the project: `file:line:fed`,
+    joined by `;`, where `line` is the first of the innermost statement holding the frame's line
+    and `fed` the lines of its function it feeds. It stops at a frame it can't name exactly: one
+    outside the project, without source, or on a line with two statements.
+    """
+    raised = item.stash.get(_STEP_ERROR, None)
+    if raised is None or raised[0] is not excinfo.value:
+        return ""
+    try:
+        return ";".join(_chain(_frames(excinfo.tb), raised[2], root))
+    except Exception:  # it runs while pytest reports the failure: nothing here may raise
+        return ""
+
+
+def _frames(tb: TracebackType | None) -> list[tuple[CodeType, int]]:
+    found: list[tuple[CodeType, int]] = []
+    while tb is not None:
+        found.append((tb.tb_frame.f_code, tb.tb_lineno))
+        tb = tb.tb_next
+    return found
+
+
+def _chain(frames: list[tuple[CodeType, int]], codes: tuple[Any, ...], root: Path) -> Iterator[str]:
+    start = next(
+        (i for code in codes for i, (frame, _) in enumerate(frames) if frame is code), None
+    )
+    if start is None:
+        return
+    for code, line in frames[start:]:
+        inside = _relative(code.co_filename, root)
+        named = _statement_at(code.co_filename, line) if inside and line else None
+        if named is None:
+            return
+        first, fed = named
+        yield f"{inside}:{first}:{','.join(str(n) for n in sorted(fed))}"
+
+
+_TREES: dict[str, ast.Module | None] = {}
+
+
+def _tree(path: str) -> ast.Module | None:
+    if path not in _TREES:
+        try:
+            with tokenize.open(path) as source:
+                _TREES[path] = ast.parse(source.read(), path)
+        except (OSError, SyntaxError, ValueError):
+            _TREES[path] = None
+    return _TREES[path]
+
+
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_SCOPES = (*_FUNCTIONS, ast.ClassDef)
+# What holds statements without being one: a handler of `try`, a case of `match` (from 3.10).
+_HOLDERS: tuple[type, ...] = (ast.excepthandler,) + (
+    (ast.match_case,) if hasattr(ast, "match_case") else ()
+)
+
+
+def _child_statements(node: ast.AST) -> Iterator[ast.stmt]:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.stmt):
+            yield child
+        elif isinstance(child, _HOLDERS):
+            yield from _child_statements(child)
+
+
+def _statement_at(path: str, line: int) -> tuple[int, frozenset[int]] | None:
+    """The first line of the innermost statement holding `line`, and the lines it feeds."""
+    tree = _tree(path)
+    found = _innermost(tree, line) if tree is not None else None
+    if found is None:
+        return None
+    statement, function = found
+    fed = _fed_by(statement, function) if function is not None else frozenset()
+    return statement.lineno, fed
+
+
+def _innermost(tree: ast.Module, line: int) -> tuple[ast.stmt, ast.AST | None] | None:
+    """The innermost statement holding `line` and the function it is in, or None: none holds it,
+    or two do on that line (`a; b`), and which one raised can't be told by it."""
+    statement: ast.stmt | None = None
+    function: ast.AST | None = None
+    children = list(_child_statements(tree))
+    while True:
+        holding = [s for s in children if s.lineno <= line <= (s.end_lineno or s.lineno)]
+        if len(holding) > 1:
+            return None
+        if not holding:
+            return None if statement is None else (statement, function)
+        statement = holding[0]
+        function = statement if isinstance(statement, _FUNCTIONS) else function
+        children = list(_child_statements(statement))
+
+
+def _flat(statements: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Every statement of a function in the order of its source, without those of nested ones."""
+    for statement in statements:
+        yield statement
+        if not isinstance(statement, _SCOPES):
+            yield from _flat(list(_child_statements(statement)))
+
+
+def _fed_by(statement: ast.stmt, function: ast.AST) -> frozenset[int]:
+    """The statements after this one in its function that load a name it binds, followed from
+    each to the next; a name bound again without being loaded stops there."""
+    order = list(_flat(list(_child_statements(function))))
+    position = next((i for i, s in enumerate(order) if s is statement), None)
+    if position is None:
+        return frozenset()
+    live = _binds(statement)
+    fed: set[int] = set()
+    for later in order[position + 1 :]:
+        if not live:
+            break
+        bound = _binds(later)
+        if _loads(later) & live:
+            fed.add(later.lineno)
+            live |= bound
+        else:
+            live -= bound
+    return frozenset(fed)
+
+
+# What evaluates nothing by itself: a definition, and a `try` (from 3.11, `try` with `except*`).
+_HEADLESS: tuple[type, ...] = (*_SCOPES, ast.Try) + (
+    (ast.TryStar,) if hasattr(ast, "TryStar") else ()
+)
+
+
+def _header(statement: ast.stmt) -> list[ast.AST]:
+    """What a statement evaluates by itself: a compound one, only its head."""
+    if isinstance(statement, _HEADLESS):
+        return []
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        return [statement.iter]
+    if isinstance(statement, (ast.While, ast.If)):
+        return [statement.test]
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return [item.context_expr for item in statement.items]
+    subject = getattr(statement, "subject", None)  # `match`
+    return [subject] if subject is not None else [statement]
+
+
+def _names(nodes: list[ast.AST], context: type) -> set[str]:
+    return {
+        node.id
+        for root in nodes
+        for node in ast.walk(root)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, context)
+    }
+
+
+def _loads(statement: ast.stmt) -> set[str]:
+    loaded = _names(_header(statement), ast.Load)
+    if isinstance(statement, ast.AugAssign) and isinstance(statement.target, ast.Name):
+        loaded.add(statement.target.id)  # `x += 1` reads `x`
+    return loaded
+
+
+def _binds(statement: ast.stmt) -> set[str]:
+    """The simple names a statement binds: assigned, unpacked, `:=`, a `for` or a `with`."""
+    targets: list[ast.AST] = []
+    if isinstance(statement, ast.Assign):
+        targets = list(statement.targets)
+    elif isinstance(statement, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor)):
+        targets = [statement.target]
+    elif isinstance(statement, (ast.With, ast.AsyncWith)):
+        targets = [item.optional_vars for item in statement.items if item.optional_vars]
+    walrus = {
+        node.target.id
+        for root in _header(statement)
+        for node in ast.walk(root)
+        if isinstance(node, ast.NamedExpr)
+    }
+    return _names(targets, ast.Store) | walrus
 
 
 def _last_frame_inside(excinfo: pytest.ExceptionInfo[BaseException], root: Path) -> tuple[str, str]:

@@ -583,7 +583,21 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
             lictor_project_path.__file__,
             {"configparser", "importlib", "os", "pathlib", "pytest", "sys", "typing"},
         ),
-        (lictor_outcome.__file__, {"pytest", "pathlib", "sys", "typing", "collections"}),
+        (
+            lictor_outcome.__file__,
+            {
+                "ast",
+                "collections",
+                "contextlib",
+                "inspect",
+                "pathlib",
+                "pytest",
+                "sys",
+                "tokenize",
+                "types",
+                "typing",
+            },
+        ),
         (
             lictor_impostor.__file__,
             {

@@ -12,13 +12,16 @@ import pytest
 
 from lictor.domain.gherkin_proof import (
     GherkinFacts,
+    driver_statements,
     gherkin_facts,
     reached_the_interface,
+    reads_what_broke,
     static_facts,
     to_change,
     value_outcome,
 )
 from lictor.domain.interface_proof import (
+    SAME_READING,
     InterfaceProof,
     interface_proof,
     only_the_value_note,
@@ -26,10 +29,11 @@ from lictor.domain.interface_proof import (
     provoked_note,
     unproved_reason,
     unreadable,
+    unreadable_result_note,
     weighed_proof,
     weighs_the_gherkin,
 )
-from lictor.domain.model import TestCaseResult, UnreadValue
+from lictor.domain.model import Statement, TestCaseResult, UnreadValue
 
 DRIVER = ("tests/acceptance/",)
 OWN = "tests/acceptance/test_pedidos.py"
@@ -318,3 +322,186 @@ def test_a_swallowed_entry_that_isn_t_one_is_ignored() -> None:
     case = _iface(swallowed="x:then,2:nada,,3")
 
     assert case.interface_swallowed_at == ((2, None), (3, None))
+
+
+# F85: a Then that couldn't read the altered result, in the statement that compares the value.
+
+STEP = "tests/acceptance/conftest.py"
+
+
+def _chain(*elements: str) -> str:
+    """The statements as `lictor_outcome` reports them: `line` or `line:fed,lines`, in `STEP`."""
+    return ";".join(
+        f"{STEP}:{element}" if ":" in element else f"{STEP}:{element}:" for element in elements
+    )
+
+
+def _broke(chain: str, step: str = "then", kind: str = "error") -> TestCaseResult:
+    """A mode in which the Then raised something else than an assertion of the driver."""
+    return _iface("failure", kind=kind, step=step, frame=STEP, **{"lictor__statement": chain})
+
+
+def _read(chain: str) -> TestCaseResult:
+    """A run of the Gherkin in which changing a value alone made this assertion fail."""
+    case = _case(
+        "failure", trace=TRACE, altered=True, kind="assertion", step="then", frame=STEP, line="1"
+    )
+    return replace(case, properties={**case.properties, "lictor.statement": chain})
+
+
+def _weighed(modes: dict[str, TestCaseResult], read: str | dict[int, str]) -> InterfaceProof:
+    """What the rule says of a test with these modes, whose two values are read where `read`
+    says (one chain for both, or one per value)."""
+    control = _iface()
+    proof = interface_proof(control, modes, (STEP,))
+    chains = read if isinstance(read, dict) else {0: read, 1: read}
+    runs = {(mode, n): _read(chain) for n, chain in chains.items() for mode in MODES}
+    facts = gherkin_facts(replace(CONTROL), None, runs, MODES, (STEP,))
+    return weighed_proof(proof, facts, control)
+
+
+# COR-006: `assert _texts(record, "Subsanacion") == [correction]` on 727, `_texts` parsing the XML
+# on 713; `mas` breaks it, `menos` is caught by the next Then's assertion. Its second value is
+# read on 728.
+COR_006 = {
+    "mas": _broke(_chain("727", "713")),
+    "menos": _iface("failure", kind="assertion", step="then", frame=STEP),
+}
+# ENR-002: `root = _returned_document(exchange)` on 250, which feeds the `assert` on 253.
+ENR_002 = _broke(_chain("250:251,253", "240"))
+
+
+@pytest.mark.parametrize(
+    ("modes", "read", "outcome"),
+    [
+        (COR_006, {0: _chain("727"), 1: _chain("728")}, "probado"),
+        # ENR-001: the assertion itself calls the helper that couldn't parse, in both modes.
+        ({mode: _broke(_chain("255", "242")) for mode in MODES}, _chain("255"), "probado"),
+        ({mode: ENR_002 for mode in MODES}, _chain("253"), "probado"),
+        # A correct helper of one line: the step calls it, and its own assertion parses.
+        ({m: _broke(_chain("30", "12", "5")) for m in MODES}, _chain("30", "12"), "probado"),
+        # The error, raised on the step's statement, came from deeper than the comparison.
+        ({m: _broke(_chain("30")) for m in MODES}, _chain("30", "12"), "probado"),
+        # A weak helper (B1): it parses on one line and compares a Given's value on another.
+        ({m: _broke(_chain("30", "12")) for m in MODES}, _chain("30", "13"), "solo_el_valor"),
+        # The parsed name isn't what the comparison loads: `root = parse(x)`, `assert ctx.v == v`.
+        ({m: _broke(_chain("250:251")) for m in MODES}, _chain("253"), "solo_el_valor"),
+        # Another statement of the step, nothing bound by one feeding the other.
+        (COR_006, {0: _chain("740"), 1: _chain("741")}, "solo_el_valor"),
+        # A mode that survives says the test doesn't check that result: nothing to join.
+        ({"mas": _broke(_chain("727")), "menos": _iface()}, _chain("727"), "solo_el_valor"),
+        # An error outside a Then, or an assertion outside the driver, isn't the Then's reading.
+        ({m: _broke(_chain("727"), step="when") for m in MODES}, _chain("727"), "solo_el_valor"),
+        (
+            {
+                m: _iface(
+                    "failure",
+                    kind="assertion",
+                    step="then",
+                    frame="src/x.py",
+                    lictor__statement=_chain("727"),
+                )
+                for m in MODES
+            },
+            _chain("727"),
+            "solo_el_valor",
+        ),
+    ],
+)
+def test_a_then_that_can_t_read_the_altered_result_where_it_reads_the_value_proves_it(
+    modes: dict[str, TestCaseResult], read: str | dict[int, str], outcome: str
+) -> None:
+    assert _weighed(modes, read).outcome == outcome
+
+
+def test_what_the_same_reading_proved_says_so() -> None:
+    proof = _weighed(COR_006, {0: _chain("727"), 1: _chain("728")})
+
+    assert proof == InterfaceProof("probado", SAME_READING)
+    assert proof.proved
+
+
+def test_a_value_read_where_the_result_broke_still_needs_every_value_read() -> None:
+    proof = interface_proof(_iface(), COR_006, (STEP,))
+    facts = GherkinFacts(2, read=(0,), survived=(1,), read_at=(_read(_chain("727")).statements,))
+
+    assert weighed_proof(proof, facts, _iface()).outcome == "no_aserta"
+
+
+def test_an_unread_value_comes_before_the_same_reading() -> None:
+    proof = interface_proof(_iface(), COR_006, (STEP,))
+
+    assert weighed_proof(proof, UNREAD, _iface()).outcome == "ignora_el_valor"
+
+
+def test_a_then_that_couldn_t_read_it_with_no_value_to_weigh_goes_to_the_person() -> None:
+    """`assert _texts(record, "RechazoPrevio") == []`: right, and nothing of the scenario in it."""
+    proof = interface_proof(_iface(), COR_006, (STEP,))
+    weighed = weighed_proof(proof, GherkinFacts(0), _iface())
+
+    assert weighed.outcome == "ilegible"
+    assert not weighed.fixable
+    reason = unproved_reason("COR-008", "test_cor_008", weighed, ["src/"])
+    assert reason.endswith(
+        "Este test no lo cambies: Lictor no puede comprobarlo, y lo decidirá una persona."
+    )
+    note = person_notes({"COR-008": weighed})[0]
+    assert note == unreadable_result_note({"COR-008": weighed})
+    assert note.startswith("Lictor no pudo comprobar COR-008 (error de un Entonces, en ")
+
+
+def test_without_the_gherkin_a_then_that_couldn_t_read_it_is_retried_as_before() -> None:
+    proof = interface_proof(_iface(), COR_006, (STEP,))
+
+    assert weighed_proof(proof, None, _iface()) == proof
+    assert proof.outcome == "no_aserta"
+    assert proof.fixable
+
+
+def test_only_modes_that_all_broke_reading_in_the_driver_carry_their_statements() -> None:
+    outside = _broke("src/lxml/parser.pxi:689:")
+    mixed = {
+        "mas": _broke(_chain("727")),
+        "menos": _iface("failure", kind="assertion", step="then", frame="src/x.py"),
+    }
+
+    assert interface_proof(_iface(), COR_006, (STEP,)).broke_at == (
+        _broke(_chain("727", "713")).statements,
+    )
+    assert interface_proof(_iface(), {m: outside for m in MODES}, (STEP,)).broke_at == ()
+    assert interface_proof(_iface(), mixed, (STEP,)).broke_at == ()
+
+
+@pytest.mark.parametrize(
+    ("broke", "read", "joined"),
+    [
+        ("727;713", "727", True),
+        ("727", "727;713", True),
+        ("727", "727", True),
+        ("30;12", "30;13", False),
+        ("250:253", "253", True),
+        ("250:253", "254", False),
+        ("", "727", False),
+        ("727", "", False),
+    ],
+)
+def test_two_chains_are_one_reading_when_one_is_a_prefix_or_the_broken_one_feeds_the_other(
+    broke: str, read: str, joined: bool
+) -> None:
+    def chain(text: str) -> tuple[Statement, ...]:
+        return _broke(_chain(*text.split(";")) if text else "").statements
+
+    assert reads_what_broke(chain(broke), chain(read)) is joined
+
+
+def test_another_file_at_the_same_place_isn_t_the_same_reading() -> None:
+    mine = (Statement(STEP, 250, frozenset({253})),)
+    theirs = (Statement("tests/acceptance/otro.py", 253),)
+
+    assert not reads_what_broke(mine, theirs)
+
+
+def test_the_statements_stop_at_the_first_outside_the_driver() -> None:
+    case = _broke(f"{STEP}:727:;src/pkg/mod.py:10:;{STEP}:713:")
+
+    assert driver_statements(case, (STEP,)) == (Statement(STEP, 727),)

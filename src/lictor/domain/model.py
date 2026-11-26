@@ -271,6 +271,9 @@ FAILURE_PROPERTY = "lictor.failure"  # assertion | not_implemented | impostor | 
 ORIGIN_PROPERTY = "lictor.origin"  # innermost frame of the failure, relative to the project
 FRAME_PROPERTY = "lictor.frame"  # last frame of the failure inside the project, relative to it
 LINE_PROPERTY = "lictor.line"  # the line of that frame, from 1
+# The statements the failure was raised in, one per frame of the project from the step's own:
+# `file:line:fed,lines;…`, each with the lines of its function that load what it binds (F85).
+STATEMENT_PROPERTY = "lictor.statement"
 INTERFACE_CALLS_PROPERTY = "lictor.interface.calls"  # calls from the driver to the interface
 INTERFACE_ALTERED_PROPERTY = "lictor.interface.altered"  # those whose result the impostor altered
 # Of those, the ones whose real result was None, as an order that only changes the state returns.
@@ -323,6 +326,36 @@ def _entries(value: str) -> tuple[str, ...]:
 
 def _numbers(value: str) -> tuple[int, ...]:
     return tuple(int(n) for n in _entries(value) if n.isascii() and n.isdigit())
+
+
+@dataclass(frozen=True)
+class Statement:
+    """A statement a failure went through: its file, its first line, and what it feeds.
+
+    `feeds` are the first lines of the statements of the same function that load a name this one
+    binds, followed from one to the next: `root = parse(x)` feeds `assert root.find(…) == v`.
+    """
+
+    path: str
+    line: int
+    feeds: frozenset[int] = frozenset()
+
+
+def statements_text(chain: Sequence[Statement]) -> str:
+    """The statements as the plugin reports them, which `statements_from_text` reads back."""
+    return ";".join(f"{s.path}:{s.line}:{','.join(str(n) for n in sorted(s.feeds))}" for s in chain)
+
+
+def statements_from_text(value: str) -> tuple[Statement, ...]:
+    """The statements a plugin reported, up to the first it didn't say whole."""
+    found: list[Statement] = []
+    for entry in value.split(";"):
+        path, _, rest = entry.partition(":")
+        line, _, fed = rest.partition(":")
+        if not path or not (line.isascii() and line.isdigit()):
+            break
+        found.append(Statement(path, int(line), frozenset(_numbers(fed))))
+    return tuple(found)
 
 
 @dataclass(frozen=True)
@@ -384,6 +417,12 @@ class TestCaseResult:
         """The line of `frame`, or None if it isn't said."""
         line = _count(self.properties.get(LINE_PROPERTY, ""))
         return line or None
+
+    @property
+    def statements(self) -> tuple[Statement, ...]:
+        """The statements the failure was raised in, from the step's own inward (F85); empty when
+        no step raised it or the plugin couldn't tell."""
+        return statements_from_text(self.properties.get(STATEMENT_PROPERTY, ""))
 
     @property
     def interface_calls(self) -> int:

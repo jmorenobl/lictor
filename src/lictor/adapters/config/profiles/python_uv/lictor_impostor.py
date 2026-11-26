@@ -134,10 +134,25 @@ def _shorter(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         return type(value)(list(value)[1:]) if value else type(value)({SENTINEL})
     if isinstance(value, str):
-        return value[:-1] if value else "·"
+        return _shorter_text(value) if value else "·"
     if isinstance(value, bytes):
-        return value[:-1] if value else b"\0"
+        return _shorter_text(value) if value else b"\0"
     return value[1:] if value else type(value)([SENTINEL])
+
+
+def _shorter_text(value: Any) -> Any:
+    """Its last character less and, if that was blank, also its last that isn't (F85).
+
+    A line break at the end is what a serialized text usually ends with, and dropping it alone
+    changes nothing a test that parses or strips the text reads; dropping both is seen by that
+    test and by one that checks the text ends with it.
+    """
+    cut = value[:-1]
+    if value[-1:].isspace():
+        end = len(cut.rstrip())
+        if end:
+            cut = cut[: end - 1] + cut[end:]
+    return cut
 
 
 def _longer(value: Any) -> Any:

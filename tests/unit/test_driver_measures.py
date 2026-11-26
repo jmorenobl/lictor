@@ -17,7 +17,7 @@ from lictor.domain.driver_measures import (
 )
 from lictor.domain.gherkin_proof import GherkinFacts
 from lictor.domain.interface_proof import InterfaceProof, ProofOutcome
-from lictor.domain.model import StepCounts, TestCaseResult, UnreadValue
+from lictor.domain.model import Statement, StepCounts, TestCaseResult, UnreadValue
 from lictor.domain.stub_proof import StubOutcome, StubProof, caught
 
 DRIVER = ["tests/acceptance/"]
@@ -189,6 +189,12 @@ FULL = DriverMeasures(
                 inputs=(1,),
                 errors=(2,),
                 place="tests/acceptance/test_x.py:12",
+                read_at=(
+                    (
+                        Statement("tests/acceptance/test_x.py", 10, frozenset({12})),
+                        Statement("tests/acceptance/test_x.py", 3),
+                    ),
+                ),
             ),
         ),
     },
@@ -265,6 +271,7 @@ def _broken(path: tuple[str, ...], value: object) -> dict[str, object]:
         _broken(("interface", "A-5", "gherkin", "unread"), [["paso", "tipo"]]),
         _broken(("interface", "A-5", "gherkin", "unread"), None),
         _broken(("interface", "A-5", "gherkin", "place"), 12),
+        _broken(("interface", "A-5", "gherkin", "read_at"), "x.py:3:"),
     ],
 )
 def test_a_record_that_doesn_t_follow_the_schema_reads_as_none(raw: object) -> None:
@@ -285,6 +292,7 @@ def test_the_record_of_the_interface_keeps_what_weighed_it() -> None:
         "survived": [],
         "errors": [2],
         "place": "tests/acceptance/test_x.py:12",
+        "read_at": ["tests/acceptance/test_x.py:10:12;tests/acceptance/test_x.py:3:"],
     }
     assert record["A-3"]["gherkin"] is None
 
