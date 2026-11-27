@@ -7,6 +7,26 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.23.1] - 2026-11-27
+
+### Cambiado
+
+- **El job «Cadenas: Go y Node» corre con Node 24 y con Node 26**, la LTS de mantenimiento y la
+  activa: una receta de la skill fallaba solo con la 24.
+- **Lo que solo declara el perfil se rechaza con una sola frase**, «solo lo declara el perfil, y
+  ningún proyecto lo escribe», también `oracle`, `driver_exempt_paths`, `status`, `detect` y los
+  campos de `verification` que antes daban el error de pydantic en inglés. La lista sale de los
+  modelos, así que un campo nuevo del perfil se rechaza igual.
+- **Las reglas de las órdenes que nombran una lista tienen su frase sin ella**: sin supresiones,
+  sin rutas vedadas, sin verdes, sin nada protegido fuera del driver. Ya no salen «No añadas
+  supresiones: ninguna.» ni «Los escenarios ninguno ya funcionan».
+
+### Corregido
+
+- **Un `code_exclude` que excluye todo el código de HEAD** (`*.go`) dejaba la puerta del refactor
+  sin nada que mirar, sin aviso. Ahora es ✗ «Rutas de código» en `lictor doctor` y al empezar un
+  run, con exit 10.
+
 ## [0.23.0] - 2026-11-27
 
 ### Añadido
@@ -1292,7 +1312,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.1...HEAD
+[0.23.1]: https://github.com/jmorenobl/lictor/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/jmorenobl/lictor/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/jmorenobl/lictor/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/jmorenobl/lictor/compare/v0.20.0...v0.21.0

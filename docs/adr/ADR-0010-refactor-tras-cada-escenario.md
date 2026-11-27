@@ -296,3 +296,8 @@ orden.
   es exclusiva, no sumable (ADR-0020).
 
 `code_paths_message`, que rechazaba `code_paths` en `lictor.json`, desaparece.
+
+En la 0.23.1, un `code_exclude` que excluye todos los ficheros de HEAD bajo `code_paths` (`*.go`) es
+✗ «Rutas de código» en `doctor` y al empezar un run, con exit 10: la puerta no tendría nada que
+mirar. Se juzga sobre los ficheros de HEAD porque ningún patrón fijo distingue `*.go` de
+`*_test.go`; sin código aún bajo esas rutas no se juzga nada.
