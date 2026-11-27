@@ -884,9 +884,10 @@ def test_the_level_of_proof_is_told_last_as_facts_that_stop_nothing(
     checks = _by_name(report)
     level = checks[preconditions.PROOF_LEVEL]
     assert report.checks[-1] is level
-    assert level.detail == "básico"
+    assert level.detail is None
     assert level.problems == ()
-    assert level.warnings[0].startswith("No se comprueba que el test compare nada")
+    assert level.warnings[0] == "básico"
+    assert level.warnings[1].startswith("No se comprueba que el test compare nada")
     assert "cov no corre: falta cov.plugin" in level.warnings
     assert report.proof is not None
     assert report.proof.level == "basico"
@@ -938,3 +939,28 @@ def test_what_the_agent_cant_run_is_warned_of(tmp_path: Path, bin_dir: Path) -> 
     parts.use_case.agent_tools = ["Bash(gotestsum:*)"]
     allowed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
     assert preconditions.AGENT_COMMANDS not in _by_name(allowed)
+
+
+def test_a_proved_level_with_nothing_missing_passes_saying_it(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.proof = dataclasses.replace(
+        _BARE,
+        link="scenario",
+        red_kinds=True,
+        stub_impostors=True,
+        interface_impostor=True,
+        gherkin=True,
+        env_hashed=True,
+        suppressions=True,
+        blocking_controls=True,
+        survey=True,
+        plugin_controls=(),
+    )
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    level = _by_name(report)[preconditions.PROOF_LEVEL]
+    assert level.detail == "resultado probado"
+    assert level.warnings == ()

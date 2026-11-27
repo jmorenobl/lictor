@@ -448,11 +448,14 @@ class CheckPreconditions:
         if req.survey_dir is None or self.proof is None:
             return [], None
         proof = proof_level(self.proof, installed)
-        checks = [
-            PreconditionCheck(
-                PROOF_LEVEL, warnings=warning_lines(proof), detail=level_name(proof.level)
-            )
-        ]
+        warned = warning_lines(proof)
+        name = level_name(proof.level)
+        level = (
+            PreconditionCheck(PROOF_LEVEL, warnings=(name, *warned))
+            if warned
+            else PreconditionCheck(PROOF_LEVEL, detail=name)
+        )
+        checks = [level]
         unrunnable = unrunnable_by_agent(
             self.head_controls, self.acceptance_run, self.agent_tools, installed or ()
         )
