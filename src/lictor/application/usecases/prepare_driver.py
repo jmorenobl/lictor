@@ -68,6 +68,8 @@ class PrepareDriverRequest:
     driver_exempt_paths: Sequence[str] = ()
     max_driver_attempts: int = 0  # only to tell whoever watches; the graph decides
     suppressions: Sequence[str] = ()
+    # The regexes `L0-supresiones` also judges a fresh driver by: with them alone it still rejects.
+    banned_patterns: Sequence[str] = ()
     check_commands: Sequence[str] = ()  # the only commands Bash admits
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
     # Whether the profile proves an already met scenario by altering the interface (ADR-0011).
@@ -201,7 +203,11 @@ class PrepareDriver:
                 request.driver_exempt_paths,
                 request.paths_driver,
             ),
-            "{regla_supresiones}": suppressions_rule(request.suppressions, "driver"),
+            "{regla_supresiones}": suppressions_rule(
+                request.suppressions,
+                "driver",
+                gated=bool(request.suppressions or request.banned_patterns),
+            ),
             # The driver's call has no copy of the profile's files: what names them can't run.
             **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
             "{regla_verdes}": greens_rule(request.green_ids, "driver"),

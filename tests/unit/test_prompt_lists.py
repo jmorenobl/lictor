@@ -14,7 +14,7 @@ ROLES: list[Role] = ["driver", "implement", "refactor"]
 
 
 def test_suppressions_with_a_list_name_it_and_what_each_role_hears() -> None:
-    assert suppressions_rule(["# noqa", "//nolint"], "driver") == (
+    assert suppressions_rule(["# noqa", "//nolint"], "driver", gated=True) == (
         "- No añadas supresiones: # noqa, //nolint. El driver queda sellado: si las lleva, se "
         "rechaza.\n"
     )
@@ -23,6 +23,17 @@ def test_suppressions_with_a_list_name_it_and_what_each_role_hears() -> None:
         "otro fichero; cambiar su texto, sí.\n"
     )
     assert suppressions_rule(["# noqa"], "refactor") == suppressions_rule(["# noqa"], "implement")
+
+
+def test_a_driver_judged_by_patterns_alone_still_hears_it_is_sealed() -> None:
+    assert suppressions_rule([], "driver", gated=True) == (
+        "- No añadas supresiones: ningún comentario ni llamada que calle un aviso o salte un "
+        "test. El driver queda sellado: si las lleva, se rechaza.\n"
+    )
+    assert suppressions_rule(["# noqa"], "driver") == "- No añadas supresiones: # noqa.\n"
+    assert suppressions_rule(["# noqa"], "implement", gated=True) == suppressions_rule(
+        ["# noqa"], "implement"
+    )
 
 
 @pytest.mark.parametrize("role", ROLES)

@@ -394,5 +394,6 @@ def test_an_exclusion_that_leaves_no_code_is_named() -> None:
     assert problem == (
         "code_exclude (*.go, x) excluye todos los ficheros de code_paths (iva/, cmd/): la "
         "puerta L0-alcance del refactor no comprobaría nada. Deja en code_exclude solo lo que no "
-        "es código, como los tests junto a él (*_test.go)."
+        "es código, como los tests junto a él (*_test.go); si ahí solo hay tests todavía, quita "
+        "code_exclude hasta que haya código."
     )

@@ -18,6 +18,7 @@ from lictor.adapters.config.models import (
     LictorFile,
     LimitsConfig,
     Profile,
+    ProfileAcceptance,
     ProfileOracle,
     ProfileVerification,
     ProjectVerification,
@@ -608,16 +609,21 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
 
 
 # What only the profile declares, each with the message that says where the project's own goes.
-_PROFILE_ONLY: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
-    ("survey", survey_message),
-    ("refactor_hints", refactor_hints_message),
-)
+# The fields only the profile declares that have a sentence of their own: where the project's goes.
+_OWN_MESSAGES: Final[Mapping[str, Callable[[], str]]] = {
+    "acceptance.needs_plugins": needs_plugins_message,
+    "survey": survey_message,
+    "refactor_hints": refactor_hints_message,
+}
 
 
 # Every field of a profile a project never writes (ADR-0020): what the profile has and the file
 # a person writes doesn't, taken from the models so that a new one is refused the same way.
 _PROFILE_ONLY_FIELDS: Final = tuple(
     sorted(set(Profile.model_fields) - set(LictorFile.model_fields))
+)
+_PROFILE_ONLY_ACCEPTANCE: Final = tuple(
+    sorted(set(ProfileAcceptance.model_fields) - set(AcceptanceConfig.model_fields))
 )
 _PROFILE_ONLY_VERIFICATION: Final = tuple(
     sorted(set(ProfileVerification.model_fields) - set(ProjectVerification.model_fields))
@@ -629,19 +635,17 @@ def _reject_profile_fields(parsed: dict[str, object]) -> None:
 
     Those with a sentence of their own say it; any other says the common one, never pydantic's.
     """
-    acceptance = parsed.get("acceptance")
-    if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
-        raise ConfigError(needs_plugins_message())
-    for key, message in _PROFILE_ONLY:
-        if key in parsed:
-            raise ConfigError(message())
-    for key in _PROFILE_ONLY_FIELDS:
-        if key in parsed:
-            raise ConfigError(profile_only_message(key))
-    verification = parsed.get("verification")
-    for key in _PROFILE_ONLY_VERIFICATION:
-        if isinstance(verification, dict) and key in verification:
-            raise ConfigError(profile_only_message(f"verification.{key}"))
+    sections = (
+        ("acceptance.", parsed.get("acceptance"), _PROFILE_ONLY_ACCEPTANCE),
+        ("", parsed, _PROFILE_ONLY_FIELDS),
+        ("verification.", parsed.get("verification"), _PROFILE_ONLY_VERIFICATION),
+    )
+    for prefix, written, keys in sections:
+        found = [key for key in keys if isinstance(written, dict) and key in written]
+        if found:
+            name = f"{prefix}{found[0]}"
+            own = _OWN_MESSAGES.get(name)
+            raise ConfigError(own() if own is not None else profile_only_message(name))
 
 
 def _known_profile(reference: object, profiles_dir: Path | None) -> Profile | None:

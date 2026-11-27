@@ -60,6 +60,7 @@ from lictor.domain.rules import (
     NO_COMMITS,
     control_label,
     missing_executables,
+    path_within,
 )
 from lictor.domain.run_branches import uncommitted_left_out
 from lictor.domain.stages import check_controls_warning
@@ -78,6 +79,9 @@ NO_NEEDS = "no comprobado: el perfil no declara qué necesita"
 UNPREPARED = "sin prepare: no se construye ni se vigila"
 PROOF_LEVEL = "Nivel de prueba"
 CODE_PATHS = "Rutas de código"
+NO_CODE_YET = (
+    "no comprobado: aún no hay código en code_paths; lo juzga L0-alcance en el primer refactor"
+)
 AGENT_COMMANDS = "Órdenes del agente"
 
 
@@ -255,6 +259,8 @@ class CheckPreconditions:
     def _code_left(self) -> PreconditionCheck:
         """Whether `code_exclude` leaves any code of HEAD for `L0-alcance` to guard."""
         files = [entry.path for entry in self.vcs.tree_entries("HEAD")]
+        if not any(path_within(path, self.code_paths.paths) for path in files):
+            return PreconditionCheck(CODE_PATHS, skipped=NO_CODE_YET)
         problem = excluded_everything(files, self.code_paths)
         if problem is None:
             return PreconditionCheck(CODE_PATHS)

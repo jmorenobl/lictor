@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
+    _PROFILE_ONLY_ACCEPTANCE,
     DEFAULT_PROFILES_DIR,
     PackagedProfiles,
     ProfileConfigInitializer,
@@ -305,3 +306,7 @@ def test_every_field_only_a_profile_declares_has_the_common_sentence(tmp_path: P
             f"lictor.json no puede declarar {key}: solo lo declara el perfil, y ningún proyecto "
             "lo escribe. Bórralo."
         ), key
+
+
+def test_a_field_only_the_profiles_acceptance_has_is_refused_the_same_way() -> None:
+    assert _PROFILE_ONLY_ACCEPTANCE == ("needs_plugins",)

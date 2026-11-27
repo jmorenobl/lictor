@@ -983,3 +983,17 @@ def test_an_exclusion_that_leaves_no_code_of_head_is_the_projects(
     assert [c.name for c in parts.use_case.execute(RUN).checks].count("Rutas de código") == 1
     parts.use_case.code_paths = CodePaths(("iva/",))
     assert "Rutas de código" not in [c.name for c in parts.use_case.execute(RUN).checks]
+
+
+def test_without_code_in_head_the_exclusion_is_left_to_the_first_refactor(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _parts(tmp_path, bin_dir)
+    parts.vcs.tree_entries.return_value = [TreeEntry("features/nif.feature", "100644")]
+    parts.use_case.code_paths = CodePaths(("iva/",), ("*.go",))
+
+    report = parts.use_case.execute(RUN)
+
+    [check] = [c for c in report.checks if c.name == "Rutas de código"]
+    assert check.skipped == preconditions.NO_CODE_YET
+    assert report.problems == []

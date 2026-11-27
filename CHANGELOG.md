@@ -25,7 +25,8 @@ en su significado se anota en «Cambiado».
 
 - **Un `code_exclude` que excluye todo el código de HEAD** (`*.go`) dejaba la puerta del refactor
   sin nada que mirar, sin aviso. Ahora es ✗ «Rutas de código» en `lictor doctor` y al empezar un
-  run, con exit 10.
+  run, con exit 10. Un proyecto que aún no tiene código ahí queda «no comprobado» en `doctor`, y
+  la puerta `L0-alcance` lo juzga sobre el árbol de su primer verde.
 
 ## [0.23.0] - 2026-11-27
 

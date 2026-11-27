@@ -63,6 +63,7 @@ from lictor.domain.refactor_scope import (
     NO_CODE,
     REFACTOR_SCOPE,
     CodePaths,
+    excluded_everything,
     out_of_scope,
     out_of_scope_reason,
 )
@@ -507,6 +508,12 @@ class VerifyAttempt:
         """`L0-alcance`: a refactor changes only the code its scenario changed (F84)."""
         if not req.refactor_of:
             raise InternalLictorError("El refactor llegó a verificación sin su verde")
+        if req.code_paths.exclude:
+            # A project that started without code is judged here, on its green's tree (0.23.1).
+            green_files = [entry.path for entry in self.vcs.tree_entries(req.refactor_of)]
+            blind = excluded_everything(green_files, req.code_paths)
+            if blind is not None:
+                return self._fail(req, _Failure(REFACTOR_SCOPE, blind))
         scope = green_scope(self.vcs, req.refactor_of, req.baseline, req.code_paths)
         outside = out_of_scope(scope, self.vcs.changes(self._tree(req)), req.code_paths)
         if outside:

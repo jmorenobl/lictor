@@ -60,7 +60,8 @@ def excluded_everything(files: Sequence[str], code: CodePaths) -> str | None:
     return (
         f"code_exclude ({', '.join(code.exclude)}) excluye todos los ficheros de code_paths "
         f"({', '.join(code.paths)}): la puerta L0-alcance del refactor no comprobaría nada. Deja "
-        "en code_exclude solo lo que no es código, como los tests junto a él (*_test.go)."
+        "en code_exclude solo lo que no es código, como los tests junto a él (*_test.go); si ahí "
+        "solo hay tests todavía, quita code_exclude hasta que haya código."
     )
 
 

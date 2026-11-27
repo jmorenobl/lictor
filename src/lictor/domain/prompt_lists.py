@@ -24,12 +24,17 @@ def _listed(items: Sequence[str]) -> str:
     return ", ".join(items)
 
 
-def suppressions_rule(suppressions: Sequence[str], role: Role) -> str:
-    """The suppressions the agent mustn't add: the profile's and the project's, or the idea."""
+def suppressions_rule(suppressions: Sequence[str], role: Role, *, gated: bool = False) -> str:
+    """The suppressions the agent mustn't add: the profile's and the project's, or the idea.
+
+    `gated` says `L0-supresiones` judges them, with `banned_patterns` alone too: then a sealed
+    driver with one is still rejected, and the driver hears so.
+    """
+    sealed = f" {_SEALED}" if role == "driver" and gated else ""
     if not suppressions:
-        return _NO_LIST
-    tail = _SEALED if role == "driver" else _KEEP_MOVED
-    return f"- No añadas supresiones: {_listed(suppressions)}. {tail}\n"
+        return f"{_NO_LIST.rstrip()}{sealed}\n"
+    tail = sealed if role == "driver" else f" {_KEEP_MOVED}"
+    return f"- No añadas supresiones: {_listed(suppressions)}.{tail}\n"
 
 
 def forbidden_rule(

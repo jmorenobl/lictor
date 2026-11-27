@@ -300,4 +300,7 @@ orden.
 En la 0.23.1, un `code_exclude` que excluye todos los ficheros de HEAD bajo `code_paths` (`*.go`) es
 ✗ «Rutas de código» en `doctor` y al empezar un run, con exit 10: la puerta no tendría nada que
 mirar. Se juzga sobre los ficheros de HEAD porque ningún patrón fijo distingue `*.go` de
-`*_test.go`; sin código aún bajo esas rutas no se juzga nada.
+`*_test.go`. Sin código aún bajo esas rutas, `doctor` lo deja «no comprobado», y `L0-alcance`
+juzga lo mismo sobre el árbol del verde: descarta el refactor con ese mensaje. Límites: cualquier
+fichero no excluido bajo `code_paths` (un `README.md`) lo tapa, y un árbol que de momento solo
+tiene tests ahí se rechaza aunque la receta sea la buena.

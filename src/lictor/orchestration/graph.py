@@ -561,6 +561,7 @@ class _GraphNodes:
                 # leaves unformatted in the code the first implementer formats (F83).
                 check_commands=self._agent_commands().all,
                 suppressions=self.ctx.suppressions,
+                banned_patterns=self.ctx.banned_patterns,
             )
         )
 
