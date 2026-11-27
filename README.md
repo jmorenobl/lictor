@@ -263,7 +263,7 @@ Doctor: todas las comprobaciones pasaron.
 
 No sirve para reglas de **comportamiento**. Nada comprueba `hints`: si una regla importa, escríbela como escenario. En la pasada de prueba, `hints` decía que `main` nunca termina el proceso, ningún escenario lo cubría, y `--help` lo terminaba igual.
 
-Las instrucciones de cómo escribir el driver (`acceptance.driver_hints`) son del perfil y se leen de él en cada carga, así que sus mejoras llegan a todos los proyectos. Un `lictor.json` no puede declararlas: Lictor lo rechaza al cargar. Lo propio del proyecto va en `hints`.
+Las instrucciones de cómo escribir el driver (`acceptance.driver_hints`) son del perfil `python-uv` y se leen de él en cada carga, así que sus mejoras llegan a todos los proyectos. Un `lictor.json` no puede declararlas sobre un perfil que las declara: Lictor lo rechaza al cargar. Lo propio del proyecto va en `hints`. Con `generic`, que no las declara, las escribe el proyecto.
 
 ### 💻 Probar una CLI
 
@@ -503,16 +503,28 @@ Un control `check` solo protege lo que integras si tu CI ejecuta `lictor check`.
 {"refactor": {"enabled": false}}
 ```
 
-Cambiarlo impide reanudar un run empezado con el otro valor. Los objetivos son del perfil, como `acceptance.driver_hints`: un `lictor.json` con `refactor_hints` no carga.
+Cambiarlo impide reanudar un run empezado con el otro valor. Los objetivos son solo del perfil: un `lictor.json` con `refactor_hints` no carga.
 
-**Qué manda cada lado.** Lo que garantiza la verificación lo declara solo el perfil y se lee de él en cada carga: un `lictor.json` no lo contiene, así que no puede quedar obsoleto. Declarar en `lictor.json` cualquiera de estos campos es un error de configuración.
+**Qué manda cada lado** ([ADR-0020](https://github.com/jmorenobl/lictor/blob/master/docs/adr/ADR-0020-perfil-generico-y-nivel-de-prueba.md)). El proyecto escribe lo que el perfil no declara, y solo añade a lo que declara. Lo que el perfil declara se lee de él en cada carga, así que un `lictor.json` no puede dejarlo obsoleto.
 
-| Lado | Campos | Regla |
+| Clase | Campos | Regla |
 | :--- | :--- | :--- |
-| Perfil | `verification.prepare`, `prepare_inherit`, `prepare_ask`, `prepare_home_files`, `env`, `inherit`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`; `suppressions`, `banned_patterns`, `forbidden_paths`, `driver_exempt_paths`, `code_paths`; `oracle`; `acceptance.driver_hints`; `refactor_hints` | Ningún proyecto los cambia ni los quita |
-| Proyecto | `verification.env`, `verification.inherit`, `verification.prepare_inherit` | Solo añaden. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
+| Se suma | `suppressions`, `banned_patterns`, `forbidden_paths`, `code_paths`; `verification.env`, `inherit`, `prepare_inherit` | Perfil + proyecto: una más solo rechaza más. Tocar una variable que el perfil fija, hereda o reserva da exit 10 |
+| Exclusiva | `verification.prepare`, `acceptance.driver_hints`, `code_exclude` | El proyecto la escribe solo si el perfil no la declara (`code_exclude`, si no declara `code_paths`); si no, exit 10 |
+| Solo del perfil | `oracle`, `survey`, `acceptance.needs_plugins`, `reserved`, `plugin_variable`, `plugins`, `plugins_command`, `files_dir_command`, `files`, `prepare_ask`, `prepare_home_files`, `driver_exempt_paths`, `refactor_hints` | Ningún proyecto los escribe, aunque el perfil no los declare |
 | Proyecto | `paths`, `acceptance`, `agent_tools`, `hints`, `gitignore` | Si se escriben, sustituyen entero al valor del perfil |
 | Proyecto | `controls` | Cambios por `id` sobre los del perfil: cambian campos, quitan (`enabled: false`) o añaden |
+
+**Otros lenguajes: el perfil `generic`** (`alpha`). Para cualquier cadena que deje un informe JUnit (Go, Node, Python sin `uv` o sin `src/`). Nunca se detecta: `lictor init --profile generic`. No sabe cómo es tu proyecto, así que `lictor.json` escribe `paths`, `acceptance`, `code_paths` y `agent_tools`, y casi siempre `suppressions`, `banned_patterns`, `forbidden_paths` y `acceptance.driver_hints`; la skill de Lictor lo hace contigo, con las recetas de cada cadena.
+
+**El nivel de prueba.** `lictor doctor`, el run, `lictor status` y `report.md` dicen qué vale un verde con tu perfil:
+
+| Nivel | Perfil | Qué no comprueba |
+| :--- | :--- | :--- |
+| Resultado probado | `python-uv` | Que el test compare con el valor del escenario: uno que copia en el assert lo que devuelve el código pasa |
+| Básico | `generic` | Que el test compare nada: uno sin aserción falla en el rojo porque la interfaz no está implementada, y pasa después con cualquier código. Lee una vez el driver sellado |
+
+Junto al nivel salen los huecos que Lictor sabe calcular (un entorno sin hash, ninguna supresión rechazada, un control sin su plugin…). Son hechos: no cambian el código de salida.
 
 El entorno de los comandos parte de vacío: `inherit` lista los nombres exactos que pasan y `env` fija después lo que debe valer, así que `env` gana y lo que nadie enumeró no entra. Cada comando tiene además un `HOME` vacío y nuevo, fuera del proyecto, así que tu configuración de usuario (`~/.config/ruff`, `~/.config/mypy`, `~/.config/uv`) no decide ningún control. Pytest corre sin autoload de plugins, y aun así un proyecto no declara ninguno: al construir el entorno, antes de calcular su hash, Lictor pregunta a su intérprete en modo aislado (`plugins_command`) qué plugins tiene instalados y los fija en `plugin_variable`, junto con los del perfil. La lista va a `.lictor/verify_env.json` y se compara en cada comprobación; lo que aparezca después no se carga y falla `L0-entorno`. Un plugin debe publicarse como módulo: uno con la forma `modulo:objeto` no se puede cargar por nombre y da exit 40. Como los plugins se registran por módulo, `-p no:<nombre>` en `addopts` no siempre los bloquea en la verificación: solo si el módulo se llama `<nombre>` o `pytest_<nombre>`. `files` son ficheros `.py` que acompañan al perfil y Lictor copia en el entorno antes de calcular su hash, en el directorio que imprime `files_dir_command`, que pregunta al intérprete del entorno.
 

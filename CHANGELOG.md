@@ -7,6 +7,66 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.23.0] - 2026-11-27
+
+### Añadido
+
+- **El nivel de prueba, calculado (ADR-0020).** Una función del dominio lee las defensas resueltas
+  y dice qué vale un verde: **resultado probado** con todo el oráculo de `python-uv` (impostores de
+  stubs, clases de cada fallo, enlace con el escenario e impostor de la interfaz), **básico** con
+  menos. Junto al nivel salen los huecos que Lictor sabe calcular, cada uno con su frase: un rojo
+  sin clase, el enlace por nombre, un escenario ya cumplido sin prueba, el valor del Gherkin sin
+  pesar, un entorno sin hash, ninguna supresión, ningún control que bloquee, nada que lea qué ve
+  cada control, un control cuyo plugin el entorno no carga. Lo dicen `lictor doctor` («Nivel de
+  prueba», con ⚠ si hay huecos, sin cambiar el código de salida), el arranque del run, `lictor
+  status` (también en `--json`) y `report.md` (en «Resumen» y en «Lo que este nivel no
+  comprueba»). `run.started` lo guarda como códigos.
+- **El perfil `generic@0.1` (`alpha`)**, para cualquier lenguaje que deje un informe JUnit (Go,
+  Node, Python sin `uv` o sin `src/`). Nunca se detecta: `lictor init --profile generic`, que dice
+  en su salida lo que hay que escribir (`paths`, `acceptance`, `code_paths` y `agent_tools`). Su
+  skill trae las recetas de Go, de Node y de Python, con las trampas medidas. Su nivel es básico:
+  **un test que no compara nada da un verde**, y la skill pide leer una vez el driver sellado. Lo
+  cierra el impostor básico de la 0.24.0.
+- **`code_exclude`** en `lictor.json`, con globs (`*_test.go`), para un perfil que no declara
+  `code_paths`: los tests unitarios junto al código dejan de ser código para la puerta del refactor
+  (`L0-alcance`).
+- **«Órdenes del agente» en `lictor doctor`**: avisa de un control que bloquea, o de la
+  aceptación, que `agent_tools` no deja ejecutar al agente.
+- **El job de la CI «Cadenas: Go y Node»**, solo en Linux (Go 1.26, Node 24, `gotestsum` v1.13.0):
+  los casos `toolchain`, con un arnés propio y un oráculo que no usa Lictor.
+
+### Cambiado
+
+- **Las defensas, en tres clases.** `suppressions`, `banned_patterns`, `forbidden_paths` y
+  `code_paths` de `lictor.json` **se suman** a las del perfil (antes, un `lictor.json` que las
+  escribía no cargaba). `verification.prepare` y `acceptance.driver_hints` son **exclusivas**: el
+  proyecto las escribe solo si su perfil no las declara. El resto (el oráculo, `survey`, los
+  plugins, `refactor_hints`…) sigue siendo solo del perfil. Cambia `config_fingerprint`: un run de
+  una versión anterior no se reanuda.
+- **`paths`, `acceptance` y `detect` son opcionales en un perfil.** Lo que falte, entre ellos y
+  `code_paths`, se nombra de una vez al cargar, con exit 10.
+- **La orden del driver pide, en todos los perfiles, stubs que fallan con el «no implementado» del
+  lenguaje y nunca devuelven un valor**, y que el driver recoja ese fallo en cada test si en su
+  lenguaje para el proceso de tests (un `panic` de Go). Un test cuyo escenario espera un error
+  comprueba cuál. Sin impostor de la interfaz, dice que un escenario que el código ya cumple lo
+  registra una persona.
+- **Un perfil no puede declarar `oracle.impostors` sin `red_kinds`.**
+
+### Corregido
+
+- **Lo que engañaba sin el plugin de `python-uv`:** «Medidas del driver» daba «falla sin una
+  aserción del driver» de un test que fallaba por su aserción (ahora, el estado del JUnit); «Tests
+  aceptados sin comprobar» decía que se comprobaron todos; «Cambios que ningún control ejecutó»
+  decía que el run no movió la rama, cuando sí la movió; «Entorno de verificación listo» sin
+  entorno; `doctor` daba por comprobadas las dependencias sin nada que comprobar; el refactor oía
+  que pasar menos tests lo descarta, sin un control que los cuente; las órdenes del implementador y
+  del refactor decían «No añadas supresiones: .» sin ninguna.
+- **Un driver nuevo cuyo informe no tiene caso de ningún escenario** (uno de Go que no compila)
+  recibe en el reintento la salida de la aceptación, con el error del compilador. **Con el driver
+  sellado, un escenario sin caso** ya no se lee como un test mal nombrado: «la aceptación se cortó
+  antes de ejecutar N tests».
+- **Un perfil sin marcadores de `detect` se detectaba en cualquier proyecto.**
+
 ## [0.22.0] - 2026-11-27
 
 ### Añadido
@@ -1230,7 +1290,9 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.21.0...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/jmorenobl/lictor/compare/v0.22.0...v0.23.0
+[0.22.0]: https://github.com/jmorenobl/lictor/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/jmorenobl/lictor/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/jmorenobl/lictor/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/jmorenobl/lictor/compare/v0.18.0...v0.19.0
