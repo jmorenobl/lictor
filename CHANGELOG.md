@@ -7,6 +7,34 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.23.2] - 2026-11-28
+
+### Cambiado
+
+- **La receta de Go no usa `t.Run`** (G1): cada subtest sale en el informe como otro caso con el
+  mismo ID, y un escenario es un solo caso. Las filas de una tabla del Gherkin se recorren con un
+  bucle dentro del mismo test. Antes la receta pedía el `defer` «también dentro de cada `t.Run`».
+- **La receta de Go añade `GOFLAGS=-modcacherw`** (G7): sin él Go deja la caché de módulos de solo
+  lectura dentro del worktree, y no se podía retirar.
+- **`lictor retire` retira una ejecución que no llegó a empezar**: antes se negaba y pedía un
+  `lictor run`, que la habría empezado y gastado.
+
+### Corregido
+
+- **Un worktree a medio borrar ya no se toma por una ejecución que sigue** (G8). Si no se podía
+  leer su configuración, contaba como reanudable: `retire` se negaba y proponía un `lictor run`
+  que gastaría. Ahora dónde está cada ejecución se lee sin su configuración. Una rota o retirada a
+  medias nunca se reanuda: `run` avisa de ella, y con `--branch` sale con 10 y dice qué hacer;
+  `status` la cuenta sin fallar. `retire` marca la ejecución antes de borrar nada y con la marca
+  termina el retiro a medias. Sin ella, solo borra lo que es de Lictor, y antes mira qué queda. Un
+  worktree desenlazado porque se movió el checkout no se toca: se repara con `git worktree repair`.
+- **`retire` quita lo que una herramienta dejó de solo lectura en su entorno** (G7), como la caché
+  de módulos de Go, devolviendo el permiso de escritura solo dentro de lo suyo. Lo mismo al
+  reconstruir el entorno y al barrer los temporales, que antes dejaban restos sin avisar.
+- **Un escenario que el driver sellado da en varios casos para el run con 10** (G1), tras dos
+  verificaciones seguidas, en vez de gastar todos los intentos de todos los escenarios. El mensaje
+  de «varios casos» dice por qué pasa y cómo se arregla.
+
 ## [0.23.1] - 2026-11-27
 
 ### Cambiado
@@ -1313,7 +1341,8 @@ con el CLI real de Claude Code (#8).
 - Lictor commitea en la rama actual: mientras corre, nadie más debe mover HEAD en ese checkout, y
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
-[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.1...HEAD
+[Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.2...HEAD
+[0.23.2]: https://github.com/jmorenobl/lictor/compare/v0.23.1...v0.23.2
 [0.23.1]: https://github.com/jmorenobl/lictor/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/jmorenobl/lictor/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/jmorenobl/lictor/compare/v0.21.0...v0.22.0
