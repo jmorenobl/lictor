@@ -202,6 +202,7 @@ TOOLCHAIN = {
         "test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry",
         "test_go_a_vacuous_test_is_no_green",
         "test_go_a_weak_assertion_is_no_green",
+        "test_go_an_exclusion_of_every_code_file_stops_before_any_agent",
         "test_node_builds_its_dependencies_into_a_hashed_environment_and_reaches_green",
         "test_node_a_dependency_changed_in_the_agents_turn_fails_the_environment",
     ),
