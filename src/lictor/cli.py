@@ -46,6 +46,7 @@ from lictor.application.usecases.check_working_tree import CheckWorkingTreeReque
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
     CheckPreconditions,
+    PreconditionCheck,
     PreconditionsReport,
     PreconditionsRequest,
 )
@@ -370,6 +371,11 @@ def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
     return runtime.preconditions, runtime.clock, None
 
 
+def _passed(check: PreconditionCheck) -> str:
+    """A check that passed, with what it has to tell."""
+    return f"✓ {check.name}: {check.detail}" if check.detail else f"✓ {check.name}"
+
+
 def _echo_checks(report: PreconditionsReport) -> int:
     """Print every check, and return the exit code the domain gives what they found."""
     for check in report.checks:
@@ -379,7 +385,7 @@ def _echo_checks(report: PreconditionsReport) -> int:
             for problem in check.problems:
                 typer.echo(f"✗ {check.name}: {problem.message}", err=True)
         elif not check.warnings:
-            typer.echo(f"✓ {check.name}: {check.detail}" if check.detail else f"✓ {check.name}")
+            typer.echo(_passed(check))
         for warning in check.warnings:
             typer.echo(f"⚠ {check.name}: {warning}")
 

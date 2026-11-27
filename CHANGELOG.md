@@ -7,7 +7,31 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.22.0] - 2026-11-27
+
+### Añadido
+
+- **El código lee la metadata de su propio paquete en la verificación (F82, ADR-0019).** El
+  proyecto sigue sin instalarse, a propósito, pero el plugin que pone `src` en el path registra en
+  memoria, dentro de pytest, la distribución que instalarlo dejaría: el nombre, la versión y los
+  entry points (menos `pytest11`), leídos del `pyproject.toml` del clon sin ejecutar nada por el
+  nuevo módulo del perfil `lictor_metadata.py`. La versión puede ser estática o dinámica en un
+  literal (hatch `path`, setuptools `attr` o `file`, flit), normalizada como la escriben los
+  backends. Solo se registra si `uv` instalaría el proyecto (`[build-system]`, y `tool.uv.package`
+  no es `false`) y si el entorno no tiene ya una distribución con ese nombre; una versión de git no
+  se registra. En agentix, `__version__ = version("agentix")` dejaba `unit` con 24 errores de
+  recogida y «Los controles pasan en HEAD» en ✗; ahora pasa, con 2652 tests. En pyverifactu, su
+  grupo `verifactu_py.certificate_providers` salía vacío sin que nada lo dijera; ahora se ve.
+- **«Dependencias de la verificación» dice si la metadata del proyecto está:** ✓ con su nombre, su
+  versión y sus grupos, o ⚠ con la razón («la versión sale de git», «sin `[build-system]`») y qué
+  hacer. Es un aviso: un código que no lee su metadata no pierde nada. Un run nuevo repite los
+  avisos de esa comprobación al empezar (`run.started` los guarda en `dependencies`).
+
 ### Cambiado
+
+- **En `lictor check` de Lictor, su `__version__` deja de ser `0+desconocida`:** es el primer
+  proyecto que lee su metadata. Cambia `config_fingerprint`, porque cambia el contenido de
+  `verification.files`: un run de una versión anterior no se reanuda.
 
 - **La autoverificación de la CI va en dos jobs a la vez: L1, L2 y L4 por un lado y la mutación
   (L5) por otro.** El paso único tardaba 10 min y se cortaba a los 12: en un runner un 20–40 % más
