@@ -373,6 +373,10 @@ class ProfileInitConfig:
     config_json: str
     model: str = ""
     hints: str = ""
+    # What the profile leaves to the person to write in `lictor.json` (ADR-0020), and how mature
+    # the profile is: `init` says both.
+    to_write: Sequence[str] = ()
+    status: str = "stable"
 
 
 @runtime_checkable

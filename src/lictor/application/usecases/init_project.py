@@ -34,6 +34,8 @@ class InitProjectResult:
     model: str = ""
     hints: str = ""
     gitignore_added: tuple[str, ...] = ()
+    to_write: tuple[str, ...] = ()
+    status: str = "stable"
 
 
 class InitProject:
@@ -74,6 +76,8 @@ class InitProject:
             model=init_data.model,
             hints=init_data.hints,
             gitignore_added=added,
+            to_write=tuple(init_data.to_write),
+            status=init_data.status,
         )
 
     def _update_gitignore(self, project_root: Path, entries: list[str]) -> tuple[str, ...]:

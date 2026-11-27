@@ -59,7 +59,13 @@ from lictor.domain.refactor import (
     refactor_subject,
     regression_reason,
 )
-from lictor.domain.refactor_scope import REFACTOR_SCOPE, out_of_scope, out_of_scope_reason
+from lictor.domain.refactor_scope import (
+    NO_CODE,
+    REFACTOR_SCOPE,
+    CodePaths,
+    out_of_scope,
+    out_of_scope_reason,
+)
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
@@ -130,7 +136,7 @@ class VerifyAttemptRequest:
     # A refactor (ADR-0010): the green it starts from, and what its verification measured.
     refactor_of: str = ""
     baseline: Mapping[str, Measure] = field(default_factory=dict)
-    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
+    code_paths: CodePaths = NO_CODE  # where the code is: a refactor stays in its own (F84)
     # The commit the run started from, against which the public API is compared (ADR-0017).
     api_base: str | None = None
     api: ApiBase | None = None  # filled in by VerifyAttempt.execute

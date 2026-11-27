@@ -77,6 +77,7 @@ from lictor.domain.refactor import (
     oracle_measures,
     settled_without_verifying,
 )
+from lictor.domain.refactor_scope import NO_CODE, CodePaths
 from lictor.domain.reports import ApiComparison
 from lictor.domain.results import (
     VERIFY_FINISHED,
@@ -247,7 +248,7 @@ class GraphContext:
     refactor_scenario: RefactorScenario | None = None
     commit_refactor: CommitRefactor | None = None
     refactor_hints: str = ""
-    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
+    code_paths: CodePaths = NO_CODE  # where the code is: a refactor stays in its own (F84)
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
     # The project's rules of code (F79): every agent gets them, and nothing checks them.

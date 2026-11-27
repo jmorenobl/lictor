@@ -5,11 +5,11 @@ function, so what the prompt names is what the gate allows (F84). It keeps nothi
 don't change, so a resume draws the same scope again.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from lictor.application.ports import Vcs
 from lictor.domain.refactor import Findings, Measure
-from lictor.domain.refactor_scope import RefactorScope, refactor_scope
+from lictor.domain.refactor_scope import CodePaths, RefactorScope, refactor_scope
 
 
 def baseline_findings(baseline: Mapping[str, Measure]) -> list[Findings]:
@@ -18,7 +18,7 @@ def baseline_findings(baseline: Mapping[str, Measure]) -> list[Findings]:
 
 
 def green_scope(
-    vcs: Vcs, refactor_of: str, baseline: Mapping[str, Measure], code: Sequence[str]
+    vcs: Vcs, refactor_of: str, baseline: Mapping[str, Measure], code: CodePaths
 ) -> RefactorScope:
     """Where the refactor of the green `refactor_of` may work, and what it is asked there."""
     parent = vcs.parent_of(refactor_of)

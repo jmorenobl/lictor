@@ -42,7 +42,13 @@ from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
 from lictor.domain.refactor import Measure
-from lictor.domain.refactor_scope import RefactorScope, outside_scope, scope_rule
+from lictor.domain.refactor_scope import (
+    NO_CODE,
+    CodePaths,
+    RefactorScope,
+    outside_scope,
+    scope_rule,
+)
 
 ROLE: Final[AgentRole] = "refactor"
 
@@ -84,7 +90,7 @@ class RefactorScenarioRequest:
     baseline_step: Path | None = None
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
     # Where the code is: the refactor may change only what its scenario changed there (F84).
-    code_paths: Sequence[str] = ()
+    code_paths: CodePaths = NO_CODE
 
 
 @dataclass(frozen=True)

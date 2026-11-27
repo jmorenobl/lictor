@@ -19,7 +19,7 @@ from lictor.domain.duplication import Duplication
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
 from lictor.domain.refactor import Measure
-from lictor.domain.refactor_scope import LineSpan
+from lictor.domain.refactor_scope import CodePaths, LineSpan
 from lictor.domain.reports import Clone, CloneOccurrence, FunctionComplexity
 
 SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
@@ -68,7 +68,7 @@ def _execute(
         "check_commands": ["pruebas"],
         "hints": "Contexto.",
         "refactor_hints": "- Funciones cortas.",
-        "code_paths": ["src/"],
+        "code_paths": CodePaths(("src/",)),
     }
     use_case = RefactorScenario(vcs, executor, spec_source, event_log, clock)
     res = use_case.execute(RefactorScenarioRequest(**{**fields, **overrides}))

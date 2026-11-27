@@ -80,6 +80,7 @@ from lictor.domain.conventions import (
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
+from lictor.domain.refactor_scope import CodePaths
 from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
 from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
@@ -478,7 +479,7 @@ def bootstrap_runtime(
             else None
         ),
         refactor_hints=defences.refactor_hints,
-        code_paths=tuple(defences.code_paths),
+        code_paths=CodePaths(tuple(defences.code_paths), tuple(defences.code_exclude)),
         agent_files=tuple(defences.verification.files),
     )
 
