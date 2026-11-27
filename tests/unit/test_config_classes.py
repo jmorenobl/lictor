@@ -17,10 +17,14 @@ from lictor.adapters.config.loader import (
     load_config,
     resolve_defences,
 )
-from lictor.adapters.config.models import Profile
+from lictor.adapters.config.models import Profile, domain_controls
 from lictor.application.usecases.init_project import InitProjectResult
+from lictor.bootstrap import proof_defences
 from lictor.cli import describe_init
+from lictor.domain.controls import controls_of_stage
 from lictor.domain.errors import ConfigError, ExitCode
+from lictor.domain.proof_level import BASIC, proof_level
+from lictor.domain.stages import ATTEMPT
 
 BARE = {
     "name": "bare",
@@ -239,3 +243,34 @@ def test_init_tells_the_person_what_a_bare_profile_leaves_to_them() -> None:
     assert "escribe en lictor.json `paths`, `acceptance` y `code_paths`, y en `agent_tools`" in told
     assert "no sabe cómo es tu proyecto" not in describe_init(base)
     assert "alpha" not in describe_init(base)
+
+
+def test_the_packaged_generic_profile_loads_what_a_go_project_writes(tmp_path: Path) -> None:
+    config = load_config(
+        _write(
+            tmp_path,
+            profile="generic@0.1",
+            paths=PATHS,
+            acceptance=ACCEPTANCE,
+            code_paths=["iva/"],
+            code_exclude=["*_test.go"],
+        )
+    )
+    defences = resolve_defences(config)
+    controls = controls_of_stage(domain_controls(config), ATTEMPT)
+
+    proof = proof_level(proof_defences(defences, controls), ())
+
+    assert proof.level == BASIC
+    assert len(proof.gaps) == 7
+    assert defences.forbidden_paths[0] == ".gitignore"
+    assert defences.refactor_hints.startswith("- Funciones cortas")
+    assert "src/<paquete>" not in defences.refactor_hints
+
+
+def test_init_with_generic_names_what_the_person_writes(tmp_path: Path) -> None:
+    init = ProfileConfigInitializer().generate_config(tmp_path, "generic")
+
+    assert init.to_write == ("paths", "acceptance", "code_paths")
+    assert init.status == "alpha"
+    assert json.loads(init.config_json)["hints"] == ""

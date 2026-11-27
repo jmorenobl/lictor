@@ -145,7 +145,7 @@ def test_list_profiles_includes_python_uv() -> None:
 
 def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
     packaged = PackagedProfiles()
-    assert packaged.names() == ["python-uv"]
+    assert packaged.names() == ["generic", "python-uv"]
     assert "uv add --dev" in (packaged.skill_text("python-uv") or "")
 
     profile = (DEFAULT_PROFILES_DIR / "python-uv.json").read_text(encoding="utf-8")
@@ -162,7 +162,7 @@ def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("name", "why"),
     [
-        ("cobol", r"Perfil desconocido: 'cobol'\. Los de esta versión: python-uv"),
+        ("cobol", r"Perfil desconocido: 'cobol'\. Los de esta versión: generic, python-uv"),
         ("python-uv@0.1", "ya no existe: usa python-uv@0.2"),
         ("python-uv@9.9", "no coincide"),
     ],

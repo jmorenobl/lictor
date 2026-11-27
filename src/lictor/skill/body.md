@@ -116,8 +116,9 @@ ejecutar, y el run lo salta.
      cambió desde ahí sin que ningún control lo ejecutara. Lo que la persona acepta romper va en
      `api.accepted`. En un clon superficial, `lictor doctor` pide traer más historia. Sin el
      control `api` activo, `api.base` no se acepta: quítalo, o deja el control.
-   - No propongas añadir `driver_hints` a `lictor.json`: es del perfil, Lictor rechaza un
-     `lictor.json` que lo declare, y lo propio del proyecto va en `hints`.
+   - No propongas escribir `driver_hints` (en `acceptance`) si el perfil las declara: son las
+     instrucciones de su oráculo, Lictor rechaza un `lictor.json` que lo haga, y lo propio del
+     proyecto va en `hints`. Si el perfil no las declara, su parte dice qué poner ahí.
    - Los `controls` salen del perfil en cada carga. En `lictor.json` solo van los cambios por `id`:
      con el de un control del perfil cambian solo los campos escritos (`{"id": "unit",
      "timeout_s": 900}`), `"enabled": false` lo quita y otro `id` añade un control, con `level`,
@@ -128,8 +129,8 @@ ejecutar, y el run lo salta.
      tests pasan, y el otro, su puntuación. Quitar el control leído, o dejarlo solo en `check`
      con su lector en cada intento, es un error que dice cómo salir; la parte del perfil dice
      cuáles son.
-   - Si a la persona le importan los tests unitarios, ofrécele un mínimo de cobertura. Con
-     `{"id": "coverage", "mode": "block", "min_score": 80}` el control bloquea por debajo, y el
+   - Si a la persona le importan los tests unitarios y hay un control de cobertura, ofrécele un
+     mínimo. Con `"mode": "block"` y `"min_score": 80` en ese control, bloquea por debajo, y el
      agente recibe el fallo en el siguiente intento. En `measure` el porcentaje solo sale en el
      informe: el agente no ve lo que no bloquea, y medir sin umbral no cambia lo que hace. El
      número lo decide la persona, y se escribe siempre como `min_score`: un umbral que la
@@ -152,11 +153,11 @@ ejecutar, y el run lo salta.
    repositorio y el árbol, y no construye el entorno, pero los escenarios sí los valida.
    `lictor check` ejecuta los controles en un clon limpio, como haría un run, y además los que
    un run deja para `check`, marcados «(solo en check)».
-4. Si ya hay código que cumple escenarios, Lictor lo prueba alterando lo que devuelve la
-   interfaz desde el Cuando y el Entonces: si una aserción del Entonces lo nota, el escenario sale
-   en verde sin llamar al agente. Lo que devuelve objetos, fechas o estado no lo puede alterar:
-   para eso, `lictor register <ID>…`, antes del primer run
-   y lanzado por la persona. Afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
+4. Si ya hay código que cumple escenarios, la parte del perfil dice si Lictor lo prueba por su
+   cuenta. Lo que no pruebe se registra con `lictor register <ID>…`, antes del primer run y
+   lanzado por la persona: afirma que esos escenarios ya se cumplen sin que Lictor lo pruebe.
+   `lictor doctor` dice en «Nivel de prueba» lo que vale un verde con este perfil, y lo que no
+   comprueba: díselo a la persona antes del primer run.
 5. Antes de dar el comando, compara `features/` y `hints` con `conventions`, y dile a la persona
    cada choque: en el prompt gana un valor literal del escenario (claves en español de una salida),
    y después `hints`, sobre las reglas del proyecto. Que decida qué cambia.
@@ -171,7 +172,8 @@ ejecutar, y el run lo salta.
 
 ## 4. Diagnosticar
 
-- `lictor status`: el escenario y el intento en curso, los verdes, las llamadas y el coste.
+- `lictor status`: el escenario y el intento en curso, los verdes, las llamadas, el coste y el
+  nivel de prueba del run.
 - `.lictor/report.md`, en el worktree de la ejecución (`lictor status` lo dice, o
   `lictor report --branch <nombre>` desde el checkout): el informe del último run; el de cada run
   queda también en `.lictor/runs/<run_id>/report.md`, para compararlos. Las secciones que más
