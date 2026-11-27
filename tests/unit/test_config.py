@@ -56,6 +56,7 @@ from lictor.adapters.config.profiles.python_uv import (
     lictor_duplication,
     lictor_gherkin,
     lictor_impostor,
+    lictor_metadata,
     lictor_outcome,
     lictor_project_path,
     lictor_survey,
@@ -590,6 +591,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
 
     assert [path.name for path in spec.files] == [
         "lictor_project_path.py",
+        "lictor_metadata.py",
         "lictor_outcome.py",
         "lictor_impostor.py",
         "lictor_gherkin.py",
@@ -616,6 +618,34 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     assert sys.path == ["primero", str(tmp_path / "src")]
 
 
+def _imported(nodes: list[ast.AST]) -> set[str]:
+    names = {
+        alias.name.split(".")[0]
+        for node in nodes
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    return names | {
+        node.module.split(".")[0]
+        for node in nodes
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+
+
+def _runtime_nodes(tree: ast.Module) -> list[ast.AST]:
+    """Every node but those under `if TYPE_CHECKING:`, which only the type checker reads."""
+    skipped = {
+        id(child)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "TYPE_CHECKING"
+        for branch in node.body
+        for child in ast.walk(branch)
+    }
+    return [node for node in ast.walk(tree) if id(node) not in skipped]
+
+
 @pytest.mark.parametrize(
     ("plugin", "expected"),
     [
@@ -623,6 +653,7 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
             lictor_project_path.__file__,
             {"configparser", "importlib", "os", "pathlib", "pytest", "sys", "typing"},
         ),
+        (lictor_metadata.__file__, {"ast", "importlib", "pathlib", "re", "typing"}),
         (
             lictor_outcome.__file__,
             {
@@ -706,21 +737,13 @@ def test_the_path_plugin_appends_the_sources_of_the_invocation(
     ],
 )
 def test_the_profile_plugins_stand_alone(plugin: str, expected: set[str]) -> None:
-    """They are installed on their own in an environment where Lictor doesn't exist."""
+    """They are installed on their own in an environment where Lictor doesn't exist: what they
+    import of it is only for the type checker, and their sibling they import by its own name."""
     tree = ast.parse(Path(plugin).read_text(encoding="utf-8"))
-    imported = {
-        alias.name.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-    imported |= {
-        node.module.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
-    }
 
-    assert imported - {"__future__"} == expected  # a directive of the compiler, no module
+    assert "lictor" not in _imported(_runtime_nodes(tree))
+    # `__future__` is a directive of the compiler, no module.
+    assert _imported(list(ast.walk(tree))) - {"__future__", "lictor"} == expected
 
 
 def test_a_profile_file_that_is_missing_is_a_configuration_error(tmp_path: Path) -> None:
@@ -992,6 +1015,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
     (profiles / "python_uv").mkdir()
     for plugin in (
         lictor_project_path.__file__,
+        lictor_metadata.__file__,
         lictor_outcome.__file__,
         lictor_impostor.__file__,
         lictor_gherkin.__file__,

@@ -379,7 +379,7 @@ def _echo_checks(report: PreconditionsReport) -> int:
             for problem in check.problems:
                 typer.echo(f"✗ {check.name}: {problem.message}", err=True)
         elif not check.warnings:
-            typer.echo(f"✓ {check.name}")
+            typer.echo(f"✓ {check.name}: {check.detail}" if check.detail else f"✓ {check.name}")
         for warning in check.warnings:
             typer.echo(f"⚠ {check.name}: {warning}")
 

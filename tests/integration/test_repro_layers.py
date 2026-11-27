@@ -63,6 +63,9 @@ ALL_CONTROLS = {
         "test_without_pytest_cov_unit_runs_as_it_is_and_coverage_is_skipped",
         "test_coverage_only_in_check_measures_there_and_never_in_the_run",
     ),
+    "test_v0_22_0_metadata": (
+        "test_unit_sees_the_projects_version_and_entry_points_without_installing_it",
+    ),
 }
 
 

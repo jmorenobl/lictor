@@ -431,6 +431,7 @@ class _GraphNodes:
                     for control in self.ctx.check_controls
                 ],
                 "blind_spots": blind_spots_record(report.blind_spots),
+                "dependencies": list(report.dependency_warnings),
                 "conventions": _conventions_record(self.ctx.conventions),
                 "api_start": _api_start(report.api_start),
             },

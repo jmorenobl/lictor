@@ -1,8 +1,11 @@
 """What a project needs before a run, and what its controls don't see (ADR-0015).
 
-`missing_plugins` and `program_problems` stop a run that couldn't do anything: what fixes them is a
-dependency, and only a person changes those; `configuration_problems` too, for a configuration of
-the tests that makes a command run something else, or fail with every test passed (F78).
+`metadata_facts` tells whether the project's own metadata (its version, its entry points) is in
+the verification, where the project isn't installed (F82, ADR-0019); it only warns, since code that
+doesn't read it loses nothing. `missing_plugins` and `program_problems` stop a run that couldn't do
+anything: what fixes them is a dependency, and only a person changes those;
+`configuration_problems` too, for a configuration of the tests that makes a command run something
+else, or fail with every test passed (F78).
 `blind_spots` only tells: tests no control runs, tests or files the run loads that the agent can't
 change, code nobody reads, and what the project's CI checks that no control does (F76). Each of
 them may be a decision of the project, so none stops anything, and what the person accepted in
@@ -23,6 +26,7 @@ from lictor.domain.survey import (
     CoverageGate,
     LoadedFile,
     ProjectImport,
+    ProjectMetadata,
     SurveyedCi,
     SurveyedCommand,
     SurveyedTests,
@@ -91,6 +95,31 @@ def _label(cid: str) -> str:
 
 def _names(ids: Sequence[str]) -> str:
     return ", ".join(f"'{cid}'" for cid in ids)
+
+
+def metadata_facts(metadata: ProjectMetadata | None) -> tuple[str | None, tuple[str, ...]]:
+    """What «Dependencias de la verificación» tells of the project's metadata: a ✓, or warnings.
+
+    The first is the detail of a ✓ (None when there is nothing to tell); the second, what to warn.
+    """
+    if metadata is None:
+        return None, ()
+    if metadata.problem is not None:
+        fix = f": {metadata.fix}" if metadata.fix else ""
+        return None, (
+            f"La metadata del proyecto no está en la verificación: {metadata.problem}. Si el "
+            f"código lee la suya (su versión, sus entry points), ahí fallará o no encontrará "
+            f"nada{fix}. Si no la lee, no pasa nada.",
+        )
+    named = f"{metadata.name} {metadata.version}"
+    if metadata.unread:
+        return None, (
+            f"La metadata del proyecto ({named}) está en la verificación sin "
+            f"{', '.join(metadata.unread)}: el proyecto los deja a su backend, y Lictor no los lee "
+            "sin ejecutarlo.",
+        )
+    groups = ", ".join(f"{group} ({count})" for group, count in metadata.groups)
+    return f"metadata del proyecto {named}" + (f", con {groups}" if groups else ""), ()
 
 
 def missing_plugins(

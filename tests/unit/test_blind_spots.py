@@ -12,6 +12,7 @@ from lictor.domain.blind_spots import (
     blind_spots,
     blind_spots_record,
     configuration_problems,
+    metadata_facts,
     missing_plugins,
     program_problems,
 )
@@ -22,6 +23,7 @@ from lictor.domain.survey import (
     LaunchedProgram,
     LoadedFile,
     ProjectImport,
+    ProjectMetadata,
     SurveyedCi,
     SurveyedCommand,
     SurveyedTests,
@@ -845,3 +847,101 @@ def test_a_ci_that_cant_be_what_the_survey_wrote_is_invalid(
     target[path[-1]] = value
 
     assert survey_report(data) == InvalidReport(reason)
+
+
+# F82 (ADR-0019): the project's own metadata, which the verification registers without installing.
+METADATA = {
+    "name": "agentix",
+    "version": "0.0.0",
+    "groups": {"x.plugins": 2, "console_scripts": 1},
+    "unread": [],
+}
+
+
+def test_the_metadata_the_survey_saw_is_read_as_a_fact() -> None:
+    report = survey_report({**GOOD, "metadata": METADATA})
+
+    assert isinstance(report, SurveyReport)
+    assert report.metadata == ProjectMetadata(
+        "agentix", "0.0.0", (("console_scripts", 1), ("x.plugins", 2))
+    )
+
+
+def test_why_there_is_no_metadata_is_read_as_a_fact() -> None:
+    report = survey_report({**GOOD, "metadata": {"problem": "sale de git", "fix": "dale una"}})
+
+    assert isinstance(report, SurveyReport)
+    assert report.metadata == ProjectMetadata(problem="sale de git", fix="dale una")
+
+
+def test_a_survey_that_says_nothing_of_metadata_has_none() -> None:
+    report = survey_report(GOOD)
+
+    assert isinstance(report, SurveyReport)
+    assert report.metadata is None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "reason"),
+    [
+        ([], "metadata no es un objeto"),
+        ({"problem": ""}, "metadata.problem no es un texto"),
+        ({"problem": "x", "fix": 1}, "metadata.fix no es un texto"),
+        ({**METADATA, "name": ""}, "metadata.name no es un texto"),
+        ({**METADATA, "version": 1}, "metadata.version no es un texto"),
+        ({**METADATA, "groups": []}, "metadata.groups no es un objeto"),
+        (
+            {**METADATA, "groups": {"g": 0}},
+            "metadata.groups.g no es un número válido: 0",
+        ),
+        ({**METADATA, "unread": "scripts"}, "metadata.unread no es una lista"),
+        ({**METADATA, "unread": [""]}, "metadata.unread no es un texto"),
+    ],
+)
+def test_metadata_that_cant_be_what_the_survey_wrote_is_invalid(
+    metadata: object, reason: str
+) -> None:
+    assert survey_report({**GOOD, "metadata": metadata}) == InvalidReport(reason)
+
+
+def test_registered_metadata_is_a_pass_with_its_name_version_and_groups() -> None:
+    found = ProjectMetadata("agentix", "0.0.0", (("console_scripts", 1), ("x.plugins", 2)))
+
+    assert metadata_facts(found) == (
+        "metadata del proyecto agentix 0.0.0, con console_scripts (1), x.plugins (2)",
+        (),
+    )
+    assert metadata_facts(ProjectMetadata("x", "1")) == ("metadata del proyecto x 1", ())
+
+
+def test_metadata_that_isnt_registered_warns_why_and_how_to_fix_it() -> None:
+    found = ProjectMetadata(problem="la versión sale de git", fix="dale una estática")
+
+    assert metadata_facts(found) == (
+        None,
+        (
+            "La metadata del proyecto no está en la verificación: la versión sale de git. Si el "
+            "código lee la suya (su versión, sus entry points), ahí fallará o no encontrará nada: "
+            "dale una estática. Si no la lee, no pasa nada.",
+        ),
+    )
+    assert metadata_facts(ProjectMetadata(problem="x"))[1] == (
+        "La metadata del proyecto no está en la verificación: x. Si el código lee la suya (su "
+        "versión, sus entry points), ahí fallará o no encontrará nada. Si no la lee, no pasa nada.",
+    )
+
+
+def test_entry_points_left_to_the_backend_warn_that_they_are_missing() -> None:
+    found = ProjectMetadata("x", "1", (("console_scripts", 1),), unread=("scripts", "entry-points"))
+
+    assert metadata_facts(found) == (
+        None,
+        (
+            "La metadata del proyecto (x 1) está en la verificación sin scripts, entry-points: el "
+            "proyecto los deja a su backend, y Lictor no los lee sin ejecutarlo.",
+        ),
+    )
+
+
+def test_without_a_survey_of_metadata_nothing_is_told() -> None:
+    assert metadata_facts(None) == (None, ())
