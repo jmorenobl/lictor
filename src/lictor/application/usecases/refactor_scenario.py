@@ -41,8 +41,15 @@ from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
-from lictor.domain.refactor import Measure
-from lictor.domain.refactor_scope import RefactorScope, outside_scope, scope_rule
+from lictor.domain.refactor import Measure, discards_text, guards_tests, unit_tests_rule
+from lictor.domain.refactor_scope import (
+    NO_CODE,
+    CodePaths,
+    RefactorScope,
+    outside_scope,
+    scope_rule,
+)
+from lictor.domain.rules import suppressions_text
 
 ROLE: Final[AgentRole] = "refactor"
 
@@ -84,7 +91,7 @@ class RefactorScenarioRequest:
     baseline_step: Path | None = None
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
     # Where the code is: the refactor may change only what its scenario changed there (F84).
-    code_paths: Sequence[str] = ()
+    code_paths: CodePaths = NO_CODE
 
 
 @dataclass(frozen=True)
@@ -206,7 +213,7 @@ class RefactorScenario:
             "{writable}": ", ".join(request.paths_writable),
             "{protected}": ", ".join(request.paths_protected),
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{suppressions}": ", ".join(request.suppressions),
+            "{suppressions}": suppressions_text(request.suppressions),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
             **agent_command_lines(
                 request.allowed_tools,
@@ -216,6 +223,8 @@ class RefactorScenario:
                 [*(cmd for _, cmd in measures), *own],
             ),
             "{medidas}": refactor_measures_text(measures, _green_left(request.baseline)),
+            "{tests_unitarios}": unit_tests_rule(guards_tests(request.baseline)),
+            "{descartes}": discards_text(guards_tests(request.baseline)),
             "{medidas_del_codigo}": _code_text(request, code, files, scope),
             "{hints}": request.hints,
             # Last: the person's text mustn't be read as a placeholder.

@@ -232,6 +232,44 @@ def _checks(
     return tuple(dict.fromkeys(c for c in found if c is not None and allowed_by(c, agent_tools)))
 
 
+def unrunnable_by_agent(
+    controls: Sequence[Control],
+    acceptance_run: str,
+    agent_tools: Sequence[str],
+    installed: Collection[str],
+) -> tuple[str, ...]:
+    """What decides an attempt that the agent's tools don't let it check, as warnings (D10).
+
+    Each such command drops out of the agent's list: it works blind on what it can't run.
+    """
+    found = [
+        (f"el control {c.id}", c.run, _check_of(c))
+        for c in command_controls(controls)
+        if counts_for_agent(c, installed)
+    ]
+    if acceptance_run:
+        found.append(("la aceptación", acceptance_run, without_report(acceptance_run)))
+    return tuple(
+        _unrunnable_text(what, run, command)
+        for what, run, command in found
+        if command is None or not allowed_by(command, agent_tools)
+    )
+
+
+def _unrunnable_text(what: str, run: str, command: str | None) -> str:
+    if command is None:
+        # `{out}` alone as an argument (`sh -c '…' {out}`): taking it out would change the command.
+        return (
+            f"el agente no tiene orden para comprobar {what} (`{run}`): su informe `{{out}}` va "
+            "como argumento suelto y no se puede quitar sin cambiar la orden, así que no podrá "
+            "comprobarlo antes de acabar."
+        )
+    return (
+        f"agent_tools no deja al agente ejecutar {what} (`{command}`): no podrá comprobarlo antes "
+        "de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita."
+    )
+
+
 def fixes_text(fixes: Sequence[AgentFix]) -> str:
     """The line of the prompt on the fixes: run them after the last change, then the checks."""
     if not fixes:

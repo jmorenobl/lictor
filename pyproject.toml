@@ -1,6 +1,6 @@
 [project]
 name = "lictor"
-version = "0.22.0"
+version = "0.23.0"
 description = "Implementa escenarios Gherkin con un agente y los verifica de forma determinista."
 readme = "README.md"
 authors = [
@@ -114,6 +114,7 @@ markers = [
     "smoke: repro cases that prove, with the whole configuration, that everything fits",
     "all_controls: repro cases whose defence needs the controls a light project drops",
     "with_refactor: repro cases about the refactor, which keep it on (ADR-0010)",
+    "toolchain: repro cases on Go and Node with the generic profile; the CI job of their own runs them",
 ]
 filterwarnings = [
     "ignore:cannot collect test class 'TestCaseResult'.*:pytest.PytestCollectionWarning",
@@ -146,6 +147,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_gherkin_proof.py",
     "tests/unit/test_driver_measures.py",
     "tests/unit/test_stub_proof.py",
+    "tests/unit/test_proof_level.py",
     "tests/unit/test_refactor.py",
     "tests/unit/test_routing.py",
     "tests/unit/test_model.py",

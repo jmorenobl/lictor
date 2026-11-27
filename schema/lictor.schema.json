@@ -25,6 +25,11 @@
           "minItems": 1,
           "title": "Failure Exit Codes",
           "type": "array"
+        },
+        "driver_hints": {
+          "default": "",
+          "title": "Driver Hints",
+          "type": "string"
         }
       },
       "required": [
@@ -373,8 +378,13 @@
     },
     "ProjectVerification": {
       "additionalProperties": false,
-      "description": "Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.",
+      "description": "Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.\n\n`prepare` solo cuando el perfil no construye el entorno (ADR-0020): entonces lo construye el\nproyecto, con su hash.",
       "properties": {
+        "prepare": {
+          "default": "",
+          "title": "Prepare",
+          "type": "string"
+        },
         "env": {
           "additionalProperties": {
             "type": "string"
@@ -437,6 +447,41 @@
   "additionalProperties": false,
   "description": "lictor.json tal como lo escribe la persona: lo que no escribe sale del perfil al cargar.\n\nUna clave escrita sustituye entera la del perfil, salvo `controls`, que son cambios por `id`\nsobre los del perfil (`ControlChange`).",
   "properties": {
+    "suppressions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Suppressions",
+      "type": "array"
+    },
+    "banned_patterns": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Banned Patterns",
+      "type": "array"
+    },
+    "forbidden_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Paths",
+      "type": "array"
+    },
+    "code_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Code Paths",
+      "type": "array"
+    },
+    "code_exclude": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Code Exclude",
+      "type": "array"
+    },
     "version": {
       "default": "0.1",
       "title": "Version",

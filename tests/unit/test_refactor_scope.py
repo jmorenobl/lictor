@@ -11,6 +11,8 @@ from lictor.domain.duplication import Duplication
 from lictor.domain.model import TreeChange
 from lictor.domain.refactor import Findings
 from lictor.domain.refactor_scope import (
+    NO_CODE,
+    CodePaths,
     LineSpan,
     RefactorScope,
     code_paths_problem,
@@ -24,7 +26,7 @@ from lictor.domain.refactor_scope import (
 )
 from lictor.domain.reports import Clone, CloneOccurrence, FunctionComplexity
 
-_CODE = ("src/",)
+_CODE = CodePaths(("src/",))
 _FIXTURE = Path(__file__).parents[1] / "fixtures" / "refactors_pyverifactu_0_20_0.json"
 
 
@@ -187,9 +189,9 @@ def test_a_clone_past_those_a_message_names_still_opens_its_file() -> None:
 
 
 def test_without_code_paths_nothing_is_out_of_scope() -> None:
-    scope = refactor_scope({"src/a.py": ()}, (), ())
+    scope = refactor_scope({"src/a.py": ()}, NO_CODE, ())
 
-    assert out_of_scope(scope, [_changed("src/b.py")], ()) == []
+    assert out_of_scope(scope, [_changed("src/b.py")], NO_CODE) == []
 
 
 # The 21 refactors of pyverifactu with the 0.20.0 (F84): 9 left their scenario, 12 didn't.
@@ -329,13 +331,34 @@ def test_code_paths_must_reach_what_the_agent_may_write() -> None:
     assert code_paths_problem(("src/", "lib/"), ("lib/x/",)) is None
     assert code_paths_problem(("src/", "lib/"), ("lib/", "tests/unit/")) is None
     assert code_paths_problem(("src/", "app/"), ("lib/", "tests/unit/")) == (
-        "paths.writable (lib/, tests/unit/) no incluye ninguna ruta de código del perfil "
+        "paths.writable (lib/, tests/unit/) no incluye ninguna ruta de código "
         "(src/, app/): la puerta L0-alcance del refactor no comprobaría nada. Añade a "
         "paths.writable la ruta donde está el código."
     )
     assert code_paths_problem((), ("src/",)) == (
-        "el perfil no declara code_paths: la puerta L0-alcance no sabría qué es código"
+        "ni el perfil ni lictor.json declaran code_paths: la puerta L0-alcance no sabría qué "
+        "es código. Escribe en lictor.json code_paths con las rutas de código."
     )
+
+
+def test_what_the_project_excludes_from_its_code_paths_isnt_code() -> None:
+    code = CodePaths(("iva/", "main.go"), ("*_test.go",))
+
+    assert code.holds("iva/iva.go")
+    assert code.holds("main.go")
+    assert not code.holds("iva/iva_test.go")
+    assert not code.holds("acceptance/x.go")
+    assert not NO_CODE.holds("iva/iva.go")
+
+
+def test_a_test_beside_the_code_may_follow_it_when_excluded() -> None:
+    code = CodePaths(("iva/",), ("*_test.go",))
+    scope = refactor_scope({"iva/iva.go": ()}, code, ())
+    changes = [_changed("iva/iva.go"), _changed("iva/otro_test.go")]
+
+    assert out_of_scope(scope, changes, code) == []
+    assert out_of_scope(scope, changes, CodePaths(("iva/",))) == ["iva/otro_test.go"]
+    assert refactor_scope({"iva/iva_test.go": ()}, code, ()).files == frozenset()
 
 
 def test_what_is_outside_counts_every_measure_less_what_the_scope_names() -> None:

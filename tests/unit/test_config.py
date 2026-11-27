@@ -145,7 +145,7 @@ def test_list_profiles_includes_python_uv() -> None:
 
 def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
     packaged = PackagedProfiles()
-    assert packaged.names() == ["python-uv"]
+    assert packaged.names() == ["generic", "python-uv"]
     assert "uv add --dev" in (packaged.skill_text("python-uv") or "")
 
     profile = (DEFAULT_PROFILES_DIR / "python-uv.json").read_text(encoding="utf-8")
@@ -162,7 +162,7 @@ def test_each_profile_adds_its_section_to_the_skill(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("name", "why"),
     [
-        ("cobol", r"Perfil desconocido: 'cobol'\. Los de esta versión: python-uv"),
+        ("cobol", r"Perfil desconocido: 'cobol'\. Los de esta versión: generic, python-uv"),
         ("python-uv@0.1", "ya no existe: usa python-uv@0.2"),
         ("python-uv@9.9", "no coincide"),
     ],
@@ -436,8 +436,8 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
     cfg = init_config_file(tmp_path)
     config_path = tmp_path / "lictor.json"
     assert config_path.is_file()
-    assert cfg.version == "0.1"
-    assert cfg.profile == "python-uv@0.2"
+    assert cfg.profile_name == "python-uv@0.2"
+    assert cfg.to_write == ()
 
     raw_disk = json.loads(config_path.read_text(encoding="utf-8"))
     assert "detect" not in raw_disk
@@ -445,17 +445,19 @@ def test_init_config_file_generates_and_does_not_overwrite_unless_forced(
     assert raw_disk["profile"] == "python-uv@0.2"
 
     loaded = load_config(tmp_path)
-    assert loaded == cfg
+    assert loaded.version == "0.1"
+    assert loaded.profile == "python-uv@0.2"
+    assert loaded == build_config_from_profile(load_profile("python-uv"), project_root=tmp_path)
 
     # No sobrescribe si force=False
     with pytest.raises(ConfigError) as exc_info:
         init_config_file(tmp_path, model="claude-opus-4-6", force=False)
     assert exc_info.value.exit_code == ExitCode.PRECONDITION
-    assert load_config(tmp_path).backend.model == cfg.backend.model
+    assert load_config(tmp_path).backend.model == cfg.model
 
     # Con force=True sí sobrescribe
     updated = init_config_file(tmp_path, model="claude-opus-4-6", force=True)
-    assert updated.backend.model == "claude-opus-4-6"
+    assert updated.model == "claude-opus-4-6"
     assert load_config(tmp_path).backend.model == "claude-opus-4-6"
 
 
@@ -878,10 +880,6 @@ def _project(tmp_path: Path, **fields: object) -> Path:
 @pytest.mark.parametrize(
     "fields",
     [
-        {"suppressions": []},
-        {"banned_patterns": []},
-        {"forbidden_paths": []},
-        {"verification": {"prepare": "uv sync"}},
         {"verification": {"files": {}}},
         {"verification": {"unset": []}},
         {"verification": {"reserved": []}},
@@ -1519,7 +1517,9 @@ def test_a_lictor_json_with_driver_hints_is_refused_naming_hints(tmp_path: Path)
     init_config_file(tmp_path)
     path = tmp_path / "lictor.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    acceptance = load_profile("python-uv").acceptance.model_dump(exclude={"driver_hints"})
+    profile_acceptance = load_profile("python-uv").acceptance
+    assert profile_acceptance is not None
+    acceptance = profile_acceptance.model_dump(exclude={"driver_hints", "needs_plugins"})
     data["acceptance"] = {**acceptance, "driver_hints": "Usa pytest-bdd."}
     path.write_text(json.dumps(data), encoding="utf-8")
 
@@ -1741,16 +1741,12 @@ def test_where_the_code_is_is_the_profiles_and_in_the_fingerprint(tmp_path: Path
     assert config_fingerprint(config, other) != config_fingerprint(config, defences)
 
 
-def test_a_lictor_json_with_code_paths_is_refused_naming_writable(tmp_path: Path) -> None:
-    path = _project(tmp_path, code_paths=["lib/"])
+def test_code_paths_of_lictor_json_join_the_profiles(tmp_path: Path) -> None:
+    """ADR-0010, amendment of 0.23.0: adding code only narrows what `L0-alcance` lets through."""
+    paths = {"writable": ["src/", "lib/"], "driver": ["tests/acceptance/"], "protected": ["x"]}
+    config = load_config(_project(tmp_path, code_paths=["lib/", "src/"], paths=paths))
 
-    with pytest.raises(ConfigError) as exc_info:
-        load_config(path)
-
-    message = str(exc_info.value)
-    assert exc_info.value.exit_code == ExitCode.PRECONDITION
-    assert "code_paths" in message
-    assert "paths.writable" in message
+    assert resolve_defences(config).code_paths == ("src/", "lib/")
 
 
 def test_writable_paths_without_the_code_leave_the_refactor_unscoped_and_are_refused(

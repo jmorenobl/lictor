@@ -69,6 +69,7 @@ from lictor.domain.errors import (
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.progress import api_start_record
+from lictor.domain.proof_level import proof_record
 from lictor.domain.refactor import (
     Measure,
     RefactorRecord,
@@ -77,6 +78,7 @@ from lictor.domain.refactor import (
     oracle_measures,
     settled_without_verifying,
 )
+from lictor.domain.refactor_scope import NO_CODE, CodePaths
 from lictor.domain.reports import ApiComparison
 from lictor.domain.results import (
     VERIFY_FINISHED,
@@ -107,7 +109,7 @@ from lictor.domain.rules import (
     suspicious_driver,
 )
 from lictor.domain.stages import ResultBranch, committed_greens, final_reason
-from lictor.domain.unexecuted import UNEXECUTED, unexecuted_record
+from lictor.domain.unexecuted import UNEXECUTED, UNREAD_BY_PROFILE, unexecuted_record
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -247,7 +249,7 @@ class GraphContext:
     refactor_scenario: RefactorScenario | None = None
     commit_refactor: CommitRefactor | None = None
     refactor_hints: str = ""
-    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
+    code_paths: CodePaths = NO_CODE  # where the code is: a refactor stays in its own (F84)
     # The profile's files, copied next to an agent call whose `agent_run` names them (ADR-0013).
     agent_files: Sequence[Path] = ()
     # The project's rules of code (F79): every agent gets them, and nothing checks them.
@@ -319,10 +321,21 @@ class _GraphNodes:
         """Tell what the run changed that no control executed, once its branch moved (H2)."""
         started = state.get("started_at")
         finder, environment = self.ctx.unexecuted, self.ctx.environment
-        if finder is None or environment is None or not started:
+        if environment is None or not started:
             return
         head = self.ctx.vcs.get_head_sha()
         if head == started:
+            return
+        if finder is None:
+            # Said, not left out: «the run didn't move the branch» would be false (ADR-0020).
+            self.ctx.event_log.append(
+                new_event(
+                    self.ctx.clock,
+                    UNEXECUTED,
+                    state["run_id"],
+                    data=unexecuted_record(UNREAD_BY_PROFILE, started, head),
+                )
+            )
             return
         step = state.get("verified_step")
         verified = self.ctx.project_root / step if step else None
@@ -434,6 +447,7 @@ class _GraphNodes:
                 "dependencies": list(report.dependency_warnings),
                 "conventions": _conventions_record(self.ctx.conventions),
                 "api_start": _api_start(report.api_start),
+                "proof": proof_record(report.proof) if report.proof is not None else None,
             },
         )
         self.ctx.event_log.append(event)
@@ -533,6 +547,7 @@ class _GraphNodes:
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
                 conventions=self.ctx.conventions,
+                interface_impostor=self.ctx.interface_impostor is not None,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),

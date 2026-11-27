@@ -15,6 +15,10 @@ Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproj
 - **Adoptar un proyecto con código:** `lictor doctor` dice qué dependencia falta (✗) y «lo que los
   controles no ven» (⚠): tests sin control, ficheros que cargan los tests y el agente no puede
   cambiar, código que nadie lee. Repásalo con la persona aviso por aviso (detalle, abajo).
+- **Código que ya cumple escenarios:** Lictor lo prueba alterando lo que devuelve la interfaz desde
+  el Cuando y el Entonces: si una aserción del Entonces lo nota, el escenario sale en verde sin
+  llamar al agente. Lo que no puede alterar (un servicio, un `Flag` combinado) lo dice al
+  rechazarlo: para eso, `lictor register`. El nivel de prueba es «resultado probado».
 - **Cuándo corre un control añadido:** una mutación o una auditoría de dependencias, con
   `"stage": "check"`; uno de secretos (`gitleaks`), en cada intento.
 

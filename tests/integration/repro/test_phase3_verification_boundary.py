@@ -492,11 +492,11 @@ def test_project_needs_reach_the_commands(
         {"verification": {"env": {"PYTHONPATH": "src"}}},
         {"verification": {"inherit": ["PYTHONPATH"]}},
         {"verification": {"prepare": "true"}},
-        {"forbidden_paths": []},
-        {"banned_patterns": []},
         {"oracle": {}},
     ],
-    ids=["addopts", "pythonpath", "heredar", "prepare", "rutas", "patrones", "oraculo"],
+    # An empty `forbidden_paths` or `banned_patterns` joins the profile's and takes nothing away
+    # (ADR-0020): `test_config_classes.py` holds it.
+    ids=["addopts", "pythonpath", "heredar", "prepare", "oraculo"],
 )
 def test_lictor_json_cannot_weaken_the_profile(
     make_project: ProjectFactory, changes: dict[str, Any]

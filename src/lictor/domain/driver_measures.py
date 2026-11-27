@@ -38,6 +38,9 @@ class RedMeasure:
 
     step: Step | None
     caught: Caught
+    # The case's status in the JUnit report, which is all a profile without the classes of each
+    # failure can tell (ADR-0020): "failure", "error", "passed", or "" without a case.
+    status: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,7 +93,9 @@ def red_measures(
     """How each pending scenario's test failed at the red."""
     return {
         sid: RedMeasure(
-            mapped[sid].failed_step if sid in mapped else None, caught(mapped.get(sid), driver)
+            mapped[sid].failed_step if sid in mapped else None,
+            caught(mapped.get(sid), driver),
+            mapped[sid].status if sid in mapped else "",
         )
         for sid in pending
     }
@@ -178,7 +183,8 @@ def measures_record(measures: DriverMeasures) -> dict[str, object]:
     """The measures as the journal keeps them."""
     return {
         "red": {
-            sid: {"step": m.step, "caught": m.caught} for sid, m in sorted(measures.red.items())
+            sid: {"step": m.step, "caught": m.caught, "status": m.status}
+            for sid, m in sorted(measures.red.items())
         },
         "stubs": None
         if measures.stubs is None
@@ -285,7 +291,10 @@ def _step(value: object) -> Step | None:
 
 def _red_from(raw: Mapping[str, object]) -> RedMeasure | None:
     found = _caught(raw.get("caught"))
-    return None if found is None else RedMeasure(_step(raw.get("step")), found)
+    status = raw.get("status", "")
+    if found is None or not isinstance(status, str):
+        return None
+    return RedMeasure(_step(raw.get("step")), found, status)
 
 
 def _stub_from(raw: Mapping[str, object]) -> StubMeasure | None:

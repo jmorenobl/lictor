@@ -31,6 +31,14 @@ from lictor.domain.progress import (
     red_timing_text,
     status_text,
 )
+from lictor.domain.proof_level import (
+    BASIC,
+    RED_WITHOUT_KIND,
+    ProofLevel,
+    level_name,
+    proof_from_record,
+    unchecked_lines,
+)
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     OLDER_EVENTS,
@@ -432,9 +440,18 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         *(
             [unchecked_note(info["stub_unchecked"])]
             if info["stub_unchecked"]
-            else ["- *Ninguno: cada test pendiente del driver se comprobó.*"]
+            else [_none_unchecked(info)]
         ),
     ]
+
+
+def _none_unchecked(info: Mapping[str, Any]) -> str:
+    """Nothing unchecked, or nothing checked at all: a basic level whose impostors never ran."""
+    proof: ProofLevel | None = info["proof"]
+    ran = any(m.stubs is not None for *_, m in info["driver_measures"])
+    if proof is not None and proof.level == BASIC and not ran:
+        return "- *Este perfil no comprueba los tests del driver: nivel básico.*"
+    return "- *Ninguno: cada test pendiente del driver se comprobó.*"
 
 
 _MEASURES_NOTE = (
@@ -471,10 +488,25 @@ def _step_word(step: str | None) -> str:
     return _STEP_WORDS.get(step or "", "fuera de un paso")
 
 
-def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> list[str]:
-    """A table per red check of a fresh driver, with what C would say of each scenario."""
+_UNCLASSIFIED_NOTE = (
+    "*Lo que vio el rojo de cada driver nuevo. Este perfil no lee cómo falla cada test (nivel "
+    "básico): el rojo es el estado del caso en el informe JUnit.*"
+)
+_STATUS_WORDS = {"failure": "falla", "error": "error", "passed": "pasa", "skipped": "omitido"}
+
+
+def _driver_measure_lines(
+    entries: list[tuple[int, str, DriverMeasures]], *, classified: bool = True
+) -> list[str]:
+    """A table per red check of a fresh driver, with what C would say of each scenario.
+
+    Without the classes of each failure (ADR-0020) there is only the JUnit status to say, and the
+    impostors' columns only when one of them ran.
+    """
     if not entries:
         return ["- *Ningún driver nuevo medido.*"]
+    if not classified and all(m.stubs is None and m.interface is None for *_, m in entries):
+        return _status_lines(entries)
     lines = [_MEASURES_NOTE]
     for attempt, step, measures in sorted(entries, key=lambda entry: entry[:2]):
         where = f" (`{step}`)" if step else ""
@@ -487,6 +519,18 @@ def _driver_measure_lines(entries: list[tuple[int, str, DriverMeasures]]) -> lis
             "|---|---|---|---|---|---|---|---|---|",
         ]
         lines += [_measure_row(sid, measures) for sid in _measured_ids(measures)]
+    return lines
+
+
+def _status_lines(entries: list[tuple[int, str, DriverMeasures]]) -> list[str]:
+    lines = [_UNCLASSIFIED_NOTE]
+    for attempt, step, measures in sorted(entries, key=lambda entry: entry[:2]):
+        where = f" (`{step}`)" if step else ""
+        lines += ["", f"### Intento {attempt}{where}", "", "| Escenario | Rojo |", "|---|---|"]
+        lines += [
+            f"| {sid} | {_STATUS_WORDS.get(red.status, 'sin resultado')} |"
+            for sid, red in sorted(measures.red.items())
+        ]
     return lines
 
 
@@ -745,6 +789,7 @@ class BuildReport:
             "attempts": [],
             "check_controls": [],
             "blind_spots": None,
+            "proof": None,
             "conventions": None,
             # What the run changed that no control executed (H2), and whether it reached the end.
             "unexecuted": None,
@@ -814,6 +859,7 @@ class BuildReport:
             if isinstance(c, dict)
         ]
         info["blind_spots"] = blind_spot_lines(ev.data.get("blind_spots"))
+        info["proof"] = proof_from_record(ev.data.get("proof"))
         info["conventions"] = ev.data.get("conventions")
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
@@ -1075,6 +1121,7 @@ class BuildReport:
             ),
             f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
             f"- **Duración total**: {_total_duration(info)}",
+            *_proof_summary(info["proof"]),
             "",
             "## Escenarios",
             *_scenario_table(info, owners, totals),
@@ -1134,7 +1181,15 @@ class BuildReport:
         lines.extend(["", "## Drivers rechazados"])
         lines.extend(info["rejected_drivers"] or ["- *Ningún driver rechazado.*"])
 
-        lines.extend(["", "## Medidas del driver", *_driver_measure_lines(info["driver_measures"])])
+        lines.extend(
+            [
+                "",
+                "## Medidas del driver",
+                *_driver_measure_lines(
+                    info["driver_measures"], classified=not _has_gap(info, RED_WITHOUT_KIND)
+                ),
+            ]
+        )
 
         lines.extend(["", "## Integridad de la bitácora"])
         lines.extend(_journal_lines(info["journal_damage"]))
@@ -1159,6 +1214,26 @@ class BuildReport:
 
         lines.append("")
         return "\n".join(lines)
+
+
+def _has_gap(info: Mapping[str, Any], code: str) -> bool:
+    proof: ProofLevel | None = info["proof"]
+    return proof is not None and any(gap.code == code for gap in proof.gaps)
+
+
+def _proof_summary(proof: ProofLevel | None) -> list[str]:
+    """The level of proof in the summary, and what it doesn't check right after (ADR-0020).
+
+    A run from before 0.23.0 kept no level, and none is said.
+    """
+    if proof is None:
+        return []
+    return [
+        f"- **Nivel de prueba**: {level_name(proof.level)}",
+        "",
+        "## Lo que este nivel no comprueba",
+        *(f"- {line}" for line in unchecked_lines(proof)),
+    ]
 
 
 def _unexecuted_section(info: Mapping[str, Any]) -> list[str]:

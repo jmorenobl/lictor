@@ -85,8 +85,36 @@ jobs:
       - run: uv sync --all-groups --frozen
       # The parts come from .test_durations, measured; a case missing there counts as the average.
       - run: >-
-          uv run pytest tests -n auto -q -m "repro and not exhaustive"
+          uv run pytest tests -n auto -q -m "repro and not toolchain and not exhaustive"
           --splits 3 --group ${{ matrix.group }} --splitting-algorithm least_duration
+
+  # The cases on Go and Node with the generic profile (ADR-0020): only here are the toolchains, so
+  # every other job leaves them out by their mark. A runner without one fails instead of skipping
+  # (`LICTOR_REQUIRE_TOOLCHAINS`). Linux alone until the harness settles (D7 of 0.23.0).
+  toolchains:
+    name: "Cadenas: Go y Node"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      LICTOR_REQUIRE_TOOLCHAINS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: go install gotest.tools/gotestsum@v1.13.0
+      - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: uv sync --all-groups --frozen
+      - run: uv run pytest tests -n auto -q -m "toolchain and not exhaustive"
 
   supply-chain:
     name: Dependencias y secretos
@@ -185,7 +213,7 @@ jobs:
 
   budget:
     name: Presupuesto
-    needs: [gates, repro, supply-chain, self-verification, mutation]
+    needs: [gates, repro, toolchains, supply-chain, self-verification, mutation]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

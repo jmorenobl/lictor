@@ -19,7 +19,7 @@ from lictor.domain.duplication import Duplication
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentTask, Event, Scenario, ScenarioId, TreeChange
 from lictor.domain.refactor import Measure
-from lictor.domain.refactor_scope import LineSpan
+from lictor.domain.refactor_scope import CodePaths, LineSpan
 from lictor.domain.reports import Clone, CloneOccurrence, FunctionComplexity
 
 SCENARIO_TEXT = "@IVA-001\nEscenario: IVA general\n  Entonces el total es 121"
@@ -68,7 +68,7 @@ def _execute(
         "check_commands": ["pruebas"],
         "hints": "Contexto.",
         "refactor_hints": "- Funciones cortas.",
-        "code_paths": ["src/"],
+        "code_paths": CodePaths(("src/",)),
     }
     use_case = RefactorScenario(vcs, executor, spec_source, event_log, clock)
     res = use_case.execute(RefactorScenarioRequest(**{**fields, **overrides}))
@@ -379,3 +379,26 @@ def test_a_green_without_a_comparison_says_nothing_of_the_api(tmp_path: Path) ->
     _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), baseline={"api": Measure()})
 
     assert "API pública" not in _task(executor).prompt
+
+
+def test_without_a_control_of_the_tests_the_refactor_isnt_told_they_guard_it(
+    tmp_path: Path,
+) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), suppressions=[])
+
+    prompt = " ".join(_task(executor).prompt.split())
+    assert "Puedes reorganizar los tests unitarios para que sigan al código." in prompt
+    assert "deje más sin probar" not in prompt
+    assert "No añadas supresiones: ninguna." in prompt
+
+
+def test_with_a_control_of_the_tests_the_refactor_hears_fewer_discards_it(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(
+        tmp_path, AgentResult(status="ok"), baseline={"unit": Measure(passed=3)}
+    )
+
+    prompt = " ".join(_task(executor).prompt.split())
+    assert "un refactor que pase menos tests, o deje más sin probar que el verde, se descarta" in (
+        prompt
+    )
+    assert "o deje más sin probar que el verde; quitar código probado no cuenta en contra" in prompt

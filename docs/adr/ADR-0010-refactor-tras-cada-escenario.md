@@ -270,3 +270,29 @@ Límites conocidos:
 
 Deuda: es la octava vez que el perfil escribe `src` (el survey, seis controles y
 `lictor_project_path`); unificarlo en `code_paths` queda para otra versión.
+
+## Enmienda de la 0.23.0 (2026-11-27): dónde está el código
+
+`code_paths` deja de ser solo del perfil y **se suma**: el perfil dice dónde está el código, y el
+proyecto añade rutas en `lictor.json`; si el perfil no declara ninguna (`generic`), el proyecto las
+declara. Tras sumar tiene que quedar al menos una, y alguna dentro de `paths.writable`
+(`code_paths_problem`, sin cambios). Lo resuelto es «perfil + proyecto», sin duplicados, en ese
+orden.
+
+- **Por qué sumar no debilita.** Una ruta más de código solo amplía lo que `L0-alcance` vigila: un
+  refactor que cambia un fichero de esa ruta fuera de los de su verde se descarta, y antes pasaba.
+  El alcance del verde también crece, pero solo con los ficheros que ese verde ya cambió. Quitar
+  una ruta no se puede: el proyecto no tiene cómo restar.
+- **Obligatorio aunque el refactor esté apagado.** `refactor.enabled` entra en la huella, y
+  apagarlo no debe cambiar lo que hay que declarar para que la configuración cargue.
+- **Los tests junto al código (`code_exclude`).** En Go y en Node los tests unitarios viven junto
+  al código (`iva/x_test.go`), y la orden dice que pueden seguir al código que se mueve, pero la
+  puerta los trataba como código y descartaba el refactor que añadía un caso a uno que ya existía
+  (ejecutado por Fable en `wt-x1`). `code_exclude` son globs sobre la ruta entera (`*_test.go`,
+  `*.test.js`) que dejan de ser código para la puerta y para el alcance (`CodePaths.holds`, domain
+  `refactor_scope.py`). Solo los escribe un proyecto cuyo perfil no declara `code_paths`: sobre
+  las rutas de un perfil, excluir debilitaría la puerta, y la carga sale con 10
+  (`code_exclude_message`). Es la única excepción de la regla «el proyecto solo añade», y por eso
+  es exclusiva, no sumable (ADR-0020).
+
+`code_paths_message`, que rechazaba `code_paths` en `lictor.json`, desaparece.

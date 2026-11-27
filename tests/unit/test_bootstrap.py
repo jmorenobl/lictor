@@ -2,9 +2,14 @@ import json
 from pathlib import Path
 
 from lictor.adapters.agents.fake import FakeExecutor
+from lictor.adapters.config.loader import load_config, resolve_defences
+from lictor.adapters.config.models import domain_controls
 from lictor.adapters.store.clock import FixedClock
 from lictor.adapters.store.jsonl_eventlog import JsonlEventLog
-from lictor.bootstrap import bootstrap_init, bootstrap_runtime
+from lictor.bootstrap import bootstrap_init, bootstrap_runtime, proof_defences
+from lictor.domain.controls import controls_of_stage
+from lictor.domain.proof_level import PROVED, proof_level
+from lictor.domain.stages import ATTEMPT
 
 
 def test_bootstrap_init(tmp_path: Path) -> None:
@@ -133,3 +138,15 @@ def test_a_run_gets_only_the_attempt_controls_and_the_check_ones_apart(tmp_path:
     assert list(checks.check_stage_ids) == ["unit", "coverage", "mutation"]
     assert list(checks.check_stage_commands) == ["unit", "mutation"]
     assert checks.check_stage_commands["mutation"] == "mutar {out}"
+
+
+def test_python_uv_resolves_to_the_proved_level(tmp_path: Path) -> None:
+    (tmp_path / "lictor.json").write_text('{"profile": "python-uv@0.2"}', encoding="utf-8")
+    config = load_config(tmp_path)
+    controls = controls_of_stage(domain_controls(config), ATTEMPT)
+
+    defences = proof_defences(resolve_defences(config), controls)
+
+    assert defences.plugin_controls == (("coverage", "pytest_cov.plugin"),)
+    assert proof_level(defences, ("pytest_cov.plugin",)).level == PROVED
+    assert proof_level(defences, ("pytest_cov.plugin",)).gaps == ()

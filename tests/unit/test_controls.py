@@ -37,6 +37,7 @@ from lictor.domain.controls import (
     refactor_measures,
     refactor_measures_text,
     runnable_fixes,
+    unrunnable_by_agent,
     verification_steps,
     without_report,
 )
@@ -622,3 +623,42 @@ def test_a_fix_naming_the_profiles_files_is_asked_with_them() -> None:
     lines = agent_command_lines(["Bash(uv run python {lictor_files}/fmt.py:*)"], [], fix, "/f")
 
     assert "`uv run python /f/fmt.py`" in lines["{arreglos}"]
+
+
+def test_what_blocks_and_the_agent_cant_run_is_named_and_nothing_else() -> None:
+    lint = CommandControl(id="lint", level="L1", run="go vet ./...", report="exit-code")
+    measured = CommandControl(
+        id="cx", level="L1", run="gocyclo .", report="exit-code", mode="measure"
+    )
+
+    found = unrunnable_by_agent([lint, measured], "gotestsum --junitfile {out}", [], ())
+
+    assert [line.split(" (")[0] for line in found] == [
+        "agent_tools no deja al agente ejecutar el control lint",
+        "agent_tools no deja al agente ejecutar la aceptación",
+    ]
+    assert "(`gotestsum`)" in found[1]
+    allowed = ["Bash(go vet:*)", "Bash(gotestsum:*)"]
+    assert unrunnable_by_agent([lint, measured], "gotestsum --junitfile {out}", allowed, ()) == ()
+    assert unrunnable_by_agent([], "", [], ()) == ()
+
+
+def test_a_control_whose_plugin_is_missing_isnt_the_agents_to_run() -> None:
+    cov = CommandControl(
+        id="cov", level="L2", run="cov run", report="exit-code", when_plugin="cov.plugin"
+    )
+
+    assert unrunnable_by_agent([cov], "", [], ()) == ()
+    assert unrunnable_by_agent([cov], "", [], ("cov.plugin",)) == (
+        "agent_tools no deja al agente ejecutar el control cov (`cov run`): no podrá comprobarlo "
+        "antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita.",
+    )
+
+
+def test_a_report_given_alone_leaves_the_agent_without_a_check_and_says_so() -> None:
+    run = "sh -c 'node --test --test-reporter-destination=\"$0\" acceptance/*.test.js' {out}"
+
+    [told] = unrunnable_by_agent([], run, ["Bash(sh -c:*)"], ())
+
+    assert told.startswith(f"el agente no tiene orden para comprobar la aceptación (`{run}`)")
+    assert told.endswith("así que no podrá comprobarlo antes de acabar.")

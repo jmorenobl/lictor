@@ -1,0 +1,16 @@
+{
+  "name": "generic",
+  "version": "0.1",
+  "status": "alpha",
+  "detect": [],
+  "controls": [],
+  "forbidden_paths": [".gitignore", ".gitattributes", ".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".vscode", ".github"],
+  "verification": {
+    "env": {"HOME": "{home_dir}"},
+    "inherit": ["PATH", "TMPDIR"],
+    "prepare_inherit": ["PATH", "TMPDIR"],
+    "reserved": ["LICTOR_*", "LD_*", "DYLD_*", "BASH_ENV", "ENV"]
+  },
+  "rule_files": ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "CONTRIBUTING.md", ".github/copilot-instructions.md"],
+  "refactor_hints": "- Funciones cortas: ninguna de más de 30 líneas de código.\n- Sin código repetido: lo que se repite se escribe una vez. Si dos partes recorren lo mismo, comparte el recorrido, que una use el resultado de la otra o una base común, en lugar de extraer trozos sueltos.\n- Lo que saques de los ficheros que cambió el escenario va a un fichero nuevo junto a ellos, con su responsabilidad.\n- Nombres que digan qué hace cada cosa.\n- No cambies la interfaz pública que llaman los tests de aceptación."
+}

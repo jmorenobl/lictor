@@ -191,3 +191,29 @@ def test_a_case_turns_the_refactor_off_unless_it_decides_it(tmp_path: Path) -> N
     on = without_refactor({**written, "refactor": {"enabled": True}})
     (tmp_path / "lictor.json").write_text(json.dumps(on), encoding="utf-8")
     assert load_config(tmp_path).refactor.enabled is True
+
+
+# The cases on Go and Node (ADR-0020): only their CI job has the toolchains, so every other repro
+# job leaves them out by this mark, and losing it would run them where they can't.
+TOOLCHAIN = {
+    "test_v0_23_0_toolchains": (
+        "test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_level",
+        "test_go_without_the_recover_in_its_first_test_is_rejected_saying_why",
+        "test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry",
+        "test_go_a_vacuous_test_is_no_green",
+        "test_go_a_weak_assertion_is_no_green",
+        "test_node_builds_its_dependencies_into_a_hashed_environment_and_reaches_green",
+        "test_node_a_dependency_changed_in_the_agents_turn_fails_the_environment",
+    ),
+}
+
+
+@pytest.mark.parametrize(("module", "name"), _cases(TOOLCHAIN))
+def test_a_case_on_another_toolchain_is_marked_for_its_job(module: str, name: str) -> None:
+    assert _case(module, name) is not None
+    assert "toolchain" in _module_marks(module)
+
+
+def _module_marks(module: str) -> set[str]:
+    marks = getattr(importlib.import_module(f"tests.integration.repro.{module}"), "pytestmark", [])
+    return {mark.name for mark in (marks if isinstance(marks, list) else [marks])}

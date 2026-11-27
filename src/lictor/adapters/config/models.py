@@ -137,12 +137,31 @@ class PathsConfig(BaseModel):
         return self
 
 
-def driver_hints_message() -> str:
-    """Why `lictor.json` can't declare the driver's instructions, and where the project's go."""
+def driver_hints_message(profile: str) -> str:
+    """Why `lictor.json` can't declare the driver's instructions when its profile does."""
     return (
-        "lictor.json no puede declarar acceptance.driver_hints: esas instrucciones son del "
-        "perfil, que las mejora en cada versión, y una copia las tapa. Bórralo; lo propio del "
-        "proyecto va en hints."
+        f"lictor.json no puede declarar acceptance.driver_hints: el perfil {profile} ya las "
+        "declara, son las instrucciones de su oráculo y las mejora en cada versión, y una copia "
+        "las tapa. Bórralo; lo propio del proyecto va en hints."
+    )
+
+
+def prepare_message(profile: str) -> str:
+    """Why `lictor.json` can't declare how the environment is built when its profile does."""
+    return (
+        f"lictor.json no puede declarar verification.prepare: el perfil {profile} ya construye el "
+        "entorno de verificación, y el hash de ese entorno es lo que vigila cada orden. "
+        "Sustituirlo cambiaría lo que el perfil garantiza. Bórralo."
+    )
+
+
+def code_exclude_message(profile: str) -> str:
+    """Why a project can't exclude code from paths its profile declares: it would weaken the
+    refactor's gate (ADR-0010, amendment of 0.23.0)."""
+    return (
+        f"lictor.json no puede declarar code_exclude: el perfil {profile} ya dice dónde está el "
+        "código, y excluir de ahí debilitaría la puerta del refactor, L0-alcance. Bórralo; a "
+        "code_paths solo se le pueden añadir rutas."
     )
 
 
@@ -173,15 +192,6 @@ def stale_agent_command_message(control_id: str, field: str, inherited: str) -> 
     )
 
 
-def code_paths_message() -> str:
-    """Why `lictor.json` can't declare where the code is: the profile's tools measure it there."""
-    return (
-        "lictor.json no puede declarar code_paths: dónde está el código es del perfil, que lo "
-        "mide ahí y con eso acota el refactor. Bórralo; lo que el agente puede escribir va en "
-        "paths.writable."
-    )
-
-
 def survey_message() -> str:
     """Why `lictor.json` can't declare the survey: it is the profile's reading of its tools."""
     return (
@@ -198,6 +208,9 @@ class AcceptanceConfig(BaseModel):
     run: str = Field(min_length=1)
     timeout_s: int = Field(default=600, gt=0)
     failure_exit_codes: list[int] = Field(default=[1], min_length=1)
+    # The driver's instructions, only when the profile declares none (ADR-0020): `resolve_defences`
+    # takes the profile's, and refuses these beside them.
+    driver_hints: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -209,14 +222,8 @@ class AcceptanceConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_driver_hints(cls, data: object) -> object:
-        """Only the profile's acceptance has them: in `lictor.json` they'd hide its fixes."""
-        if (
-            isinstance(data, dict)
-            and "driver_hints" in data
-            and "driver_hints" not in cls.model_fields
-        ):
-            raise ValueError(driver_hints_message())
+    def _reject_needs_plugins(cls, data: object) -> object:
+        """Only the profile's acceptance has them: its driver uses them."""
         if (
             isinstance(data, dict)
             and "needs_plugins" in data
@@ -243,7 +250,6 @@ class AcceptanceConfig(BaseModel):
 class ProfileAcceptance(AcceptanceConfig):
     """The acceptance of a profile, with the instructions every driver of the profile gets."""
 
-    driver_hints: str = ""
     # The plugins its driver can't do without, each with how a person adds it (ADR-0015).
     needs_plugins: dict[str, str] = Field(default_factory=dict)
 
@@ -446,9 +452,15 @@ class ProfileOracle(BaseModel):
 
 
 class ProjectVerification(BaseModel):
-    """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada."""
+    """Lo que un proyecto añade a la verificación de su perfil, sin poder quitarle nada.
+
+    `prepare` solo cuando el perfil no construye el entorno (ADR-0020): entonces lo construye el
+    proyecto, con su hash.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prepare: str = ""
 
     env: dict[str, str] = Field(default_factory=dict)
     inherit: list[str] = Field(default_factory=list)
@@ -844,9 +856,11 @@ class Profile(BaseModel):
     # for its rules, and getting others under the same name would change them unawares.
     retired_versions: dict[str, str] = Field(default_factory=dict)
     status: ProfileStatus = "stable"
-    detect: list[str] = Field(min_length=1)
-    paths: PathsConfig
-    acceptance: ProfileAcceptance
+    # The files that tell a project is of this profile. A profile without any is never detected.
+    detect: list[str] = Field(default_factory=list)
+    # A profile that knows no layout declares neither: the project writes both (ADR-0020).
+    paths: PathsConfig | None = None
+    acceptance: ProfileAcceptance | None = None
     controls: list[ControlConfig]
     suppressions: list[str] = Field(default_factory=list)
     banned_patterns: list[str] = Field(default_factory=list)
@@ -900,9 +914,18 @@ class Profile(BaseModel):
 
     @model_validator(mode="after")
     def _validate_needs_can_be_listed(self) -> Self:
-        if self.acceptance.needs_plugins and not self.verification.plugins_command:
+        needs = self.acceptance.needs_plugins if self.acceptance is not None else {}
+        if needs and not self.verification.plugins_command:
             msg = "acceptance.needs_plugins necesita verification.plugins_command para comprobarlo"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_impostors_have_red_kinds(self) -> Self:
+        """Without the class of each failure the stubs' impostors reject right tests too: until
+        a profile has its own judge without the plugin (0.24.0), it is a mistake (ADR-0020)."""
+        if self.oracle.impostors is not None and not self.oracle.red_kinds:
+            raise ValueError("oracle.impostors necesita oracle.red_kinds")
         return self
 
     @model_validator(mode="after")
@@ -957,7 +980,28 @@ class RetentionConfig(BaseModel):
     keep_retired: int = Field(default=10, ge=1)
 
 
-class LictorConfig(BaseModel):
+class ProjectDefences(BaseModel):
+    """What a project adds to its profile's defences (ADR-0020): each list joins the profile's.
+
+    `code_exclude` only where the profile declares no code paths. `LictorFile` and `LictorConfig`
+    both carry them, as written: `resolve_defences` joins them.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suppressions: list[str] = Field(default_factory=list)
+    banned_patterns: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    code_paths: list[str] = Field(default_factory=list)
+    code_exclude: list[str] = Field(default_factory=list)
+
+    @field_validator("banned_patterns")
+    @classmethod
+    def _check_regexes(cls, patterns: list[str]) -> list[str]:
+        return _validate_regexes(patterns)
+
+
+class LictorConfig(ProjectDefences):
     """Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -1014,7 +1058,7 @@ def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
     )
 
 
-class LictorFile(BaseModel):
+class LictorFile(ProjectDefences):
     """lictor.json tal como lo escribe la persona: lo que no escribe sale del perfil al cargar.
 
     Una clave escrita sustituye entera la del perfil, salvo `controls`, que son cambios por `id`

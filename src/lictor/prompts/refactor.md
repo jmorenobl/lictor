@@ -18,9 +18,7 @@ Reglas:
 - No toques {protected}, ni los tests de aceptación ni los features: cualquier cambio ahí descarta
   el refactor.
 - Tampoco crees ni modifiques, en ninguna carpeta: {forbidden}.
-- Puedes reorganizar los tests unitarios para que sigan al código, pero no quites ninguno que pase
-  ni dejes más código sin probar: un refactor que pase menos tests, o deje más sin probar que el
-  verde, se descarta. Quitar código que ya estaba probado no cuenta en contra.
+{tests_unitarios}
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
 - No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
@@ -38,6 +36,5 @@ Reglas:
 
 Si la verificación no pasa, Lictor descarta tu cambio y el escenario sigue en verde: un descarte no
 le cuesta nada al escenario. Se descarta un refactor que cambie el comportamiento, toque lo que no
-puedes tocar, salga de lo que cambió el escenario o deje más sin probar que el verde; quitar código
-probado no cuenta en contra. Si el código ya cumple los objetivos, dejarlo como está es un
+puedes tocar{descartes}. Si el código ya cumple los objetivos, dejarlo como está es un
 resultado válido.

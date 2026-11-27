@@ -139,7 +139,7 @@ def test_the_essentials_stay_well_within_what_a_compaction_keeps() -> None:
 def test_every_packaged_profile_has_its_essentials_and_its_detail() -> None:
     """A profile without its file would be told as one the skill knows nothing of."""
     catalog = PackagedProfiles()
-    assert catalog.names() == ["python-uv"]
+    assert catalog.names() == ["generic", "python-uv"]
     for name in catalog.names():
         text = catalog.skill_text(name)
         assert text is not None, name
@@ -150,6 +150,15 @@ def test_every_packaged_profile_has_its_essentials_and_its_detail() -> None:
     )
     for critical in ("uv add --dev", "capsys", "`min_score`", "nada de `--cov`", "gitleaks"):
         assert critical in python_uv.essentials
+    generic = parse_profile_skill("generic", catalog.skill_text("generic") or "")
+    for critical in (
+        "lea una vez el\n  driver sellado",
+        "nunca devuelven un valor",
+        "`code_exclude`",
+        "`agent_tools`",
+        "lictor register",
+    ):
+        assert critical in generic.essentials, critical
 
 
 @pytest.mark.parametrize(
@@ -375,7 +384,7 @@ def test_configuring_offers_a_minimum_coverage_that_the_agent_sees() -> None:
     """F36: measuring without a threshold doesn't change what the agent does."""
     configuring = _section(_render(), "3. Configurar")
 
-    assert '{"id": "coverage", "mode": "block", "min_score": 80}' in configuring
+    assert '`"mode": "block"` y `"min_score": 80`' in configuring
     assert "el agente no ve" in configuring
 
 

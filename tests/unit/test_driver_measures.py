@@ -62,9 +62,9 @@ def test_the_red_says_where_each_pending_test_failed() -> None:
     mapped = {"A-1": _failed("not_implemented", "when"), "A-2": _failed("assertion")}
 
     assert red_measures(["A-1", "A-2", "A-3"], mapped, DRIVER) == {
-        "A-1": RedMeasure("when", "sin_implementar"),
-        "A-2": RedMeasure("then", "entonces"),
-        "A-3": RedMeasure(None, "sin_resultado"),
+        "A-1": RedMeasure("when", "sin_implementar", "failure"),
+        "A-2": RedMeasure("then", "entonces", "failure"),
+        "A-3": RedMeasure(None, "sin_resultado", ""),
     }
 
 
@@ -224,8 +224,8 @@ def test_the_record_of_a_stub_carries_what_c_and_the_interface_decided() -> None
         },
     }
     assert record["red"] == {
-        "A-1": {"step": "then", "caught": "entonces"},
-        "A-2": {"step": None, "caught": "no_aserta"},
+        "A-1": {"step": "then", "caught": "entonces", "status": ""},
+        "A-2": {"step": None, "caught": "no_aserta", "status": ""},
     }
 
 
@@ -247,6 +247,7 @@ def _broken(path: tuple[str, ...], value: object) -> dict[str, object]:
         _broken(("red",), []),
         _broken(("red", "A-1"), "entonces"),
         _broken(("red", "A-1", "caught"), "cazado"),
+        _broken(("red", "A-1", "status"), 1),
         _broken(("stubs",), "x"),
         _broken(("stubs", "A-1", "by_constant"), []),
         _broken(("stubs", "A-1", "by_constant", "None"), "cazado"),
@@ -356,3 +357,24 @@ def test_a_red_checks_timing_adds_each_phases_runs_in_the_order_they_run() -> No
     phases = timing["phases"]
     assert isinstance(phases, dict)
     assert list(phases) == ["red", "stubs", "interface", "gherkin"]
+
+
+def test_a_red_kept_without_its_status_reads_with_none() -> None:
+    record = measures_record(DriverMeasures(red={"A-1": RedMeasure("then", "entonces")}))
+    red = record["red"]
+    assert isinstance(red, dict)
+    del red["A-1"]["status"]
+
+    found = measures_from_record(record)
+
+    assert found is not None
+    assert found.red == {"A-1": RedMeasure("then", "entonces", "")}
+
+
+def test_the_red_keeps_the_junit_status_through_the_record() -> None:
+    measures = DriverMeasures(red={"A-1": RedMeasure(None, "no_aserta", "error")})
+
+    found = measures_from_record(measures_record(measures))
+
+    assert found is not None
+    assert found.red["A-1"].status == "error"

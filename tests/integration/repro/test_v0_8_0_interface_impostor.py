@@ -96,7 +96,9 @@ def test_the_red_check_records_in_which_step_each_impostor_caught_each_test(
 
     [measured] = events_of(root, "driver.measured")
     data = measured["data"]
-    assert data["red"] == {"IVA-003": {"step": "then", "caught": "sin_implementar"}}
+    assert data["red"] == {
+        "IVA-003": {"step": "then", "caught": "sin_implementar", "status": "failure"}
+    }
     assert data["stubs"] == {
         "IVA-003": {
             "by_constant": {

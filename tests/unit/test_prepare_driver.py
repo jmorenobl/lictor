@@ -546,3 +546,55 @@ def test_the_driver_prompt_has_no_rules_block_without_rules(tmp_path: Path) -> N
 
     assert "Reglas del proyecto" not in _prompt(executor)
     assert "{conventions}" not in _prompt(executor)
+
+
+def test_the_stubs_fail_never_return_and_only_fail_their_test_in_any_profile(
+    tmp_path: Path,
+) -> None:
+    """ADR-0020: a constant is an impostor, not a stub; a stub's signal is outside the domain."""
+    _, executor, _ = _execute_driver(tmp_path, AgentResult(status="ok"))
+
+    prompt = " ".join(_prompt(executor).split())
+    assert (
+        'falla con el error de "no implementado" de tu lenguaje y nunca devuelve un valor' in prompt
+    )
+    assert "recógelo en el driver, en cada test, y conviértelo en el fallo de ese test" in prompt
+    assert "comprueba cuál es (su clase o su mensaje), no solo que lo hay" in prompt
+
+
+@pytest.mark.parametrize(
+    ("interface_impostor", "said", "unsaid"),
+    [
+        (True, "alterando lo que devuelve la interfaz", "una persona lo registre"),
+        (False, "para para que una persona registre el escenario", "alterando"),
+    ],
+)
+def test_the_driver_hears_how_an_already_met_scenario_is_judged(
+    tmp_path: Path, interface_impostor: bool, said: str, unsaid: str
+) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), interface_impostor=interface_impostor
+    )
+
+    prompt = " ".join(_prompt(executor).split())
+    assert said in prompt
+    assert unsaid not in prompt
+    assert "lo cambies para que falle." in prompt
+
+
+def test_the_forbidden_paths_name_their_exception_only_when_there_is_one(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), forbidden_paths=["conftest.py"]
+    )
+    _, exempt, _ = _execute_driver(
+        tmp_path,
+        AgentResult(status="ok"),
+        forbidden_paths=["conftest.py"],
+        driver_exempt_paths=["conftest.py"],
+    )
+
+    assert "en ninguna carpeta: conftest.py. Se descartan" in " ".join(_prompt(executor).split())
+    assert "salvo" not in _prompt(executor)
+    assert "conftest.py, salvo conftest.py dentro de tests/acceptance/." in " ".join(
+        _prompt(exempt).split()
+    )

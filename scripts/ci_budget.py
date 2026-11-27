@@ -47,6 +47,8 @@ JOB_BUDGETS_MIN = (
     # Linear in mutants, about 38 ms each on the runner: it warns long before its cut of 18 min.
     ("Mutación", 10.0),
     ("Dependencias", 3.0),
+    # Go and Node with the generic profile (ADR-0020): its own row, since «Repro» isn't its prefix.
+    ("Cadenas: Go y Node", 8.0),
     # The full suite's, each night and before a release; called from release.yml its jobs are
     # «Suite completa / Suite completa (...)», which starts the same.
     ("Suite completa", 60.0),

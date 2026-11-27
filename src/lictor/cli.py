@@ -76,6 +76,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
+from lictor.domain.proof_level import proof_record
 from lictor.domain.reports import (
     ApiComparison,
     ApiReport,
@@ -181,9 +182,10 @@ _UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con
 def describe_init(res: InitProjectResult) -> str:
     """Say what `init` decided for the person, what to review, and what comes next (F08)."""
     added = ", ".join(res.gitignore_added)
+    status = f" ({res.status}: puede cambiar sin aviso)" if res.status != "stable" else ""
     lines = [
         f"Configuración inicializada en '{res.config_path.name}':",
-        f"  Perfil: {res.profile_name}",
+        f"  Perfil: {res.profile_name}{status}",
         f"  Modelo: {res.model} (backend.model; otro con --model)",
         f"  hints: «{res.hints}»",
         "    Lo lee el agente en cada llamada: ajústalo a tu proyecto.",
@@ -193,6 +195,13 @@ def describe_init(res: InitProjectResult) -> str:
     if res.skill_path:
         lines.append(f"  Skill de Lictor para Claude Code: {SKILL_FILE.as_posix()}")
         helper = " (en Claude Code, la skill de Lictor te ayuda a redactarlos)"
+    if res.to_write:
+        fields = " y ".join(", ".join(f"`{name}`" for name in res.to_write).rsplit(", ", 1))
+        lines.append(
+            f"Este perfil no sabe cómo es tu proyecto: escribe en lictor.json {fields}, y en "
+            "`agent_tools` lo que el agente puede ejecutar (la aceptación y cada control). La "
+            "skill de Lictor lo hace contigo: /lictor en Claude Code."
+        )
     lines.append(
         f"Siguiente paso: escribe los escenarios en features/ si aún no están{helper}, "
         "haz commit y ejecuta `lictor doctor`."
@@ -367,7 +376,8 @@ def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
         # Everything that doesn't need the configuration is still worth telling (F30).
         checks, clock = unconfigured_preconditions(root)
         return checks, clock, str(err)
-    typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
+    status = "" if runtime.profile_status == "stable" else f" ({runtime.profile_status})"
+    typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'{status}")
     return runtime.preconditions, runtime.clock, None
 
 
@@ -1522,6 +1532,7 @@ def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
             "previous": progress.previous,
         },
         "registered_by_hand": by_hand,
+        "proof": proof_record(progress.proof) if progress.proof is not None else None,
     }
 
 

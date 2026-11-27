@@ -25,10 +25,11 @@ from lictor.adapters.config.models import (
     agent_commands_message,
     agent_run_problems,
     allow_empty_message,
-    code_paths_message,
+    code_exclude_message,
     driver_hints_message,
     needs_plugins_message,
     plugin_without_list_message,
+    prepare_message,
     refactor_hints_message,
     stale_agent_command_message,
     survey_message,
@@ -66,6 +67,7 @@ class Defences:
     driver_hints: str = ""
     refactor_hints: str = ""
     code_paths: Sequence[str] = ()
+    code_exclude: Sequence[str] = ()
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
@@ -173,7 +175,7 @@ class PackagedProfiles:
 
     def detected(self, project_root: Path) -> str | None:
         for profile in self._all():
-            if all((project_root / marker).exists() for marker in profile.detect):
+            if _detects(profile, project_root):
                 return profile.name
         return None
 
@@ -199,10 +201,15 @@ def load_profile(name: str, profiles_dir: Path | None = None) -> Profile:
     raise ConfigError(msg)
 
 
+def _detects(profile: Profile, project_root: Path) -> bool:
+    """A profile without markers is never detected: `all` of nothing would match any project."""
+    return bool(profile.detect) and all((project_root / m).exists() for m in profile.detect)
+
+
 def detect_profile(project_dir: Path, profiles_dir: Path | None = None) -> Profile:
     """Detecta el perfil del proyecto comprobando sus archivos de detección."""
     for profile in list_profiles(profiles_dir):
-        if all((project_dir / marker).exists() for marker in profile.detect):
+        if _detects(profile, project_dir):
             return profile
     msg = f"No se pudo detectar ningún perfil en '{project_dir}'"
     raise ConfigError(msg)
@@ -236,7 +243,12 @@ def build_config_from_profile(
     model: str | None = None,
     project_root: Path | None = None,
 ) -> LictorConfig:
-    """Construye una instancia de LictorConfig a partir de un perfil."""
+    """Construye una instancia de LictorConfig a partir de un perfil que declara su proyecto.
+
+    Un perfil sin `paths` o sin `acceptance` no basta: lo que falta lo escribe la persona.
+    """
+    if profile.paths is None or profile.acceptance is None:
+        raise ConfigError(missing_project_fields_message(profile, _missing_of(profile, {})))
     try:
         backend = BackendConfig(model=model) if model is not None else BackendConfig()
         return LictorConfig(
@@ -258,14 +270,14 @@ def build_config_from_profile(
         raise ConfigError(msg) from exc
 
 
-def _init_payload(config: LictorConfig) -> str:
+def _init_payload(profile_ref: str, model: str, hints: str) -> str:
     """What `init` writes: what the person decides. The rest comes from the profile on each load,
     so a fix to the profile reaches the project without editing its `lictor.json`."""
     written = {
-        "version": config.version,
-        "profile": config.profile,
-        "backend": {"model": config.backend.model},
-        "hints": config.hints,
+        "version": "0.1",
+        "profile": profile_ref,
+        "backend": {"model": model},
+        "hints": hints,
     }
     return json.dumps(written, indent=2, ensure_ascii=False) + "\n"
 
@@ -277,26 +289,19 @@ def init_config_file(
     model: str | None = None,
     force: bool = False,
     profiles_dir: Path | None = None,
-) -> LictorConfig:
+) -> ProfileInitConfig:
     """Genera y escribe lictor.json sin sobrescribir uno existente salvo force=True."""
     target = project_dir / CONFIG_FILENAME
     if target.exists() and not force:
         msg = f"El archivo '{target}' ya existe (usa --force para sobrescribir)"
         raise ConfigError(msg)
-
-    profile = (
-        load_profile(profile_name, profiles_dir)
-        if profile_name is not None
-        else detect_profile(project_dir, profiles_dir)
-    )
-    config = build_config_from_profile(profile, model=model, project_root=project_dir)
-    payload = _init_payload(config)
+    init = ProfileConfigInitializer(profiles_dir).generate_config(project_dir, profile_name, model)
     try:
-        target.write_text(payload, encoding="utf-8")
+        target.write_text(init.config_json, encoding="utf-8")
     except OSError as exc:
         msg = f"No se pudo escribir '{target}': {exc}"
         raise ConfigError(msg) from exc
-    return config
+    return init
 
 
 class ProfileConfigInitializer(ConfigInitializer):
@@ -316,15 +321,50 @@ class ProfileConfigInitializer(ConfigInitializer):
             if profile_name is not None
             else detect_profile(project_root, self.profiles_dir)
         )
-        config = build_config_from_profile(profile, model=model, project_root=project_root)
-        payload = _init_payload(config)
+        chosen = model if model is not None else BackendConfig().model
+        hints = render_hints(profile, project_root)
+        reference = f"{profile.name}@{profile.version}"
         return ProfileInitConfig(
-            profile_name=config.profile,
-            gitignore_entries=list(config.gitignore),
-            config_json=payload,
-            model=config.backend.model,
-            hints=config.hints,
+            profile_name=reference,
+            gitignore_entries=list(profile.gitignore),
+            config_json=_init_payload(reference, chosen, hints),
+            model=chosen,
+            hints=hints,
+            to_write=tuple(_missing_of(profile, {})),
+            status=profile.status,
         )
+
+
+# What a project writes when its profile doesn't (ADR-0020), in the order a person is told.
+_PROJECT_FIELDS: Final = ("paths", "acceptance", "code_paths")
+
+
+def _missing_of(profile: Profile, written: Mapping[str, object]) -> list[str]:
+    """The fields neither the profile nor `lictor.json` declares that a configuration needs."""
+    declared = {
+        "paths": profile.paths is not None,
+        "acceptance": profile.acceptance is not None,
+        "code_paths": bool(profile.code_paths),
+    }
+    return [name for name in _PROJECT_FIELDS if not declared[name] and not written.get(name)]
+
+
+def missing_project_fields_message(profile: Profile, missing: Sequence[str]) -> str:
+    """Tell the person everything their profile leaves to them and `lictor.json` lacks, at once."""
+    what = {
+        "paths": "`paths` (qué puede escribir el agente, dónde va el driver y qué está protegido)",
+        "acceptance": "`acceptance` (la orden que ejecuta la aceptación y deja un JUnit en {out})",
+        "code_paths": (
+            "`code_paths` (las rutas de código, dentro de paths.writable; lo usa la puerta del "
+            "refactor, L0-alcance)"
+        ),
+    }
+    listed = [what[name] for name in missing]
+    joined = listed[0] if len(listed) == 1 else ", ".join(listed[:-1]) + " y " + listed[-1]
+    return (
+        f"El perfil {profile.name} no sabe cómo es tu proyecto: escribe en lictor.json {joined}. "
+        "La skill de Lictor te ayuda: /lictor en Claude Code."
+    )
 
 
 def _merge_profile_defaults(
@@ -334,20 +374,24 @@ def _merge_profile_defaults(
     project_root: Path,
 ) -> dict[str, object]:
     profile = load_profile(written.profile, profiles_dir)
+    missing = _missing_of(profile, raw_data)
+    if missing:
+        raise ConfigError(missing_project_fields_message(profile, missing))
     profile_dump = profile.model_dump(mode="json")
-    # The driver's instructions are the profile's alone: `resolve_defences` reads them.
-    del profile_dump["acceptance"]["driver_hints"]
-    del profile_dump["acceptance"]["needs_plugins"]
+    inherited = profile_dump["acceptance"]
+    if inherited is not None:
+        # The driver's instructions are the profile's alone: `resolve_defences` reads them.
+        del inherited["driver_hints"]
+        del inherited["needs_plugins"]
     profile_dump["hints"] = render_hints(profile, project_root)
     merged = dict(raw_data)
     for key in _PROFILE_FALLBACK_KEYS:
-        if key not in merged:
+        if key not in merged and profile_dump[key] is not None:
             merged[key] = profile_dump[key]
     merged["controls"] = _resolve_controls(profile_dump["controls"], written.controls)
 
     acc = merged.get("acceptance")
-    if isinstance(acc, dict):
-        inherited = profile_dump["acceptance"]
+    if isinstance(acc, dict) and inherited is not None:
         merged["acceptance"] = {"failure_exit_codes": inherited["failure_exit_codes"], **acc}
     return merged
 
@@ -538,6 +582,10 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
 
     _reject_allow_empty(parsed, profiles_dir)
     _reject_profile_fields(parsed)
+    known = _known_profile(parsed.get("profile"), profiles_dir)
+    if known is not None:
+        # Before validating: a field the profile declares says so, whatever else is missing.
+        _reject_exclusive_fields(known, parsed)
     # Refused once the profile it asks for is known: a retired profile says more (F83).
     old_commands = parsed.pop("agent_commands", None) is not None
     try:
@@ -562,24 +610,57 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
 _PROFILE_ONLY: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
     ("survey", survey_message),
     ("refactor_hints", refactor_hints_message),
-    ("code_paths", code_paths_message),
-)
-_PROFILE_ONLY_ACCEPTANCE: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
-    ("driver_hints", driver_hints_message),
-    ("needs_plugins", needs_plugins_message),
 )
 
 
 def _reject_profile_fields(parsed: dict[str, object]) -> None:
-    """Refuse a field only the profile declares, with its own message."""
+    """Refuse a field only the profile declares, even when it declares none, with its message."""
     acceptance = parsed.get("acceptance")
-    written = acceptance if isinstance(acceptance, dict) else {}
-    for key, message in _PROFILE_ONLY_ACCEPTANCE:
-        if key in written:
-            raise ConfigError(message())
+    if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
+        raise ConfigError(needs_plugins_message())
     for key, message in _PROFILE_ONLY:
         if key in parsed:
             raise ConfigError(message())
+
+
+def _known_profile(reference: object, profiles_dir: Path | None) -> Profile | None:
+    """The profile `lictor.json` asks for, or None: one that doesn't load is told later, in turn."""
+    if not isinstance(reference, str) or not reference:
+        return None
+    try:
+        return load_profile(reference, profiles_dir)
+    except ConfigError:
+        return None
+
+
+def _reject_exclusive_fields(profile: Profile, written: Mapping[str, object]) -> None:
+    """Refuse what the project may write only where its profile declares nothing (ADR-0020).
+
+    The profile's `prepare` is the contract of the hashed environment and its `driver_hints` the
+    instructions of its oracle: replacing either changes what the profile guarantees. Excluding
+    code from the profile's code paths would weaken `L0-alcance`.
+    """
+    if _written(written, "acceptance", "driver_hints") and _driver_hints_of(profile):
+        raise ConfigError(driver_hints_message(profile.name))
+    if _written(written, "verification", "prepare") and profile.verification.prepare:
+        raise ConfigError(prepare_message(profile.name))
+    if written.get("code_exclude") and profile.code_paths:
+        raise ConfigError(code_exclude_message(profile.name))
+
+
+def _written(written: Mapping[str, object], section: str, key: str) -> bool:
+    """Tell whether `lictor.json` gives `section.key` a value that isn't empty."""
+    part = written.get(section)
+    return isinstance(part, dict) and bool(part.get(key))
+
+
+def _driver_hints_of(profile: Profile) -> str:
+    return profile.acceptance.driver_hints if profile.acceptance is not None else ""
+
+
+def _union(profile: Sequence[str], project: Sequence[str]) -> tuple[str, ...]:
+    """The profile's values, then the project's it lacks: adding only ever rejects more."""
+    return tuple(dict.fromkeys([*profile, *project]))
 
 
 def _reject_unrunnable_agent_runs(
@@ -738,12 +819,13 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         for control in config.controls:
             if control.when_plugin is not None:
                 raise ConfigError(plugin_without_list_message(control.id))
-    problem = code_paths_problem(profile.code_paths, config.paths.writable)
+    code_paths = _union(profile.code_paths, config.code_paths)
+    problem = code_paths_problem(code_paths, config.paths.writable)
     if problem is not None:
         raise ConfigError(problem)
     return Defences(
         verification=VerificationEnvSpec(
-            prepare=profile.verification.prepare,
+            prepare=profile.verification.prepare or project.prepare,
             prepare_inherit=[*profile.verification.prepare_inherit, *project.prepare_inherit],
             prepare_ask=profile.verification.prepare_ask,
             prepare_home_files=profile.verification.prepare_home_files,
@@ -755,33 +837,39 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
             plugins=profile.verification.plugins,
             plugins_command=profile.verification.plugins_command,
         ),
-        suppressions=profile.suppressions,
-        banned_patterns=profile.banned_patterns,
-        forbidden_paths=profile.forbidden_paths,
+        suppressions=_union(profile.suppressions, config.suppressions),
+        banned_patterns=_union(profile.banned_patterns, config.banned_patterns),
+        forbidden_paths=_union(profile.forbidden_paths, config.forbidden_paths),
         driver_exempt_paths=profile.driver_exempt_paths,
-        driver_hints=profile.acceptance.driver_hints,
+        driver_hints=_driver_hints_of(profile) or config.acceptance.driver_hints,
         refactor_hints=profile.refactor_hints,
-        code_paths=tuple(profile.code_paths),
+        code_paths=code_paths,
+        code_exclude=tuple(config.code_exclude),
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
-        impostors=(
-            Impostors(
-                imp.pattern,
-                tuple(StubConstant(r.code, r.name, r.double) for r in imp.replacements),
-            )
-            if (imp := profile.oracle.impostors) is not None
-            else None
-        ),
-        interface_impostor=(
-            InterfaceImpostor(face.variable, face.control, tuple(face.modes), face.gherkin)
-            if (face := profile.oracle.interface_impostor) is not None
-            else None
-        ),
-        needs_plugins=dict(profile.acceptance.needs_plugins),
+        impostors=_impostors(profile.oracle),
+        interface_impostor=_interface_impostor(profile.oracle),
+        needs_plugins=dict(profile.acceptance.needs_plugins) if profile.acceptance else {},
         survey_run=profile.survey.run if profile.survey is not None else None,
         ci_hooks=dict(profile.survey.ci_hooks) if profile.survey is not None else {},
         detect=tuple(profile.detect),
     )
+
+
+def _impostors(oracle: ProfileOracle) -> Impostors | None:
+    imp = oracle.impostors
+    if imp is None:
+        return None
+    return Impostors(
+        imp.pattern, tuple(StubConstant(r.code, r.name, r.double) for r in imp.replacements)
+    )
+
+
+def _interface_impostor(oracle: ProfileOracle) -> InterfaceImpostor | None:
+    face = oracle.interface_impostor
+    if face is None:
+        return None
+    return InterfaceImpostor(face.variable, face.control, tuple(face.modes), face.gherkin)
 
 
 def rule_files(config: LictorConfig, profiles_dir: Path | None = None) -> tuple[str, ...]:

@@ -13,6 +13,8 @@ from lictor.domain.model import (
 from lictor.domain.refactor import (
     Measure,
     RefactorRecord,
+    discards_text,
+    guards_tests,
     measures_from_record,
     measures_record,
     oracle_measures,
@@ -21,6 +23,7 @@ from lictor.domain.refactor import (
     regression_reason,
     score_misses,
     settled_without_verifying,
+    unit_tests_rule,
 )
 from lictor.domain.reports import CoverageReport, JUnitReport
 from lictor.domain.results import (
@@ -259,3 +262,35 @@ def test_one_case_gone_is_a_regression_too() -> None:
     assert refactor_regressions({"unit": Measure(passed=1)}, {}) == [
         "unit: pasan 0 casos, y en el verde pasaban 1"
     ]
+
+
+def test_only_a_control_that_counts_tests_or_what_they_leave_guards_them() -> None:
+    assert not guards_tests({})
+    assert not guards_tests({"cx": Measure(misses=(("excess", 3), ("peak", 1)))})
+    assert not guards_tests({"api": Measure(breaks=frozenset())})
+    assert guards_tests({"unit": Measure(passed=0)})
+    assert guards_tests({"cov": Measure(misses=(("branches", 0),))})
+    assert guards_tests({"mut": Measure(misses=(("mutants", 2),))})
+    assert guards_tests({"cov": Measure(misses=(("lines", 1),))})
+
+
+def test_the_refactor_hears_of_tests_only_what_the_verification_guards() -> None:
+    assert "se descarta" in unit_tests_rule(guarded=True)
+    assert unit_tests_rule(guarded=False) == (
+        "- Puedes reorganizar los tests unitarios para que sigan al código."
+    )
+    assert "deje más sin probar" in discards_text(guarded=True)
+    assert discards_text(guarded=False) == " o salga de lo que cambió el escenario"
+
+
+def test_the_guarded_texts_are_whole() -> None:
+    assert unit_tests_rule(guarded=True) == (
+        "- Puedes reorganizar los tests unitarios para que sigan al código, pero no quites ninguno "
+        "que pase\n  ni dejes más código sin probar: un refactor que pase menos tests, o deje más "
+        "sin probar que el\n  verde, se descarta. Quitar código que ya estaba probado no cuenta en "
+        "contra."
+    )
+    assert discards_text(guarded=True) == (
+        ", salga de lo que cambió el escenario o deje más sin probar que el verde; quitar código\n"
+        "probado no cuenta en contra"
+    )

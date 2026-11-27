@@ -13,6 +13,7 @@ compared as text, relative to the project, so a report must name files as git do
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 from lictor.domain.complexity import OverLimit
 from lictor.domain.duplication import Duplication
@@ -22,6 +23,28 @@ from lictor.domain.reports import Clone, FunctionComplexity
 from lictor.domain.rules import path_within
 
 REFACTOR_SCOPE = "L0-alcance"
+
+
+@dataclass(frozen=True)
+class CodePaths:
+    """Where the code is: the profile's paths and the project's, less what the project excludes.
+
+    `exclude` holds globs over the whole path (`*_test.go`): in Go and Node the unit tests live
+    beside the code, and the refactor may change them as it moves the code. Only a project whose
+    profile declares no code paths may write it, since over the profile's it would weaken the gate.
+    """
+
+    paths: tuple[str, ...]
+    exclude: tuple[str, ...] = ()
+
+    def holds(self, path: str) -> bool:
+        """Tell whether `path` is code: under a code path and matching no exclusion."""
+        return path_within(path, self.paths) and not any(
+            fnmatchcase(path, glob) for glob in self.exclude
+        )
+
+
+NO_CODE = CodePaths(())
 
 
 @dataclass(frozen=True)
@@ -92,7 +115,7 @@ def _clone_touched(changed: ChangedLines, clone: Clone) -> bool:
 
 
 def refactor_scope(
-    changed: ChangedLines, code: Sequence[str], findings: Iterable[Findings]
+    changed: ChangedLines, code: CodePaths, findings: Iterable[Findings]
 ) -> RefactorScope:
     """The scope of a refactor, from what its green changed and what its verification found.
 
@@ -104,10 +127,8 @@ def refactor_scope(
     found = list(findings)
     functions = _named_functions(changed, _of(found, OverLimit))
     clones = _named_clones(changed, _of(found, Duplication))
-    files = frozenset(path for path in changed if path_within(path, code))
-    reached = frozenset(
-        o.file for clone in clones for o in clone.occurrences if path_within(o.file, code)
-    )
+    files = frozenset(path for path in changed if code.holds(path))
+    reached = frozenset(o.file for clone in clones for o in clone.occurrences if code.holds(o.file))
     return RefactorScope(files, reached - files, functions, clones)
 
 
@@ -133,9 +154,7 @@ def outside_scope(findings: Iterable[Findings], scope: RefactorScope) -> str:
     return outside_scope_text(functions, clones)
 
 
-def out_of_scope(
-    scope: RefactorScope, changes: Sequence[TreeChange], code: Sequence[str]
-) -> list[str]:
+def out_of_scope(scope: RefactorScope, changes: Sequence[TreeChange], code: CodePaths) -> list[str]:
     """The code files that already existed, the refactor changed and its scope doesn't allow.
 
     A new file is never outside: what is taken out of the scenario's files goes somewhere. A file
@@ -145,9 +164,7 @@ def out_of_scope(
         {
             change.path
             for change in changes
-            if path_within(change.path, code)
-            and not change.is_new
-            and change.path not in scope.allowed
+            if code.holds(change.path) and not change.is_new and change.path not in scope.allowed
         }
     )
 
@@ -204,17 +221,20 @@ def outside_scope_text(functions: int, clones: int) -> str:
 
 
 def code_paths_problem(code: Sequence[str], writable: Sequence[str]) -> str | None:
-    """Why the profile's code paths can't scope a refactor here, or None if they can.
+    """Why the code paths, the profile's and the project's together, can't scope a refactor here.
 
     With none of them in `paths.writable`, `L0-alcance` would check nothing, and nobody would see.
     """
     if not code:
-        return "el perfil no declara code_paths: la puerta L0-alcance no sabría qué es código"
+        return (
+            "ni el perfil ni lictor.json declaran code_paths: la puerta L0-alcance no sabría qué "
+            "es código. Escribe en lictor.json code_paths con las rutas de código."
+        )
     reached = [c for c in code if any(path_within(c, [w]) or path_within(w, [c]) for w in writable)]
     if reached:
         return None
     return (
-        f"paths.writable ({', '.join(writable)}) no incluye ninguna ruta de código del perfil "
+        f"paths.writable ({', '.join(writable)}) no incluye ninguna ruta de código "
         f"({', '.join(code)}): la puerta L0-alcance del refactor no comprobaría nada. Añade a "
         "paths.writable la ruta donde está el código."
     )

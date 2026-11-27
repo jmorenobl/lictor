@@ -59,7 +59,13 @@ from lictor.domain.refactor import (
     refactor_subject,
     regression_reason,
 )
-from lictor.domain.refactor_scope import REFACTOR_SCOPE, out_of_scope, out_of_scope_reason
+from lictor.domain.refactor_scope import (
+    NO_CODE,
+    REFACTOR_SCOPE,
+    CodePaths,
+    out_of_scope,
+    out_of_scope_reason,
+)
 from lictor.domain.results import (
     AcceptanceRun,
     Block,
@@ -83,8 +89,10 @@ from lictor.domain.rules import (
     describe_suppressions,
     forbidden_paths,
     map_test_cases_to_scenarios,
+    mapping_failure_reason,
     path_within,
     plugin_skip_reason,
+    present_scenarios,
     registration_subject,
     render_full_error,
     routes_rejected,
@@ -130,7 +138,7 @@ class VerifyAttemptRequest:
     # A refactor (ADR-0010): the green it starts from, and what its verification measured.
     refactor_of: str = ""
     baseline: Mapping[str, Measure] = field(default_factory=dict)
-    code_paths: Sequence[str] = ()  # where the code is: a refactor stays in its scenario's (F84)
+    code_paths: CodePaths = NO_CODE  # where the code is: a refactor stays in its own (F84)
     # The commit the run started from, against which the public API is compared (ADR-0017).
     api_base: str | None = None
     api: ApiBase | None = None  # filled in by VerifyAttempt.execute
@@ -676,7 +684,7 @@ class VerifyAttempt:
                 req,
                 _Failure(
                     "acceptance",
-                    str(exc),
+                    _cut_short_reason(req, str(exc), trusted.cases, output),
                     cases=trusted.cases,
                     output=output,
                     controls=controls,
@@ -714,3 +722,12 @@ class VerifyAttempt:
             acceptance=acceptance,
             scenario_results=scenario_results,
         )
+
+
+def _cut_short_reason(
+    req: VerifyAttemptRequest, reason: str, cases: Sequence[TestCaseResult], output: str
+) -> str:
+    """Why the report doesn't map, with the driver sealed: a case missing was cut short."""
+    ids = [_scenario_str(sid) for sid in req.all_scenario_ids]
+    present = present_scenarios(cases, ids, req.link)
+    return mapping_failure_reason(reason, ids, present, sealed=True, output=output)

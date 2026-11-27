@@ -99,6 +99,43 @@ class Measure:
     breaks: frozenset[ApiBreak] | None = None
 
 
+_TESTED: Final[frozenset[MissKind]] = frozenset({"lines", "branches", "mutants"})
+
+
+def guards_tests(baseline: Mapping[str, Measure]) -> bool:
+    """Tell whether a control of the green counts its tests or what they leave untested.
+
+    Without one `refactor_regressions` compares nothing of the tests, and the refactor's prompt
+    mustn't say that fewer of them discards it (ADR-0020).
+    """
+    return any(
+        m.passed is not None or any(kind in _TESTED for kind, _ in m.misses or ())
+        for m in baseline.values()
+    )
+
+
+def unit_tests_rule(guarded: bool) -> str:
+    """The refactor's rule on the unit tests, as far as the verification guards them."""
+    if not guarded:
+        return "- Puedes reorganizar los tests unitarios para que sigan al código."
+    return (
+        "- Puedes reorganizar los tests unitarios para que sigan al código, pero no quites ninguno "
+        "que pase\n  ni dejes más código sin probar: un refactor que pase menos tests, o deje más "
+        "sin probar que el\n  verde, se descarta. Quitar código que ya estaba probado no cuenta en "
+        "contra."
+    )
+
+
+def discards_text(guarded: bool) -> str:
+    """The end of the sentence on what discards a refactor."""
+    if not guarded:
+        return " o salga de lo que cambió el escenario"
+    return (
+        ", salga de lo que cambió el escenario o deje más sin probar que el verde; quitar código\n"
+        "probado no cuenta en contra"
+    )
+
+
 def complexity_misses(over: OverLimit) -> tuple[tuple[MissKind, int], ...]:
     """What a complexity report leaves above its limit: two counts a refactor may not raise."""
     return (("excess", over.excess), ("peak", over.peak))

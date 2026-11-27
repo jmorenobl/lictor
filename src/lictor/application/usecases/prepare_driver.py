@@ -33,6 +33,7 @@ from lictor.domain.rules import (
     forbidden_paths,
     keeps_attempt,
     path_within,
+    suppressions_text,
 )
 
 
@@ -64,6 +65,8 @@ class PrepareDriverRequest:
     suppressions: Sequence[str] = ()
     check_commands: Sequence[str] = ()  # the only commands Bash admits
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
+    # Whether the profile proves an already met scenario by altering the interface (ADR-0011).
+    interface_impostor: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,31 @@ class PrepareDriverResult:
     tree: str | None = None
     error: str | None = None
     failed_at: str | None = None
+
+
+def already_met_line(interface_impostor: bool) -> str:
+    """What the driver hears of a scenario the code already meets: how Lictor will judge it.
+
+    Only a profile with the impostor of the interface proves it by altering what the code returns
+    (ADR-0011); without one the run stops so a person registers it (ADR-0020).
+    """
+    if interface_impostor:
+        return (
+            "Si el código ya la cumple, el test pasa,\ny Lictor comprueba que mire el resultado "
+            "alterando lo que devuelve la interfaz: no lo cambies\npara que falle."
+        )
+    return (
+        "Si el código ya la cumple, el test pasa,\ny Lictor no puede probar que mire el "
+        "resultado: rechaza el driver y, al agotar sus intentos,\npara para que una persona "
+        "registre el escenario. No lo cambies para que falle."
+    )
+
+
+def _exempt_text(exempt: Sequence[str], driver: Sequence[str]) -> str:
+    """The exception to the forbidden paths, only when the profile has one."""
+    if not exempt:
+        return ""
+    return f", salvo {', '.join(exempt)} dentro de {', '.join(driver)}"
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -164,13 +192,14 @@ class PrepareDriver:
 
         replacements = {
             "{repo}": request.project_root.name,
+            "{ya_cumplido}": already_met_line(request.interface_impostor),
             "{features}": all_features,
             "{driver_paths}": ", ".join(request.paths_driver),
             "{writable}": ", ".join(request.paths_writable),
             "{protected_sin_driver}": ", ".join(protected_without_driver),
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
-            "{suppressions}": ", ".join(request.suppressions) or "ninguna",
+            "{exentos}": _exempt_text(request.driver_exempt_paths, request.paths_driver),
+            "{suppressions}": suppressions_text(request.suppressions),
             # The driver's call has no copy of the profile's files: what names them can't run.
             **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",

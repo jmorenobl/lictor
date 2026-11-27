@@ -1,7 +1,7 @@
 """Composition root for Lictor runtime and dependency injection."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from lictor.adapters.config.loader import (
     config_fingerprint,
     declared_profile,
     load_config,
+    load_profile,
     project_root_of,
     resolve_defences,
     rule_files,
@@ -80,6 +81,8 @@ from lictor.domain.conventions import (
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
+from lictor.domain.proof_level import ProofDefences
+from lictor.domain.refactor_scope import CodePaths
 from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
 from lictor.domain.stages import ATTEMPT, CHECK
 from lictor.orchestration.graph import GraphContext
@@ -114,6 +117,8 @@ class BootstrapResult:
     spec_history: SpecHistory
     verification: VerificationEnvSpec
     graph_context: GraphContext
+    # How mature the profile is: `doctor` says it beside its name when it isn't stable.
+    profile_status: str = "stable"
 
 
 def bootstrap_init(project_root: Path) -> InitProject:
@@ -222,6 +227,26 @@ def _start_survey(config: LictorConfig, defences: Defences) -> StartSurvey | Non
         detect=defences.detect,
         reader=SurveyReader(),
         ci=YamlCiReader(defences.ci_hooks),
+    )
+
+
+def proof_defences(defences: Defences, controls: Sequence[Control]) -> ProofDefences:
+    """The resolved defences the level of proof is computed from (ADR-0020): one conversion.
+
+    `controls` are the ones a run verifies, the `attempt` ones.
+    """
+    return ProofDefences(
+        link=defences.map_link,
+        red_kinds=bool(defences.red_kinds),
+        stub_impostors=defences.impostors is not None,
+        interface_impostor=defences.interface_impostor is not None,
+        gherkin=defences.interface_impostor is not None
+        and defences.interface_impostor.gherkin is not None,
+        env_hashed=bool(defences.verification.prepare),
+        suppressions=bool(defences.suppressions or defences.banned_patterns),
+        blocking_controls=any(c.mode == "block" for c in controls),
+        survey=defences.survey_run is not None,
+        plugin_controls=tuple((c.id, c.when_plugin) for c in controls if c.when_plugin is not None),
     )
 
 
@@ -413,6 +438,10 @@ def bootstrap_runtime(
         api=_api_baseline(active_config, readers),
         rule_files=rule_files(active_config),
         reviewed=active_config.conventions.reviewed,
+        proof=proof_defences(defences, attempt_controls),
+        env_prepared=bool(defences.verification.prepare),
+        acceptance_run=active_config.acceptance.run,
+        agent_tools=active_config.agent_tools,
     )
 
     graph_context = GraphContext(
@@ -478,7 +507,7 @@ def bootstrap_runtime(
             else None
         ),
         refactor_hints=defences.refactor_hints,
-        code_paths=tuple(defences.code_paths),
+        code_paths=CodePaths(tuple(defences.code_paths), tuple(defences.code_exclude)),
         agent_files=tuple(defences.verification.files),
     )
 
@@ -507,4 +536,5 @@ def bootstrap_runtime(
         spec_history=spec_history,
         verification=defences.verification,
         graph_context=graph_context,
+        profile_status=load_profile(active_config.profile).status,
     )
