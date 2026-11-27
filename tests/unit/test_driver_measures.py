@@ -369,3 +369,12 @@ def test_a_red_kept_without_its_status_reads_with_none() -> None:
 
     assert found is not None
     assert found.red == {"A-1": RedMeasure("then", "entonces", "")}
+
+
+def test_the_red_keeps_the_junit_status_through_the_record() -> None:
+    measures = DriverMeasures(red={"A-1": RedMeasure(None, "no_aserta", "error")})
+
+    found = measures_from_record(measures_record(measures))
+
+    assert found is not None
+    assert found.red["A-1"].status == "error"

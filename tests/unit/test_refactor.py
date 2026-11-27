@@ -281,3 +281,16 @@ def test_the_refactor_hears_of_tests_only_what_the_verification_guards() -> None
     )
     assert "deje más sin probar" in discards_text(guarded=True)
     assert discards_text(guarded=False) == " o salga de lo que cambió el escenario"
+
+
+def test_the_guarded_texts_are_whole() -> None:
+    assert unit_tests_rule(guarded=True) == (
+        "- Puedes reorganizar los tests unitarios para que sigan al código, pero no quites ninguno "
+        "que pase\n  ni dejes más código sin probar: un refactor que pase menos tests, o deje más "
+        "sin probar que el\n  verde, se descarta. Quitar código que ya estaba probado no cuenta en "
+        "contra."
+    )
+    assert discards_text(guarded=True) == (
+        ", salga de lo que cambió el escenario o deje más sin probar que el verde; quitar código\n"
+        "probado no cuenta en contra"
+    )

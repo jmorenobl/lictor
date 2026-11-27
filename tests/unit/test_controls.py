@@ -641,3 +641,15 @@ def test_what_blocks_and_the_agent_cant_run_is_named_and_nothing_else() -> None:
     allowed = ["Bash(go vet:*)", "Bash(gotestsum:*)"]
     assert unrunnable_by_agent([lint, measured], "gotestsum --junitfile {out}", allowed, ()) == ()
     assert unrunnable_by_agent([], "", [], ()) == ()
+
+
+def test_a_control_whose_plugin_is_missing_isnt_the_agents_to_run() -> None:
+    cov = CommandControl(
+        id="cov", level="L2", run="cov run", report="exit-code", when_plugin="cov.plugin"
+    )
+
+    assert unrunnable_by_agent([cov], "", [], ()) == ()
+    assert unrunnable_by_agent([cov], "", [], ("cov.plugin",)) == (
+        "agent_tools no deja al agente ejecutar el control cov (`cov run`): no podrá comprobarlo "
+        "antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita.",
+    )
