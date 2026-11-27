@@ -11,6 +11,14 @@ from typing import Any, Final
 
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.model import Event
+from lictor.domain.proof_level import (
+    ENV_UNHASHED,
+    ProofLevel,
+    level_name,
+    proof_from_record,
+    status_line,
+    warning_lines,
+)
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.reports import ApiBreak
 from lictor.domain.results import (
@@ -170,6 +178,16 @@ def _number(raw: object) -> float:
     return float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else 0.0
 
 
+def _proof_lines(proof: ProofLevel | None) -> list[str]:
+    """What the start of a run warns of the level (ADR-0020): nothing when nothing is missing."""
+    lines = warning_lines(proof) if proof is not None else ()
+    if proof is None or not lines:
+        return []
+    return [f"⚠ Nivel de prueba: {level_name(proof.level)}. No se comprueba:"] + [
+        f"  - {line}" for line in lines
+    ]
+
+
 @dataclass
 class RunProgress:
     """Fold a run's events, one at a time, into what it has done and a line per step."""
@@ -184,6 +202,8 @@ class RunProgress:
     quarantined: list[str] = field(default_factory=list)
     # How each refactor ended (ADR-0010), by scenario: applied, discarded or unchanged.
     refactors: dict[str, str] = field(default_factory=dict)
+    # What a green of the run can be trusted for, as `run.started` kept it (ADR-0020).
+    proof: ProofLevel | None = None
     _spend: dict[str, Spend] = field(default_factory=dict)
     # What the refactors cost, by scenario: apart, so a green's line tells only its own work.
     _refactor_spend: dict[str, Spend] = field(default_factory=dict)
@@ -340,8 +360,12 @@ class RunProgress:
     def _run_started(self, event: Event) -> list[str]:
         self._api_known.update(api_start_names(event.data.get("api_start")))
         dependencies = event.data.get("dependencies")
+        proof = self.proof = proof_from_record(event.data.get("proof"))
+        # Without its own environment there is nothing ready: the level's gap says so (ADR-0020).
+        unprepared = proof is not None and any(g.code == ENV_UNHASHED for g in proof.gaps)
         return [
-            "Entorno de verificación listo.",
+            *([] if unprepared else ["Entorno de verificación listo."]),
+            *_proof_lines(proof),
             *(
                 f"⚠ Dependencias de la verificación: {line}"
                 for line in (dependencies if isinstance(dependencies, list) else [])
@@ -646,6 +670,7 @@ def describe_status(view: StatusView) -> list[str]:
     return [
         f"Ejecución: {view.run_id}",
         *_state_line(view),
+        *([status_line(view.progress.proof)] if view.progress.proof is not None else []),
         *_attempt_line(view),
         _greens_line(view, status),
         _spend_line(view.progress),

@@ -76,6 +76,7 @@ from lictor.domain.errors import (
 )
 from lictor.domain.model import Event
 from lictor.domain.progress import RunProgress, StatusView, describe_status
+from lictor.domain.proof_level import proof_record
 from lictor.domain.reports import (
     ApiComparison,
     ApiReport,
@@ -1530,6 +1531,7 @@ def _status_payload(view: StatusView, by_hand: list[str]) -> dict[str, Any]:
             "previous": progress.previous,
         },
         "registered_by_hand": by_hand,
+        "proof": proof_record(progress.proof) if progress.proof is not None else None,
     }
 
 

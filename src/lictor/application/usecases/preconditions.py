@@ -35,7 +35,7 @@ from lictor.domain.blind_spots import (
     missing_plugins,
     program_problems,
 )
-from lictor.domain.controls import Control, command_controls
+from lictor.domain.controls import Control, command_controls, unrunnable_by_agent
 from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.head_controls import (
@@ -46,6 +46,13 @@ from lictor.domain.head_controls import (
     head_tampered,
 )
 from lictor.domain.model import CommandOutput, PreconditionProblem
+from lictor.domain.proof_level import (
+    ProofDefences,
+    ProofLevel,
+    level_name,
+    proof_level,
+    warning_lines,
+)
 from lictor.domain.reports import ApiComparison, ApiReport, InvalidReport
 from lictor.domain.rules import (
     CHECK_STAGE_ONLY,
@@ -66,6 +73,10 @@ NONE_STARTS = (
     "no comprobado: no arranca ningún control que bloquea, como dice «Comandos de verificación»"
 )
 NO_SURVEY = "no comprobado: el perfil no declara cómo leerlo"
+NO_NEEDS = "no comprobado: el perfil no declara qué necesita"
+UNPREPARED = "sin prepare: no se construye ni se vigila"
+PROOF_LEVEL = "Nivel de prueba"
+AGENT_COMMANDS = "Órdenes del agente"
 
 
 @dataclass(frozen=True)
@@ -122,6 +133,9 @@ class PreconditionsReport:
     # HEAD against `api.base` at the start (H4 of 0.20.0): what was already broken, so a run only
     # warns of what it breaks.
     api_start: ApiComparison | None = None
+    # What a green of the run can be trusted for (ADR-0020), with the plugins the environment
+    # loads when it was built.
+    proof: ProofLevel | None = None
 
     @property
     def problems(self) -> list[PreconditionProblem]:
@@ -135,7 +149,9 @@ class PreconditionsReport:
 
 # What checking on the environment just built gives: its checks, the blind spots, and HEAD's API
 # against its base.
-type _Contract = tuple[list[PreconditionCheck], BlindSpots | None, ApiComparison | None]
+type _Contract = tuple[
+    list[PreconditionCheck], BlindSpots | None, ApiComparison | None, ProofLevel | None
+]
 
 
 @dataclass
@@ -174,6 +190,12 @@ class CheckPreconditions:
     # The profile's rule files, and the hash of each one the person reviewed (F79).
     rule_files: Sequence[str] = ()
     reviewed: Mapping[str, str] = field(default_factory=dict)
+    # The level of proof the defences give (ADR-0020), whether the profile or the project builds
+    # the environment, and what the agent may run, to warn of what it couldn't check (D10).
+    proof: ProofDefences | None = None
+    env_prepared: bool = True
+    acceptance_run: str = ""
+    agent_tools: Sequence[str] = ()
 
     def execute(self, req: PreconditionsRequest) -> PreconditionsReport:
         has_commits = self.vcs.has_commits()
@@ -192,11 +214,11 @@ class CheckPreconditions:
         checks.append(
             self._commands(req, lambda program: self._found(environment, program, has_commits))
         )
-        built, spots, api_start = self._environment(
+        built, spots, api_start, proof = self._environment(
             environment, req, checks, scratch_ok=not scratch.problems, has_commits=has_commits
         )
         checks.extend(built)
-        return PreconditionsReport(tuple(checks), cli_version, spots, api_start)
+        return PreconditionsReport(tuple(checks), cli_version, spots, api_start, proof)
 
     def _project_checks(
         self, req: PreconditionsRequest, has_commits: bool
@@ -342,10 +364,12 @@ class CheckPreconditions:
         name = "Entorno de verificación"
         skipped = self._why_not_built(req, earlier, scratch_ok=scratch_ok, has_commits=has_commits)
         if skipped is not None:
+            checks, proof = self._level(req, None)
             return (
-                [PreconditionCheck(name, skipped=skipped), *self._unchecked(req, skipped)],
+                [PreconditionCheck(name, skipped=skipped), *self._unchecked(req, skipped), *checks],
                 None,
                 None,
+                proof,
             )
         try:
             if req.environment == "run":
@@ -360,7 +384,8 @@ class CheckPreconditions:
         except EnvironmentUnavailableError as err:
             failed = PreconditionCheck(name, (PreconditionProblem("environment", str(err)),))
             unchecked = self._unchecked(req, "no comprobado: el entorno no se pudo construir")
-            return [failed, *unchecked], None, None
+            checks, proof = self._level(req, None)
+            return [failed, *unchecked, *checks], None, None, proof
 
     @staticmethod
     def _why_not_built(
@@ -401,14 +426,39 @@ class CheckPreconditions:
         against its base."""
         checks, spots = self._start_contract(environment, req)
         if req.survey_dir is None:
-            return checks, spots, None
+            return checks, spots, None, None
         checks.append(self._head_controls(environment, req, req.survey_dir))
-        if self.api is None or self.api.ref is None:
-            return checks, spots, None
-        api_check, api_start = self._api_against_base(
-            environment, req.survey_dir, self.api, self.api.ref
+        api_start = None
+        if self.api is not None and self.api.ref is not None:
+            api_check, api_start = self._api_against_base(
+                environment, req.survey_dir, self.api, self.api.ref
+            )
+            checks.append(api_check)
+        level, proof = self._level(req, environment.installed_plugins)
+        return [*checks, *level], spots, api_start, proof
+
+    def _level(
+        self, req: PreconditionsRequest, installed: Sequence[str] | None
+    ) -> tuple[list[PreconditionCheck], ProofLevel | None]:
+        """What a green of this run can be trusted for, and what the agent can't check (D10).
+
+        Facts, never an error (D3): the level is told in every report too. Without the
+        environment the controls that need a plugin can't be judged, and that is said.
+        """
+        if req.survey_dir is None or self.proof is None:
+            return [], None
+        proof = proof_level(self.proof, installed)
+        checks = [
+            PreconditionCheck(
+                PROOF_LEVEL, warnings=warning_lines(proof), detail=level_name(proof.level)
+            )
+        ]
+        unrunnable = unrunnable_by_agent(
+            self.head_controls, self.acceptance_run, self.agent_tools, installed or ()
         )
-        return [*checks, api_check], spots, api_start
+        if unrunnable:
+            checks.append(PreconditionCheck(AGENT_COMMANDS, warnings=unrunnable))
+        return checks, proof
 
     def _api_against_base(
         self,
@@ -519,13 +569,24 @@ class CheckPreconditions:
         self, environment: VerificationEnvironment, req: PreconditionsRequest
     ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
         """The environment's check, and what the project needs and its controls don't see."""
-        checks = [PreconditionCheck("Entorno de verificación")]
+        detail = None if self.env_prepared else UNPREPARED
+        checks = [PreconditionCheck("Entorno de verificación", detail=detail)]
         if req.survey_dir is None:
             return checks, None
         plugins = missing_plugins(self.needs_plugins, environment.installed_plugins)
         if self.survey is None or self.start_rules is None:
-            dependencies = PreconditionCheck(DEPENDENCIES, tuple(plugins))
-            return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, skipped=NO_SURVEY)], None
+            dependencies = (
+                PreconditionCheck(DEPENDENCIES, tuple(plugins))
+                if self.needs_plugins
+                else PreconditionCheck(DEPENDENCIES, skipped=NO_NEEDS)
+            )
+            # Kept, so the report says why nothing was looked at, as `doctor` does (ADR-0020).
+            unread = BlindSpots(skipped=NO_SURVEY)
+            return [
+                *checks,
+                dependencies,
+                PreconditionCheck(BLIND_SPOTS, skipped=NO_SURVEY),
+            ], unread
         surveyed = self.survey.execute(environment, self.vcs, self.project_root, req.survey_dir)
         if isinstance(surveyed, str):
             reason = f"no se pudo leer lo que ve cada control: {surveyed}"

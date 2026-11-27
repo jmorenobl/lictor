@@ -17,6 +17,7 @@ from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases import preconditions
 from lictor.application.usecases.preconditions import (
     CheckPreconditions,
+    PreconditionCheck,
     PreconditionsReport,
     PreconditionsRequest,
 )
@@ -26,6 +27,7 @@ from lictor.domain.blind_spots import StartRules
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import CommandOutput, Health, PreconditionProblem
+from lictor.domain.proof_level import ProofDefences
 from lictor.domain.reports import ApiReport, ApiSymbol
 from lictor.domain.rules import NO_COMMITS
 from lictor.domain.survey import (
@@ -849,3 +851,90 @@ def test_a_base_that_cant_be_measured_blocks_only_where_api_blocks(
     assert "la medida no dejó informe" in blocking.checks[-1].problems[0].message
     assert measuring.checks[-1].problems == ()
     assert "la medida no dejó informe" in measuring.checks[-1].warnings[0]
+
+
+_BARE = ProofDefences(
+    link="name",
+    red_kinds=False,
+    stub_impostors=False,
+    interface_impostor=False,
+    gherkin=False,
+    env_hashed=False,
+    suppressions=False,
+    blocking_controls=False,
+    survey=False,
+    plugin_controls=(("cov", "cov.plugin"),),
+)
+
+
+def _by_name(report: PreconditionsReport) -> dict[str, PreconditionCheck]:
+    return {check.name: check for check in report.checks}
+
+
+def test_the_level_of_proof_is_told_last_as_facts_that_stop_nothing(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir, None)
+    parts.use_case.needs_plugins = {}
+    parts.use_case.proof = _BARE
+    parts.use_case.env_prepared = False
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    checks = _by_name(report)
+    level = checks[preconditions.PROOF_LEVEL]
+    assert report.checks[-1] is level
+    assert level.detail == "básico"
+    assert level.problems == ()
+    assert level.warnings[0].startswith("No se comprueba que el test compare nada")
+    assert "cov no corre: falta cov.plugin" in level.warnings
+    assert report.proof is not None
+    assert report.proof.level == "basico"
+    assert checks["Entorno de verificación"].detail == preconditions.UNPREPARED
+    assert checks[preconditions.DEPENDENCIES].skipped == preconditions.NO_NEEDS
+    assert report.blind_spots is not None
+    assert report.blind_spots.skipped == preconditions.NO_SURVEY
+
+
+def test_without_the_environment_the_controls_of_a_plugin_are_unchecked(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.proof = _BARE
+    parts.environment.ensure.side_effect = EnvironmentUnavailableError("prepare falló")
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    level = _by_name(report)[preconditions.PROOF_LEVEL]
+    assert any(w.startswith("No se comprobó qué controles se saltan") for w in level.warnings)
+    assert not any("cov no corre" in w for w in level.warnings)
+
+
+def test_a_run_without_a_survey_dir_says_no_level(tmp_path: Path, bin_dir: Path) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.proof = _BARE
+
+    report = parts.use_case.execute(RUN)
+
+    assert report.proof is None
+    assert preconditions.PROOF_LEVEL not in _by_name(report)
+
+
+def test_what_the_agent_cant_run_is_warned_of(tmp_path: Path, bin_dir: Path) -> None:
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.use_case.proof = _BARE
+    parts.use_case.acceptance_run = "gotestsum --junitfile {out} -- ./acceptance/..."
+    parts.use_case.agent_tools = ["Bash(go test:*)"]
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    told = _by_name(report)[preconditions.AGENT_COMMANDS]
+    assert told.problems == ()
+    assert told.warnings == (
+        "agent_tools no deja al agente ejecutar la aceptación (`gotestsum -- ./acceptance/...`): "
+        "no podrá comprobarlo antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) "
+        "que lo permita.",
+    )
+    parts.use_case.agent_tools = ["Bash(gotestsum:*)"]
+    allowed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    assert preconditions.AGENT_COMMANDS not in _by_name(allowed)

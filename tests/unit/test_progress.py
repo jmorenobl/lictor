@@ -787,3 +787,32 @@ def test_the_start_tells_what_the_verification_lacks_of_its_dependencies() -> No
     assert _lines(RunProgress(), _event("run.started", dependencies="no")) == [
         "Entorno de verificación listo."
     ]
+
+
+_BASIC = {"level": "basico", "gaps": [{"code": "entorno_sin_hash"}, {"code": "sin_controles"}]}
+
+
+def test_the_start_warns_of_the_level_and_each_gap_and_says_no_environment_is_ready() -> None:
+    lines = _lines(RunProgress(), _event("run.started", proof=_BASIC))
+
+    assert lines[0] == "⚠ Nivel de prueba: básico. No se comprueba:"
+    assert lines[1].startswith("  - No se comprueba que el test compare nada")
+    assert lines[2].startswith("  - El entorno de verificación no se construye ni se vigila")
+    assert lines[3].startswith("  - Un verde solo pasó la aceptación")
+    assert "Entorno de verificación listo." not in lines
+
+
+def test_a_proved_level_with_nothing_missing_is_not_warned_of() -> None:
+    lines = _lines(
+        RunProgress(), _event("run.started", proof={"level": "resultado_probado", "gaps": []})
+    )
+
+    assert lines == ["Entorno de verificación listo."]
+
+
+def test_status_says_the_level_and_its_gaps() -> None:
+    progress = _folded(_event("run.started", proof=_BASIC))
+
+    assert progress.proof is not None
+    assert "Nivel de prueba: básico (2 huecos; ver report.md)" in _status([], {}, progress)
+    assert not any("Nivel de prueba" in line for line in _status([], {}))

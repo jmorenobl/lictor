@@ -1,7 +1,7 @@
 """Composition root for Lictor runtime and dependency injection."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,6 +80,7 @@ from lictor.domain.conventions import (
 )
 from lictor.domain.errors import ConfigError
 from lictor.domain.model import Event
+from lictor.domain.proof_level import ProofDefences
 from lictor.domain.refactor_scope import CodePaths
 from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
 from lictor.domain.stages import ATTEMPT, CHECK
@@ -223,6 +224,26 @@ def _start_survey(config: LictorConfig, defences: Defences) -> StartSurvey | Non
         detect=defences.detect,
         reader=SurveyReader(),
         ci=YamlCiReader(defences.ci_hooks),
+    )
+
+
+def proof_defences(defences: Defences, controls: Sequence[Control]) -> ProofDefences:
+    """The resolved defences the level of proof is computed from (ADR-0020): one conversion.
+
+    `controls` are the ones a run verifies, the `attempt` ones.
+    """
+    return ProofDefences(
+        link=defences.map_link,
+        red_kinds=bool(defences.red_kinds),
+        stub_impostors=defences.impostors is not None,
+        interface_impostor=defences.interface_impostor is not None,
+        gherkin=defences.interface_impostor is not None
+        and defences.interface_impostor.gherkin is not None,
+        env_hashed=bool(defences.verification.prepare),
+        suppressions=bool(defences.suppressions or defences.banned_patterns),
+        blocking_controls=any(c.mode == "block" for c in controls),
+        survey=defences.survey_run is not None,
+        plugin_controls=tuple((c.id, c.when_plugin) for c in controls if c.when_plugin is not None),
     )
 
 
@@ -414,6 +435,10 @@ def bootstrap_runtime(
         api=_api_baseline(active_config, readers),
         rule_files=rule_files(active_config),
         reviewed=active_config.conventions.reviewed,
+        proof=proof_defences(defences, attempt_controls),
+        env_prepared=bool(defences.verification.prepare),
+        acceptance_run=active_config.acceptance.run,
+        agent_tools=active_config.agent_tools,
     )
 
     graph_context = GraphContext(

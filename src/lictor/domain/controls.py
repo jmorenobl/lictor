@@ -232,6 +232,28 @@ def _checks(
     return tuple(dict.fromkeys(c for c in found if c is not None and allowed_by(c, agent_tools)))
 
 
+def unrunnable_by_agent(
+    controls: Sequence[Control],
+    acceptance_run: str,
+    agent_tools: Sequence[str],
+    installed: Collection[str],
+) -> tuple[str, ...]:
+    """What decides an attempt that the agent's tools don't let it check, as warnings (D10).
+
+    Each such command drops out of the agent's list: it works blind on what it can't run.
+    """
+    found = [
+        (f"el control {c.id}", _check_of(c)) for c in controls if counts_for_agent(c, installed)
+    ]
+    found.append(("la aceptación", without_report(acceptance_run) if acceptance_run else None))
+    return tuple(
+        f"agent_tools no deja al agente ejecutar {what} (`{command}`): no podrá comprobarlo antes "
+        "de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita."
+        for what, command in found
+        if command is not None and not allowed_by(command, agent_tools)
+    )
+
+
 def fixes_text(fixes: Sequence[AgentFix]) -> str:
     """The line of the prompt on the fixes: run them after the last change, then the checks."""
     if not fixes:

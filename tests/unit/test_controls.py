@@ -37,6 +37,7 @@ from lictor.domain.controls import (
     refactor_measures,
     refactor_measures_text,
     runnable_fixes,
+    unrunnable_by_agent,
     verification_steps,
     without_report,
 )
@@ -622,3 +623,21 @@ def test_a_fix_naming_the_profiles_files_is_asked_with_them() -> None:
     lines = agent_command_lines(["Bash(uv run python {lictor_files}/fmt.py:*)"], [], fix, "/f")
 
     assert "`uv run python /f/fmt.py`" in lines["{arreglos}"]
+
+
+def test_what_blocks_and_the_agent_cant_run_is_named_and_nothing_else() -> None:
+    lint = CommandControl(id="lint", level="L1", run="go vet ./...", report="exit-code")
+    measured = CommandControl(
+        id="cx", level="L1", run="gocyclo .", report="exit-code", mode="measure"
+    )
+
+    found = unrunnable_by_agent([lint, measured], "gotestsum --junitfile {out}", [], ())
+
+    assert [line.split(" (")[0] for line in found] == [
+        "agent_tools no deja al agente ejecutar el control lint",
+        "agent_tools no deja al agente ejecutar la aceptación",
+    ]
+    assert "(`gotestsum`)" in found[1]
+    allowed = ["Bash(go vet:*)", "Bash(gotestsum:*)"]
+    assert unrunnable_by_agent([lint, measured], "gotestsum --junitfile {out}", allowed, ()) == ()
+    assert unrunnable_by_agent([], "", [], ()) == ()

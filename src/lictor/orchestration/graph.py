@@ -69,6 +69,7 @@ from lictor.domain.errors import (
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.model import AgentResult, AgentStatus, Candidate, Scenario, ScenarioId
 from lictor.domain.progress import api_start_record
+from lictor.domain.proof_level import proof_record
 from lictor.domain.refactor import (
     Measure,
     RefactorRecord,
@@ -435,6 +436,7 @@ class _GraphNodes:
                 "dependencies": list(report.dependency_warnings),
                 "conventions": _conventions_record(self.ctx.conventions),
                 "api_start": _api_start(report.api_start),
+                "proof": proof_record(report.proof) if report.proof is not None else None,
             },
         )
         self.ctx.event_log.append(event)

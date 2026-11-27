@@ -1388,3 +1388,22 @@ def test_report_without_a_comparison_says_so(tmp_path: Path) -> None:
 
     section = report.split("## API pública")[1].split("\n## ")[0]
     assert section.strip() == "- *Ningún control de API comparó con la base del run.*"
+
+
+def test_the_summary_says_the_level_and_right_after_what_it_doesnt_check(tmp_path: Path) -> None:
+    proof = {"level": "basico", "gaps": [{"code": "sin_controles"}]}
+
+    report = _report(tmp_path, [_event("lictor.run.started.v1", {"proof": proof})])
+
+    assert "- **Nivel de prueba**: básico" in report
+    section = report.split("## Lo que este nivel no comprueba\n", 1)[1].split("\n\n", 1)[0]
+    assert section.splitlines()[0].startswith("- No se comprueba que el test compare nada")
+    assert section.splitlines()[1].startswith("- Un verde solo pasó la aceptación")
+    assert report.index("## Lo que este nivel no comprueba") < report.index("## Escenarios")
+
+
+def test_a_run_from_before_the_level_says_none(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_event("lictor.run.started.v1", {})])
+
+    assert "Nivel de prueba" not in report
+    assert "## Lo que este nivel no comprueba" not in report

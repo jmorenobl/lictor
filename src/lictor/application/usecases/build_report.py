@@ -31,6 +31,7 @@ from lictor.domain.progress import (
     red_timing_text,
     status_text,
 )
+from lictor.domain.proof_level import ProofLevel, level_name, proof_from_record, unchecked_lines
 from lictor.domain.refactor import REFACTORED
 from lictor.domain.results import (
     OLDER_EVENTS,
@@ -745,6 +746,7 @@ class BuildReport:
             "attempts": [],
             "check_controls": [],
             "blind_spots": None,
+            "proof": None,
             "conventions": None,
             # What the run changed that no control executed (H2), and whether it reached the end.
             "unexecuted": None,
@@ -814,6 +816,7 @@ class BuildReport:
             if isinstance(c, dict)
         ]
         info["blind_spots"] = blind_spot_lines(ev.data.get("blind_spots"))
+        info["proof"] = proof_from_record(ev.data.get("proof"))
         info["conventions"] = ev.data.get("conventions")
 
     def _on_spec_loaded(self, ev: Event, info: dict[str, Any]) -> None:
@@ -1075,6 +1078,7 @@ class BuildReport:
             ),
             f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
             f"- **Duración total**: {_total_duration(info)}",
+            *_proof_summary(info["proof"]),
             "",
             "## Escenarios",
             *_scenario_table(info, owners, totals),
@@ -1159,6 +1163,21 @@ class BuildReport:
 
         lines.append("")
         return "\n".join(lines)
+
+
+def _proof_summary(proof: ProofLevel | None) -> list[str]:
+    """The level of proof in the summary, and what it doesn't check right after (ADR-0020).
+
+    A run from before 0.23.0 kept no level, and none is said.
+    """
+    if proof is None:
+        return []
+    return [
+        f"- **Nivel de prueba**: {level_name(proof.level)}",
+        "",
+        "## Lo que este nivel no comprueba",
+        *(f"- {line}" for line in unchecked_lines(proof)),
+    ]
 
 
 def _unexecuted_section(info: Mapping[str, Any]) -> list[str]:
