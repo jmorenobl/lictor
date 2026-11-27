@@ -35,7 +35,14 @@ from typing import NoReturn
 
 from lictor.application.events import new_event
 from lictor.application.ports import AuditSink, CommandRunner, Vcs
-from lictor.application.run_files import save_output, scratch_dir, unused_path, verification_tree
+from lictor.application.run_files import (
+    VERIFY_ENV_DIR,
+    remove_tree,
+    save_output,
+    scratch_dir,
+    unused_path,
+    verification_tree,
+)
 from lictor.application.seal import hash_tree
 from lictor.domain.errors import EnvironmentUnavailableError
 from lictor.domain.model import CommandOutput
@@ -116,7 +123,7 @@ class VerificationEnvironment:
         self._installed_plugins: list[str] = []
         self._move_to(
             EnvironmentPlace(
-                project_root / ".lictor" / "verify-env",
+                project_root / ".lictor" / VERIFY_ENV_DIR,
                 project_root / ".lictor" / "verify_env.json",
             )
         )
@@ -252,7 +259,8 @@ class VerificationEnvironment:
     def _build(self, run_id: str, reason: str) -> None:
         started = time.monotonic()
         self.manifest.unlink(missing_ok=True)
-        shutil.rmtree(self.env_dir, ignore_errors=True)
+        # Building over what a tool left read-only isn't the environment the hash vouches for.
+        remove_tree(self.env_dir)
 
         tokens = self._tokens(self.spec.prepare)
         with (

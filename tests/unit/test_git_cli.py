@@ -1101,3 +1101,91 @@ def test_histories_with_no_common_ancestor_have_no_base(git_repo: Path) -> None:
     other = _commit(git_repo, "otra.txt")
 
     assert cli.merge_base(head, other) is None
+
+
+def _worktree(repo: Path, path: Path, *extra: str) -> Path:
+    subprocess.run(
+        [GIT_BIN, *extra, "worktree", "add", "-q", "-b", path.name, str(path), "HEAD"],
+        cwd=repo,
+        check=True,
+    )
+    return path
+
+
+def test_a_worktree_both_ends_point_to_is_linked(git_repo: Path, tmp_path: Path) -> None:
+    worktree = _worktree(git_repo, tmp_path / "wt")
+    assert GitCli(git_repo).link_of(worktree) == "linked"
+
+
+def test_a_worktree_through_a_link_is_still_linked(git_repo: Path, tmp_path: Path) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "enlace").symlink_to(tmp_path / "real", target_is_directory=True)
+    worktree = _worktree(git_repo, tmp_path / "enlace" / "wt")
+    assert GitCli(git_repo).link_of(tmp_path / "enlace" / "wt") == "linked"
+    assert GitCli(git_repo).link_of(tmp_path / "real" / "wt") == "linked"
+    assert worktree.is_dir()
+
+
+def test_relative_paths_of_git_are_resolved_from_their_own_ends(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    worktree = _worktree(git_repo, tmp_path / "wt", "-c", "worktree.useRelativePaths=true")
+    if not (worktree / ".git").read_text(encoding="utf-8").startswith("gitdir: ."):
+        pytest.skip("este git no escribe rutas relativas en los worktrees")
+    assert GitCli(git_repo).link_of(worktree) == "linked"
+
+
+def test_a_worktree_without_its_git_file_is_unlinked_and_repairable(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    worktree = _worktree(git_repo, tmp_path / "wt")
+    (worktree / ".git").unlink()
+    assert GitCli(git_repo).link_of(worktree) == "unlinked"
+
+
+def test_a_moved_checkout_leaves_its_worktrees_unlinked_not_orphaned(tmp_path: Path) -> None:
+    """B1: the worktree's `.git` points to the old place, and `git worktree repair` fixes it."""
+    repo = tmp_path / "proyecto"
+    repo.mkdir()
+    subprocess.run([GIT_BIN, "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            GIT_BIN,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    worktree = _worktree(repo, tmp_path / "wt")
+    moved = repo.rename(tmp_path / "movido")
+
+    assert GitCli(moved).link_of(worktree) == "unlinked"
+
+
+def test_a_worktree_git_removed_its_entry_of_is_orphaned(git_repo: Path, tmp_path: Path) -> None:
+    worktree = _worktree(git_repo, tmp_path / "wt")
+    shutil.rmtree(git_repo / ".git" / "worktrees" / "wt")
+    assert GitCli(git_repo).link_of(worktree) == "orphan"
+    assert GitCli(git_repo).link_of(tmp_path / "ninguno") == "orphan"
+
+
+def test_removing_a_worktree_whose_directory_is_gone_drops_only_its_entry(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """C2 and C5: `prune` would take a person's worktree on an unmounted disk as well."""
+    gone = _worktree(git_repo, tmp_path / "wt")
+    unmounted = _worktree(git_repo, tmp_path / "disco")
+    shutil.rmtree(gone)
+    unmounted.rename(tmp_path / "desmontado")
+
+    GitCli(git_repo).remove_worktree(gone)
+
+    assert sorted(p.name for p in (git_repo / ".git" / "worktrees").iterdir()) == ["disco"]

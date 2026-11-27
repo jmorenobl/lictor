@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from lictor.domain.errors import EnvironmentUnavailableError
@@ -29,6 +29,8 @@ class RunEntry:
     branch: str
     worktree: str
     run_id: str
+    # Set by `retire` once it found the tree clean and kept its evidence, before removing anything.
+    retiring: bool = False
 
 
 def lictor_home() -> Path:
@@ -83,6 +85,19 @@ def _write_index(main_root: Path, runs: list[RunEntry]) -> None:
     payload = {"version": _INDEX_VERSION, "runs": [asdict(run) for run in runs]}
     partial.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     partial.replace(path)
+
+
+def mark_retiring(main_root: Path, branch: str) -> None:
+    """Leave word that `retire` is removing this run's worktree, before it removes anything.
+
+    Whatever a failed removal leaves, a marked run is a retire halfway: `run` never picks it, and
+    the next `retire` finishes it (G8 of 0.23.2).
+    """
+    runs = [
+        replace(run, retiring=True) if run.branch == branch else run
+        for run in read_run_index(main_root)
+    ]
+    _write_index(main_root, runs)
 
 
 def remove_from_run_index(main_root: Path, branch: str) -> None:

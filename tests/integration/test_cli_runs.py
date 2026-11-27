@@ -1,12 +1,13 @@
 """Which run `lictor run` picks from a person's checkout, and `retire`, `register` and `--branch`.
 
 A real repository and real worktrees, but no graph: `_run_here`, where the run itself starts, is
-replaced, and whether a run can go on is told through `_read_only_state`. The repro cases run the
-same paths with real runs (`test_v0_3_0_own_worktree.py`, `test_v0_3_0_retire.py`,
+replaced, and whether a run can go on is told through its checkpoint (`_states`). The repro
+cases run the same paths with real runs (`test_v0_3_0_own_worktree.py`, `test_v0_3_0_retire.py`,
 `test_phase7_register.py`); these fail when the decision in `cli.py` breaks, in seconds.
 """
 
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +16,10 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from lictor import cli
+from lictor import bootstrap, cli
 from lictor.application.run_index import RunEntry, read_run_index, run_worktree
 from lictor.cli import app
-from lictor.domain.errors import ConfigError, RunInProgressError
+from lictor.domain.errors import RunInProgressError
 
 runner = CliRunner()
 
@@ -87,15 +88,33 @@ def started(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, str | None]]:
 
 
 def _states(monkeypatch: pytest.MonkeyPatch, **by_worktree: Any) -> None:
-    """Give each run's checkpoint, by its worktree's name; the rest never started."""
+    """Give each run's checkpoint, by its worktree's name; the rest never started.
 
-    def read(project_root: Path, run_id: str) -> Any:
+    A state is a checkpoint's (`FINISHED`, `PAUSED`), or an exception for one that can't be read.
+    Where a run stands is read from the checkpoint alone (`checkpoint_state`), and `status` folds
+    it through the graph (`_read_only_state`): both are given the same.
+    """
+
+    def state_of(project_root: Path) -> Any:
         state = by_worktree.get(project_root.name)
         if isinstance(state, Exception):
             raise state
         return state
 
+    def read(project_root: Path, run_id: str) -> Any:
+        return state_of(project_root)
+
+    def checkpoint(db_path: Path, run_id: str) -> tuple[str, str]:
+        try:
+            state = state_of(db_path.parent.parent)
+        except Exception as exc:
+            return "unreadable", str(exc)
+        if state is None or not state.values:
+            return "none", ""
+        return ("finished" if state.values.get("exit_code") is not None else "open"), ""
+
     monkeypatch.setattr(cli, "_read_only_state", read)
+    monkeypatch.setattr(bootstrap, "checkpoint_state", checkpoint)
 
 
 FINISHED = SimpleNamespace(values={"exit_code": 0}, next=())
@@ -192,16 +211,23 @@ def test_a_run_whose_worktree_is_gone_is_not_resumed(
     assert started[-1][0] != Path(gone.worktree)
 
 
-def test_a_checkpoint_that_cant_be_read_still_counts_as_a_run_to_resume(
+def test_a_checkpoint_that_cant_be_read_is_never_resumed_and_is_told(
     project: Path, started: list[tuple[Path, str | None]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The resume says what is wrong, with the run's own checks."""
+    """G8 of 0.23.2: it counted as a run to resume, and `retire` asked for a `lictor run`."""
     assert _run(project, "--branch", "uno").exit_code == 0
-    _states(monkeypatch, uno=ConfigError("lictor.json no carga"))
+    _states(monkeypatch, uno=sqlite3.DatabaseError("file is not a database"))
 
-    assert _run(project).exit_code == 0
+    result = _run(project)
+    named = _run(project, "--branch", "uno")
 
-    assert [call[0].name for call in started] == ["uno", "uno"]
+    assert result.exit_code == 0
+    assert "su checkpoint no se puede leer (file is not a database)" in result.stderr
+    assert "`lictor retire uno`" in result.stderr
+    assert [call[0].name for call in started][:1] == ["uno"]
+    assert started[1][0].name != "uno", "empieza otra al lado"
+    assert named.exit_code == 10
+    assert len(started) == 2
 
 
 @pytest.mark.parametrize(
@@ -210,19 +236,22 @@ def test_a_checkpoint_that_cant_be_read_still_counts_as_a_run_to_resume(
         (None, True),
         (SimpleNamespace(values={}, next=()), True),
         (PAUSED, True),
-        (SimpleNamespace(values={"exit_code": 10}, next=("pause",)), True),
         (FINISHED, False),
     ],
 )
-def test_can_go_on_until_the_checkpoint_finished(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: Any, goes_on: bool
+def test_lictor_run_resumes_until_the_checkpoint_finished(
+    project: Path,
+    started: list[tuple[Path, str | None]],
+    monkeypatch: pytest.MonkeyPatch,
+    state: Any,
+    goes_on: bool,
 ) -> None:
-    worktree = tmp_path / "uno"
-    worktree.mkdir()
+    assert _run(project, "--branch", "uno").exit_code == 0
     _states(monkeypatch, uno=state)
 
-    assert cli._can_go_on(RunEntry("lictor/uno", str(worktree), "r1")) is goes_on
-    assert cli._can_go_on(RunEntry("lictor/uno", str(tmp_path / "otro"), "r1")) is False
+    assert _run(project).exit_code == 0
+
+    assert (started[-1][0].name == "uno") is goes_on
 
 
 def test_a_bad_branch_name_is_refused_before_anything_is_created(
@@ -411,7 +440,11 @@ def _retire(project: Path, *args: str) -> Any:
     return runner.invoke(app, ["retire", *args, "--cwd", str(project)])
 
 
-def test_retire_refuses_a_run_that_can_still_go_on(project: Path, run_uno: RunEntry) -> None:
+def test_retire_refuses_a_run_that_can_still_go_on(
+    project: Path, run_uno: RunEntry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _states(monkeypatch, uno=PAUSED)
+
     result = _retire(project, "uno")
 
     assert result.exit_code == 10
@@ -419,6 +452,15 @@ def test_retire_refuses_a_run_that_can_still_go_on(project: Path, run_uno: RunEn
     assert "`lictor run --branch uno`" in result.stderr
     assert Path(run_uno.worktree).is_dir()
     assert read_run_index(project) == [run_uno]
+
+
+def test_retire_removes_a_run_that_never_started(project: Path, run_uno: RunEntry) -> None:
+    """G8 of 0.23.2: refusing it asked for a `lictor run` that would have started it, and spent."""
+    result = _retire(project, "uno")
+
+    assert result.exit_code == 0, result.output
+    assert not Path(run_uno.worktree).exists()
+    assert read_run_index(project) == []
 
 
 def test_retire_refuses_a_worktree_with_uncommitted_changes(

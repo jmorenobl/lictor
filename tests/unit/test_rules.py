@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 import pytest
 
-from lictor.domain.errors import DriverError, ExitCode
+from lictor.domain.errors import AmbiguousMappingError, DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
@@ -23,6 +23,7 @@ from lictor.domain.rules import (
     RedOracle,
     ScenarioClass,
     acceptance_failure,
+    ambiguous_with_sealed_driver,
     anchor_from_older_version,
     anchor_problems,
     banned_matches,
@@ -51,6 +52,7 @@ from lictor.domain.rules import (
     path_within,
     paths_only_a_person_can_change,
     person_only_reason,
+    person_stop_reason,
     precondition_exit_code,
     present_scenarios,
     red_failure_problem,
@@ -64,11 +66,14 @@ from lictor.domain.rules import (
     runs_to_prune,
     same_error_groups,
     score_meets,
+    sealed_driver_cases,
+    sealed_driver_reason,
     stub_lines,
     suppression_matches,
     suppressions_not_moved,
     suspicious_driver,
     unmapped_cases,
+    with_mapping,
 )
 from lictor.domain.verdicts import Failed, Passed, enforce_min_score
 
@@ -129,8 +134,23 @@ def test_map_test_cases_duplicate_for_scenario_raises_driver_error() -> None:
     ]
     scenario_ids = ["IVA-001"]
 
-    with pytest.raises(DriverError, match="Múltiples casos de test"):
+    with pytest.raises(AmbiguousMappingError) as raised:
         map_test_cases_to_scenarios(test_cases, scenario_ids)
+
+    assert raised.value.scenario == "IVA-001"
+    assert raised.value.cases == ("test_iva_001_first", "test_iva_001_second")
+    assert "un subtest o un test parametrizado sale como otro caso" in str(raised.value)
+
+
+def test_a_go_subtest_is_another_case_of_the_same_scenario_and_the_message_says_so() -> None:
+    """G1 of 0.23.2: gotestsum writes `Test_X/fila` beside `Test_X`, and by name both are X."""
+    cases = [
+        TestCaseResult(name="Test_PLZ_007/despido", classname="acceptance"),
+        TestCaseResult(name="Test_PLZ_007", classname="acceptance"),
+    ]
+
+    with pytest.raises(AmbiguousMappingError, match="Recorre los casos dentro de un solo test"):
+        map_test_cases_to_scenarios(cases, ["PLZ-007"])
 
 
 def test_map_test_cases_same_test_for_multiple_scenarios_raises_driver_error() -> None:
@@ -829,7 +849,7 @@ def test_map_by_scenario_requires_one_test_per_scenario() -> None:
             [_linked("test_a", "IVA-001")], IDS, link="scenario", files=FILES
         )
     twice = [_linked("a", "IVA-001"), _linked("b", "IVA-001"), _linked("c", "IVA-002")]
-    with pytest.raises(DriverError, match=r"Múltiples casos de test ejecutan.*\['a', 'b'\]"):
+    with pytest.raises(AmbiguousMappingError, match=r"'IVA-001' sale en 2 casos.*\['a', 'b'\]"):
         map_test_cases_to_scenarios(twice, IDS, link="scenario", files=FILES)
 
 
@@ -1859,3 +1879,51 @@ def test_by_scenario_a_case_is_present_by_what_it_executed() -> None:
 
     assert present_scenarios([case], ["A-001", "A-002"], "scenario") == {"A-001"}
     assert present_scenarios([case], ["A-002"], "scenario") == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        ([], None),
+        (["A-001"], None),
+        ([None, "A-001"], None),
+        (["A-001", None], None),
+        (["A-001", "A-001"], "A-001"),
+        (["B-002", "A-001", "A-001"], "A-001"),
+        (["A-001", "B-002"], None),
+        ([None, None], None),
+    ],
+)
+def test_the_sealed_driver_stops_the_run_after_two_verifications_agree(
+    history: list[str | None], expected: str | None
+) -> None:
+    assert sealed_driver_cases(history) == expected
+
+
+def test_only_a_verification_that_reached_the_mapping_counts_for_the_streak() -> None:
+    found = ("A-001", ("a", "b"))
+    assert with_mapping(["A-001"], None, mapped=False) == ["A-001"]
+    assert with_mapping(["A-001"], None, mapped=True) == ["A-001", None]
+    assert with_mapping(["A-001"], found, mapped=False) == ["A-001", "A-001"]
+    assert with_mapping([], ("B-002", ()), mapped=True) == ["B-002"]
+
+
+def test_a_person_stops_the_run_for_a_path_first_and_for_the_sealed_driver_after() -> None:
+    found = ("A-001", ("a", "b"))
+    assert person_stop_reason("B-002", [], ["A-001"], found) is None
+    assert person_stop_reason("B-002", [], ["A-001", "A-001"], None) is None
+    sealed = person_stop_reason("B-002", [], ["A-001", "A-001"], found)
+    assert sealed == sealed_driver_reason("A-001", ("a", "b"))
+    paths = person_stop_reason("B-002", ["pyproject.toml"], ["A-001", "A-001"], found)
+    assert paths == person_only_reason("B-002", ["pyproject.toml"])
+
+
+def test_the_implementer_hears_both_causes_and_the_person_what_to_do() -> None:
+    told = ambiguous_with_sealed_driver("PLZ-007", ["Test_PLZ_007/a", "Test_PLZ_007"])
+    assert "Si un test tuyo lleva el ID" in told
+    assert "no puedes cambiarlos" in told
+    assert "['Test_PLZ_007/a', 'Test_PLZ_007']" in told
+    reason = sealed_driver_reason("PLZ-007", ["Test_PLZ_007/a", "Test_PLZ_007"])
+    assert reason.startswith("El driver sellado da 2 casos para el escenario PLZ-007")
+    assert "Los verdes ya confirmados en la rama siguen valiendo" in reason
+    assert "`driver_hints`" in reason

@@ -13,6 +13,7 @@ from lictor.domain.conventions import TreeEntry
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
 from lictor.domain.model import DELETED_MODE, Candidate, RepoPin, TreeChange
 from lictor.domain.refactor_scope import LineSpan, hunk_span
+from lictor.domain.run_standing import Link
 
 _MIN_PORCELAIN_LINE_LEN = 4
 _PORCELAIN_PREFIX_LEN = 3
@@ -49,6 +50,16 @@ def _hunk_span(header: str) -> LineSpan:
 
 _NO_USER_CONFIG = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _EXECUTABLE_MODE = "100755"
+
+
+def _points_to(dot_git: Path, entry: Path) -> bool:
+    """Whether a worktree's `.git` file names that entry of the repository."""
+    if not dot_git.is_file() or dot_git.is_symlink():
+        return False
+    pointer = dot_git.read_text(encoding="utf-8").strip()
+    if not pointer.startswith("gitdir:"):
+        return False
+    return (dot_git.parent / pointer.removeprefix("gitdir:").strip()).resolve() == entry.resolve()
 
 
 class GitCli(Vcs, Worktrees, TextSearch):
@@ -207,6 +218,25 @@ class GitCli(Vcs, Worktrees, TextSearch):
         removed = self._run_git(["worktree", "remove", str(path)], check=False)
         if removed.returncode != 0:
             raise CandidateError(f"No se pudo retirar el worktree {path}: {removed.stderr.strip()}")
+
+    def link_of(self, path: Path) -> Link:
+        """Find git's entry for the worktree among this repository's, reading files only.
+
+        Each entry's `gitdir` names the worktree's `.git`, relative to the entry with
+        `worktree.useRelativePaths`; both sides are resolved, so a path through a link (macOS's
+        `/var`) still matches. The entry without a `.git` pointing back is what a moved checkout
+        or a deleted `.git` leaves, and `git worktree repair` fixes.
+        """
+        wanted = (path / ".git").resolve()
+        entries = self._common_dir() / "worktrees"
+        for entry in sorted(entries.iterdir()) if entries.is_dir() else ():
+            gitdir = entry / "gitdir"
+            if not gitdir.is_file():
+                continue
+            if (entry / gitdir.read_text(encoding="utf-8").strip()).resolve() != wanted:
+                continue
+            return "linked" if _points_to(path / ".git", entry) else "unlinked"
+        return "orphan"
 
     def delete_branch(self, branch: str) -> None:
         """`-d`, never `-D`: a branch that isn't integrated stays."""

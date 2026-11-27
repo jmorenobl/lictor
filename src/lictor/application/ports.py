@@ -30,6 +30,7 @@ from lictor.domain.reports import (
     MutationReport,
     ReportOf,
 )
+from lictor.domain.run_standing import Link
 from lictor.domain.spec_rules import SpecProblem
 
 
@@ -102,6 +103,10 @@ class Worktrees(Protocol):
 
     def remove_worktree(self, path: Path) -> None:
         """Remove a clean worktree; git refuses one with untracked or modified files."""
+        ...
+
+    def link_of(self, path: Path) -> Link:
+        """Tell, from this checkout and by reading files, how git knows the worktree at `path`."""
         ...
 
     def delete_branch(self, branch: str) -> None:

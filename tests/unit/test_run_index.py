@@ -10,6 +10,7 @@ from lictor.application.run_index import (
     RunEntry,
     add_to_run_index,
     lictor_home,
+    mark_retiring,
     read_run_index,
     remove_from_run_index,
     run_worktree,
@@ -83,3 +84,28 @@ def test_a_retired_run_leaves_the_index(tmp_path: Path) -> None:
     remove_from_run_index(tmp_path, "lictor/c")
 
     assert read_run_index(tmp_path) == [second]
+
+
+def test_retire_leaves_word_in_the_index_before_removing_anything(tmp_path: Path) -> None:
+    """G8 of 0.23.2: a marked run is a retire halfway, whatever its directory looks like."""
+    first = RunEntry(branch="lictor/a", worktree="/w/a", run_id="r1")
+    second = RunEntry(branch="lictor/b", worktree="/w/b", run_id="r2")
+    add_to_run_index(tmp_path, first)
+    add_to_run_index(tmp_path, second)
+
+    mark_retiring(tmp_path, "lictor/a")
+
+    assert read_run_index(tmp_path) == [
+        RunEntry(branch="lictor/a", worktree="/w/a", run_id="r1", retiring=True),
+        second,
+    ]
+
+
+def test_an_index_written_before_the_mark_still_reads(tmp_path: Path) -> None:
+    index = tmp_path / ".lictor" / "worktrees.json"
+    index.parent.mkdir()
+    index.write_text(
+        '{"version": 1, "runs": [{"branch": "lictor/a", "worktree": "/w", "run_id": "r"}]}',
+        encoding="utf-8",
+    )
+    assert read_run_index(tmp_path) == [RunEntry("lictor/a", "/w", "r", retiring=False)]

@@ -3,7 +3,7 @@
 import hashlib
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, closing, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol, TypedDict
@@ -103,11 +103,13 @@ from lictor.domain.rules import (
     MapLink,
     RedOracle,
     paths_only_a_person_can_change,
-    person_only_reason,
+    person_stop_reason,
     precondition_exit_code,
     run_outcome,
     suspicious_driver,
+    with_mapping,
 )
+from lictor.domain.run_standing import Checkpoint
 from lictor.domain.stages import ResultBranch, committed_greens, final_reason
 from lictor.domain.unexecuted import UNEXECUTED, UNREAD_BY_PROFILE, unexecuted_record
 
@@ -176,6 +178,8 @@ class GraphState(TypedDict, total=False):
     green_at_load: list[str]
     failures: list[list[str] | None]
     rejected_paths: list[list[str] | None]
+    # Per verification of the implementer in the whole run, never per scenario (G1 of 0.23.2).
+    ambiguous_scenarios: list[str | None]
     # The refactor after the current scenario's green (ADR-0010): the green's own commit, what its
     # verification measured, and how the refactor ended once settled.
     refactor_of: str | None
@@ -807,14 +811,15 @@ class _GraphNodes:
         needed = (
             [] if res.ok else paths_only_a_person_can_change(rejected_paths, self.ctx.paths_driver)
         )
-        stop = (
-            self._finish(state, int(ExitCode.PRECONDITION), person_only_reason(current_id, needed))
-            if needed
-            else {}
+        ambiguous = with_mapping(
+            state.get("ambiguous_scenarios", []), res.ambiguous, mapped=bool(res.scenario_results)
         )
+        reason = person_stop_reason(current_id, needed, ambiguous, res.ambiguous)
+        stop = self._finish(state, int(ExitCode.PRECONDITION), reason) if reason else {}
         return {
             **stop,
             "rejected_paths": rejected_paths,
+            "ambiguous_scenarios": ambiguous,
             "last_verify": {
                 "ok": res.ok,
                 "failed_at": res.failed_at,
@@ -1228,6 +1233,31 @@ def read_only_sqlite_saver(db_path: Path) -> SqliteSaver | None:
     saver = SqliteSaver(conn)
     saver.is_setup = True  # its tables exist: the run that wrote them created them
     return saver
+
+
+def checkpoint_state(db_path: Path, run_id: str) -> tuple[Checkpoint, str]:
+    """Say what a run's checkpoint holds, reading it alone: no graph, no `lictor.json` (G8).
+
+    Building the graph to ask `get_state` loads the project's configuration, and a worktree half
+    removed had none: the error read as «the run goes on». `exit_code` is enough: only `_finish`
+    writes it, and every route goes to END once it is there. A file without tables (a kill between
+    creating it and `setup()`) holds no run yet. Returns the state and, when it can't be read, why.
+    """
+    try:
+        saver = read_only_sqlite_saver(db_path)
+        if saver is None:
+            return "none", ""
+        with closing(saver.conn):
+            tables = saver.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'"
+            ).fetchone()
+            found = saver.get_tuple({"configurable": {"thread_id": run_id}}) if tables else None
+    except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+        return "unreadable", str(exc) or type(exc).__name__
+    values = found.checkpoint.get("channel_values", {}) if found is not None else {}
+    if not values:
+        return "none", ""
+    return ("finished" if values.get("exit_code") is not None else "open"), ""
 
 
 class _Node(Protocol):
