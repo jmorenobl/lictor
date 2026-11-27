@@ -65,6 +65,7 @@ from lictor.domain.rules import (
     stub_lines,
     suppression_matches,
     suppressions_not_moved,
+    suppressions_text,
     suspicious_driver,
     unmapped_cases,
 )
@@ -1796,3 +1797,8 @@ def test_same_error_groups_keeps_going_after_a_case_with_nothing_to_share() -> N
     ]
 
     assert [[c.name for c in g] for g in same_error_groups(cases)] == [["a"], ["b", "c"]]
+
+
+def test_every_prompt_says_the_same_of_no_suppressions() -> None:
+    assert suppressions_text([]) == "ninguna"
+    assert suppressions_text(["# noqa", "# type: ignore"]) == "# noqa, # type: ignore"

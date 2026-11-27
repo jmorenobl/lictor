@@ -33,6 +33,7 @@ from lictor.domain.rules import (
     forbidden_paths,
     keeps_attempt,
     path_within,
+    suppressions_text,
 )
 
 
@@ -190,7 +191,7 @@ class PrepareDriver:
             "{protected_sin_driver}": ", ".join(protected_without_driver),
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
             "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
-            "{suppressions}": ", ".join(request.suppressions) or "ninguna",
+            "{suppressions}": suppressions_text(request.suppressions),
             # The driver's call has no copy of the profile's files: what names them can't run.
             **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
             "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",

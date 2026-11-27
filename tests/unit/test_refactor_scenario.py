@@ -379,3 +379,26 @@ def test_a_green_without_a_comparison_says_nothing_of_the_api(tmp_path: Path) ->
     _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), baseline={"api": Measure()})
 
     assert "API pública" not in _task(executor).prompt
+
+
+def test_without_a_control_of_the_tests_the_refactor_isnt_told_they_guard_it(
+    tmp_path: Path,
+) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"), suppressions=[])
+
+    prompt = " ".join(_task(executor).prompt.split())
+    assert "Puedes reorganizar los tests unitarios para que sigan al código." in prompt
+    assert "deje más sin probar" not in prompt
+    assert "No añadas supresiones: ninguna." in prompt
+
+
+def test_with_a_control_of_the_tests_the_refactor_hears_fewer_discards_it(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(
+        tmp_path, AgentResult(status="ok"), baseline={"unit": Measure(passed=3)}
+    )
+
+    prompt = " ".join(_task(executor).prompt.split())
+    assert "un refactor que pase menos tests, o deje más sin probar que el verde, se descarta" in (
+        prompt
+    )
+    assert "o deje más sin probar que el verde; quitar código probado no cuenta en contra" in prompt
