@@ -980,7 +980,28 @@ class RetentionConfig(BaseModel):
     keep_retired: int = Field(default=10, ge=1)
 
 
-class LictorConfig(BaseModel):
+class ProjectDefences(BaseModel):
+    """What a project adds to its profile's defences (ADR-0020): each list joins the profile's.
+
+    `code_exclude` only where the profile declares no code paths. `LictorFile` and `LictorConfig`
+    both carry them, as written: `resolve_defences` joins them.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suppressions: list[str] = Field(default_factory=list)
+    banned_patterns: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    code_paths: list[str] = Field(default_factory=list)
+    code_exclude: list[str] = Field(default_factory=list)
+
+    @field_validator("banned_patterns")
+    @classmethod
+    def _check_regexes(cls, patterns: list[str]) -> list[str]:
+        return _validate_regexes(patterns)
+
+
+class LictorConfig(ProjectDefences):
     """Lo que decide un proyecto (lictor.json); las defensas vienen de su perfil."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -1001,23 +1022,11 @@ class LictorConfig(BaseModel):
     agent_tools: list[str] = Field(default_factory=list)
     hints: str = ""
     gitignore: list[str] = Field(default_factory=list)
-    # What the project adds to its profile's defences (ADR-0020): each list joins the profile's.
-    # `code_exclude` only where the profile declares no code paths.
-    suppressions: list[str] = Field(default_factory=list)
-    banned_patterns: list[str] = Field(default_factory=list)
-    forbidden_paths: list[str] = Field(default_factory=list)
-    code_paths: list[str] = Field(default_factory=list)
-    code_exclude: list[str] = Field(default_factory=list)
 
     @field_validator("controls")
     @classmethod
     def _check_unique_controls(cls, controls: list[ControlConfig]) -> list[ControlConfig]:
         return _validate_unique_control_ids(controls)
-
-    @field_validator("banned_patterns")
-    @classmethod
-    def _check_regexes(cls, patterns: list[str]) -> list[str]:
-        return _validate_regexes(patterns)
 
     @model_validator(mode="after")
     def _validate_readers(self) -> Self:
@@ -1049,7 +1058,7 @@ def domain_controls(config: LictorConfig) -> tuple[Control, ...]:
     )
 
 
-class LictorFile(BaseModel):
+class LictorFile(ProjectDefences):
     """lictor.json tal como lo escribe la persona: lo que no escribe sale del perfil al cargar.
 
     Una clave escrita sustituye entera la del perfil, salvo `controls`, que son cambios por `id`
@@ -1074,18 +1083,6 @@ class LictorFile(BaseModel):
     agent_tools: list[str] | None = None
     hints: str | None = None
     gitignore: list[str] | None = None
-    # What the project adds to its profile's defences (ADR-0020): each list joins the profile's.
-    # `code_exclude` only where the profile declares no code paths.
-    suppressions: list[str] = Field(default_factory=list)
-    banned_patterns: list[str] = Field(default_factory=list)
-    forbidden_paths: list[str] = Field(default_factory=list)
-    code_paths: list[str] = Field(default_factory=list)
-    code_exclude: list[str] = Field(default_factory=list)
-
-    @field_validator("banned_patterns")
-    @classmethod
-    def _check_regexes(cls, patterns: list[str]) -> list[str]:
-        return _validate_regexes(patterns)
 
     @model_validator(mode="before")
     @classmethod

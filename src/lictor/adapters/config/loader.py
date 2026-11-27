@@ -847,24 +847,29 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         code_exclude=tuple(config.code_exclude),
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
-        impostors=(
-            Impostors(
-                imp.pattern,
-                tuple(StubConstant(r.code, r.name, r.double) for r in imp.replacements),
-            )
-            if (imp := profile.oracle.impostors) is not None
-            else None
-        ),
-        interface_impostor=(
-            InterfaceImpostor(face.variable, face.control, tuple(face.modes), face.gherkin)
-            if (face := profile.oracle.interface_impostor) is not None
-            else None
-        ),
+        impostors=_impostors(profile.oracle),
+        interface_impostor=_interface_impostor(profile.oracle),
         needs_plugins=dict(profile.acceptance.needs_plugins) if profile.acceptance else {},
         survey_run=profile.survey.run if profile.survey is not None else None,
         ci_hooks=dict(profile.survey.ci_hooks) if profile.survey is not None else {},
         detect=tuple(profile.detect),
     )
+
+
+def _impostors(oracle: ProfileOracle) -> Impostors | None:
+    imp = oracle.impostors
+    if imp is None:
+        return None
+    return Impostors(
+        imp.pattern, tuple(StubConstant(r.code, r.name, r.double) for r in imp.replacements)
+    )
+
+
+def _interface_impostor(oracle: ProfileOracle) -> InterfaceImpostor | None:
+    face = oracle.interface_impostor
+    if face is None:
+        return None
+    return InterfaceImpostor(face.variable, face.control, tuple(face.modes), face.gherkin)
 
 
 def rule_files(config: LictorConfig, profiles_dir: Path | None = None) -> tuple[str, ...]:

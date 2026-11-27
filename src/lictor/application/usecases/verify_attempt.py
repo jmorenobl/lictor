@@ -680,14 +680,11 @@ class VerifyAttempt:
                 trusted.cases, req.all_scenario_ids, req.link, req.scenario_files
             )
         except DriverError as exc:
-            ids = [_scenario_str(sid) for sid in req.all_scenario_ids]
-            present = present_scenarios(trusted.cases, ids, req.link)
-            reason = mapping_failure_reason(str(exc), ids, present, sealed=True, output=output)
             return self._fail(
                 req,
                 _Failure(
                     "acceptance",
-                    reason,
+                    _cut_short_reason(req, str(exc), trusted.cases, output),
                     cases=trusted.cases,
                     output=output,
                     controls=controls,
@@ -725,3 +722,12 @@ class VerifyAttempt:
             acceptance=acceptance,
             scenario_results=scenario_results,
         )
+
+
+def _cut_short_reason(
+    req: VerifyAttemptRequest, reason: str, cases: Sequence[TestCaseResult], output: str
+) -> str:
+    """Why the report doesn't map, with the driver sealed: a case missing was cut short."""
+    ids = [_scenario_str(sid) for sid in req.all_scenario_ids]
+    present = present_scenarios(cases, ids, req.link)
+    return mapping_failure_reason(reason, ids, present, sealed=True, output=output)
