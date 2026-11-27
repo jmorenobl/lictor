@@ -7,19 +7,15 @@ Objetivo: que pase el escenario {id}.
 Reglas:
 - Solo puedes crear o modificar archivos en: {writable}.
 - No toques {protected}. Cualquier cambio ahí se revierte y cuenta como intento fallido.
-- Tampoco crees ni modifiques, en ninguna carpeta: {forbidden}.
-  Lo que hay ahí lo cambia solo una persona.
-- Si el escenario no se puede cumplir sin cambiar algo de lo anterior (una dependencia nueva en la
+{regla_prohibidas}- Si el escenario no se puede cumplir sin cambiar algo de lo anterior (una dependencia nueva en la
   configuración del proyecto, una pipeline), no busques rodeos como copiar o reimplementar una
   dependencia: haz el cambio que haría falta. Se descartará y Lictor se lo pedirá a una persona.
   Los tests de aceptación y los features no entran aquí: no se tocan nunca.
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
-- No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
-- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
+{regla_supresiones}- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
 - Bash solo admite órdenes que empiecen por: {bash_admite}. Cualquier otra orden,
   un intérprete o un script incluidos, se deniega y te cuesta turnos.
-- Estos escenarios ya funcionan y deben seguir funcionando: {green_ids}.
-- Comprueba siempre tu trabajo con estas órdenes, y asegúrate de que todas pasen sin errores
+{regla_verdes}- Comprueba siempre tu trabajo con estas órdenes, y asegúrate de que todas pasen sin errores
   antes de terminar:
 {comprobaciones}
 {arreglos}

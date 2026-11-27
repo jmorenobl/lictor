@@ -41,6 +41,7 @@ from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import Duplication, refactor_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentRole, AgentSignal, AgentTask, Scenario
+from lictor.domain.prompt_lists import forbidden_rule, greens_rule, suppressions_rule
 from lictor.domain.refactor import Measure, discards_text, guards_tests, unit_tests_rule
 from lictor.domain.refactor_scope import (
     NO_CODE,
@@ -49,7 +50,6 @@ from lictor.domain.refactor_scope import (
     outside_scope,
     scope_rule,
 )
-from lictor.domain.rules import suppressions_text
 
 ROLE: Final[AgentRole] = "refactor"
 
@@ -212,9 +212,9 @@ class RefactorScenario:
             "{refactor_hints}": request.refactor_hints,
             "{writable}": ", ".join(request.paths_writable),
             "{protected}": ", ".join(request.paths_protected),
-            "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{suppressions}": suppressions_text(request.suppressions),
-            "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{regla_prohibidas}": forbidden_rule(request.forbidden_paths, "refactor"),
+            "{regla_supresiones}": suppressions_rule(request.suppressions, "refactor"),
+            "{regla_verdes}": greens_rule(request.green_ids, "refactor"),
             **agent_command_lines(
                 request.allowed_tools,
                 request.check_commands,

@@ -26,6 +26,12 @@ from lictor.domain.controls import agent_command_lines, agent_tools_with_files
 from lictor.domain.conventions import conventions_block
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
+from lictor.domain.prompt_lists import (
+    forbidden_rule,
+    greens_rule,
+    protected_rule,
+    suppressions_rule,
+)
 from lictor.domain.rules import (
     classify_agent,
     count_agent_failures,
@@ -33,7 +39,6 @@ from lictor.domain.rules import (
     forbidden_paths,
     keeps_attempt,
     path_within,
-    suppressions_text,
 )
 
 
@@ -100,13 +105,6 @@ def already_met_line(interface_impostor: bool) -> str:
         "resultado: rechaza el driver y, al agotar sus intentos,\npara para que una persona "
         "registre el escenario. No lo cambies para que falle."
     )
-
-
-def _exempt_text(exempt: Sequence[str], driver: Sequence[str]) -> str:
-    """The exception to the forbidden paths, only when the profile has one."""
-    if not exempt:
-        return ""
-    return f", salvo {', '.join(exempt)} dentro de {', '.join(driver)}"
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -196,13 +194,17 @@ class PrepareDriver:
             "{features}": all_features,
             "{driver_paths}": ", ".join(request.paths_driver),
             "{writable}": ", ".join(request.paths_writable),
-            "{protected_sin_driver}": ", ".join(protected_without_driver),
-            "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{exentos}": _exempt_text(request.driver_exempt_paths, request.paths_driver),
-            "{suppressions}": suppressions_text(request.suppressions),
+            "{regla_protegidas}": protected_rule(protected_without_driver),
+            "{regla_prohibidas}": forbidden_rule(
+                request.forbidden_paths,
+                "driver",
+                request.driver_exempt_paths,
+                request.paths_driver,
+            ),
+            "{regla_supresiones}": suppressions_rule(request.suppressions, "driver"),
             # The driver's call has no copy of the profile's files: what names them can't run.
             **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
-            "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{regla_verdes}": greens_rule(request.green_ids, "driver"),
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,
             "{hints}": request.hints,

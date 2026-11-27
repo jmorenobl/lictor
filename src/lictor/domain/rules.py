@@ -783,11 +783,6 @@ def suppressions_not_moved(
     return sorted(left)
 
 
-def suppressions_text(suppressions: Sequence[str]) -> str:
-    """The suppressions a prompt forbids, or «ninguna»: the same words for the three roles."""
-    return ", ".join(suppressions) or "ninguna"
-
-
 def describe_suppressions(found: Sequence[str]) -> str:
     """The message of L0-supresiones, naming what was found."""
     return f"Se detectaron supresiones no permitidas: {', '.join(sorted(set(found)))}"

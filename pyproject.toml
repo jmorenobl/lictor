@@ -148,6 +148,7 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_driver_measures.py",
     "tests/unit/test_stub_proof.py",
     "tests/unit/test_proof_level.py",
+    "tests/unit/test_prompt_lists.py",
     "tests/unit/test_refactor.py",
     "tests/unit/test_routing.py",
     "tests/unit/test_model.py",
