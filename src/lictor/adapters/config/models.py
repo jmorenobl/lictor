@@ -858,7 +858,7 @@ class Profile(BaseModel):
     status: ProfileStatus = "stable"
     # The files that tell a project is of this profile. A profile without any is never detected.
     detect: list[str] = Field(default_factory=list)
-    # A profile that knows no layout (`generic`) declares neither: the project writes both.
+    # A profile that knows no layout declares neither: the project writes both (ADR-0020).
     paths: PathsConfig | None = None
     acceptance: ProfileAcceptance | None = None
     controls: list[ControlConfig]

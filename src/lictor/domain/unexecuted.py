@@ -109,7 +109,7 @@ class _Facts:
             return None if self.unknown or self._executed(test) else "sin_ejecutar"
         if path_within(path, self.oracle):
             return None  # the scenarios and the driver: the acceptance runs them
-        # Only `python-uv` has a survey, so only Python is code here. A profile with a survey of
+        # Only one profile has a survey, so only Python is code here. A profile with a survey of
         # another language will have to say its extensions (0.24.0 and later).
         if not path.endswith(".py"):
             return "no_es_codigo"
