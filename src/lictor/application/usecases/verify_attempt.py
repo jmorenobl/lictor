@@ -89,8 +89,10 @@ from lictor.domain.rules import (
     describe_suppressions,
     forbidden_paths,
     map_test_cases_to_scenarios,
+    mapping_failure_reason,
     path_within,
     plugin_skip_reason,
+    present_scenarios,
     registration_subject,
     render_full_error,
     routes_rejected,
@@ -678,11 +680,14 @@ class VerifyAttempt:
                 trusted.cases, req.all_scenario_ids, req.link, req.scenario_files
             )
         except DriverError as exc:
+            ids = [_scenario_str(sid) for sid in req.all_scenario_ids]
+            present = present_scenarios(trusted.cases, ids, req.link)
+            reason = mapping_failure_reason(str(exc), ids, present, sealed=True, output=output)
             return self._fail(
                 req,
                 _Failure(
                     "acceptance",
-                    str(exc),
+                    reason,
                     cases=trusted.cases,
                     output=output,
                     controls=controls,

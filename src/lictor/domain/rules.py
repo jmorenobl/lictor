@@ -174,6 +174,49 @@ def _map_by_scenario(
     return mapped
 
 
+def present_scenarios(
+    test_cases: Sequence[TestCaseResult], scenario_ids: Sequence[str], link: MapLink
+) -> frozenset[str]:
+    """The scenarios some case of the report is of, by name or by what it executed."""
+    return frozenset(sid for case in test_cases for sid in _present_ids(case, scenario_ids, link))
+
+
+def mapping_failure_reason(
+    reason: str,
+    scenario_ids: Sequence[str],
+    present: Collection[str],
+    *,
+    sealed: bool,
+    output: str,
+) -> str:
+    """What the agent reads when the report's cases don't map to the scenarios (ADR-0020).
+
+    With the driver sealed its names already mapped at the red: a scenario without a case means
+    the tests were cut short (a panic nobody recovered, an exit), not that a test is misnamed. With
+    no case of any scenario the report can't explain itself (a driver that doesn't compile leaves
+    one case of the package), and the output joins the reason, as for a control without cases.
+    """
+    missing = [sid for sid in scenario_ids if sid not in present]
+    told = f"\nFinal de la salida de la aceptación:\n{output.strip()}" if output.strip() else ""
+    if sealed and missing:
+        count = len(missing)
+        tests = "1 test" if count == 1 else f"{count} tests"
+        return (
+            f"La aceptación se cortó antes de ejecutar {tests}: su informe no tiene caso de "
+            f"{', '.join(missing)}. El driver está sellado, así que no es el nombre de un test: "
+            f"algo paró el proceso de tests antes de llegar a ellos.{told}"
+        )
+    if not present and told:
+        return f"{reason}\nNingún caso del informe es de un escenario.{told}"
+    return reason
+
+
+def _present_ids(case: TestCaseResult, scenario_ids: Sequence[str], link: MapLink) -> list[str]:
+    if link == "name":
+        return _named_ids(case, scenario_ids)
+    return [sid for sid in scenario_ids if sid in case.scenario_tags]
+
+
 def unmapped_cases(
     test_cases: Sequence[TestCaseResult], mapped: Mapping[str, TestCaseResult]
 ) -> list[TestCaseResult]:

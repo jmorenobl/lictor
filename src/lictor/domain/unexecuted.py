@@ -109,6 +109,8 @@ class _Facts:
             return None if self.unknown or self._executed(test) else "sin_ejecutar"
         if path_within(path, self.oracle):
             return None  # the scenarios and the driver: the acceptance runs them
+        # Only `python-uv` has a survey, so only Python is code here. A profile with a survey of
+        # another language will have to say its extensions (0.24.0 and later).
         if not path.endswith(".py"):
             return "no_es_codigo"
         if path_within(path, [self.code_dir]) or path in self.read:
@@ -197,6 +199,10 @@ def _as_kind(spot: str) -> UnexecutedKind:
         if kind == spot:
             return kind
     raise ValueError(spot)
+
+
+# Why nothing is said without the profile's survey: there is no reading of what each control runs.
+UNREAD_BY_PROFILE = "el perfil no declara cómo leer lo que ejecuta cada control"
 
 
 def unexecuted_record(

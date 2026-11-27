@@ -43,6 +43,7 @@ from lictor.domain.rules import (
     judge_red,
     keeps_attempt,
     map_test_cases_to_scenarios,
+    mapping_failure_reason,
     missing_executables,
     missing_plugin,
     model_responded,
@@ -51,6 +52,7 @@ from lictor.domain.rules import (
     paths_only_a_person_can_change,
     person_only_reason,
     precondition_exit_code,
+    present_scenarios,
     red_failure_problem,
     registration_problems,
     registration_subject,
@@ -1802,3 +1804,64 @@ def test_same_error_groups_keeps_going_after_a_case_with_nothing_to_share() -> N
 def test_every_prompt_says_the_same_of_no_suppressions() -> None:
     assert suppressions_text([]) == "ninguna"
     assert suppressions_text(["# noqa", "# type: ignore"]) == "# noqa, # type: ignore"
+
+
+_TESTMAIN = TestCaseResult(name="TestMain", classname="example.com/toy/acceptance", status="failed")
+_NIF_001 = TestCaseResult(name="Test_NIF_001", classname="acceptance", status="failed")
+
+
+def test_a_sealed_driver_with_cases_missing_was_cut_short_not_misnamed() -> None:
+    present = present_scenarios([_NIF_001], ["NIF-001", "NIF-002"], "name")
+
+    reason = mapping_failure_reason(
+        "No se encontró caso de test para el escenario 'NIF-002'",
+        ["NIF-001", "NIF-002"],
+        present,
+        sealed=True,
+        output="panic: runtime error: index out of range\n",
+    )
+
+    assert present == {"NIF-001"}
+    assert reason.startswith(
+        "La aceptación se cortó antes de ejecutar 1 test: su informe no tiene caso de NIF-002."
+    )
+    assert "no es el nombre de un test" in reason
+    assert reason.endswith(
+        "Final de la salida de la aceptación:\npanic: runtime error: index out of range"
+    )
+
+
+def test_a_fresh_driver_whose_report_has_no_scenario_gets_the_output() -> None:
+    ids = ["NIF-001", "NIF-002"]
+    output = "=== Errors\nacceptance/nif_test.go:16:16: undefined: nif.NoExiste\n"
+
+    reason = mapping_failure_reason(
+        "No se encontró",
+        ids,
+        present_scenarios([_TESTMAIN], ids, "name"),
+        sealed=False,
+        output=output,
+    )
+
+    assert reason.startswith("No se encontró\nNingún caso del informe es de un escenario.")
+    assert reason.endswith("undefined: nif.NoExiste")
+    assert mapping_failure_reason("x", ids, set(), sealed=False, output=" ") == "x"
+    assert mapping_failure_reason("x", ids, {"NIF-001"}, sealed=False, output=output) == "x"
+    assert mapping_failure_reason("x", ids, set(ids), sealed=True, output=output) == "x"
+
+
+def test_two_missing_cases_are_counted() -> None:
+    reason = mapping_failure_reason("x", ["A-001", "A-002"], set(), sealed=True, output="")
+
+    assert reason.startswith(
+        "La aceptación se cortó antes de ejecutar 2 tests: su informe no tiene caso de "
+        "A-001, A-002."
+    )
+    assert reason.endswith("antes de llegar a ellos.")
+
+
+def test_by_scenario_a_case_is_present_by_what_it_executed() -> None:
+    case = TestCaseResult(name="t", classname="c", properties={"lictor.scenario": "A-001"})
+
+    assert present_scenarios([case], ["A-001", "A-002"], "scenario") == {"A-001"}
+    assert present_scenarios([case], ["A-002"], "scenario") == frozenset()

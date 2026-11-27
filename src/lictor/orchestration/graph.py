@@ -109,7 +109,7 @@ from lictor.domain.rules import (
     suspicious_driver,
 )
 from lictor.domain.stages import ResultBranch, committed_greens, final_reason
-from lictor.domain.unexecuted import UNEXECUTED, unexecuted_record
+from lictor.domain.unexecuted import UNEXECUTED, UNREAD_BY_PROFILE, unexecuted_record
 
 
 def merge_dict(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -321,10 +321,21 @@ class _GraphNodes:
         """Tell what the run changed that no control executed, once its branch moved (H2)."""
         started = state.get("started_at")
         finder, environment = self.ctx.unexecuted, self.ctx.environment
-        if finder is None or environment is None or not started:
+        if environment is None or not started:
             return
         head = self.ctx.vcs.get_head_sha()
         if head == started:
+            return
+        if finder is None:
+            # Said, not left out: «the run didn't move the branch» would be false (ADR-0020).
+            self.ctx.event_log.append(
+                new_event(
+                    self.ctx.clock,
+                    UNEXECUTED,
+                    state["run_id"],
+                    data=unexecuted_record(UNREAD_BY_PROFILE, started, head),
+                )
+            )
             return
         step = state.get("verified_step")
         verified = self.ctx.project_root / step if step else None

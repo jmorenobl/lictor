@@ -62,6 +62,8 @@ from lictor.domain.rules import (
     impostor_source,
     judge_red,
     map_test_cases_to_scenarios,
+    mapping_failure_reason,
+    present_scenarios,
     registration_subject,
     render_full_error,
     stub_lines,
@@ -575,7 +577,14 @@ class CheckRed:
         try:
             mapped = map_test_cases_to_scenarios(cases, ids, request.link, request.scenario_files)
         except DriverError as exc:
-            rejection = _Rejection("mapeo", str(exc), cases, output=raw_output)
+            reason = mapping_failure_reason(
+                str(exc),
+                ids,
+                present_scenarios(cases, ids, request.link),
+                sealed=not request.driver_fresh,
+                output=raw_output,
+            )
+            rejection = _Rejection("mapeo", reason, cases, output=raw_output)
             return self._reject_or_raise(request, step_dir, rejection), None
 
         extra = unmapped_cases(cases, mapped)
