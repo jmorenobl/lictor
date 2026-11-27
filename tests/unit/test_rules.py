@@ -1919,11 +1919,26 @@ def test_a_person_stops_the_run_for_a_path_first_and_for_the_sealed_driver_after
 
 
 def test_the_implementer_hears_both_causes_and_the_person_what_to_do() -> None:
-    told = ambiguous_with_sealed_driver("PLZ-007", ["Test_PLZ_007/a", "Test_PLZ_007"])
-    assert "Si un test tuyo lleva el ID" in told
-    assert "no puedes cambiarlos" in told
-    assert "['Test_PLZ_007/a', 'Test_PLZ_007']" in told
-    reason = sealed_driver_reason("PLZ-007", ["Test_PLZ_007/a", "Test_PLZ_007"])
-    assert reason.startswith("El driver sellado da 2 casos para el escenario PLZ-007")
-    assert "Los verdes ya confirmados en la rama siguen valiendo" in reason
-    assert "`driver_hints`" in reason
+    cases = ["Test_PLZ_007/a", "Test_PLZ_007"]
+    assert ambiguous_with_sealed_driver("PLZ-007", cases) == (
+        "El escenario 'PLZ-007' sale en 2 casos del informe de la aceptación: "
+        "['Test_PLZ_007/a', 'Test_PLZ_007'], y cada escenario tiene que ser un solo caso. Si un "
+        "test tuyo lleva el ID en el nombre y la aceptación lo ejecuta, renómbralo. Si los casos "
+        "son del driver sellado (un subtest aparece cuando el código ya llega a él), no puedes "
+        "cambiarlos: no toques nada por eso, y si vuelve a pasar Lictor parará para pedírselo a "
+        "una persona."
+    )
+    assert sealed_driver_reason("PLZ-007", cases) == (
+        "El driver sellado da 2 casos para el escenario PLZ-007: ['Test_PLZ_007/a', "
+        "'Test_PLZ_007'], y cada escenario tiene que ser un solo caso (un subtest o un test "
+        "parametrizado sale como otro). El implementador no puede cambiar un driver sellado, y "
+        "así no se verifica ningún escenario. Los verdes ya confirmados en la rama siguen "
+        "valiendo: intégrala o descártala, retira esta ejecución y lanza otra, que construye su "
+        "driver de nuevo; antes, corrige `driver_hints` para que no lo repita."
+    )
+    assert str(AmbiguousMappingError("PLZ-007", cases)) == (
+        "El escenario 'PLZ-007' sale en 2 casos del informe: ['Test_PLZ_007/a', "
+        "'Test_PLZ_007']. Cada escenario es un solo caso: un subtest o un test parametrizado sale "
+        "como otro caso con el mismo ID. Recorre los casos dentro de un solo test, y que el "
+        "mensaje de cada fallo diga cuál falló."
+    )

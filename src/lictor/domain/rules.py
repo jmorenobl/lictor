@@ -919,9 +919,10 @@ def sealed_driver_cases(ambiguous: Sequence[str | None]) -> str | None:
     cases may change from one to the next: a second attempt may reach another subtest.
     """
     last = ambiguous[-PERSON_ONLY_STREAK:]
-    if len(last) < PERSON_ONLY_STREAK or last[0] is None or any(sid != last[0] for sid in last):
+    distinct = set(last)
+    if len(last) < PERSON_ONLY_STREAK or len(distinct) != 1:
         return None
-    return last[0]
+    return distinct.pop()
 
 
 def with_mapping(

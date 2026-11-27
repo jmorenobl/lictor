@@ -90,8 +90,11 @@ def test_each_run_that_cant_go_on_names_its_way_out() -> None:
         "(/w/h9). Retírala con `lictor retire h9`."
     )
     assert note("unlinked") == unlinked_note("lictor/h9", "/w/h9", "/c")
-    assert "`git -C /c worktree repair /w/h9`" in unlinked_note("lictor/h9", "/w/h9", "/c")
-    assert "No se ha tocado nada" in unlinked_note("lictor/h9", "/w/h9", "/c")
+    assert unlinked_note("lictor/h9", "/w/h9", "/c") == (
+        "el worktree de la rama lictor/h9 (/w/h9) ya no está enlazado con el repositorio "
+        "(¿se movió el checkout o se borró su .git?). No se ha tocado nada: arréglalo con "
+        "`git -C /c worktree repair /w/h9` y vuelve a lanzar."
+    )
 
 
 def test_what_lictor_and_git_left_is_never_foreign() -> None:
@@ -138,10 +141,24 @@ def test_a_tracked_file_doesnt_make_a_directory_of_the_same_name_the_branchs() -
 
 
 def test_the_leftovers_message_lists_five_and_says_whose_they_may_be() -> None:
-    foreign = [f"f{n}" for n in range(7)]
-    marked = leftovers_problem("/w", foreign, marked=True)
-    assert "queda f0, f1, f2, f3, f4 y 2 más" in marked
-    assert "No son de la rama: si son ignorados que git iba a borrar" in marked
-    assert "No se ha tocado nada" in marked
-    unmarked = leftovers_problem("/w", ["b"], marked=False)
-    assert "queda b. Lictor no dejó este retiro a medias" in unmarked
+    assert leftovers_problem("/w", [f"f{n}" for n in range(7)], marked=True) == (
+        "git ya no conoce el worktree /w, y en él queda f0, f1, f2, f3, f4 y 2 más. No son de la "
+        "rama: si son ignorados que git iba a borrar con el worktree, bórralos tú. No se ha tocado "
+        "nada: después vuelve a lanzar `lictor retire`."
+    )
+    assert leftovers_problem("/w", [f"f{n}" for n in range(5)], marked=False) == (
+        "git ya no conoce el worktree /w, y en él queda f0, f1, f2, f3, f4. Lictor no dejó este "
+        "retiro a medias, así que no sabe si son tuyos: revísalos y bórralos tú. No se ha tocado "
+        "nada: después vuelve a lanzar `lictor retire`."
+    )
+
+
+def test_a_lictor_dir_is_lictors_only_by_its_whole_name() -> None:
+    assert foreign_leftovers([(".lictor-x", "file"), (".lictor/a/b", "file")], None) == [
+        ".lictor-x"
+    ]
+
+
+def test_a_directory_holding_only_directories_of_the_branch_is_the_branchs() -> None:
+    entries = [("a", "dir"), ("a/b", "dir"), ("a/b/c", "dir"), ("a/b/c/d.go", "file")]
+    assert foreign_leftovers(entries, {"a/b/c/d.go"}) == []

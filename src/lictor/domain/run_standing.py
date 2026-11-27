@@ -14,9 +14,10 @@ points nowhere.
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal
 
-from lictor.domain.run_branches import run_branch
+from lictor.domain.run_branches import RUN_BRANCH_PREFIX
 
 Link = Literal["linked", "unlinked", "orphan"]
 """How git knows the worktree: both ends point to each other, only git's entry is left (`git
@@ -95,7 +96,7 @@ def standing_note(
     standing: Standing, facts: WorktreeFacts, *, name: str, worktree: str, checkout: str
 ) -> str | None:
     """What `run`, `status` and `report` say of a run they can't go on with, or None."""
-    branch = run_branch(name, "")
+    branch = f"{RUN_BRANCH_PREFIX}{name}"
     if standing == "retiring":
         return (
             f"la ejecución de la rama {branch} se estaba retirando y el retiro quedó a medias: "
@@ -142,15 +143,16 @@ def foreign_leftovers(
 
 def _lictors(path: str, kind: EntryKind) -> bool:
     """`.lictor/` and the `.git` file git leaves pointing to its entry."""
-    return path.split("/", 1)[0] == _LICTOR_DIR or (path == _GIT_POINTER and kind == "file")
+    own = path == _LICTOR_DIR or path.startswith(f"{_LICTOR_DIR}/")
+    return own or (path == _GIT_POINTER and kind == "file")
 
 
 def _branch_paths(tracked: Collection[str]) -> dict[str, bool]:
     """Each path of the branch and each directory holding one, telling directories apart."""
     found = {path: False for path in tracked}
     for path in tracked:
-        parts = path.split("/")
-        found |= {"/".join(parts[:end]): True for end in range(1, len(parts))}
+        # The last parent of a relative path is `.`, which names no directory of the branch.
+        found |= {str(parent): True for parent in list(PurePosixPath(path).parents)[:-1]}
     return found
 
 
