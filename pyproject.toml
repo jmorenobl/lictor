@@ -114,6 +114,7 @@ markers = [
     "smoke: repro cases that prove, with the whole configuration, that everything fits",
     "all_controls: repro cases whose defence needs the controls a light project drops",
     "with_refactor: repro cases about the refactor, which keep it on (ADR-0010)",
+    "toolchain: repro cases on Go and Node with the generic profile; the CI job of their own runs them",
 ]
 filterwarnings = [
     "ignore:cannot collect test class 'TestCaseResult'.*:pytest.PytestCollectionWarning",

@@ -71,7 +71,7 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   "banned_patterns": ["//\\s*nolint", "\\bt\\.Skip(Now|f)?\\("],
   "forbidden_paths": ["go.mod", "go.sum"],
   "verification": {
-    "env": {"GOCACHE": "{env_dir}/gocache", "GOMODCACHE": "{env_dir}/gomod", "GOPATH": "{env_dir}/gopath"}
+    "env": {"GOCACHE": "{env_dir}/gocache", "GOMODCACHE": "{env_dir}/gomod", "GOPATH": "{env_dir}/gopath", "GOTOOLCHAIN": "local"}
   }
 }
 ```
@@ -102,7 +102,8 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   Los stubs lanzan `new Error("no implementado")`, que solo tumba su test. Coma flotante:
   `100 * 1.1 !== 110`; el test compara con un margen o en céntimos.
 - Con dependencias, `prepare` las instala en el entorno:
-  `sh -c 'npm ci --ignore-scripts && mv node_modules {env_dir}/'`, con `env` `LNM={env_dir}/node_modules`,
+  `sh -c 'npm ci --ignore-scripts && mkdir -p {env_dir} && mv node_modules {env_dir}/node_modules'`,
+  con `env` `LNM={env_dir}/node_modules`; el entorno lleva hash y se vigila en cada orden,
   y la aceptación enlaza `node_modules` antes de correr:
   `sh -c 'ln -sfn "$LNM" node_modules && exec node --test --test-reporter=junit --test-reporter-destination="$0" acceptance/' {out}`.
   El enlace a mano es la parte frágil. **La copia del agente no tiene `node_modules`, y permitir

@@ -316,7 +316,9 @@ def test_the_ci_names_match_the_budgets() -> None:
         (workflows / name).read_text(encoding="utf-8") for name in ("ci.yml", "suite-completa.yml")
     )
     names = [
-        line.split("name:", 1)[1].strip() for line in text.splitlines() if "    name: " in line
+        line.split("name:", 1)[1].strip().strip('"')
+        for line in text.splitlines()
+        if "    name: " in line
     ]
     budgeted = [prefix for prefix, _ in _load("ci_budget").JOB_BUDGETS_MIN]
 
@@ -498,6 +500,6 @@ def test_the_full_suite_steals_work_and_checks_its_budget() -> None:
     )
     runs = [line for line in workflow.splitlines() if "uv run pytest" in line]
 
-    assert len(runs) == 3
+    assert len(runs) == 4
     assert all("-n auto --dist worksteal" in line for line in runs), runs
     assert "ci_budget.py full-suite-jobs" in workflow

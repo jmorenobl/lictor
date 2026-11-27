@@ -49,16 +49,16 @@ jobs:
           version: "0.12.18"
       - run: uv sync --all-groups --frozen
       - if: env.MEASURES_COVERAGE != 'true' && env.KEEPS_DURATIONS != 'true'
-        run: uv run pytest tests -n auto --dist worksteal -q
+        run: uv run pytest tests -n auto --dist worksteal -q -m "not toolchain"
       - if: env.MEASURES_COVERAGE == 'true'
-        run: uv run pytest tests -n auto --dist worksteal -q --cov=lictor --cov-branch --cov-report=term
+        run: uv run pytest tests -n auto --dist worksteal -q -m "not toolchain" --cov=lictor --cov-branch --cov-report=term
       - if: always() && env.MEASURES_COVERAGE == 'true'
         run: >-
           echo "Cobertura completa, con repro: $(uv run coverage report --format=total) %"
           >> "$GITHUB_STEP_SUMMARY"
       - if: env.KEEPS_DURATIONS == 'true'
         run: >-
-          uv run pytest tests -n auto --dist worksteal -q
+          uv run pytest tests -n auto --dist worksteal -q -m "not toolchain"
           --store-durations --durations-path "$RUNNER_TEMP/all-durations.json"
       - if: env.KEEPS_DURATIONS == 'true'
         run: >-
@@ -71,9 +71,37 @@ jobs:
           path: ${{ runner.temp }}/test_durations
           retention-days: 30
 
+  # The cases on Go and Node with the generic profile (ADR-0020): only here are the toolchains, so
+  # every other job leaves them out by their mark. A runner without one fails instead of skipping
+  # (`LICTOR_REQUIRE_TOOLCHAINS`). Linux alone until the harness settles (D7 of 0.23.0).
+  toolchains:
+    name: "Cadenas: Go y Node"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LICTOR_REQUIRE_TOOLCHAINS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.18"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: go install gotest.tools/gotestsum@v1.13.0
+      - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: uv sync --all-groups --frozen
+      - run: uv run pytest tests -n auto --dist worksteal -q -m "toolchain"
+
   budget:
     name: Presupuesto
-    needs: [full]
+    needs: [full, toolchains]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

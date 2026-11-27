@@ -8,6 +8,7 @@
   "verification": {
     "env": {"HOME": "{home_dir}"},
     "inherit": ["PATH", "TMPDIR"],
+    "prepare_inherit": ["PATH", "TMPDIR"],
     "reserved": ["LICTOR_*", "LD_*", "DYLD_*", "BASH_ENV", "ENV"]
   },
   "rule_files": ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "CONTRIBUTING.md", ".github/copilot-instructions.md"],
