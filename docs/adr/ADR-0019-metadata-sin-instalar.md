@@ -52,13 +52,15 @@ De los 14 proyectos Python de `~/code`, Lictor incluido, 13 declaran una versió
 3. **Solo se registra lo que `uv` instalaría:** hay `[build-system]` y `tool.uv.package` no es
    `false`, o `tool.uv.package = true`. Sin eso `version()` funcionaría en la verificación y fallaría
    en la máquina de la persona y en su CI: un falso verde. La metadata existe en la verificación
-   cuando existiría al instalar el proyecto.
+   cuando existiría al instalar el proyecto. Un proyecto así no es un paquete, y la verificación es
+   fiel sin ella: `doctor` lo dice con ✓ («sin metadata del proyecto: …»), sin nada que arreglar.
 4. **Gana la instalada.** Si `distribution(<nombre>)` ya responde, no se registra nada: con las dos,
    `distributions()` las daría ambas en todas las versiones, y `entry_points()` duplicaría el grupo en
    3.9.
-5. **Un solo buscador por proyecto.** Antes de añadirlo se quita el del mismo nombre: un `pytest.main()`
-   del mismo proyecto dentro de un test lo reemplaza, y uno de otro proyecto, o de ninguno, deja el de
-   fuera como estaba.
+5. **Un solo buscador por proyecto.** Lo que ya se encuentra gana, también el buscador de un
+   `pytest.main()` de fuera del mismo proyecto: el de dentro no añade otro, y uno de otro proyecto, o
+   de ninguno, deja el de fuera como estaba. El buscador solo responde a una búsqueda que mira el
+   `src` del proyecto (`distributions(path=[…])` sin él no lo encuentra).
 6. **La distribución es de la biblioteca que pregunta.** Es un mixin que el buscador une al
    `Distribution` del módulo del `Context` que recibe: la biblioteca estándar recibe una suya, y el
    backport `importlib_metadata` (en 3.9) una del backport, con sus entry points y los métodos que les
@@ -69,12 +71,15 @@ De los 14 proyectos Python de `~/code`, Lictor incluido, 13 declaran una versió
    plugin del proyecto (Fable lo ejecutó). No se anuncia nunca como plugin algo que es código del
    proyecto.
 8. **Lo que no se registra se ve.** El survey da el hecho `metadata`: `{name, version, groups,
-   unread}` o `{problem, fix}`. `doctor` y un run nuevo lo dicen en «Dependencias de la
+   unread}`, `{not_installed}` (punto 3) o `{problem, fix}`, con un `fix` que habla de la versión. `doctor` y un run nuevo lo dicen en «Dependencias de la
    verificación»: ✓ con nombre, versión y grupos, o ⚠ con la razón («la versión sale de git»,
    «pyproject.toml no tiene [build-system]: uv no instala el proyecto…») y qué hacer. Es un aviso, no
    un ✗: un código que no la lee no pierde nada. Con `dynamic = ["scripts"]` o `["entry-points"]` se
    registran nombre y versión sin ellos, y el ⚠ lo dice. La lectura nunca lanza: lo que no entiende
-   (un tipo equivocado, un fichero fuera del clon, un `pattern` roto) es una razón.
+   (un tipo equivocado, un fichero fuera del clon o con un byte nulo, un `pattern` roto, un nombre
+   que no cumple la PEP 508) es una razón. Es más estricta que setuptools en la dirección segura: sin
+   `build-backend` una versión dinámica no se lee, ni un `__version__` que no sea un texto o una
+   tupla; con `version` y `dynamic` a la vez, gana la dinámica.
 
 ## Lo que se descarta
 

@@ -77,16 +77,14 @@ def _append_declared(root: Path, inipath: Any) -> None:
 def register_metadata(root: Path) -> None:
     """Make the project's distribution visible to `importlib.metadata`, if it would have one.
 
-    Registering is idempotent: a nested `pytest.main` of the same project replaces its finder
-    instead of adding another (in 3.9 `entry_points()` gave every entry twice), and one of another
-    project, or of none, leaves the outer one alone.
+    Registering is idempotent: what is already found, installed or registered by an outer
+    `pytest.main` of the same project, wins, so a nested one adds no second finder (in 3.9
+    `entry_points()` gave every entry twice); one of another project, or of none, leaves the outer
+    one alone.
     """
     found = lictor_metadata.read(root)
     if isinstance(found, str):
         return
-    key = lictor_metadata.normalized(found.name)
-    for finder in [f for f in sys.meta_path if isinstance(f, ProjectFinder) and f.key == key]:
-        sys.meta_path.remove(finder)
     try:
         importlib_metadata.distribution(found.name)
     except importlib_metadata.PackageNotFoundError:
@@ -149,8 +147,11 @@ class ProjectFinder(importlib_metadata.DistributionFinder):
         return None
 
     def find_distributions(self, context: Any = None) -> list[Any]:
+        """Only for its name, or any, and only where the search looks at the project's `src`."""
         name = getattr(context, "name", None)
         if name is not None and lictor_metadata.normalized(name) != self.key:
+            return []
+        if str(self.root / "src") not in getattr(context, "path", [str(self.root / "src")]):
             return []
         return [_distribution_class(context)(self.found, self.root)]
 

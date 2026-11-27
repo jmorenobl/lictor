@@ -371,23 +371,25 @@ def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
     return runtime.preconditions, runtime.clock, None
 
 
-def _passed(check: PreconditionCheck) -> str:
-    """A check that passed, with what it has to tell."""
-    return f"✓ {check.name}: {check.detail}" if check.detail else f"✓ {check.name}"
+def _echo_check(check: PreconditionCheck) -> None:
+    """One check: skipped, its problems, or a pass with what it has to tell; then its warnings."""
+    if check.skipped:
+        typer.echo(f"- {check.name}: {check.skipped}")
+    elif check.problems:
+        for problem in check.problems:
+            typer.echo(f"✗ {check.name}: {problem.message}", err=True)
+    elif check.detail:
+        typer.echo(f"✓ {check.name}: {check.detail}")
+    elif not check.warnings:
+        typer.echo(f"✓ {check.name}")
+    for warning in check.warnings:
+        typer.echo(f"⚠ {check.name}: {warning}")
 
 
 def _echo_checks(report: PreconditionsReport) -> int:
     """Print every check, and return the exit code the domain gives what they found."""
     for check in report.checks:
-        if check.skipped:
-            typer.echo(f"- {check.name}: {check.skipped}")
-        elif check.problems:
-            for problem in check.problems:
-                typer.echo(f"✗ {check.name}: {problem.message}", err=True)
-        elif not check.warnings:
-            typer.echo(_passed(check))
-        for warning in check.warnings:
-            typer.echo(f"⚠ {check.name}: {warning}")
+        _echo_check(check)
 
     code = precondition_exit_code(report.problems)
     if code:

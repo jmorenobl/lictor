@@ -423,3 +423,20 @@ def test_python_3_9_and_its_backport_see_the_metadata(tmp_path: Path, python_3_9
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "2 passed" in done.stdout
+
+
+def test_a_search_of_other_paths_doesnt_find_the_project(tmp_path: Path) -> None:
+    root = _packaged(tmp_path / "p")
+    (tmp_path / "vacio").mkdir()
+    (root / "tests" / "test_metadata.py").write_text(
+        "from importlib.metadata import distributions\n\n\n"
+        "def test_only_where_its_src_is_looked_at():\n"
+        f"    found = distributions(path=[{str(tmp_path / 'vacio')!r}])\n"
+        "    assert [d.metadata['Name'] for d in found] == []\n"
+        "    assert 'Demo.Pkg' in [d.metadata['Name'] for d in distributions()]\n",
+        encoding="utf-8",
+    )
+
+    done = _pytest(root)
+
+    assert done.returncode == 0, done.stdout + done.stderr

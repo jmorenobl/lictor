@@ -136,7 +136,9 @@ class CodeUser:
 class ProjectMetadata:
     """The project's own distribution as the verification registers it, or why it doesn't (F82).
 
-    Either `problem` says why nothing is registered, with what the person can do (`fix`), or
+    `not_installed` says the project would have no metadata installed either, so the
+    verification is faithful without it; `problem` says why what it would have isn't registered,
+    with what the person can do (`fix`); otherwise
     `name` and `version` are what the project's code finds of itself in the verification, with each
     group of entry points and how many it has; `unread` names what the project leaves to its
     backend and is missing from them.
@@ -148,6 +150,7 @@ class ProjectMetadata:
     unread: tuple[str, ...] = ()
     problem: str | None = None
     fix: str | None = None
+    not_installed: str | None = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +238,8 @@ def _metadata(raw: object) -> ProjectMetadata | None:
     if raw is None:
         return None
     data = _map(raw, "metadata")
+    if "not_installed" in data:
+        return ProjectMetadata(not_installed=_text(data["not_installed"], "metadata.not_installed"))
     if "problem" in data:
         fix = data.get("fix")
         return ProjectMetadata(

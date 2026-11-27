@@ -24,9 +24,15 @@ from typing import Any
 # hatchling's default (1.33.0), matched with MULTILINE.
 HATCH_PATTERN = r"(?i)^(__version__|VERSION) *= *(['\"])v?(?P<version>.+?)\2"
 GIT = "la versión sale de git"
-NOT_INSTALLED = "uv no instala el proyecto, así que fuera de Lictor tampoco tiene metadata"
-# What the person can do about any reason: the forms this module reads.
-FIX = "dale a pyproject.toml un [build-system] y una versión estática, o leída de un fichero"
+NOT_INSTALLED = "uv no instala el proyecto, así que no tiene metadata, ni aquí ni fuera de Lictor"
+# What the person can do when the project would have metadata and it can't be read: the forms of
+# the version this module reads.
+FIX = (
+    "dale a pyproject.toml una versión estática, o leída de un fichero "
+    "(tool.hatch.version.path, tool.setuptools.dynamic.version)"
+)
+# PEP 508: what a distribution's name may be.
+NAME = r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?"
 # The groups of `[project]` that are entry points, and the group each one becomes.
 SCRIPT_TABLES = {"scripts": "console_scripts", "gui-scripts": "gui_scripts"}
 # What the profile's plugins come from: a project's own is never announced as one.
@@ -76,6 +82,10 @@ class _UnreadableError(Exception):
     """Why the project's metadata isn't registered; it becomes the reason `read` returns."""
 
 
+class _NotInstalledError(_UnreadableError):
+    """The project isn't a package uv installs: without metadata the verification is faithful."""
+
+
 def normalized(name: str) -> str:
     """The name `importlib.metadata` compares: PEP 503, with `_` as separator."""
     return re.sub(r"[-_.]+", "_", name).lower()
@@ -93,16 +103,26 @@ def toml_module() -> Any:
 
 def read(root: Path) -> Metadata | str:
     """The distribution installing the project at `root` would give, or why there is none."""
-    try:
-        return _read(root)
-    except _UnreadableError as reason:
-        return str(reason)
+    found = _attempt(root)
+    return str(found) if isinstance(found, _UnreadableError) else found
 
 
 def record(root: Path) -> dict[str, Any]:
-    """The survey's fact: the distribution, or why it isn't registered and how to change it."""
-    found = read(root)
-    return {"problem": found, "fix": FIX} if isinstance(found, str) else found.record()
+    """The survey's fact: the distribution; or that the project would have none, installed or
+    not; or why it isn't registered, and how to change it."""
+    found = _attempt(root)
+    if isinstance(found, _NotInstalledError):
+        return {"not_installed": str(found)}
+    if isinstance(found, _UnreadableError):
+        return {"problem": str(found), "fix": FIX}
+    return found.record()
+
+
+def _attempt(root: Path) -> Metadata | _UnreadableError:
+    try:
+        return _read(root)
+    except _UnreadableError as reason:
+        return reason
 
 
 def _read(root: Path) -> Metadata:
@@ -111,6 +131,8 @@ def _read(root: Path) -> Metadata:
     name = project.get("name")
     if not isinstance(name, str) or not name.strip():
         raise _UnreadableError("[project] no tiene un nombre")
+    if re.fullmatch(NAME, name) is None:
+        raise _UnreadableError(f"[project].name no es un nombre de distribución válido: {name!r}")
     _installed_by_uv(data)
     dynamic = _texts(project.get("dynamic", []), "[project].dynamic")
     version = _dynamic_version(data, root, name) if "version" in dynamic else project.get("version")
@@ -161,9 +183,9 @@ def _installed_by_uv(data: dict[str, Any]) -> None:
     """uv installs a project with `[build-system]`, unless `tool.uv.package` says otherwise."""
     package = _get(data, "tool", "uv", "package")
     if package is False:
-        raise _UnreadableError(f"tool.uv.package = false: {NOT_INSTALLED}")
+        raise _NotInstalledError(f"tool.uv.package = false: {NOT_INSTALLED}")
     if package is not True and not isinstance(data.get("build-system"), dict):
-        raise _UnreadableError(f"pyproject.toml no tiene [build-system]: {NOT_INSTALLED}")
+        raise _NotInstalledError(f"pyproject.toml no tiene [build-system]: {NOT_INSTALLED}")
 
 
 def _entry_points(project: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -188,6 +210,8 @@ def _normalized_version(version: str) -> str:
     try:
         packaging_version = importlib.import_module("packaging.version")
     except ImportError:
+        if re.fullmatch(r"\S+", version) is None:
+            raise _UnreadableError(f"la versión {version!r} no es válida") from None
         return version
     try:
         return str(packaging_version.Version(version))
@@ -235,17 +259,23 @@ def _hatch_version(hatch: Any, root: Path) -> str:
         raise _UnreadableError(
             f"el pattern de tool.hatch.version no es una expresión válida: {exc}"
         ) from None
-    if found is None or "version" not in found.groupdict():
+    version = None if found is None else found.groupdict().get("version")
+    if version is None:
         raise _UnreadableError(f"{path} no tiene la versión que busca hatch")
-    return found.group("version")
+    return str(version)
 
 
 def _setuptools_version(tool: dict[str, Any], root: Path) -> str:
     if "setuptools_scm" in tool:
         raise _UnreadableError(GIT)
     dynamic = _get(tool, "setuptools", "dynamic", "version")
-    if isinstance(_get(dynamic, "file"), str):
-        return _file_text(root, dynamic["file"]).strip()
+    file = _get(dynamic, "file")
+    if isinstance(file, str):
+        return _file_text(root, file).strip()
+    if file is not None:
+        raise _UnreadableError(
+            "tool.setuptools.dynamic.version la lee de varios ficheros, y Lictor solo lee uno"
+        )
     attr = _get(dynamic, "attr")
     if not isinstance(attr, str) or "." not in attr:
         raise _UnreadableError(
@@ -262,8 +292,10 @@ def _file_text(root: Path, rel: str) -> str:
         if path != top and top not in path.parents:
             raise _UnreadableError(f"la versión se lee de {rel}, que está fuera del proyecto")
         return path.read_text(encoding="utf-8")
-    except (OSError, RuntimeError, UnicodeDecodeError) as exc:
-        raise _UnreadableError(f"la versión se lee de {rel}, que no se puede leer: {exc}") from None
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        raise _UnreadableError(
+            f"la versión se lee de {rel!r}, que no se puede leer: {exc}"
+        ) from None
 
 
 def _module_version(root: Path, module: str, name: str, package_dir: dict[str, Any]) -> str:

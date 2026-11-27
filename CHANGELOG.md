@@ -23,8 +23,8 @@ en su significado se anota en «Cambiado».
   recogida y «Los controles pasan en HEAD» en ✗; ahora pasa, con 2652 tests. En pyverifactu, su
   grupo `verifactu_py.certificate_providers` salía vacío sin que nada lo dijera; ahora se ve.
 - **«Dependencias de la verificación» dice si la metadata del proyecto está:** ✓ con su nombre, su
-  versión y sus grupos, o ⚠ con la razón («la versión sale de git», «sin `[build-system]`») y qué
-  hacer. Es un aviso: un código que no lee su metadata no pierde nada. Un run nuevo repite los
+  versión y sus grupos; ✓ «sin metadata del proyecto» si no es un paquete (sin `[build-system]`),
+  donde tampoco la tendría instalado; o ⚠ con la razón («la versión sale de git») y qué hacer. Es un aviso: un código que no lee su metadata no pierde nada. Un run nuevo repite los
   avisos de esa comprobación al empezar (`run.started` los guarda en `dependencies`).
 
 ### Cambiado

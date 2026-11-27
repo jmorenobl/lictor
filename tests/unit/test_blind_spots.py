@@ -877,6 +877,17 @@ def test_why_there_is_no_metadata_is_read_as_a_fact() -> None:
     assert alone.metadata == ProjectMetadata(problem="sale de git")
 
 
+def test_a_project_uv_wouldnt_install_is_read_as_having_none() -> None:
+    report = survey_report({**GOOD, "metadata": {"not_installed": "sin [build-system]"}})
+
+    assert isinstance(report, SurveyReport)
+    assert report.metadata == ProjectMetadata(not_installed="sin [build-system]")
+    assert metadata_facts(report.metadata) == (
+        "sin metadata del proyecto: sin [build-system]",
+        (),
+    )
+
+
 def test_a_survey_that_says_nothing_of_metadata_has_none() -> None:
     report = survey_report(GOOD)
 
@@ -890,6 +901,7 @@ def test_a_survey_that_says_nothing_of_metadata_has_none() -> None:
         ([], "metadata no es un objeto"),
         ({"problem": ""}, "metadata.problem no es un texto"),
         ({"problem": "x", "fix": 1}, "metadata.fix no es un texto"),
+        ({"not_installed": ""}, "metadata.not_installed no es un texto"),
         ({**METADATA, "name": ""}, "metadata.name no es un texto"),
         ({**METADATA, "version": 1}, "metadata.version no es un texto"),
         ({**METADATA, "groups": []}, "metadata.groups no es un objeto"),

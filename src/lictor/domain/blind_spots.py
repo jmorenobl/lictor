@@ -104,6 +104,8 @@ def metadata_facts(metadata: ProjectMetadata | None) -> tuple[str | None, tuple[
     """
     if metadata is None:
         return None, ()
+    if metadata.not_installed is not None:
+        return f"sin metadata del proyecto: {metadata.not_installed}", ()
     if metadata.problem is not None:
         fix = f": {metadata.fix}" if metadata.fix else ""
         return None, (

@@ -160,7 +160,8 @@ def test_cli_refuses_while_another_run_holds_the_project(
 def _installed_version() -> str:
     """The version of the installed package, or the marker of a tree that was never installed.
 
-    Lictor verifies itself in an environment where the project isn't installed, so both happen.
+    Lictor verifies itself in an environment where the project isn't installed but its metadata is
+    registered (F82, ADR-0019); the marker is what a source tree outside pytest still gives.
     """
     try:
         return version("lictor")

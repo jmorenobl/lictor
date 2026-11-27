@@ -111,6 +111,8 @@ def test_what_uv_wouldnt_install_has_no_metadata(
     found = read(_project(tmp_path, pyproject))
 
     assert found == f"{reason}: {lictor_metadata.NOT_INSTALLED}"
+    # Not a problem to fix: installed, it would have no metadata either.
+    assert record(tmp_path) == {"not_installed": found}
 
 
 def test_uv_package_true_installs_it_without_build_system(tmp_path: Path) -> None:
@@ -143,6 +145,14 @@ def test_uv_package_true_installs_it_without_build_system(tmp_path: Path) -> Non
         (
             HATCH + '[project]\nname = "x"\nversion = "1"\nentry-points = "x"\n',
             "[project.entry-points] no es una tabla",
+        ),
+        (
+            HATCH + '[project]\nname = " demo\\nVersion: 9 "\nversion = "1"\n',
+            "[project].name no es un nombre de distribución válido: ' demo\\nVersion: 9 '",
+        ),
+        (
+            HATCH + '[project]\nname = "a b/c"\nversion = "1"\n',
+            "[project].name no es un nombre de distribución válido: 'a b/c'",
         ),
     ],
 )
@@ -187,6 +197,8 @@ def test_without_packaging_the_version_stays_as_written(
     monkeypatch.setattr(lictor_metadata.importlib, "import_module", without_packaging)
 
     assert _read(root).version == "1.0.0-dev"
+    _project(tmp_path, HATCH + '[project]\nname = "x"\nversion = "1\\nName: y"\n')
+    assert read(root) == "la versión '1\\nName: y' no es válida"
 
 
 @pytest.mark.parametrize(
@@ -259,8 +271,23 @@ def test_hatch_reads_its_own_pattern(tmp_path: Path) -> None:
         ),
         ('path = "v.py"\npattern = "("\n', {"v.py": ""}, "el pattern de tool.hatch.version no es"),
         ('path = "v.py"\npattern = "x"\n', {"v.py": "x"}, "v.py no tiene la versión que busca"),
+        (
+            "path = \"v.py\"\npattern = 'a|(?P<version>b)'\n",
+            {"v.py": "a"},
+            "v.py no tiene la versión que busca",
+        ),
+        ('path = "v\\u0000.py"\n', {}, "la versión se lee de 'v\\x00.py', que no se puede leer"),
     ],
-    ids=["vcs", "code", "sin path", "fuera del clon", "pattern roto", "pattern sin grupo"],
+    ids=[
+        "vcs",
+        "code",
+        "sin path",
+        "fuera del clon",
+        "pattern roto",
+        "pattern sin grupo",
+        "grupo que no participa",
+        "byte nulo",
+    ],
 )
 def test_hatch_registers_nothing_it_cant_read_without_running(
     tmp_path: Path, hatch: str, files: dict[str, str], reason: str
@@ -279,7 +306,7 @@ def test_a_file_that_cant_be_read_is_a_reason(tmp_path: Path) -> None:
     found = read(root)
 
     assert isinstance(found, str)
-    assert found.startswith("la versión se lee de v.py, que no se puede leer: ")
+    assert found.startswith("la versión se lee de 'v.py', que no se puede leer: ")
 
 
 @pytest.mark.parametrize(
@@ -343,7 +370,7 @@ def test_setuptools_follows_the_package_dir_of_the_package(tmp_path: Path) -> No
         (
             '[tool.setuptools.dynamic]\nversion = {file = ["A", "B"]}\n',
             {},
-            "la versión es dinámica, y tool.setuptools.dynamic.version no da",
+            "tool.setuptools.dynamic.version la lee de varios ficheros, y Lictor solo lee uno",
         ),
         (
             '[tool.setuptools.dynamic]\nversion = {attr = "demo.__version__"}\n',

@@ -19,3 +19,14 @@ def test_a_check_that_passed_prints_its_detail(capsys: pytest.CaptureFixture[str
         "✓ Dependencias de la verificación: metadata de x 1",
         "✓ Árbol git limpio",
     ]
+
+
+def test_a_detail_is_told_beside_the_warnings(capsys: pytest.CaptureFixture[str]) -> None:
+    check = PreconditionCheck("Dependencias", warnings=("falta x",), detail="metadata de x 1")
+
+    _echo_checks(PreconditionsReport(checks=(check,)))
+
+    assert capsys.readouterr().out.splitlines()[:2] == [
+        "✓ Dependencias: metadata de x 1",
+        "⚠ Dependencias: falta x",
+    ]

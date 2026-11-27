@@ -385,7 +385,8 @@ def test_the_program_uv_run_launches_says_whether_the_environment_has_it(
 
 
 def test_the_command_writes_the_report(tmp_path: Path) -> None:
-    """As the profile runs it, `-m` from the directory that holds it beside `lictor_metadata`."""
+    """By `-m` from the directory that holds it beside `lictor_metadata`, as the profile runs it
+    from the environment; without `-I`, which would leave that directory out of the path here."""
     root = _tree(tmp_path / "p", {**PKG, **UNIT, **OTHER})
     given = tmp_path / "in.json"
     given.write_text(
@@ -723,4 +724,6 @@ def test_the_survey_reports_the_projects_metadata_as_lictor_metadata_reads_it(
 def test_the_survey_says_why_there_is_no_metadata(tmp_path: Path) -> None:
     root = _tree(tmp_path, {**PKG, "pyproject.toml": '[project]\nname = "pkg"\nversion = "1"\n'})
 
-    assert _survey(root)["metadata"]["problem"].startswith("pyproject.toml no tiene [build-system]")
+    assert _survey(root)["metadata"]["not_installed"].startswith(
+        "pyproject.toml no tiene [build-system]"
+    )
