@@ -872,6 +872,9 @@ def test_why_there_is_no_metadata_is_read_as_a_fact() -> None:
 
     assert isinstance(report, SurveyReport)
     assert report.metadata == ProjectMetadata(problem="sale de git", fix="dale una")
+    alone = survey_report({**GOOD, "metadata": {"problem": "sale de git"}})
+    assert isinstance(alone, SurveyReport)
+    assert alone.metadata == ProjectMetadata(problem="sale de git")
 
 
 def test_a_survey_that_says_nothing_of_metadata_has_none() -> None:
