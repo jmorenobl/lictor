@@ -862,3 +862,12 @@ def test_without_an_api_control_the_implementer_hears_nothing_of_it(tmp_path: Pa
     _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), controls=[])
 
     assert "API pública" not in executor.run.call_args.args[0].prompt
+
+
+def test_the_implement_prompt_without_greens_or_suppressions_reads_whole(tmp_path: Path) -> None:
+    _, executor, _ = _execute(tmp_path, AgentResult(status="ok"), suppressions=[])
+
+    prompt = executor.run.call_args.args[0].prompt
+    assert "{regla_" not in prompt
+    assert "ya funcionan y deben seguir funcionando" not in prompt
+    assert "- No añadas supresiones: ningún comentario ni llamada" in prompt

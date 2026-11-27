@@ -598,3 +598,12 @@ def test_the_forbidden_paths_name_their_exception_only_when_there_is_one(tmp_pat
     assert "conftest.py, salvo conftest.py dentro de tests/acceptance/." in " ".join(
         _prompt(exempt).split()
     )
+
+
+def test_the_driver_prompt_without_lists_reads_whole(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(tmp_path, AgentResult(status="ok"))
+
+    prompt = _prompt(executor)
+    assert "{regla_" not in prompt
+    assert "ninguno ya funcionan" not in prompt
+    assert "- No implementes la funcionalidad.\n- Trabajas en una copia" in prompt

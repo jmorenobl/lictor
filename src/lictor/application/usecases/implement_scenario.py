@@ -35,7 +35,8 @@ from lictor.domain.conventions import conventions_block
 from lictor.domain.duplication import implementer_duplication_text
 from lictor.domain.errors import SealTamperedError
 from lictor.domain.model import AgentResult, AgentSignal, AgentStatus, AgentTask, Scenario
-from lictor.domain.rules import error_for_agent, suppressions_text
+from lictor.domain.prompt_lists import forbidden_rule, greens_rule, suppressions_rule
+from lictor.domain.rules import error_for_agent
 
 _STOPPED_EARLY_NOTES: dict[str, str] = {
     "max_turns": "El intento anterior se quedó sin turnos antes de terminar.",
@@ -211,9 +212,9 @@ class ImplementScenario:
             ),
             "{writable}": ", ".join(request.paths_writable),
             "{protected}": ", ".join(request.paths_protected),
-            "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{suppressions}": suppressions_text(request.suppressions),
-            "{green_ids}": ", ".join(request.green_ids) if request.green_ids else "ninguno",
+            "{regla_prohibidas}": forbidden_rule(request.forbidden_paths, "implement"),
+            "{regla_supresiones}": suppressions_rule(request.suppressions, "implement"),
+            "{regla_verdes}": greens_rule(request.green_ids, "implement"),
             **agent_command_lines(
                 request.allowed_tools,
                 request.check_commands,

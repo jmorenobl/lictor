@@ -881,7 +881,6 @@ def _project(tmp_path: Path, **fields: object) -> Path:
     "fields",
     [
         {"verification": {"files": {}}},
-        {"verification": {"unset": []}},
         {"verification": {"reserved": []}},
         {"verification": {"plugin_variable": "OTRA"}},
         {"oracle": {"interface_impostor": None}},
@@ -891,8 +890,14 @@ def _project(tmp_path: Path, **fields: object) -> Path:
 def test_a_project_cannot_declare_a_defence_of_the_profile(
     tmp_path: Path, fields: dict[str, object]
 ) -> None:
-    with pytest.raises(ConfigError, match="Extra inputs"):
+    with pytest.raises(ConfigError, match="solo lo declara el perfil") as refused:
         load_config(_project(tmp_path, **fields))
+    assert "Extra inputs" not in str(refused.value)
+
+
+def test_a_field_nobody_declares_is_pydantics_to_name(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="Extra inputs"):
+        load_config(_project(tmp_path, verification={"unset": []}))
 
 
 @pytest.mark.parametrize(

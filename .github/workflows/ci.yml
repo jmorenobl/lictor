@@ -92,8 +92,13 @@ jobs:
   # every other job leaves them out by their mark. A runner without one fails instead of skipping
   # (`LICTOR_REQUIRE_TOOLCHAINS`). Linux alone until the harness settles (D7 of 0.23.0).
   toolchains:
-    name: "Cadenas: Go y Node"
+    name: "Cadenas: Go y Node (Node ${{ matrix.node }})"
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The maintenance LTS and the active one: a recipe of the skill broke on 24 alone (0.23.0).
+        node: ["24", "26"]
     timeout-minutes: 15
     env:
       LICTOR_REQUIRE_TOOLCHAINS: "1"
@@ -110,7 +115,7 @@ jobs:
           cache: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node }}
       - run: go install gotest.tools/gotestsum@v1.13.0
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: uv sync --all-groups --frozen

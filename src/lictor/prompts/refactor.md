@@ -11,17 +11,14 @@ Objetivos de calidad, en lo que cambió el escenario:
 {refactor_hints}
 
 Reglas:
-- No cambies el comportamiento. Todos estos escenarios funcionan y deben seguir funcionando: {green_ids}.
-- No añadas funcionalidad nueva ni adelantes la de escenarios que aún no pasan.
+{regla_verdes}- No añadas funcionalidad nueva ni adelantes la de escenarios que aún no pasan.
 {alcance}
 - Solo puedes crear o modificar archivos en: {writable}.
 - No toques {protected}, ni los tests de aceptación ni los features: cualquier cambio ahí descarta
   el refactor.
-- Tampoco crees ni modifiques, en ninguna carpeta: {forbidden}.
-{tests_unitarios}
+{regla_prohibidas}{tests_unitarios}
 - Trabajas en una copia sin historial: no hay git ni commits. Lictor guarda tu trabajo si pasa la verificación.
-- No añadas supresiones: {suppressions}. Mover o juntar las que ya hay no cuenta, aunque sea a otro fichero; cambiar su texto, sí.
-- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
+{regla_supresiones}- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
 - Bash solo admite órdenes que empiecen por: {bash_admite}. Cualquier otra orden,
   un intérprete o un script incluidos, se deniega y te cuesta turnos.
 - Comprueba siempre tu trabajo con estas órdenes, y asegúrate de que todas pasen sin errores

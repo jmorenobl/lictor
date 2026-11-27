@@ -162,6 +162,19 @@ def test_go_a_weak_assertion_is_no_green(tmp_path: Path) -> None:
     assert go_false_greens(root) == []
 
 
+def test_go_an_exclusion_of_every_code_file_stops_before_any_agent(tmp_path: Path) -> None:
+    """0.23.1: `code_exclude` that leaves the refactor's gate nothing to guard is the project's."""
+    root = go_project(tmp_path / "nif", code_exclude=["*.go"])
+
+    result = CliRunner().invoke(app, ["doctor", "--cwd", str(root)])
+    outcome = run_lictor(root, Agent())
+
+    assert result.exit_code == 10
+    assert "✗ Rutas de código: code_exclude (*.go) excluye todos los ficheros" in result.output
+    assert outcome == Outcome(10)
+    assert events_of(root, "agent.started") == []
+
+
 def _node_driver(task: AgentTask, _attempt: int = 1) -> None:
     write(task.cwd, "iva/index.js", NODE_STUB)
     write(task.cwd, NODE_DRIVER_PATH, NODE_DRIVER)

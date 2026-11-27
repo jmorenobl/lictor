@@ -23,10 +23,11 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.controls import CommandControl, Control, ReaderControl
+from lictor.domain.conventions import TreeEntry
 from lictor.domain.errors import InternalLictorError
 from lictor.domain.model import Candidate, CommandOutput, RepoPin, TreeChange
 from lictor.domain.refactor import Measure
-from lictor.domain.refactor_scope import LineSpan
+from lictor.domain.refactor_scope import CodePaths, LineSpan
 from lictor.domain.reports import CoverageReport
 from tests.environments import PlainEnvironment
 from tests.readers import FlagRunner, Leaves, ReportingRunner, all_readers, coverage_json
@@ -1979,3 +1980,20 @@ def test_a_refactor_must_keep_the_seal(tmp_path: Path) -> None:
     )
 
     assert verifier.execute(req).failed_at == "L0-sello"
+
+
+def test_a_refactor_whose_green_has_no_code_left_to_guard_fails_its_scope(
+    tmp_path: Path,
+) -> None:
+    """0.23.1: a project that started without code is judged on its green's tree."""
+    runner = ReportingRunner()
+    runner.set_report("suite", CommandOutput(returncode=1, stdout="", stderr=""), _PENDING_REPORT)
+    verifier, req = _refactor(tmp_path, runner, code_paths=CodePaths(("src/",), ("*.py",)))
+    vcs = verifier.vcs
+    assert isinstance(vcs, FakeVcs)
+    vcs.tree_entries = lambda _rev: [TreeEntry("src/code.py", "100644")]
+
+    result = verifier.execute(req)
+
+    assert result.failed_at == "L0-alcance"
+    assert "code_exclude (*.py) excluye todos los ficheros" in (result.condensed_error or "")

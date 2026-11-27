@@ -16,6 +16,7 @@ from lictor.domain.refactor_scope import (
     LineSpan,
     RefactorScope,
     code_paths_problem,
+    excluded_everything,
     hunk_span,
     out_of_scope,
     out_of_scope_reason,
@@ -380,3 +381,19 @@ def test_what_is_outside_counts_every_measure_less_what_the_scope_names() -> Non
         "son de este refactor."
     )
     assert outside_scope([], RefactorScope(frozenset(), frozenset())) == ""
+
+
+def test_an_exclusion_that_leaves_no_code_is_named() -> None:
+    files = ["go.mod", "iva/iva.go", "iva/iva_test.go", "acceptance/x_test.go"]
+
+    assert excluded_everything(files, CodePaths(("iva/",), ("*_test.go",))) is None
+    assert excluded_everything(files, CodePaths(("iva/",))) is None
+    assert excluded_everything([], CodePaths(("iva/",), ("*",))) is None
+    assert excluded_everything(["go.mod"], CodePaths(("iva/",), ("*",))) is None
+    problem = excluded_everything(files, CodePaths(("iva/", "cmd/"), ("*.go", "x")))
+    assert problem == (
+        "code_exclude (*.go, x) excluye todos los ficheros de code_paths (iva/, cmd/): la "
+        "puerta L0-alcance del refactor no comprobaría nada. Deja en code_exclude solo lo que no "
+        "es código, como los tests junto a él (*_test.go); si ahí solo hay tests todavía, quita "
+        "code_exclude hasta que haya código."
+    )

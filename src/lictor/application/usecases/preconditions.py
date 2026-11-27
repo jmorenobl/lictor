@@ -53,12 +53,14 @@ from lictor.domain.proof_level import (
     proof_level,
     warning_lines,
 )
+from lictor.domain.refactor_scope import NO_CODE, CodePaths, excluded_everything
 from lictor.domain.reports import ApiComparison, ApiReport, InvalidReport
 from lictor.domain.rules import (
     CHECK_STAGE_ONLY,
     NO_COMMITS,
     control_label,
     missing_executables,
+    path_within,
 )
 from lictor.domain.run_branches import uncommitted_left_out
 from lictor.domain.stages import check_controls_warning
@@ -76,6 +78,10 @@ NO_SURVEY = "no comprobado: el perfil no declara cómo leerlo"
 NO_NEEDS = "no comprobado: el perfil no declara qué necesita"
 UNPREPARED = "sin prepare: no se construye ni se vigila"
 PROOF_LEVEL = "Nivel de prueba"
+CODE_PATHS = "Rutas de código"
+NO_CODE_YET = (
+    "no comprobado: aún no hay código en code_paths; lo juzga L0-alcance en el primer refactor"
+)
 AGENT_COMMANDS = "Órdenes del agente"
 
 
@@ -190,6 +196,8 @@ class CheckPreconditions:
     # The profile's rule files, and the hash of each one the person reviewed (F79).
     rule_files: Sequence[str] = ()
     reviewed: Mapping[str, str] = field(default_factory=dict)
+    # Where the code is, with what the project excludes from it (ADR-0010, amendment of 0.23.0).
+    code_paths: CodePaths = NO_CODE
     # The level of proof the defences give (ADR-0020), whether the profile or the project builds
     # the environment, and what the agent may run, to warn of what it couldn't check (D10).
     proof: ProofDefences | None = None
@@ -229,6 +237,8 @@ class CheckPreconditions:
             problem = PreconditionProblem("config", req.config_problem)
             checks.append(PreconditionCheck("Configuración", (problem,)))
         checks.append(self._commits(has_commits))
+        if has_commits and self.code_paths.exclude:
+            checks.append(self._code_left())
         if req.clean_tree:
             checks.append(self._clean_tree(warn=req.uncommitted_warns))
         if req.features:
@@ -245,6 +255,16 @@ class CheckPreconditions:
         if req.check_stage and self.check_stage_ids:
             checks.append(self._check_stage())
         return checks
+
+    def _code_left(self) -> PreconditionCheck:
+        """Whether `code_exclude` leaves any code of HEAD for `L0-alcance` to guard."""
+        files = [entry.path for entry in self.vcs.tree_entries("HEAD")]
+        if not any(path_within(path, self.code_paths.paths) for path in files):
+            return PreconditionCheck(CODE_PATHS, skipped=NO_CODE_YET)
+        problem = excluded_everything(files, self.code_paths)
+        if problem is None:
+            return PreconditionCheck(CODE_PATHS)
+        return PreconditionCheck(CODE_PATHS, (PreconditionProblem("config", problem),))
 
     @staticmethod
     def _commits(has_commits: bool) -> PreconditionCheck:

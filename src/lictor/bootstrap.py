@@ -442,6 +442,7 @@ def bootstrap_runtime(
         env_prepared=bool(defences.verification.prepare),
         acceptance_run=active_config.acceptance.run,
         agent_tools=active_config.agent_tools,
+        code_paths=CodePaths(tuple(defences.code_paths), tuple(defences.code_exclude)),
     )
 
     graph_context = GraphContext(

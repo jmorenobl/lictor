@@ -47,6 +47,24 @@ class CodePaths:
 NO_CODE = CodePaths(())
 
 
+def excluded_everything(files: Sequence[str], code: CodePaths) -> str | None:
+    """Why `code_exclude` leaves `L0-alcance` nothing to guard in these files, or None.
+
+    `files` are a tree's. With code under its paths and every file of it excluded, the gate would
+    pass any refactor, and nobody would see. With none there yet, nothing is judged: a project
+    may start with its features alone.
+    """
+    under = [path for path in files if path_within(path, code.paths)]
+    if not under or not code.exclude or any(code.holds(path) for path in under):
+        return None
+    return (
+        f"code_exclude ({', '.join(code.exclude)}) excluye todos los ficheros de code_paths "
+        f"({', '.join(code.paths)}): la puerta L0-alcance del refactor no comprobaría nada. Deja "
+        "en code_exclude solo lo que no es código, como los tests junto a él (*_test.go); si ahí "
+        "solo hay tests todavía, quita code_exclude hasta que haya código."
+    )
+
+
 @dataclass(frozen=True)
 class LineSpan:
     """Lines a commit adds or changes, `first` to `last` both included, in its own numbering.

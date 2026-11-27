@@ -389,7 +389,7 @@ def test_without_a_control_of_the_tests_the_refactor_isnt_told_they_guard_it(
     prompt = " ".join(_task(executor).prompt.split())
     assert "Puedes reorganizar los tests unitarios para que sigan al código." in prompt
     assert "deje más sin probar" not in prompt
-    assert "No añadas supresiones: ninguna." in prompt
+    assert "No añadas supresiones: ningún comentario ni llamada que calle un aviso" in prompt
 
 
 def test_with_a_control_of_the_tests_the_refactor_hears_fewer_discards_it(tmp_path: Path) -> None:
@@ -402,3 +402,11 @@ def test_with_a_control_of_the_tests_the_refactor_hears_fewer_discards_it(tmp_pa
         prompt
     )
     assert "o deje más sin probar que el verde; quitar código probado no cuenta en contra" in prompt
+
+
+def test_the_refactor_prompt_has_every_rule_in_place(tmp_path: Path) -> None:
+    _, executor, _, _ = _execute(tmp_path, AgentResult(status="ok"))
+
+    prompt = _task(executor).prompt
+    assert "{regla_" not in prompt
+    assert "- No cambies el comportamiento. Todos estos escenarios funcionan" in prompt

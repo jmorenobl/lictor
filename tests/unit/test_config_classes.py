@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from lictor.adapters.config.loader import (
+    _PROFILE_ONLY_ACCEPTANCE,
     DEFAULT_PROFILES_DIR,
     PackagedProfiles,
     ProfileConfigInitializer,
@@ -182,9 +183,13 @@ def test_code_paths_must_still_reach_what_the_agent_writes(tmp_path: Path, profi
         ({"survey": {"run": "x {in} {out}"}}, "survey"),
         ({"refactor_hints": "- Corto."}, "refactor_hints"),
         ({"acceptance": {**ACCEPTANCE, "needs_plugins": {}}}, "needs_plugins"),
-        ({"oracle": {}}, "Extra inputs"),
-        ({"driver_exempt_paths": []}, "Extra inputs"),
-        ({"verification": {"reserved": []}}, "Extra inputs"),
+        ({"oracle": {}}, "lictor.json no puede declarar oracle: solo lo declara el perfil"),
+        ({"driver_exempt_paths": []}, "declarar driver_exempt_paths: solo lo declara el perfil"),
+        ({"verification": {"reserved": []}}, "declarar verification.reserved: solo lo declara"),
+        (
+            {"status": "stable"},
+            "declarar status: solo lo declara el perfil, y ningún proyecto lo escribe",
+        ),
     ],
 )
 def test_what_only_a_profile_declares_stays_refused_without_one(
@@ -292,3 +297,16 @@ def test_an_empty_list_of_the_project_takes_nothing_from_the_profile(tmp_path: P
     )
 
     assert emptied == plain
+
+
+def test_every_field_only_a_profile_declares_has_the_common_sentence(tmp_path: Path) -> None:
+    for key in ("name", "detect", "rule_files", "hint_values", "retired_versions"):
+        message = _refused(_write(tmp_path / key, profile="python-uv@0.2", **{key: []}))
+        assert message == (
+            f"lictor.json no puede declarar {key}: solo lo declara el perfil, y ningún proyecto "
+            "lo escribe. Bórralo."
+        ), key
+
+
+def test_a_field_only_the_profiles_acceptance_has_is_refused_the_same_way() -> None:
+    assert _PROFILE_ONLY_ACCEPTANCE == ("needs_plugins",)

@@ -25,9 +25,11 @@ from lictor.application.verification_env import VerificationEnvironment
 from lictor.domain.api import ApiBase
 from lictor.domain.blind_spots import StartRules
 from lictor.domain.controls import CommandControl, ControlMode, ReaderControl
+from lictor.domain.conventions import TreeEntry
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.model import CommandOutput, Health, PreconditionProblem
 from lictor.domain.proof_level import ProofDefences
+from lictor.domain.refactor_scope import CodePaths
 from lictor.domain.reports import ApiReport, ApiSymbol
 from lictor.domain.rules import NO_COMMITS
 from lictor.domain.survey import (
@@ -964,3 +966,34 @@ def test_a_proved_level_with_nothing_missing_passes_saying_it(
     level = _by_name(report)[preconditions.PROOF_LEVEL]
     assert level.detail == "resultado probado"
     assert level.warnings == ()
+
+
+def test_an_exclusion_that_leaves_no_code_of_head_is_the_projects(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _parts(tmp_path, bin_dir)
+    parts.vcs.tree_entries.return_value = [TreeEntry("iva/iva.go", "100644")]
+    parts.use_case.code_paths = CodePaths(("iva/",), ("*.go",))
+
+    report = parts.use_case.execute(RUN)
+
+    [problem] = [p for p in report.problems if p.kind == "config"]
+    assert problem.message.startswith("code_exclude (*.go) excluye todos los ficheros")
+    parts.use_case.code_paths = CodePaths(("iva/",), ("*_test.go",))
+    assert [c.name for c in parts.use_case.execute(RUN).checks].count("Rutas de código") == 1
+    parts.use_case.code_paths = CodePaths(("iva/",))
+    assert "Rutas de código" not in [c.name for c in parts.use_case.execute(RUN).checks]
+
+
+def test_without_code_in_head_the_exclusion_is_left_to_the_first_refactor(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    parts = _parts(tmp_path, bin_dir)
+    parts.vcs.tree_entries.return_value = [TreeEntry("features/nif.feature", "100644")]
+    parts.use_case.code_paths = CodePaths(("iva/",), ("*.go",))
+
+    report = parts.use_case.execute(RUN)
+
+    [check] = [c for c in report.checks if c.name == "Rutas de código"]
+    assert check.skipped == preconditions.NO_CODE_YET
+    assert report.problems == []
