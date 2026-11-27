@@ -534,6 +534,7 @@ class _GraphNodes:
                 driver_hints=self.ctx.driver_hints,
                 hints=self.ctx.hints,
                 conventions=self.ctx.conventions,
+                interface_impostor=self.ctx.interface_impostor is not None,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),

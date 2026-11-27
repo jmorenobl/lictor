@@ -374,7 +374,6 @@ def _merge_profile_defaults(
     project_root: Path,
 ) -> dict[str, object]:
     profile = load_profile(written.profile, profiles_dir)
-    _reject_exclusive_fields(profile, written)
     missing = _missing_of(profile, raw_data)
     if missing:
         raise ConfigError(missing_project_fields_message(profile, missing))
@@ -583,6 +582,10 @@ def load_config(path_or_dir: Path, profiles_dir: Path | None = None) -> LictorCo
 
     _reject_allow_empty(parsed, profiles_dir)
     _reject_profile_fields(parsed)
+    known = _known_profile(parsed.get("profile"), profiles_dir)
+    if known is not None:
+        # Before validating: a field the profile declares says so, whatever else is missing.
+        _reject_exclusive_fields(known, parsed)
     # Refused once the profile it asks for is known: a retired profile says more (F83).
     old_commands = parsed.pop("agent_commands", None) is not None
     try:
@@ -620,20 +623,35 @@ def _reject_profile_fields(parsed: dict[str, object]) -> None:
             raise ConfigError(message())
 
 
-def _reject_exclusive_fields(profile: Profile, written: LictorFile) -> None:
+def _known_profile(reference: object, profiles_dir: Path | None) -> Profile | None:
+    """The profile `lictor.json` asks for, or None: one that doesn't load is told later, in turn."""
+    if not isinstance(reference, str) or not reference:
+        return None
+    try:
+        return load_profile(reference, profiles_dir)
+    except ConfigError:
+        return None
+
+
+def _reject_exclusive_fields(profile: Profile, written: Mapping[str, object]) -> None:
     """Refuse what the project may write only where its profile declares nothing (ADR-0020).
 
     The profile's `prepare` is the contract of the hashed environment and its `driver_hints` the
     instructions of its oracle: replacing either changes what the profile guarantees. Excluding
     code from the profile's code paths would weaken `L0-alcance`.
     """
-    acceptance = written.acceptance
-    if acceptance is not None and acceptance.driver_hints and _driver_hints_of(profile):
+    if _written(written, "acceptance", "driver_hints") and _driver_hints_of(profile):
         raise ConfigError(driver_hints_message(profile.name))
-    if written.verification.prepare and profile.verification.prepare:
+    if _written(written, "verification", "prepare") and profile.verification.prepare:
         raise ConfigError(prepare_message(profile.name))
-    if written.code_exclude and profile.code_paths:
+    if written.get("code_exclude") and profile.code_paths:
         raise ConfigError(code_exclude_message(profile.name))
+
+
+def _written(written: Mapping[str, object], section: str, key: str) -> bool:
+    """Tell whether `lictor.json` gives `section.key` a value that isn't empty."""
+    part = written.get(section)
+    return isinstance(part, dict) and bool(part.get(key))
 
 
 def _driver_hints_of(profile: Profile) -> str:

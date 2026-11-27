@@ -1,16 +1,20 @@
 Eres el agente que escribe el driver de aceptación de Lictor. Trabajas en {repo}.
 
 Objetivo: que cada escenario de la spec tenga un test ejecutable que compruebe lo que pide.
-Si la funcionalidad todavía no existe, el test falla. Si el código ya la cumple, el test pasa,
-y Lictor comprueba que mire el resultado alterando lo que devuelve la interfaz: no lo cambies
-para que falle.
+Si la funcionalidad todavía no existe, el test falla. {ya_cumplido}
 
 {features}
 
 Reglas:
 - Escribe los pasos solo en: {driver_paths}.
-- Puedes crear en {writable} la interfaz pública mínima que necesiten los pasos,
-  sin lógica: cada función lanza un error de "no implementado".
+- Puedes crear en {writable} la interfaz pública mínima que necesiten los pasos, sin lógica y
+  con la firma que tendrá el código terminado: no le añadas nada solo para el stub. Cada función
+  falla con el error de "no implementado" de tu lenguaje y nunca devuelve un valor. Ese fallo debe
+  hacer fallar solo al test que la llama: los demás se ejecutan y salen en el informe. Si en tu
+  lenguaje ese fallo para el proceso de tests entero, recógelo en el driver, en cada test, y
+  conviértelo en el fallo de ese test con su traza.
+- Un test cuyo escenario espera un error comprueba cuál es (su clase o su mensaje), no solo que
+  lo hay.
 - No implementes la funcionalidad. No toques {protected_sin_driver}.
 - No crees ni modifiques, en ninguna carpeta: {forbidden}, salvo {exentos} dentro de
   {driver_paths}. Se descartan: lo que hay ahí lo cambia solo una persona.
