@@ -6,6 +6,7 @@ never a guess.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -384,6 +385,8 @@ def test_the_program_uv_run_launches_says_whether_the_environment_has_it(
 
 
 def test_the_command_writes_the_report(tmp_path: Path) -> None:
+    """By `-m` from the directory that holds it beside `lictor_metadata`, as the profile runs it
+    from the environment; without `-I`, which would leave that directory out of the path here."""
     root = _tree(tmp_path / "p", {**PKG, **UNIT, **OTHER})
     given = tmp_path / "in.json"
     given.write_text(
@@ -395,9 +398,9 @@ def test_the_command_writes_the_report(tmp_path: Path) -> None:
     done = subprocess.run(
         [
             sys.executable,
-            "-I",
             "-B",
-            lictor_survey.__file__,
+            "-m",
+            "lictor_survey",
             "src",
             "--in",
             str(given),
@@ -405,6 +408,10 @@ def test_the_command_writes_the_report(tmp_path: Path) -> None:
             str(out),
         ],
         cwd=root,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": str(Path(lictor_survey.__file__).parent),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -695,3 +702,28 @@ def test_the_tests_a_step_of_the_ci_runs_are_marked(tmp_path: Path) -> None:
     assert marks == {"tests/integration/test_i.py": [0], "tests/unit/test_a.py": [0, 2]}
     # A step of the CI is no control: it runs nothing a run verifies with.
     assert _unrun(report) == ["tests/integration/test_i.py"]
+
+
+def test_the_survey_reports_the_projects_metadata_as_lictor_metadata_reads_it(
+    tmp_path: Path,
+) -> None:
+    pyproject = (
+        '[build-system]\nbuild-backend = "hatchling.build"\n'
+        '[project]\nname = "pkg"\nversion = "1.0"\n[project.scripts]\npkg = "pkg:main"\n'
+    )
+    root = _tree(tmp_path, {**PKG, "pyproject.toml": pyproject})
+
+    assert _survey(root)["metadata"] == {
+        "name": "pkg",
+        "version": "1.0",
+        "groups": {"console_scripts": 1},
+        "unread": [],
+    }
+
+
+def test_the_survey_says_why_there_is_no_metadata(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {**PKG, "pyproject.toml": '[project]\nname = "pkg"\nversion = "1"\n'})
+
+    assert _survey(root)["metadata"]["not_installed"].startswith(
+        "pyproject.toml no tiene [build-system]"
+    )

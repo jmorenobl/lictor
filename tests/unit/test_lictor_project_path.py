@@ -6,6 +6,7 @@ any warning the plugin's loading causes fail the suite, as with warnings as erro
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -70,19 +71,24 @@ def _project(root: Path, config_name: str | None, config: str) -> Path:
 
 
 def _pytest(
-    root: Path, *args: str, plugins: str = "lictor_project_path"
+    root: Path,
+    *args: str,
+    plugins: str = "lictor_project_path",
+    extra_path: Path | None = None,
+    python: str = sys.executable,
 ) -> subprocess.CompletedProcess[str]:
+    paths = [str(_PLUGIN_DIR), *([str(extra_path)] if extra_path is not None else [])]
     env = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(root),
-        "PYTHONPATH": str(_PLUGIN_DIR),
+        "PYTHONPATH": os.pathsep.join(paths),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTEST_PLUGINS": plugins,
         "PYTEST_ADDOPTS": "-o pythonpath= -p no:cacheprovider",
     }
     return subprocess.run(
-        [sys.executable, "-B", "-m", "pytest", "-q", "-W", "error", *args],
+        [python, "-B", "-m", "pytest", "-q", "-W", "error", *args],
         cwd=root,
         env=env,
         capture_output=True,
@@ -194,3 +200,261 @@ def test_declared_pythonpath_reads_each_format_as_written(
     path.write_text(config, encoding="utf-8")
 
     assert declared_pythonpath(path) == expected
+
+
+# F82 (ADR-0019): the project's own distribution, registered in memory from its `pyproject.toml`.
+_PACKAGED = """\
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "Demo.Pkg"
+version = "1.0.0-dev"
+
+[project.scripts]
+demo = "pkg:main"
+
+[project.entry-points."demo.plugins"]
+uno = "pkg:uno"
+
+[project.entry-points.pytest11]
+demo = "pkg.plugin"
+
+[tool.pytest.ini_options]
+filterwarnings = ["error"]
+"""
+
+_METADATA_TEST = """\
+import sys
+from importlib.metadata import distribution, distributions, entry_points, version
+
+
+def _group(name):
+    if sys.version_info >= (3, 10):
+        return list(entry_points(group=name))
+    return list(entry_points().get(name, []))
+
+
+def test_the_project_has_its_metadata():
+    import pkg
+
+    assert pkg.VERSION == "1.0.0.dev0"
+    assert version("demo_pkg") == version("Demo-Pkg") == "1.0.0.dev0"
+    assert distribution("demo.pkg").metadata["Name"] == "Demo.Pkg"
+    assert [e.load()() for e in _group("demo.plugins")] == [1]
+    assert [e.name for e in _group("console_scripts") if e.value == "pkg:main"] == ["demo"]
+    assert not [e for e in _group("pytest11") if e.name == "demo"]
+    assert len([d for d in distributions() if d.metadata["Name"] == "Demo.Pkg"]) == 1
+"""
+
+_PKG = (
+    "from importlib.metadata import version\n\n"
+    'VERSION = version("demo-pkg")\n\n\n'
+    "def uno():\n    return 1\n"
+)
+
+
+def _packaged(root: Path, pyproject: str = _PACKAGED, test: str = _METADATA_TEST) -> Path:
+    (root / "src" / "pkg").mkdir(parents=True)
+    (root / "src" / "pkg" / "__init__.py").write_text(_PKG, encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_metadata.py").write_text(test, encoding="utf-8")
+    (root / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    return root
+
+
+def test_the_project_reads_its_own_metadata_inside_pytest(tmp_path: Path) -> None:
+    done = _pytest(_packaged(tmp_path))
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_xdist_workers_register_it_too(tmp_path: Path) -> None:
+    done = _pytest(_packaged(tmp_path), "-n", "2", plugins="lictor_project_path,xdist.plugin")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "1 passed" in done.stdout
+
+
+_NOT_FOUND_TEST = """\
+from importlib.metadata import PackageNotFoundError, version
+
+import pytest
+
+
+def test_there_is_no_metadata():
+    with pytest.raises(PackageNotFoundError):
+        version("demo-pkg")
+"""
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        _PACKAGED.replace('[build-system]\nrequires = ["hatchling"]\n', "[tool.x]\n").replace(
+            'build-backend = "hatchling.build"\n', ""
+        ),
+        _PACKAGED + "\n[tool.uv]\npackage = false\n",
+        _PACKAGED.replace('version = "1.0.0-dev"', "version = 1"),
+    ],
+    ids=["sin build-system", "tool.uv.package false", "versión que no es un texto"],
+)
+def test_what_uv_wouldnt_install_or_cant_be_read_has_no_metadata(
+    tmp_path: Path, pyproject: str
+) -> None:
+    root = _packaged(tmp_path, pyproject, _NOT_FOUND_TEST)
+    (root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+
+    done = _pytest(root)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_distribution_the_environment_has_wins(tmp_path: Path) -> None:
+    root = _packaged(tmp_path / "p")
+    installed = tmp_path / "site" / "demo_pkg-9.0.dist-info"
+    installed.mkdir(parents=True)
+    (installed / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo-pkg\nVersion: 9.0\n", encoding="utf-8"
+    )
+    (installed / "entry_points.txt").write_text("[demo.plugins]\nnueve = x:y\n", encoding="utf-8")
+    (root / "tests" / "test_metadata.py").write_text(
+        "import sys\n"
+        "from importlib.metadata import distributions, entry_points, version\n\n\n"
+        "def test_the_installed_one():\n"
+        '    assert version("demo-pkg") == "9.0"\n'
+        "    names = [d.metadata['Name'] for d in distributions()]\n"
+        "    assert names.count('demo-pkg') == 1 and 'Demo.Pkg' not in names\n"
+        "    eps = entry_points(group='demo.plugins') if sys.version_info >= (3, 10) else "
+        "entry_points()['demo.plugins']\n"
+        "    assert [e.name for e in eps] == ['nueve']\n",
+        encoding="utf-8",
+    )
+    (root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+
+    done = _pytest(root, extra_path=installed.parent)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_nested_pytest_main_leaves_one_finder(tmp_path: Path) -> None:
+    root = _packaged(tmp_path / "p")
+    other = tmp_path / "sin_proyecto"
+    other.mkdir()
+    (other / "test_nada.py").write_text("def test_nada():\n    pass\n", encoding="utf-8")
+    (root / "tests" / "test_nested.py").write_text(
+        "import os\nimport sys\n\nimport pytest\n\n"
+        "from importlib.metadata import entry_points, version\n\n\n"
+        "def _finders():\n"
+        "    return [f for f in sys.meta_path if type(f).__name__ == 'ProjectFinder']\n\n\n"
+        "def test_nested_runs():\n"
+        "    assert pytest.main(['-q', '-p', 'no:cacheprovider', 'tests/test_metadata.py']) == 0\n"
+        "    assert len(_finders()) == 1\n"
+        f"    os.chdir({str(other)!r})\n"
+        "    try:\n"
+        "        assert pytest.main(['-q', '-p', 'no:cacheprovider']) == 0\n"
+        "    finally:\n"
+        f"        os.chdir({str(root)!r})\n"
+        "    assert len(_finders()) == 1\n"
+        '    assert version("demo-pkg") == "1.0.0.dev0"\n'
+        "    eps = entry_points(group='demo.plugins') if sys.version_info >= (3, 10) else "
+        "entry_points()['demo.plugins']\n"
+        "    assert [e.name for e in eps] == ['uno']\n",
+        encoding="utf-8",
+    )
+
+    done = _pytest(root, "tests/test_nested.py")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+_BACKPORT_TEST = """\
+import importlib_metadata
+
+
+def test_the_backport_sees_it_too():
+    assert importlib_metadata.version("demo-pkg") == "1.0.0.dev0"
+    assert [e.name for e in importlib_metadata.entry_points(group="demo.plugins")] == ["uno"]
+"""
+
+
+@pytest.fixture(scope="module")
+def python_3_9(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """A Python 3.9 with pytest and the backport 3.10.1, which asks every distribution for
+    `_normalized_name` and calls `matches` on the entry points of its own class (I4)."""
+    uv = shutil.which("uv")
+    offline = {**os.environ, "UV_PYTHON_DOWNLOADS": "never", "UV_OFFLINE": "1"}
+    found = subprocess.run(
+        [uv or "uv", "python", "find", "3.9"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=offline,
+    )
+    if uv is None or found.returncode != 0:
+        pytest.skip("no hay un Python 3.9 instalado")
+    venv = tmp_path_factory.mktemp("py39") / "venv"
+    steps = [
+        [uv, "venv", "-q", "-p", found.stdout.strip(), str(venv)],
+        [
+            uv,
+            "pip",
+            "install",
+            "-q",
+            "-p",
+            str(venv / "bin" / "python"),
+            "pytest",
+            "packaging",
+            "importlib_metadata==3.10.1",
+        ],
+    ]
+    for step in steps:
+        if subprocess.run(step, check=False, capture_output=True, env=offline).returncode != 0:
+            pytest.skip("no se pudo preparar Python 3.9 con pytest sin red")
+    return str(venv / "bin" / "python")
+
+
+def test_python_3_9_and_its_backport_see_the_metadata(tmp_path: Path, python_3_9: str) -> None:
+    root = _packaged(tmp_path)
+    (root / "tests" / "test_backport.py").write_text(_BACKPORT_TEST, encoding="utf-8")
+
+    done = _pytest(root, python=python_3_9)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "2 passed" in done.stdout
+
+
+def test_a_search_of_other_paths_doesnt_find_the_project(tmp_path: Path) -> None:
+    root = _packaged(tmp_path / "p")
+    (tmp_path / "vacio").mkdir()
+    (root / "tests" / "test_metadata.py").write_text(
+        "from importlib.metadata import distributions\n\n\n"
+        "def test_only_where_its_src_is_looked_at():\n"
+        f"    found = distributions(path=[{str(tmp_path / 'vacio')!r}])\n"
+        "    assert [d.metadata['Name'] for d in found] == []\n"
+        "    assert 'Demo.Pkg' in [d.metadata['Name'] for d in distributions()]\n",
+        encoding="utf-8",
+    )
+
+    done = _pytest(root)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_backport_gets_a_distribution_of_its_own_class(tmp_path: Path) -> None:
+    """The finder joins its files to the `Distribution` of the library that asks (ADR-0019, 6):
+    here the backport of Lictor's own environment, so the CI proves it without a Python 3.9."""
+    root = _packaged(tmp_path)
+    (root / "tests" / "test_backport.py").write_text(
+        _BACKPORT_TEST
+        + "\n\ndef test_its_class_is_the_backports():\n"
+        + '    found = importlib_metadata.distribution("demo-pkg")\n'
+        + "    assert isinstance(found, importlib_metadata.Distribution)\n",
+        encoding="utf-8",
+    )
+
+    done = _pytest(root)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "3 passed" in done.stdout

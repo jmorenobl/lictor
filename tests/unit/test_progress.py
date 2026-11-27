@@ -773,3 +773,17 @@ def test_the_start_tells_what_the_controls_dont_see() -> None:
         "⚠ Lo que los controles no ven: Tests sin control.",
         "⚠ Lo que los controles no ven: Aceptados: 2.",
     ]
+
+
+def test_the_start_tells_what_the_verification_lacks_of_its_dependencies() -> None:
+    lines = _lines(
+        RunProgress(), _event("run.started", dependencies=["Sin metadata.", 3], blind_spots=None)
+    )
+
+    assert lines == [
+        "Entorno de verificación listo.",
+        "⚠ Dependencias de la verificación: Sin metadata.",
+    ]
+    assert _lines(RunProgress(), _event("run.started", dependencies="no")) == [
+        "Entorno de verificación listo."
+    ]

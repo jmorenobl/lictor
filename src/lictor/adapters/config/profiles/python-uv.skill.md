@@ -4,8 +4,11 @@ Para proyectos Python gestionados con `uv` (`lictor init` lo detecta por `pyproj
   `pyproject.toml` ni `uv.lock`. Como mínimo, `uv add --dev pytest pytest-bdd ruff mypy`. Pregunta
   si hará falta algo más (una librería, `pytest-cov` si quiere medir cobertura) y añádelo ahora.
 - **El proyecto no se instala en el entorno de verificación**, y `src/` está en el path de
-  importación detrás de las dependencias. Una CLI se prueba en el proceso: el driver llama a
-  `main(argv)` y lee la salida con `capsys`, nunca lanza el ejecutable. Eso va en `hints`.
+  importación detrás de las dependencias. Su metadata sí está, dentro de pytest, si es un paquete
+  (con `[build-system]`): `version()` y sus entry points funcionan, salvo con una versión que sale
+  de git. Una CLI se prueba en el proceso: el
+  driver llama a `main(argv)` y lee la salida con `capsys`, nunca lanza el ejecutable. Eso va en
+  `hints`.
 - **Un mínimo de cobertura se escribe como `min_score`, nunca como `fail_under`**: `{"id":
   "coverage", "mode": "block", "min_score": 80}`. Y nada de `--cov` en el `run` de `unit`: los
   argumentos de cobertura los pone `coverage`, y dos veces chocarían.
@@ -45,6 +48,16 @@ solo lo ve:
 - **Dependencias (✗).** Si falta `pytest-bdd` o una herramienta de un control (`ruff`, `mypy`), se
   añade con `uv add --dev` y se confirman `pyproject.toml` y `uv.lock`. Un programa que solo está en
   la máquina tampoco vale: se usaría otro intérprete, sin las dependencias.
+- **La metadata del proyecto (⚠ en «Dependencias»).** Lictor lee de `pyproject.toml`, sin
+  ejecutar nada, el nombre, la versión y los entry points, y los registra dentro de pytest como si
+  el proyecto estuviera instalado. Un proyecto sin `[build-system]` no es un paquete: `uv` no lo
+  instala y no tiene metadata, ni en la verificación ni fuera, así que `doctor` lo dice con ✓ y no
+  hay nada que arreglar. Si `doctor` avisa (⚠), el código que lee su versión (`version()`) o recorre
+  un grupo propio fallará o no encontrará nada en la verificación. Se arregla en `pyproject.toml`,
+  con una versión estática o leída de un fichero (`tool.hatch.version.path`,
+  `tool.setuptools.dynamic.version`). Una versión de git (`hatch-vcs`, `setuptools-scm`) no se
+  registra. Si el código no lee su metadata, el aviso se puede dejar. Un `python -c` que lance un
+  test tampoco la ve, igual que no ve `src/`.
 - **Tests que ningún control ejecuta.** Si deben contar, se amplía el `run` de `unit` por `id` y se
   añade su directorio a `paths.writable`. Por ejemplo, para todos los tests sin la marca
   `integration`: `{"id": "unit", "run": "uv run pytest tests -m \"not integration\"

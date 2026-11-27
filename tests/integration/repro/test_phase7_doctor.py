@@ -95,6 +95,8 @@ def test_doctor_passes_on_a_project_from_lictor_init(make_project: ProjectFactor
 
     assert code == 0, output
     assert "✓ Entorno de verificación" in output
+    # The project isn't installed, and its metadata is there all the same (F82).
+    assert "✓ Dependencias de la verificación: metadata del proyecto iva 0.1.0" in output
     assert not (root / ".lictor" / "verify-env").exists()  # a run's own isn't touched
     assert events_of(root, "env.built") == []  # nor is the runs' journal
     assert (root / ".lictor" / "doctor" / "journal.jsonl").is_file()

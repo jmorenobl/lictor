@@ -14,7 +14,9 @@ paths it runs or reads, and whether it selects among its tests), not known, and 
 launches through `uv run`, with where the environment finds it; each file of tests and who runs
 it; each file the tests load (a `conftest.py`, or a module of the repository they import) with
 what of the project it imports; each other file that imports the project, with who reads it; and
-what it skipped. When in doubt a command is "unknown": a false warning teaches not to read them.
+what it skipped; and the project's own distribution as `lictor_project_path` registers it, or why
+it doesn't (`lictor_metadata`, F82). When in doubt a command is "unknown": a false warning teaches
+not to read them.
 
 It runs in the project's interpreter, which may be older than Lictor's: valid back to Python 3.9.
 """
@@ -33,20 +35,17 @@ import shutil
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from lictor.adapters.config.profiles.python_uv import lictor_metadata
+else:
+    # Its sibling in the environment; in Lictor's own tests, the module of its package.
+    lictor_metadata = importlib.import_module(
+        f"{__package__}.lictor_metadata" if __package__ else "lictor_metadata"
+    )
 
-def _toml_module() -> Any:
-    """`tomllib` from Python 3.11, or before it the `tomli` pytest installs; None without both."""
-    for name in ("tomllib", "tomli"):
-        try:
-            return importlib.import_module(name)
-        except ImportError:
-            continue
-    return None
-
-
-_toml = _toml_module()
+_toml = lictor_metadata.toml_module()
 SKIPPED_DIRS = {".git", ".lictor", "__pycache__", "node_modules", "venv", "build", "dist"}
 DEFAULT_FILES = ["test_*.py", "*_test.py"]
 # What may run anything, tests included: what they do can't be read off their line.
@@ -946,6 +945,7 @@ def survey(
         "loaded": sorted(loaded.values(), key=lambda e: e["path"]),
         "code_users": _code_users(tree, code, modules, parsed, set(tests) | set(loaded)),
         "ci": [step.record() for step in steps],
+        "metadata": lictor_metadata.record(root),
         "skipped": {"projects": tree.projects, "unreadable": sorted(set(tree.unreadable))},
     }
 

@@ -74,7 +74,7 @@
       "LD_*", "DYLD_*", "BASH_ENV", "ENV", "LICTOR_*"
     ],
     "files_dir_command": "{env_dir}/bin/python -I -B -c 'import sysconfig; print(sysconfig.get_path(\"purelib\"))'",
-    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_gherkin.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py", "python_uv/lictor_api.py"]
+    "files": ["python_uv/lictor_project_path.py", "python_uv/lictor_metadata.py", "python_uv/lictor_outcome.py", "python_uv/lictor_impostor.py", "python_uv/lictor_gherkin.py", "python_uv/lictor_doubles.py", "python_uv/lictor_complexity.py", "python_uv/lictor_duplication.py", "python_uv/lictor_coverage.py", "python_uv/lictor_survey.py", "python_uv/lictor_api.py"]
   },
   "survey": {
     "run": "uv run python -I -B -m lictor_survey src --in {in} --out {out}",

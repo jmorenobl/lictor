@@ -133,6 +133,27 @@ class CodeUser:
 
 
 @dataclass(frozen=True)
+class ProjectMetadata:
+    """The project's own distribution as the verification registers it, or why it doesn't (F82).
+
+    `not_installed` says the project would have no metadata installed either, so the
+    verification is faithful without it; `problem` says why what it would have isn't registered,
+    with what the person can do (`fix`); otherwise
+    `name` and `version` are what the project's code finds of itself in the verification, with each
+    group of entry points and how many it has; `unread` names what the project leaves to its
+    backend and is missing from them.
+    """
+
+    name: str = ""
+    version: str = ""
+    groups: tuple[tuple[str, int], ...] = ()
+    unread: tuple[str, ...] = ()
+    problem: str | None = None
+    fix: str | None = None
+    not_installed: str | None = None
+
+
+@dataclass(frozen=True)
 class SurveyReport:
     """Everything the survey saw of HEAD, and what it skipped."""
 
@@ -146,6 +167,8 @@ class SurveyReport:
     unreadable: tuple[str, ...] = ()
     ci: tuple[SurveyedCi, ...] = ()
     ci_unreadable: tuple[str, ...] = ()
+    # None when the survey says nothing of it: a profile whose code has no such metadata.
+    metadata: ProjectMetadata | None = None
 
 
 class _BadSurveyError(Exception):
@@ -208,6 +231,30 @@ def _program(raw: object, what: str) -> LaunchedProgram | None:
         name=_text(data.get("name"), f"{what}.name"),
         path=None if found is None else _text(found, f"{what}.path"),
         in_env=_flag(data.get("in_env"), f"{what}.in_env") and found is not None,
+    )
+
+
+def _metadata(raw: object) -> ProjectMetadata | None:
+    if raw is None:
+        return None
+    data = _map(raw, "metadata")
+    if "not_installed" in data:
+        return ProjectMetadata(not_installed=_text(data["not_installed"], "metadata.not_installed"))
+    if "problem" in data:
+        fix = data.get("fix")
+        return ProjectMetadata(
+            problem=_text(data["problem"], "metadata.problem"),
+            fix=None if fix is None else _text(fix, "metadata.fix"),
+        )
+    groups = _map(data.get("groups"), "metadata.groups")
+    return ProjectMetadata(
+        name=_text(data.get("name"), "metadata.name"),
+        version=_text(data.get("version"), "metadata.version"),
+        groups=tuple(
+            (group, _count(count, f"metadata.groups.{group}", 1))
+            for group, count in sorted(groups.items())
+        ),
+        unread=_texts(data.get("unread"), "metadata.unread"),
     )
 
 
@@ -399,6 +446,7 @@ def survey_report(data: object) -> SurveyReport | InvalidReport:
             projects=_paths(skipped.get("projects"), "skipped.projects"),
             unreadable=_paths(skipped.get("unreadable"), "skipped.unreadable"),
             ci=ci,
+            metadata=_metadata(root.get("metadata")),
         )
     except _BadSurveyError as bad:
         return InvalidReport(str(bad))

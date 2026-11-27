@@ -46,6 +46,7 @@ from lictor.application.usecases.check_working_tree import CheckWorkingTreeReque
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
     CheckPreconditions,
+    PreconditionCheck,
     PreconditionsReport,
     PreconditionsRequest,
 )
@@ -370,18 +371,25 @@ def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
     return runtime.preconditions, runtime.clock, None
 
 
+def _echo_check(check: PreconditionCheck) -> None:
+    """One check: skipped, its problems, or a pass with what it has to tell; then its warnings."""
+    if check.skipped:
+        typer.echo(f"- {check.name}: {check.skipped}")
+    elif check.problems:
+        for problem in check.problems:
+            typer.echo(f"✗ {check.name}: {problem.message}", err=True)
+    elif check.detail:
+        typer.echo(f"✓ {check.name}: {check.detail}")
+    elif not check.warnings:
+        typer.echo(f"✓ {check.name}")
+    for warning in check.warnings:
+        typer.echo(f"⚠ {check.name}: {warning}")
+
+
 def _echo_checks(report: PreconditionsReport) -> int:
     """Print every check, and return the exit code the domain gives what they found."""
     for check in report.checks:
-        if check.skipped:
-            typer.echo(f"- {check.name}: {check.skipped}")
-        elif check.problems:
-            for problem in check.problems:
-                typer.echo(f"✗ {check.name}: {problem.message}", err=True)
-        elif not check.warnings:
-            typer.echo(f"✓ {check.name}")
-        for warning in check.warnings:
-            typer.echo(f"⚠ {check.name}: {warning}")
+        _echo_check(check)
 
     code = precondition_exit_code(report.problems)
     if code:

@@ -14,6 +14,12 @@ The module is the first plugin of the list, so it can also mark every other one 
 rewriting before any is imported, as pytest does with the plugins it loads by itself: otherwise a
 plugin imported by an earlier one (`xdist.looponfail` imports `xdist.plugin`) warns that it can't be
 rewritten, and a project whose warnings are errors can't even start (F81).
+
+It also registers, at the end of `sys.meta_path`, the project's own distribution as installing it
+would leave it, read by `lictor_metadata` from the clone's `pyproject.toml` without running anything
+(F82, ADR-0019): `version("<project>")` and the project's own groups of entry points work inside
+pytest, with the same reach as `src`. Only what uv would install is registered, never `pytest11`,
+and never over a distribution of the same name the environment already has.
 """
 
 from __future__ import annotations
@@ -22,10 +28,19 @@ import configparser
 import importlib
 import os
 import sys
+from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from lictor.adapters.config.profiles.python_uv import lictor_metadata
+else:
+    # Its sibling in the environment; in Lictor's own tests, the module of its package.
+    lictor_metadata = importlib.import_module(
+        f"{__package__}.lictor_metadata" if __package__ else "lictor_metadata"
+    )
 
 PLUGIN_VARIABLE = "PYTEST_PLUGINS"
 # The first pytest that reads `[tool.pytest]` and `pytest.toml` as its own configuration.
@@ -48,11 +63,97 @@ def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
     """Make the sources importable for the conftests and the tests that come next."""
     root = early_config.invocation_params.dir
     sys.path.append(str(root / "src"))
-    inipath = early_config.inipath
+    _append_declared(root, early_config.inipath)
+    register_metadata(root)
+
+
+def _append_declared(root: Path, inipath: Any) -> None:
     if inipath is None:
         return
     for entry in declared_pythonpath(Path(inipath)):
         sys.path.append(str(_inside(root, Path(inipath).parent / entry, entry)))
+
+
+def register_metadata(root: Path) -> None:
+    """Make the project's distribution visible to `importlib.metadata`, if it would have one.
+
+    Registering is idempotent: what is already found, installed or registered by an outer
+    `pytest.main` of the same project, wins, so a nested one adds no second finder (in 3.9
+    `entry_points()` gave every entry twice); one of another project, or of none, leaves the outer
+    one alone.
+    """
+    found = lictor_metadata.read(root)
+    if isinstance(found, str):
+        return
+    try:
+        importlib_metadata.distribution(found.name)
+    except importlib_metadata.PackageNotFoundError:
+        sys.meta_path.append(ProjectFinder(found, root))
+
+
+class ProjectFiles:
+    """What a distribution reads of its files, from what `lictor_metadata` read: no file behind it.
+
+    It is a mixin, not a `Distribution`: the finder joins it to the `Distribution` of the library
+    that asks, so the backport (`importlib_metadata` on 3.9) gets its own entry points, with the
+    methods it calls on them, and not the standard library's.
+    """
+
+    def __init__(self, found: lictor_metadata.Metadata, root: Path) -> None:
+        self._found = found
+        self._root = root
+
+    @property
+    def name(self) -> str:
+        return self._found.name
+
+    @property
+    def _normalized_name(self) -> str:
+        # The backport (3.10 on Python 3.9) asks every distribution for it.
+        return lictor_metadata.normalized(self._found.name)
+
+    def read_text(self, filename: str) -> str | None:
+        if filename == "METADATA":
+            return self._found.metadata_text()
+        if filename == "entry_points.txt":
+            return self._found.entry_points_text()
+        return None
+
+    def locate_file(self, path: Any) -> Path:
+        return self._root / "src" / str(path)
+
+
+_DISTRIBUTIONS: dict[type, type] = {}
+
+
+def _distribution_class(context: Any) -> type:
+    """`ProjectFiles` joined to the `Distribution` of the library whose `Context` asks."""
+    library = sys.modules.get(type(context).__module__)
+    base = getattr(library, "Distribution", importlib_metadata.Distribution)
+    if base not in _DISTRIBUTIONS:
+        _DISTRIBUTIONS[base] = type("ProjectDistribution", (ProjectFiles, base), {})
+    return _DISTRIBUTIONS[base]
+
+
+class ProjectFinder(importlib_metadata.DistributionFinder):
+    """Finds the project's distribution by its normalized name, and no module."""
+
+    def __init__(self, found: lictor_metadata.Metadata, root: Path) -> None:
+        self.found = found
+        self.root = root
+        self.key = lictor_metadata.normalized(found.name)
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> None:
+        return None
+
+    def find_distributions(self, context: Any = None) -> list[Any]:
+        """Only for its name, or any, and only where the search looks at the project's `src`."""
+        name = getattr(context, "name", None)
+        if name is not None and lictor_metadata.normalized(name) != self.key:
+            return []
+        if str(self.root / "src") not in getattr(context, "path", [str(self.root / "src")]):
+            return []
+        return [_distribution_class(context)(self.found, self.root)]
 
 
 def declared_pythonpath(inipath: Path) -> list[str]:
@@ -91,12 +192,10 @@ def _pytest_major() -> int:
 
 def _toml_module(inipath: Path) -> Any:
     """`tomllib` from Python 3.11, or before it the `tomli` pytest itself needs to read the file."""
-    for name in ("tomllib", "tomli"):
-        try:
-            return importlib.import_module(name)
-        except ImportError:
-            continue
-    raise _usage_error(f"no hay con qué leer {inipath.name} en este intérprete")
+    toml = lictor_metadata.toml_module()
+    if toml is None:
+        raise _usage_error(f"no hay con qué leer {inipath.name} en este intérprete")
+    return toml
 
 
 def _inside(root: Path, path: Path, entry: str) -> Path:

@@ -1,6 +1,7 @@
 """Unit tests for the checks every command makes before spending anything."""
 
 import contextlib
+import dataclasses
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -27,7 +28,13 @@ from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorErro
 from lictor.domain.model import CommandOutput, Health, PreconditionProblem
 from lictor.domain.reports import ApiReport, ApiSymbol
 from lictor.domain.rules import NO_COMMITS
-from lictor.domain.survey import LaunchedProgram, SurveyedCommand, SurveyedTests, SurveyReport
+from lictor.domain.survey import (
+    LaunchedProgram,
+    ProjectMetadata,
+    SurveyedCommand,
+    SurveyedTests,
+    SurveyReport,
+)
 
 HEALTHY = Health(ok=True, cli_version="2.1.0", auth_status="subscription")
 NAMES = [
@@ -558,6 +565,27 @@ def test_doctor_surveys_inside_the_throwaway_before_it_is_gone(
     assert [p.message for p in dependencies.problems if "bdd.plugin" in p.message] == []
     assert survey_execute.call_args.args[0] is built
     assert report.blind_spots is not None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "detail", "warned"),
+    [
+        (ProjectMetadata("pkg", "1.0"), "metadata del proyecto pkg 1.0", False),
+        (ProjectMetadata(problem="la versión sale de git"), None, True),
+    ],
+)
+def test_dependencies_tell_the_projects_metadata_and_a_run_keeps_the_warning(
+    tmp_path: Path, bin_dir: Path, metadata: ProjectMetadata, detail: str | None, warned: bool
+) -> None:
+    parts = _with_contract(tmp_path, bin_dir, dataclasses.replace(SURVEYED, metadata=metadata))
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    dependencies = report.checks[-3]
+    assert dependencies.detail == detail
+    told = [w for w in dependencies.warnings if "la versión sale de git" in w]
+    assert bool(told) is warned
+    assert report.dependency_warnings == dependencies.warnings
 
 
 def test_a_survey_that_fails_only_warns(tmp_path: Path, bin_dir: Path) -> None:

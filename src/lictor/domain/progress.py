@@ -339,8 +339,14 @@ class RunProgress:
 
     def _run_started(self, event: Event) -> list[str]:
         self._api_known.update(api_start_names(event.data.get("api_start")))
+        dependencies = event.data.get("dependencies")
         return [
             "Entorno de verificación listo.",
+            *(
+                f"⚠ Dependencias de la verificación: {line}"
+                for line in (dependencies if isinstance(dependencies, list) else [])
+                if isinstance(line, str)
+            ),
             *(
                 f"⚠ Lo que los controles no ven: {line}"
                 for line in blind_spot_lines(event.data.get("blind_spots")) or []

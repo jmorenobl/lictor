@@ -31,6 +31,7 @@ from lictor.domain.blind_spots import (
     StartRules,
     blind_spots,
     configuration_problems,
+    metadata_facts,
     missing_plugins,
     program_problems,
 )
@@ -78,6 +79,8 @@ class PreconditionCheck:
     problems: tuple[PreconditionProblem, ...] = ()
     skipped: str | None = None
     warnings: tuple[str, ...] = ()
+    # What a check that passed has to tell: `✓ <name>: <detail>`.
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,11 @@ class PreconditionsReport:
     @property
     def problems(self) -> list[PreconditionProblem]:
         return [problem for check in self.checks for problem in check.problems]
+
+    @property
+    def dependency_warnings(self) -> tuple[str, ...]:
+        """What «Dependencias de la verificación» warned of, which a new run tells too."""
+        return tuple(w for c in self.checks if c.name == DEPENDENCIES for w in c.warnings)
 
 
 # What checking on the environment just built gives: its checks, the blind spots, and HEAD's API
@@ -525,7 +533,10 @@ class CheckPreconditions:
             return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=(reason,))], None
         programs, later = program_problems(surveyed, self.start_rules.check_only)
         programs += configuration_problems(surveyed)
-        dependencies = PreconditionCheck(DEPENDENCIES, (*plugins, *programs), warnings=tuple(later))
+        detail, metadata = metadata_facts(surveyed.metadata)
+        dependencies = PreconditionCheck(
+            DEPENDENCIES, (*plugins, *programs), warnings=(*later, *metadata), detail=detail
+        )
         spots = blind_spots(surveyed, self.start_rules)
         if spots.skipped is not None:
             return [
