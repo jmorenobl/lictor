@@ -165,11 +165,21 @@ def code_exclude_message(profile: str) -> str:
     )
 
 
+def profile_only_message(field: str, why: str = "", instead: str = "") -> str:
+    """Why `lictor.json` can't declare a field only the profile declares, even when it declares
+    none (ADR-0020): one sentence for all of them, with what it is and where the project's goes."""
+    reason = f" ({why})" if why else ""
+    rest = f"; {instead}" if instead else ""
+    return (
+        f"lictor.json no puede declarar {field}: solo lo declara el perfil{reason}, y ningún "
+        f"proyecto lo escribe. Bórralo{rest}."
+    )
+
+
 def needs_plugins_message() -> str:
     """Why `lictor.json` can't declare what the acceptance needs: the profile's driver uses it."""
-    return (
-        "lictor.json no puede declarar acceptance.needs_plugins: lo que necesita la aceptación lo "
-        "declara el perfil, cuyo driver lo usa. Bórralo."
+    return profile_only_message(
+        "acceptance.needs_plugins", "es lo que necesita su driver, que lo usa"
     )
 
 
@@ -194,9 +204,10 @@ def stale_agent_command_message(control_id: str, field: str, inherited: str) -> 
 
 def survey_message() -> str:
     """Why `lictor.json` can't declare the survey: it is the profile's reading of its tools."""
-    return (
-        "lictor.json no puede declarar survey: cómo se lee lo que ve cada control es del perfil. "
-        "Bórralo; lo que la persona acepta que no se vea va en blind_spots.accepted."
+    return profile_only_message(
+        "survey",
+        "es cómo lee lo que ve cada control",
+        "lo que la persona acepta que no se vea va en blind_spots.accepted",
     )
 
 
@@ -963,9 +974,10 @@ class RefactorConfig(BaseModel):
 
 def refactor_hints_message() -> str:
     """Why `lictor.json` can't declare the refactor's goals, and where the project's go."""
-    return (
-        "lictor.json no puede declarar refactor_hints: esos objetivos son del perfil, que los "
-        "mejora en cada versión, y una copia los tapa. Bórralo; lo propio del proyecto va en hints."
+    return profile_only_message(
+        "refactor_hints",
+        "son sus objetivos, que mejora en cada versión, y una copia los tapa",
+        "lo propio del proyecto va en hints o en conventions.text",
     )
 
 

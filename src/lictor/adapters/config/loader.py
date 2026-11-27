@@ -30,6 +30,7 @@ from lictor.adapters.config.models import (
     needs_plugins_message,
     plugin_without_list_message,
     prepare_message,
+    profile_only_message,
     refactor_hints_message,
     stale_agent_command_message,
     survey_message,
@@ -613,14 +614,34 @@ _PROFILE_ONLY: Final[tuple[tuple[str, Callable[[], str]], ...]] = (
 )
 
 
+# Every field of a profile a project never writes (ADR-0020): what the profile has and the file
+# a person writes doesn't, taken from the models so that a new one is refused the same way.
+_PROFILE_ONLY_FIELDS: Final = tuple(
+    sorted(set(Profile.model_fields) - set(LictorFile.model_fields))
+)
+_PROFILE_ONLY_VERIFICATION: Final = tuple(
+    sorted(set(ProfileVerification.model_fields) - set(ProjectVerification.model_fields))
+)
+
+
 def _reject_profile_fields(parsed: dict[str, object]) -> None:
-    """Refuse a field only the profile declares, even when it declares none, with its message."""
+    """Refuse a field only the profile declares, even when it declares none, with its message.
+
+    Those with a sentence of their own say it; any other says the common one, never pydantic's.
+    """
     acceptance = parsed.get("acceptance")
     if isinstance(acceptance, dict) and "needs_plugins" in acceptance:
         raise ConfigError(needs_plugins_message())
     for key, message in _PROFILE_ONLY:
         if key in parsed:
             raise ConfigError(message())
+    for key in _PROFILE_ONLY_FIELDS:
+        if key in parsed:
+            raise ConfigError(profile_only_message(key))
+    verification = parsed.get("verification")
+    for key in _PROFILE_ONLY_VERIFICATION:
+        if isinstance(verification, dict) and key in verification:
+            raise ConfigError(profile_only_message(f"verification.{key}"))
 
 
 def _known_profile(reference: object, profiles_dir: Path | None) -> Profile | None:
