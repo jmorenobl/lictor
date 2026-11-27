@@ -1407,3 +1407,43 @@ def test_a_run_from_before_the_level_says_none(tmp_path: Path) -> None:
 
     assert "Nivel de prueba" not in report
     assert "## Lo que este nivel no comprueba" not in report
+
+
+_BASIC_START = _event(
+    "lictor.run.started.v1",
+    {"proof": {"level": "basico", "gaps": [{"code": "rojo_sin_clase"}]}},
+)
+
+
+def test_without_the_classes_of_each_failure_the_red_is_the_junit_status(tmp_path: Path) -> None:
+    measures = DriverMeasures(
+        red={
+            "NIF-001": RedMeasure(None, "no_aserta", "failure"),
+            "NIF-002": RedMeasure(None, "no_aserta", "error"),
+            "NIF-003": RedMeasure(None, "sin_resultado", ""),
+        }
+    )
+
+    report = _report(tmp_path, [_BASIC_START, _measured(1, "driver/001-red", measures)])
+
+    section = report.split("## Medidas del driver")[1].split("\n## ")[0]
+    assert "Este perfil no lee cómo falla cada test (nivel básico)" in section
+    assert "| Escenario | Rojo |" in section
+    assert "| NIF-001 | falla |" in section
+    assert "| NIF-002 | error |" in section
+    assert "| NIF-003 | sin resultado |" in section
+    assert "Con C" not in section
+    assert "falla sin una aserción del driver" not in section
+
+
+def test_with_the_classes_the_measures_keep_every_column(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_measured(1, "driver/001-red", _MEASURES)])
+
+    assert "| Escenario | Rojo | Stubs, por constante | Con C |" in report
+
+
+def test_a_basic_level_whose_impostors_never_ran_says_it_checks_no_test(tmp_path: Path) -> None:
+    report = _report(tmp_path, [_BASIC_START])
+
+    section = report.split("## Tests aceptados sin comprobar")[1].split("##")[0]
+    assert "*Este perfil no comprueba los tests del driver: nivel básico.*" in section

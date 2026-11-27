@@ -129,7 +129,9 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
     assert measured.type == "lictor.driver.measured.v1"
     assert measured.data["step"] == sealed.data["evidence"]["path"]
     assert "evidence" not in measured.data
-    assert measured.data["red"] == {"IVA-002": {"step": None, "caught": "no_aserta"}}
+    assert measured.data["red"] == {
+        "IVA-002": {"step": None, "caught": "no_aserta", "status": "failure"}
+    }
     assert (measured.data["stubs"], measured.data["interface"]) == (None, None)
     # How long the red check took, and each of its runs by phase (F52): here the red alone.
     assert sealed.data["phases"] == {"red": {"runs": 1, "duration_ms": 500}}
@@ -1927,7 +1929,9 @@ def test_check_red_measures_what_the_interface_proved_of_a_scenario(tmp_path: Pa
     [measured] = _events(event_log, "lictor.driver.measured.v1")
     types = [call.args[0].type for call in event_log.append.call_args_list]
     assert types.index("lictor.driver.measured.v1") < types.index("lictor.driver.sealed.v1")
-    assert measured.data["red"] == {"IVA-001": {"step": "then", "caught": "entonces"}}
+    assert measured.data["red"] == {
+        "IVA-001": {"step": "then", "caught": "entonces", "status": "failure"}
+    }
     found = measured.data["interface"]["IVA-002"]
     assert found["outcome"] == "probado"
     assert found["calls"] == {"given": 1, "when": 0, "then": 1, "outside": 0}
@@ -2039,7 +2043,11 @@ def test_check_red_measures_how_each_new_test_fared_with_each_stub_constant(
             "verdict": "aceptado",
         },
     }
-    assert measured.data["red"]["IVA-001"] == {"step": "then", "caught": "sin_implementar"}
+    assert measured.data["red"]["IVA-001"] == {
+        "step": "then",
+        "caught": "sin_implementar",
+        "status": "failure",
+    }
 
 
 def test_check_red_measures_the_stub_runs_of_a_driver_they_reject(tmp_path: Path) -> None:
