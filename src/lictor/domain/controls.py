@@ -243,14 +243,30 @@ def unrunnable_by_agent(
     Each such command drops out of the agent's list: it works blind on what it can't run.
     """
     found = [
-        (f"el control {c.id}", _check_of(c)) for c in controls if counts_for_agent(c, installed)
+        (f"el control {c.id}", c.run, _check_of(c))
+        for c in command_controls(controls)
+        if counts_for_agent(c, installed)
     ]
-    found.append(("la aceptación", without_report(acceptance_run) if acceptance_run else None))
+    if acceptance_run:
+        found.append(("la aceptación", acceptance_run, without_report(acceptance_run)))
     return tuple(
+        _unrunnable_text(what, run, command)
+        for what, run, command in found
+        if command is None or not allowed_by(command, agent_tools)
+    )
+
+
+def _unrunnable_text(what: str, run: str, command: str | None) -> str:
+    if command is None:
+        # `{out}` alone as an argument (`sh -c '…' {out}`): taking it out would change the command.
+        return (
+            f"el agente no tiene orden para comprobar {what} (`{run}`): su informe `{{out}}` va "
+            "como argumento suelto y no se puede quitar sin cambiar la orden, así que no podrá "
+            "comprobarlo antes de acabar."
+        )
+    return (
         f"agent_tools no deja al agente ejecutar {what} (`{command}`): no podrá comprobarlo antes "
         "de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita."
-        for what, command in found
-        if command is not None and not allowed_by(command, agent_tools)
     )
 
 

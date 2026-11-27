@@ -274,3 +274,21 @@ def test_init_with_generic_names_what_the_person_writes(tmp_path: Path) -> None:
     assert init.to_write == ("paths", "acceptance", "code_paths")
     assert init.status == "alpha"
     assert json.loads(init.config_json)["hints"] == ""
+
+
+def test_an_empty_list_of_the_project_takes_nothing_from_the_profile(tmp_path: Path) -> None:
+    plain = resolve_defences(load_config(_write(tmp_path / "a", profile="python-uv@0.2")))
+    emptied = resolve_defences(
+        load_config(
+            _write(
+                tmp_path / "b",
+                profile="python-uv@0.2",
+                suppressions=[],
+                banned_patterns=[],
+                forbidden_paths=[],
+                code_paths=[],
+            )
+        )
+    )
+
+    assert emptied == plain

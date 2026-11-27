@@ -19,6 +19,7 @@ from tests.integration.repro.harness import (
     events_of,
     green_ids,
     known_limitation,
+    require,
     run_lictor,
     write,
 )
@@ -84,6 +85,7 @@ def test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_leve
     doctor = _cli("doctor", "--cwd", str(root))
     outcome = run_lictor(root, agent)
 
+    assert "✓ Configuración válida: perfil 'generic@0.1' (alpha)" in doctor
     assert "⚠ Nivel de prueba: básico" in doctor
     assert "⚠ Órdenes del agente" not in doctor
     assert outcome == Outcome(0)
@@ -138,11 +140,25 @@ def test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry(tmp_path:
 def test_go_a_vacuous_test_is_no_green(tmp_path: Path) -> None:
     """The basic level's gap: NIF-002 asserts nothing, and code that ignores the letter passes."""
     root = go_project(tmp_path / "nif")
-    agent = Agent(driver=_go_driver(go_driver(vacuous_second=True)), impl=_go_impl(GO_LENIENT))
+    agent = Agent(driver=_go_driver(go_driver(second="vacuo")), impl=_go_impl(GO_LENIENT))
 
-    outcome = run_lictor(root, agent)
+    require(run_lictor(root, agent) == Outcome(0), "el run debía llegar a verde")
+    require(green_ids(root) == ["NIF-001", "NIF-002"], "los dos escenarios debían quedar en verde")
 
-    assert outcome == Outcome(0)
+    assert go_false_greens(root) == []
+
+
+@known_limitation(
+    "un test que no compara con el escenario pasa con cualquier código", until="0.24.0"
+)
+def test_go_a_weak_assertion_is_no_green(tmp_path: Path) -> None:
+    """The other half of the gap: NIF-002 fails at the red by the stub, never by its comparison."""
+    root = go_project(tmp_path / "nif")
+    agent = Agent(driver=_go_driver(go_driver(second="debil")), impl=_go_impl(GO_LENIENT))
+
+    require(run_lictor(root, agent) == Outcome(0), "el run debía llegar a verde")
+    require(green_ids(root) == ["NIF-001", "NIF-002"], "los dos escenarios debían quedar en verde")
+
     assert go_false_greens(root) == []
 
 

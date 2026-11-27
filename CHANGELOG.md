@@ -31,7 +31,9 @@ en su significado se anota en «Cambiado».
   `code_paths`: los tests unitarios junto al código dejan de ser código para la puerta del refactor
   (`L0-alcance`).
 - **«Órdenes del agente» en `lictor doctor`**: avisa de un control que bloquea, o de la
-  aceptación, que `agent_tools` no deja ejecutar al agente.
+  aceptación, que `agent_tools` no deja ejecutar al agente, o que no tiene orden que darle porque
+  su informe `{out}` va como argumento suelto. `doctor` dice además si el perfil no es estable
+  («perfil 'generic@0.1' (alpha)»).
 - **El job de la CI «Cadenas: Go y Node»**, solo en Linux (Go 1.26, Node 24, `gotestsum` v1.13.0):
   los casos `toolchain`, con un arnés propio y un oráculo que no usa Lictor.
 

@@ -566,7 +566,7 @@ def test_the_stubs_fail_never_return_and_only_fail_their_test_in_any_profile(
     ("interface_impostor", "said", "unsaid"),
     [
         (True, "alterando lo que devuelve la interfaz", "una persona lo registre"),
-        (False, "Lictor parará para que una persona lo registre", "alterando"),
+        (False, "para para que una persona registre el escenario", "alterando"),
     ],
 )
 def test_the_driver_hears_how_an_already_met_scenario_is_judged(
@@ -580,3 +580,21 @@ def test_the_driver_hears_how_an_already_met_scenario_is_judged(
     assert said in prompt
     assert unsaid not in prompt
     assert "lo cambies para que falle." in prompt
+
+
+def test_the_forbidden_paths_name_their_exception_only_when_there_is_one(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), forbidden_paths=["conftest.py"]
+    )
+    _, exempt, _ = _execute_driver(
+        tmp_path,
+        AgentResult(status="ok"),
+        forbidden_paths=["conftest.py"],
+        driver_exempt_paths=["conftest.py"],
+    )
+
+    assert "en ninguna carpeta: conftest.py. Se descartan" in " ".join(_prompt(executor).split())
+    assert "salvo" not in _prompt(executor)
+    assert "conftest.py, salvo conftest.py dentro de tests/acceptance/." in " ".join(
+        _prompt(exempt).split()
+    )

@@ -653,3 +653,12 @@ def test_a_control_whose_plugin_is_missing_isnt_the_agents_to_run() -> None:
         "agent_tools no deja al agente ejecutar el control cov (`cov run`): no podrá comprobarlo "
         "antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo permita.",
     )
+
+
+def test_a_report_given_alone_leaves_the_agent_without_a_check_and_says_so() -> None:
+    run = "sh -c 'node --test --test-reporter-destination=\"$0\" acceptance/*.test.js' {out}"
+
+    [told] = unrunnable_by_agent([], run, ["Bash(sh -c:*)"], ())
+
+    assert told.startswith(f"el agente no tiene orden para comprobar la aceptación (`{run}`)")
+    assert told.endswith("así que no podrá comprobarlo antes de acabar.")

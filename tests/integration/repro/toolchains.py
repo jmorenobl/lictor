@@ -87,28 +87,33 @@ GO_DRIVER_PATH = "acceptance/nif_test.go"
 GO_UNIT_PATH = "nif/longitud_test.go"
 
 
-def go_test(sid: str, nif: str, want: str, *, defer: bool = True, vacuous: bool = False) -> str:
-    """One test of the driver, named after its scenario with a border: `Test_NIF_001`."""
+def go_test(sid: str, nif: str, want: str, *, defer: bool = True, check: str = "compara") -> str:
+    """One test of the driver, named after its scenario with a border: `Test_NIF_001`.
+
+    `check` is how it checks: `compara` with the scenario's value, `vacuo` asserting nothing, or
+    `debil` asserting what holds whatever the code returns.
+    """
     pre = "\tdefer enEscenario(t)\n" if defer else ""
-    if vacuous:
-        body = f'\t_ = nif.Valido("{nif}")\n'
-    else:
-        body = (
+    bodies = {
+        "compara": (
             f'\tif got := nif.Valido("{nif}"); got != {want} {{\n'
             f'\t\tt.Fatalf("Valido = %v, quiero {want}", got)\n\t}}\n'
-        )
-    return f"func Test_{sid.replace('-', '_')}(t *testing.T) {{\n{pre}{body}}}\n"
+        ),
+        "vacuo": f'\t_ = nif.Valido("{nif}")\n',
+        "debil": f'\tif got := nif.Valido("{nif}"); got && !got {{\n\t\tt.Fatal(got)\n\t}}\n',
+    }
+    return f"func Test_{sid.replace('-', '_')}(t *testing.T) {{\n{pre}{bodies[check]}}}\n"
 
 
-def go_driver(*, first_defer: bool = True, vacuous_second: bool = False, extra: str = "") -> str:
+def go_driver(*, first_defer: bool = True, second: str = "compara", extra: str = "") -> str:
     """The driver of the two scenarios: each test recovers the stub's panic, as the skill says."""
     header = (
         'package acceptance_test\n\nimport (\n\t"runtime/debug"\n\t"testing"\n\n'
         '\t"example.com/toy/nif"\n)\n\n'
     )
-    first = go_test("NIF-001", "12345678Z", "true", defer=first_defer)
-    second = go_test("NIF-002", "12345678A", "false", vacuous=vacuous_second)
-    return f"{header}{first}\n{second}{extra}{GO_HELPER}"
+    first_test = go_test("NIF-001", "12345678Z", "true", defer=first_defer)
+    second_test = go_test("NIF-002", "12345678A", "false", check=second)
+    return f"{header}{first_test}\n{second_test}{extra}{GO_HELPER}"
 
 
 GO_ORACLE = {
@@ -226,9 +231,17 @@ def _false_greens(root: Path, oracle: Mapping[str, str], run: Oracle) -> list[st
         git(root, "clone", "-q", "--no-hardlinks", ".", str(clone))
         for sha, sid in greens:
             git(clone, "checkout", "-q", "-f", sha)
-            result = run(clone, oracle[sid])
-            if result.returncode != 0:
+            if run(clone, oracle[sid]).returncode != 0:
                 found.append(sid)
+        # What a refactor left after the greens must still meet every one of them.
+        head = git(root, "rev-parse", "HEAD").strip()
+        if head != greens[-1][0]:
+            git(clone, "checkout", "-q", "-f", head)
+            found += [
+                f"{sid} tras {head[:12]}"
+                for _, sid in greens
+                if run(clone, oracle[sid]).returncode != 0
+            ]
     return found
 
 
@@ -271,7 +284,7 @@ NODE_CONFIG: dict[str, object] = {
     "acceptance": {
         "run": (
             f"sh -c '{NODE_LINK} && exec node --test --test-reporter=junit "
-            '--test-reporter-destination="$0" acceptance/\' {out}'
+            '--test-reporter-destination="$0" acceptance/*.test.js\' {out}'
         ),
         "failure_exit_codes": [1],
     },

@@ -4,7 +4,7 @@ Para cualquier lenguaje que deje un informe JUnit (Go, Node, Python sin `uv` o s
   código y pasa después, en un clon limpio y con el driver sellado, pero **no que compare nada**:
   un test sin aserción falla en el rojo porque la interfaz no está implementada, y pasa después
   con cualquier código. Díselo a la persona antes del primer run, y pídele que **lea una vez el
-  driver sellado** (el commit «test: driver de aceptación», en `paths.driver`): es el único sitio
+  driver sellado** (el commit «chore(lictor): driver de aceptación», en `paths.driver`): es el único sitio
   donde se ve un test vacuo. Mete en `acceptance.driver_hints` «cada test compara con el valor
   del Gherkin».
 - **La persona escribe lo que el perfil no sabe**, con tu ayuda y su aprobación: `paths`,
@@ -98,14 +98,15 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
 
 **Node:**
 
-- Aceptación: `node --test --test-reporter=junit --test-reporter-destination={out} acceptance/`.
+- Aceptación: `node --test --test-reporter=junit --test-reporter-destination={out} acceptance/*.test.js`
+  (el patrón, no el directorio: con un directorio, Node 24 da un único caso y el driver se rechaza).
   Los stubs lanzan `new Error("no implementado")`, que solo tumba su test. Coma flotante:
   `100 * 1.1 !== 110`; el test compara con un margen o en céntimos.
 - Con dependencias, `prepare` las instala en el entorno:
   `sh -c 'npm ci --ignore-scripts && mkdir -p {env_dir} && mv node_modules {env_dir}/node_modules'`,
   con `env` `LNM={env_dir}/node_modules`; el entorno lleva hash y se vigila en cada orden,
   y la aceptación enlaza `node_modules` antes de correr:
-  `sh -c 'ln -sfn "$LNM" node_modules && exec node --test --test-reporter=junit --test-reporter-destination="$0" acceptance/' {out}`.
+  `sh -c 'ln -sfn "$LNM" node_modules && exec node --test --test-reporter=junit --test-reporter-destination="$0" acceptance/*.test.js' {out}`.
   El enlace a mano es la parte frágil. **La copia del agente no tiene `node_modules`, y permitir
   `sh -c` lo permite todo: con dependencias, el agente trabaja a ciegas** hasta una versión
   posterior.
@@ -114,11 +115,16 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
 
 **Python sin `uv` o sin `src/`:**
 
-- Aceptación: `python -m pytest tests/acceptance --junitxml {out}`; el test se empareja por su
-  nombre (`test_iva_001`), sin pytest-bdd enlazado. Para `src/` con `uv`, mejor `python-uv`.
-- `prepare` pasa por `shlex` y no por una shell: `sh -c 'python -m venv {env_dir} &&
-  {env_dir}/bin/pip install -r requirements.txt'`, con `env` `PYTHONDONTWRITEBYTECODE=1` (si no,
-  el bytecode cambia el hash del entorno).
+- Sin entorno propio: `python -m pytest tests/acceptance --junitxml {out}`, con el Python y las
+  dependencias de la máquina (`entorno_sin_hash`). El test se empareja por su nombre
+  (`test_iva_001`), sin pytest-bdd enlazado. Para `src/` con `uv`, mejor `python-uv`.
+- Con entorno propio: `prepare` pasa por `shlex` y no por una shell, así que va en `sh -c
+  'python -m venv {env_dir} && {env_dir}/bin/pip install -r requirements.txt'`. `{env_dir}` solo se
+  sustituye en `verification.env`, y `PATH` es del perfil: las órdenes lo usan por una variable,
+  `env` `PY={env_dir}/bin/python` y `PYTHONDONTWRITEBYTECODE=1` (si no, el bytecode cambia el hash),
+  y la aceptación es `sh -c '"$PY" -m pytest tests/acceptance --junitxml "$0"' {out}`. Sin
+  `"$PY"`, el `python` del `PATH` no es el del entorno, y los tests corren fuera de él. (Receta sin
+  medir: la pasada de Go no la cubre.)
 - `banned_patterns`: `#\s*noqa`, `#\s*type:\s*ignore`, `pytest\.(skip|xfail)\(`.
 
 **Lo que este perfil aún no hace:** probar un escenario que el código ya cumple, saber qué ve cada

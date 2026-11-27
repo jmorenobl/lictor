@@ -376,7 +376,8 @@ def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
         # Everything that doesn't need the configuration is still worth telling (F30).
         checks, clock = unconfigured_preconditions(root)
         return checks, clock, str(err)
-    typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'")
+    status = "" if runtime.profile_status == "stable" else f" ({runtime.profile_status})"
+    typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'{status}")
     return runtime.preconditions, runtime.clock, None
 
 

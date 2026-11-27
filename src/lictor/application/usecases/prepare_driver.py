@@ -96,9 +96,17 @@ def already_met_line(interface_impostor: bool) -> str:
             "alterando lo que devuelve la interfaz: no lo cambies\npara que falle."
         )
     return (
-        "Si el código ya la cumple, el test pasa:\nLictor parará para que una persona lo "
-        "registre. No lo cambies para que falle."
+        "Si el código ya la cumple, el test pasa,\ny Lictor no puede probar que mire el "
+        "resultado: rechaza el driver y, al agotar sus intentos,\npara para que una persona "
+        "registre el escenario. No lo cambies para que falle."
     )
+
+
+def _exempt_text(exempt: Sequence[str], driver: Sequence[str]) -> str:
+    """The exception to the forbidden paths, only when the profile has one."""
+    if not exempt:
+        return ""
+    return f", salvo {', '.join(exempt)} dentro de {', '.join(driver)}"
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -190,7 +198,7 @@ class PrepareDriver:
             "{writable}": ", ".join(request.paths_writable),
             "{protected_sin_driver}": ", ".join(protected_without_driver),
             "{forbidden}": ", ".join(request.forbidden_paths) or "nada más",
-            "{exentos}": ", ".join(request.driver_exempt_paths) or "nada",
+            "{exentos}": _exempt_text(request.driver_exempt_paths, request.paths_driver),
             "{suppressions}": suppressions_text(request.suppressions),
             # The driver's call has no copy of the profile's files: what names them can't run.
             **agent_command_lines(request.allowed_tools, request.check_commands, (), None),

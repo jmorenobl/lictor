@@ -53,7 +53,8 @@ _GAP_TEXTS: Final[Mapping[str, str]] = {
         "El test se empareja con su escenario por el nombre: no se comprueba que lo ejecute"
     ),
     MET_WITHOUT_PROOF: (
-        "Un escenario que el código ya cumple no se prueba: el run para y lo registra una persona"
+        "Un escenario que el código ya cumple no se prueba: el driver se rechaza hasta agotar sus "
+        "intentos, y el run para para que lo registre una persona"
     ),
     VALUE_UNWEIGHED: "No se comprueba que cada valor del Gherkin llegue a una aserción",
     ENV_UNHASHED: (
@@ -64,10 +65,7 @@ _GAP_TEXTS: Final[Mapping[str, str]] = {
         "No se rechaza ninguna supresión: añade las de tu lenguaje en suppressions y "
         "banned_patterns"
     ),
-    NO_CONTROLS: (
-        "Un verde solo pasó la aceptación, y el refactor no tiene guarda: ningún control cuenta "
-        "sus tests ni su puntuación"
-    ),
+    NO_CONTROLS: "Un verde solo pasó la aceptación: ningún control bloquea un intento",
     NO_SURVEY: (
         "No se sabe qué ve cada control: «Lo que los controles no ven» y «Cambios que ningún "
         "control ejecutó» no se calculan"

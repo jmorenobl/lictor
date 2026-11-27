@@ -16,6 +16,7 @@ from lictor.adapters.config.loader import (
     config_fingerprint,
     declared_profile,
     load_config,
+    load_profile,
     project_root_of,
     resolve_defences,
     rule_files,
@@ -116,6 +117,8 @@ class BootstrapResult:
     spec_history: SpecHistory
     verification: VerificationEnvSpec
     graph_context: GraphContext
+    # How mature the profile is: `doctor` says it beside its name when it isn't stable.
+    profile_status: str = "stable"
 
 
 def bootstrap_init(project_root: Path) -> InitProject:
@@ -533,4 +536,5 @@ def bootstrap_runtime(
         spec_history=spec_history,
         verification=defences.verification,
         graph_context=graph_context,
+        profile_status=load_profile(active_config.profile).status,
     )

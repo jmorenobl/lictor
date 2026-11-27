@@ -16,8 +16,8 @@ Reglas:
 - Un test cuyo escenario espera un error comprueba cuál es (su clase o su mensaje), no solo que
   lo hay.
 - No implementes la funcionalidad. No toques {protected_sin_driver}.
-- No crees ni modifiques, en ninguna carpeta: {forbidden}, salvo {exentos} dentro de
-  {driver_paths}. Se descartan: lo que hay ahí lo cambia solo una persona.
+- No crees ni modifiques, en ninguna carpeta: {forbidden}{exentos}. Se descartan: lo que hay ahí
+  lo cambia solo una persona.
 - Trabajas en una copia sin historial: no hay git ni commits.
 - No añadas supresiones: {suppressions}. El driver queda sellado: si las lleva, se rechaza.
 - Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
