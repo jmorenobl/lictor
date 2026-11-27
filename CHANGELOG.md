@@ -32,6 +32,8 @@ en su significado se anota en «Cambiado».
 - **En `lictor check` de Lictor, su `__version__` deja de ser `0+desconocida`:** es el primer
   proyecto que lee su metadata. Cambia `config_fingerprint`, porque cambia el contenido de
   `verification.files`: un run de una versión anterior no se reanuda.
+- **`importlib-metadata` entra en el grupo de desarrollo de Lictor**, solo para que la CI pruebe que
+  el backport recibe una distribución de su propia clase. No cambia las dependencias del paquete.
 
 - **La autoverificación de la CI va en dos jobs a la vez: L1, L2 y L4 por un lado y la mutación
   (L5) por otro.** El paso único tardaba 10 min y se cortaba a los 12: en un runner un 20–40 % más

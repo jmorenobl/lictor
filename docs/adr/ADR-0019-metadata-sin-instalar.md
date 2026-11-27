@@ -118,4 +118,6 @@ De los 14 proyectos Python de `~/code`, Lictor incluido, 13 declaran una versió
 - pyverifactu: su grupo `verifactu_py.certificate_providers` y su versión se ven dentro de pytest.
 - Lictor es su primer caso: en `lictor check` de Lictor, su `__version__` deja de ser
   `0+desconocida`.
-- Probado en 3.9 (estándar, backport 3.10.1 y 8.7.1), 3.12 y 3.14, con `-W error`.
+- Probado en 3.9 (estándar, backport 3.10.1 y 8.7.1), 3.12 y 3.14, con `-W error`. La CI lo prueba
+  con el backport en cada plataforma: `importlib-metadata` está en el grupo de desarrollo de Lictor
+  solo para eso.

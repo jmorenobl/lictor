@@ -440,3 +440,21 @@ def test_a_search_of_other_paths_doesnt_find_the_project(tmp_path: Path) -> None
     done = _pytest(root)
 
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_backport_gets_a_distribution_of_its_own_class(tmp_path: Path) -> None:
+    """The finder joins its files to the `Distribution` of the library that asks (ADR-0019, 6):
+    here the backport of Lictor's own environment, so the CI proves it without a Python 3.9."""
+    root = _packaged(tmp_path)
+    (root / "tests" / "test_backport.py").write_text(
+        _BACKPORT_TEST
+        + "\n\ndef test_its_class_is_the_backports():\n"
+        + '    found = importlib_metadata.distribution("demo-pkg")\n'
+        + "    assert isinstance(found, importlib_metadata.Distribution)\n",
+        encoding="utf-8",
+    )
+
+    done = _pytest(root)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "3 passed" in done.stdout
