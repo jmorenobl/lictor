@@ -324,3 +324,21 @@ def test_every_field_only_a_profile_declares_has_the_common_sentence(tmp_path: P
 
 def test_a_field_only_the_profiles_acceptance_has_is_refused_the_same_way() -> None:
     assert _PROFILE_ONLY_ACCEPTANCE == ("needs_plugins",)
+
+
+def test_a_control_the_person_exempts_from_the_driver_reaches_the_domain(tmp_path: Path) -> None:
+    """G3: `"driver": false` on a control of the profile, changed by its `id`, and on one added."""
+    added = {"id": "largo", "level": "L1", "run": "true", "report": "exit-code", "driver": False}
+    config = load_config(
+        _write(
+            tmp_path,
+            profile="python-uv@0.2",
+            controls=[{"id": "lint", "driver": False}, added],
+        )
+    )
+
+    checks = {control.id: control.checks_driver for control in domain_controls(config)}
+
+    assert checks["lint"] is False
+    assert checks["largo"] is False
+    assert checks["types"] is True

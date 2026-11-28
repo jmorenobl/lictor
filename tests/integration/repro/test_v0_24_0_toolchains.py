@@ -85,6 +85,8 @@ def test_go_a_test_that_passes_with_every_constant_is_rejected_and_its_retry_is_
     assert outcome.exit_code != 0
     assert "NIF-002" not in green_ids(root)
     assert go_false_greens(root) == []
+    report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
+    assert "Los stubs de un escenario en cuarentena siguen en la rama con la marca" in report
 
 
 def test_go_a_right_driver_is_sealed_at_once_and_reaches_green(tmp_path: Path) -> None:
@@ -283,3 +285,43 @@ def test_go_doctor_keeps_its_environment_until_told_otherwise(tmp_path: Path) ->
     )
     assert "reutilizado" not in fresh
     assert (root / ".lictor" / "doctor-env" / "env" / "gocache").is_dir()
+
+
+SKIP_002 = (
+    "func Test_NIF_002(t *testing.T) {\n\tdefer enEscenario(t)\n"
+    '\tif got := nif.Valido("12345678A"); got {\n\t\tt.Skip("de momento no")\n\t}\n}\n'
+)
+
+
+def test_go_a_test_that_skips_with_a_constant_is_rejected_not_sealed(tmp_path: Path) -> None:
+    """Fable's B1 of the PR: a case skipped with one constant read as «that variant doesn't
+    count», which left NIF-002 unjudged with no reason, and the driver sealed a false green."""
+    root = go_project(tmp_path / "nif", banned_patterns=["//\\\\s*nolint"])
+    header, _, rest = go_driver().partition("func Test_NIF_002")
+    skipping = header + SKIP_002 + rest[rest.index("\nfunc enEscenario") :]
+    agent = Agent(driver=_driver(skipping), impl=_impl(GO_LENIENT))  # type: ignore[arg-type]
+
+    run_lictor(root, agent)
+
+    assert events_of(root, "driver.sealed") == []
+    assert "El test Test_NIF_002 del escenario NIF-002 pasa también" in agent.prompts["driver"][1]
+    assert green_ids(root) == []
+
+
+VET_BAD = "\nfunc ayuda() {\n\tx := 1\n\tx = x\n\t_ = x\n}\n"
+
+
+def test_go_one_rejection_says_both_the_vacuous_test_and_the_vet_warning(tmp_path: Path) -> None:
+    """G3 and I6: `go vet` reads the driver; its warning and the impostor's go in one rejection."""
+    root = go_project(tmp_path / "nif")
+    bad = go_driver(second="vacuo", extra=VET_BAD)
+    agent = Agent(driver=_driver(bad, go_driver()), impl=_impl())  # type: ignore[arg-type]
+
+    assert run_lictor(root, agent) == Outcome(0)
+
+    assert _rejections(root) == ["impostor"]
+    told = agent.prompts["driver"][1]
+    assert "El test Test_NIF_002 del escenario NIF-002 pasa también" in told
+    assert "El commit del driver no pasa el control 'vet'" in told
+    assert green_ids(root) == ["NIF-001", "NIF-002"]
+    assert go_false_greens(root) == []

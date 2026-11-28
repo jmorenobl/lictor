@@ -414,11 +414,10 @@ def _doctor_env_key(root: Path, config_hash: str) -> str:
     `prepare` runs on a clean clone of HEAD, so either changing rebuilds it; without a commit
     there is nothing to build from, and the run's id stands for the key.
     """
-    try:
-        tree = checkout_repository(root).get_tree("HEAD")
-    except LictorError:
+    repository = checkout_repository(root)
+    if not repository.has_commits():
         return ""
-    return f"doctor-{config_hash}-{tree}"
+    return f"doctor-{config_hash}-{repository.get_tree('HEAD')}"
 
 
 def _echo_check(check: PreconditionCheck) -> None:

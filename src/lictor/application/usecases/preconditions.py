@@ -410,7 +410,7 @@ class CheckPreconditions:
             source = self.aside or environment
             if req.environment == "kept" and req.kept_dir is not None:
                 kept = source.kept(req.kept_dir, "HEAD", req.log_dir)
-                kept.ensure(req.env_key or req.run_id)
+                kept.ensure(_env_id(req))
                 return self._built(kept, req)
             with source.throwaway("HEAD", req.log_dir) as env:
                 env.ensure(req.run_id)
@@ -598,7 +598,7 @@ class CheckPreconditions:
         ]
         if snapshot.changes:
             problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
-        if tampered := environment.ensure(req.run_id):
+        if tampered := environment.ensure(_env_id(req)):
             problems.append(PreconditionProblem("environment", tampered))
         return PreconditionCheck(HEAD_CONTROLS, tuple(problems), warnings=notes)
 
@@ -645,6 +645,12 @@ class CheckPreconditions:
                 PreconditionCheck(BLIND_SPOTS, skipped=spots.skipped),
             ], spots
         return [*checks, dependencies, PreconditionCheck(BLIND_SPOTS, warnings=spots.lines)], spots
+
+
+def _env_id(req: PreconditionsRequest) -> str:
+    """What the environment is ensured for: `doctor`'s kept one by its key, every time in the same
+    `doctor` (Fable's B2 of the 0.24.0's PR: two ids rebuilt it twice per `doctor`)."""
+    return req.env_key if req.environment == "kept" and req.env_key else req.run_id
 
 
 def _api_check(message: str, *, blocks: bool) -> PreconditionCheck:

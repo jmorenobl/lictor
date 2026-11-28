@@ -23,7 +23,7 @@ en su significado se anota en «Cambiado».
   oráculo entero. `generic` está en él.
 - **`lictor doctor --fresh`**, que rehace el entorno de `doctor` en vez de reutilizar el anterior.
 - **`"driver": false` en un control de `lictor.json`**: el commit del driver no lo pasa antes del
-  sello, para un control que un driver correcto no puede pasar.
+  sello, para un control que un driver correcto no puede pasar. El sellado y `report.md` lo dicen.
 
 ### Cambiado
 

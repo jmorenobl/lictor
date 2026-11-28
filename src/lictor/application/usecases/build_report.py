@@ -10,7 +10,12 @@ from typing import Any, Final
 from lictor.application.ports import EventLog, TextSearch
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.api import break_line, describe_api
-from lictor.domain.basic_stub_proof import UNCHECKED_BY_INTERFACE, unchecked_text
+from lictor.domain.basic_stub_proof import (
+    QUARANTINED_STUBS_NOTE,
+    UNCHECKED_BY_INTERFACE,
+    driver_exempt_note,
+    unchecked_text,
+)
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
 from lictor.domain.conventions import conventions_report_lines
@@ -132,6 +137,9 @@ def _quarantine_lines(info: dict[str, Any]) -> list[str]:
         lines.append(f"- **{q_id}**: {q_data['reason']}")
         if q_data.get("last_error"):
             lines.extend(["  ```", f"  {q_data['last_error']}", "  ```"])
+    if any(m.declared for *_, m in info["driver_measures"]):
+        # The stubs a quarantined scenario still has carry Lictor's mark in the branch (ADR-0021).
+        lines.append(f"- *{QUARANTINED_STUBS_NOTE}*")
     return lines
 
 
@@ -439,7 +447,14 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         "",
         "## Tests aceptados sin comprobar",
         *([_unchecked_text(info)] if info["stub_unchecked"] else [_none_unchecked(info)]),
+        *_exempt_lines(info),
     ]
+
+
+def _exempt_lines(info: Mapping[str, Any]) -> list[str]:
+    """The controls the driver's commit didn't pass before the seal, by the person's decision."""
+    exempt: list[str] = info["driver_exempt"]
+    return [driver_exempt_note(exempt)] if exempt else []
 
 
 def _unchecked_text(info: Mapping[str, Any]) -> str:
@@ -846,6 +861,7 @@ class BuildReport:
             "already_met": [],
             "stub_unchecked": [],
             "unchecked_why": "",
+            "driver_exempt": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -971,6 +987,9 @@ class BuildReport:
         info["driver_seen"] = True
         info["driver"]["status"] = "sellado"
         info["driver"]["commit"] = str(ev.data.get("commit", "-"))
+        exempt = ev.data.get("driver_exempt")
+        if isinstance(exempt, list):
+            info["driver_exempt"] = [str(cid) for cid in exempt]
         unchecked = ev.data.get("stub_unchecked")
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]

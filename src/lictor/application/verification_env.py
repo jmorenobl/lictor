@@ -162,8 +162,10 @@ class VerificationEnvironment:
         other = VerificationEnvironment(
             self.vcs, self.runner, self.audit, self.project_root, self.spec
         )
+        # A `doctor` before left its manifest, or without `prepare` what its commands wrote.
+        other.reused = (root / "env.json").is_file() or (root / "env").is_dir()
+        root.mkdir(parents=True, exist_ok=True)
         other._move_to(EnvironmentPlace(root / "env", root / "env.json", rev, log_dir))
-        other.reused = (root / "env").is_dir()
         return other
 
     @property

@@ -33,8 +33,8 @@ BasicOutcome = Literal[
 
 BasicVerdict = Literal["aceptado", "sin_comprobar", "rechazado"]
 
-# What rejects one test on its own; `sin_juzgar` rejects the driver, with what the variant did.
-TestRejection = Literal["sobrevive", "sigue_sin_implementar"]
+# What rejects one test: every outcome whose verdict is `rechazado`.
+TestRejection = Literal["sobrevive", "sigue_sin_implementar", "sin_juzgar"]
 
 
 @dataclass(frozen=True)
@@ -53,10 +53,17 @@ def carries_mark(case: TestCaseResult) -> bool:
 
 
 def variant_fact(case: TestCaseResult | None) -> VariantFact | None:
-    """The fact of one variant that counts; a test it has no case for tells nothing."""
-    if case is None or case.status == "skipped":
+    """The fact of one variant that counts; a test it has no case for tells nothing.
+
+    A test that skips itself with a constant doesn't fail with it: what it does with the result
+    doesn't decide it, whatever the runner calls it (Fable's B1 of the 0.24.0's PR).
+    """
+    if case is None:
         return None
-    return VariantFact(passed=case.status == "passed", marked=carries_mark(case))
+    return VariantFact(passed=case.status in _NOT_FAILED, marked=carries_mark(case))
+
+
+_NOT_FAILED: Final = ("passed", "skipped")
 
 
 def basic_proof(red_marked: bool, variants: Sequence[VariantFact | None]) -> BasicOutcome:
@@ -108,6 +115,11 @@ _REASONS: Final[dict[TestRejection, str]] = {
         + "» con sus stubs sustituidos por "
         + _CONSTANTS
         + ": esa marca va solo en la línea de un stub de {writable}, con sus constantes al final."
+    ),
+    # Which variant told nothing, and why, follows apart: the same for every test it left.
+    "sin_juzgar": (
+        "{head} pasa con las constantes que se pudieron ejecutar, y sin las demás no se puede "
+        "juzgar."
     ),
 }
 
@@ -192,4 +204,20 @@ def unchecked_text(why: str, ids: Sequence[str]) -> str:
         f"Lictor aceptó {', '.join(ids)} sin comprobarlos: el driver no declaró ningún stub con "
         f"«{STUB_MARK}» y sus constantes, así que nada los puso a prueba. Revisa que su Entonces "
         "compare con el valor del escenario."
+    )
+
+
+# For the person, beside each quarantine: what the stubs left in the branch look like.
+QUARANTINED_STUBS_NOTE: Final = (
+    f"Los stubs de un escenario en cuarentena siguen en la rama con la marca «{STUB_MARK}» y sus "
+    f"constantes («{IMPOSTOR_MARK}»): se quitan al implementarlo."
+)
+
+
+def driver_exempt_note(control_ids: Sequence[str]) -> str:
+    """The controls a person exempted from the driver's commit (G3): the report names them."""
+    names = ", ".join(f"`{cid}`" for cid in control_ids)
+    return (
+        f"El commit del driver no pasó {names} antes del sello: lictor.json los marca con "
+        '"driver": false.'
     )

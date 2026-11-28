@@ -25,6 +25,8 @@ from lictor.application.usecases.check_red import (
     DRIVER_COMMIT_MESSAGE,
     CheckRed,
     CheckRedRequest,
+    _joined,
+    _Rejection,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
@@ -2208,3 +2210,19 @@ def test_check_red_a_value_the_then_never_reads_is_told_to_the_agent_without_mor
     assert len(runner.told) == 4  # the red and the interface's three: the code says it
     assert result.last_error is not None
     assert "el Entonces «el IVA es 21» recibe «21» del escenario y no lo usa" in result.last_error
+
+
+def test_one_rejection_joins_what_the_impostor_and_the_controls_found() -> None:
+    """I6 of the design: two attempts may be all the driver has, so both reasons go at once."""
+    impostor = _Rejection("impostor", "el test pasa también")
+    control = _Rejection("control", "no pasa el lint")
+    tampered = _Rejection("L0-estado", "cambió el estado")
+
+    assert _joined(impostor, control) == _Rejection(
+        "impostor", "el test pasa también\n\nno pasa el lint"
+    )
+    assert _joined(None, control) == control
+    assert _joined(impostor, None) == impostor
+    assert _joined(None, None) is None
+    # What the agent can't fix in the same retry stands alone.
+    assert _joined(impostor, tampered) == tampered

@@ -1,16 +1,21 @@
 """The basic rule of the stubs' impostor, without a plugin (ADR-0021)."""
 
+from typing import get_args
+
 import pytest
 
 from lictor.domain.basic_stub_proof import (
     BASIC_LIMITS_NOTE,
+    QUARANTINED_STUBS_NOTE,
     BasicOutcome,
+    TestRejection,
     VariantFact,
     ambiguous_variant_reason,
     basic_proof,
     basic_reason,
     basic_verdict,
     carries_mark,
+    driver_exempt_note,
     seal_warning,
     unchecked_basic_note,
     unchecked_text,
@@ -100,7 +105,8 @@ def test_the_mark_is_read_in_the_message_and_the_detail_of_a_failure(
 
 def test_a_variant_without_a_case_for_the_test_tells_nothing() -> None:
     assert variant_fact(None) is None
-    assert variant_fact(TestCaseResult("t", status="skipped")) is None
+    # A test that skips itself with a constant doesn't fail with it (Fable's B1 of the PR).
+    assert variant_fact(TestCaseResult("t", status="skipped")) == PASS
     assert variant_fact(TestCaseResult("t")) == PASS
     failed = TestCaseResult("t", status="failure", details="lictor: no implementado")
     assert variant_fact(failed) == MARKED
@@ -186,3 +192,22 @@ def test_the_report_says_why_each_was_accepted_unchecked() -> None:
         "no implementado» y sus constantes, así que nada los puso a prueba. Revisa que su "
         "Entonces compare con el valor del escenario."
     )
+
+
+def test_every_rejected_outcome_has_its_own_line_for_the_agent() -> None:
+    """No rejected verdict may leave the driver without a reason, and so sealed (B1 of the PR)."""
+    rejected = [o for o in get_args(BasicOutcome) if basic_verdict(o) == "rechazado"]
+
+    assert set(rejected) == set(get_args(TestRejection))
+    assert basic_reason("A-1", "test_a", "sin_juzgar", ["src/"]) == (
+        "El test test_a del escenario A-1 pasa con las constantes que se pudieron ejecutar, y sin "
+        "las demás no se puede juzgar."
+    )
+
+
+def test_the_report_names_the_controls_the_person_exempted_from_the_driver() -> None:
+    assert driver_exempt_note(["lint", "largo"]) == (
+        "El commit del driver no pasó `lint`, `largo` antes del sello: lictor.json los marca con "
+        '"driver": false.'
+    )
+    assert QUARANTINED_STUBS_NOTE.startswith("Los stubs de un escenario en cuarentena siguen")

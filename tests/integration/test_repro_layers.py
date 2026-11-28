@@ -55,6 +55,11 @@ ALL_CONTROLS = {
     ),
     "test_phase4_environment": ("test_user_configuration_does_not_decide_a_control",),
     "test_phase5_oracle_cycle": ("test_d12_missing_unit_dir_does_not_block_an_honest_agent",),
+    # G3: the driver's commit passes the lint, which a light project drops (0.24.0).
+    "test_v0_24_0_driver_controls": (
+        "test_a_driver_whose_commit_doesnt_pass_the_lint_is_rejected_and_its_retry_sealed",
+        "test_a_control_the_person_exempts_is_not_passed_by_the_driver_and_the_report_says_so",
+    ),
     "test_phase6_robustness": ("test_e20_non_utf8_output_does_not_crash_the_run",),
     "test_phase7_check": ("test_check_ignores_the_users_configuration",),
     "test_v0_4_0_coverage_reads_unit": (
@@ -215,6 +220,8 @@ TOOLCHAIN = {
         "test_node_a_test_that_asserts_nothing_is_rejected",
         "test_go_a_paused_run_whose_code_is_all_excluded_is_refused_on_resume",
         "test_go_doctor_keeps_its_environment_until_told_otherwise",
+        "test_go_a_test_that_skips_with_a_constant_is_rejected_not_sealed",
+        "test_go_one_rejection_says_both_the_vacuous_test_and_the_vet_warning",
     ),
 }
 

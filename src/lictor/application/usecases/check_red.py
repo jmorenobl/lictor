@@ -473,6 +473,12 @@ class CheckRed:
         )
         return self._stub_rejection(request, registration, proofs, interface), registration
 
+    def _deleted_by_driver(self, request: CheckRedRequest) -> list[str]:
+        """The paths the driver's tree removes from HEAD."""
+        if request.tree is None:
+            return []
+        return [change.path for change in self.vcs.changes(request.tree) if change.is_deleted]
+
     def _stub_impostors(
         self,
         request: CheckRedRequest,
@@ -527,6 +533,9 @@ class CheckRed:
                     evidence_dir=evidence,
                     keep_going=True,
                     error_max_chars=request.error_max_chars,
+                    # A `when_exists` the driver removed fails, as in an attempt: once sealed it
+                    # would be skipped for good (Fable's M1 of the PR).
+                    deleted=self._deleted_by_driver(request),
                     installed_plugins=self.environment.installed_plugins,
                 )
             )
@@ -604,16 +613,18 @@ class CheckRed:
         lines: list[str] = []
         left_unjudged = False
         for sid, outcome in outcomes.items():
-            if outcome in ("sobrevive", "sigue_sin_implementar"):
+            # Every rejected verdict has its line: none may let the driver be sealed silently.
+            if outcome in ("sobrevive", "sigue_sin_implementar", "sin_juzgar"):
                 name = registration.pending_names.get(sid, sid)
                 lines.append(basic_reason(sid, name, outcome, request.oracle.writable))
-            elif outcome == "sin_juzgar":
-                left_unjudged = True
+                left_unjudged = left_unjudged or outcome == "sin_juzgar"
         if left_unjudged:
             lines.extend(ran.unjudged)
         if not lines:
             return None
-        if request.driver_attempts >= request.max_driver_attempts:
+        survived = any(outcome == "sobrevive" for outcome in outcomes.values())
+        if survived and request.driver_attempts >= request.max_driver_attempts:
+            # Only what passes with every constant may be a right test of «there is a result».
             lines.append(BASIC_LIMITS_NOTE)
         output = "\n".join(ran.outputs) if left_unjudged else ""
         return _Rejection("impostor", "\n".join(lines), output=output)
@@ -664,12 +675,13 @@ class CheckRed:
         with verification_tree(self.vcs, rev, request.project_root) as clone:
             for path, _ in _writable_files(clone, request.oracle):
                 try:
-                    text = path.read_text(encoding="utf-8")
+                    # Each line keeps its own end: `\r\n` stays as it was written.
+                    text = path.read_bytes().decode("utf-8")
                 except UnicodeDecodeError:
                     continue
                 changed, count = declared_variant(text, variant)
                 if count:
-                    path.write_text(changed, encoding="utf-8")
+                    path.write_bytes(changed.encode("utf-8"))
             command, output, tampered = self._run_acceptance_suite(
                 request, run_dir / "acceptance.xml", clone
             )
@@ -1451,6 +1463,9 @@ class CheckRed:
                 "stub_impostors": registration.stub_impostors,
                 "stub_unchecked": list(registration.stub_unchecked),
                 "unchecked_why": registration.unchecked_why,
+                "driver_exempt": [
+                    c.id for c in request.controls if c.mode == "block" and not c.checks_driver
+                ],
                 "already_met": list(registration.already_met),
                 "evidence": step_evidence(step_dir, request.project_root),
                 **self._timing(),
