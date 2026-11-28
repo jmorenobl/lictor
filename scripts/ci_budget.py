@@ -39,7 +39,7 @@ from defusedxml import ElementTree
 SLOW_TEST_S = 10.0
 REPRO_CLASSNAME = "tests.integration.repro"
 # Minutes each job may take on its runner, by the start of its name, and the critical path of a
-# pull request without the queue. Keep them with the table of AGENTS.md («What to run and when»).
+# pull request without the queue. Keep them with the budget table of docs/internals/testing.md.
 JOB_BUDGETS_MIN = (
     ("Puertas", 3.0),
     ("Repro", 10.0),
