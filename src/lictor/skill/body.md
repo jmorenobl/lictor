@@ -52,8 +52,9 @@ Lo que funciona:
 **`features/` acumula.** Es el contrato del proyecto, no la lista del run en curso: un escenario ya
 integrado se queda y se vuelve a ejecutar en cada intento (es su no regresión). Retirar un
 comportamiento es quitar su escenario en un commit de la persona: `doctor` lo avisa, y el
-siguiente run quita su test del driver y lo deja escrito. Lánzalo justo después: hasta entonces,
-la aceptación puede no cargar.
+siguiente run quita su test del driver y lo deja escrito (si la persona quitó el test en el mismo
+commit, solo lo deja escrito). Lánzalo justo después: hasta entonces, la aceptación puede no
+cargar.
 
 **Comportamiento o interfaz:**
 

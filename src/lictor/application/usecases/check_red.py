@@ -874,16 +874,24 @@ class CheckRed:
         """Take the fresh driver from what the agent left, unless HEAD already holds it.
 
         That is the case after a crash that left it committed, and when the driver needed no change.
+        With retired scenarios it is committed even unchanged: the person took their tests out
+        with the scenarios, and this commit is what says so (Fable's I5 of the PR). After a crash
+        that left it committed, nothing is retired any more, so nothing is committed twice.
         """
         if not request.driver_fresh or request.tree is None:
             return None
-        if self.vcs.get_tree("HEAD") == request.tree:
+        if self.vcs.get_tree("HEAD") == request.tree and not request.retired_ids:
             return None
         trailers: dict[str, str | list[str]] = {"Lictor-Run": request.run_id}
         if request.retired_ids:
             # Their tests went with this driver: from here on they are no longer pending.
             trailers[RETIRED_TRAILER] = list(request.retired_ids)
-        return self.vcs.commit_tree(request.tree, message=DRIVER_COMMIT_MESSAGE, trailers=trailers)
+        return self.vcs.commit_tree(
+            request.tree,
+            message=DRIVER_COMMIT_MESSAGE,
+            trailers=trailers,
+            empty=bool(request.retired_ids),
+        )
 
     def _check_tree(
         self,

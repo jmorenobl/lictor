@@ -118,6 +118,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
         "driver-tree",
         message="chore(lictor): driver de aceptación",
         trailers={"Lictor-Run": "20261030-140000-abcd"},
+        empty=False,
     )
     vcs.advance_head.assert_called_once_with("driver_commit_sha", expected="parent")
     vcs.export_tree.assert_called_once()
@@ -1438,7 +1439,7 @@ def test_check_red_with_a_fresh_driver_never_commits_a_registration(
 
     for call in vcs.commit_tree.call_args_list:
         assert call.kwargs["message"] == DRIVER_COMMIT_MESSAGE
-        assert "empty" not in call.kwargs
+        assert call.kwargs.get("empty") is False
     for call in vcs.advance_head.call_args_list:
         assert call.args == ("driver",)
     assert _events(event_log, "lictor.scenario.reregistered.v1") == []
@@ -2226,3 +2227,42 @@ def test_one_rejection_joins_what_the_impostor_and_the_controls_found() -> None:
     assert _joined(None, None) is None
     # What the agent can't fix in the same retry stands alone.
     assert _joined(impostor, tampered) == tampered
+
+
+def test_a_driver_unchanged_with_retired_scenarios_is_still_committed_to_record_them(
+    tmp_path: Path,
+) -> None:
+    """Fable's I5 of the PR: the person took the scenario and its test out in one commit; the
+    driver needs no change, and its commit is still what says the retirement is done."""
+    vcs = MagicMock()
+    vcs.get_tree.return_value = "driver-tree"
+    use_case = CheckRed(
+        environment=MagicMock(),
+        readers=all_readers(),
+        vcs=vcs,
+        history=MagicMock(),
+        audit=MagicMock(),
+    )
+    req = CheckRedRequest(
+        tree="driver-tree",
+        project_root=tmp_path,
+        run_id="r1",
+        acceptance_run="acceptance-runner --junitxml {out}",
+        acceptance_timeout_s=600,
+        driver_fresh=True,
+        driver_attempts=1,
+        max_driver_attempts=2,
+        driver_paths=["tests/acceptance/"],
+        all_scenario_ids=[ScenarioId("IVA-001")],
+    )
+
+    assert use_case._create_candidate(replace(req, retired_ids=["A-3"])) is not None
+    vcs.commit_tree.assert_called_once_with(
+        "driver-tree",
+        message=DRIVER_COMMIT_MESSAGE,
+        trailers={"Lictor-Run": "r1", "Lictor-Retired": ["A-3"]},
+        empty=True,
+    )
+    vcs.commit_tree.reset_mock()
+    assert use_case._create_candidate(req) is None
+    vcs.commit_tree.assert_not_called()

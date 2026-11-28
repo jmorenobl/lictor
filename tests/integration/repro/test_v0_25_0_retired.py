@@ -98,3 +98,24 @@ def test_a_retired_scenario_that_comes_back_is_new_and_goes_green_again(
     assert run_lictor(root, agent, new=True) == Outcome(0)
     # Its first green and a new one: the one from before the retirement no longer counted.
     assert green_ids(root).count("IVA-003") == 2
+
+
+def test_a_scenario_retired_with_its_test_by_hand_is_recorded_by_the_next_run(
+    make_project: ProjectFactory,
+) -> None:
+    """Fable's I5 of the PR: the person takes out the scenario and its test in one commit, which
+    keeps the CI green; the driver changes nothing, and `doctor` kept saying it was pending."""
+    root = make_project()
+    require(run_lictor(root, Agent()) == Outcome(0), "el primer run debía acabar en verde")
+    text = (root / FEATURE).read_text(encoding="utf-8")
+    write(root, str(FEATURE), text[: text.index("  @IVA-003")].rstrip() + "\n")
+    write(root, DRIVER_PATH, WITHOUT_THE_THIRD)
+    git(root, "commit", "-qam", "feat: se retira IVA-003 con su test")
+
+    def unchanged(task: AgentTask, _attempt: int = 1) -> None:
+        return None
+
+    assert run_lictor(root, Agent(driver=unchanged), new=True) == Outcome(0)
+    trailers = git(root, "log", "--format=%(trailers:key=Lictor-Retired)", "-3")
+    assert "Lictor-Retired: IVA-003" in trailers
+    assert "se retiraron" not in _doctor(root)
