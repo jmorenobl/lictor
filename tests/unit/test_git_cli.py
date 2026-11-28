@@ -1189,3 +1189,15 @@ def test_removing_a_worktree_whose_directory_is_gone_drops_only_its_entry(
     GitCli(git_repo).remove_worktree(gone)
 
     assert sorted(p.name for p in (git_repo / ".git" / "worktrees").iterdir()) == ["disco"]
+
+
+def test_a_stale_entry_beside_the_live_one_doesnt_unlink_a_sound_worktree(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """P8 of the PR's review: the first entry naming the path decided, stale or not."""
+    worktree = _worktree(git_repo, tmp_path / "wt")
+    stale = git_repo / ".git" / "worktrees" / "aaa-viejo"
+    stale.mkdir()
+    (stale / "gitdir").write_text(f"{worktree / '.git'}\n", encoding="utf-8")
+
+    assert GitCli(git_repo).link_of(worktree) == "linked"

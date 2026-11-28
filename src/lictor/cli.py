@@ -117,6 +117,7 @@ from lictor.domain.run_branches import (
     uncommitted_left_out,
 )
 from lictor.domain.run_standing import (
+    LeftoversKnown,
     WorktreeFacts,
     counts_for_resume,
     foreign_leftovers,
@@ -1406,7 +1407,8 @@ def _retire_linked(run: RunEntry, name: str, main_root: Path, *, archive: bool) 
         checkout_repository(main_root).remove_worktree(worktree)
     except (CandidateError, CleanupError) as err:
         typer.echo(
-            f"Error: {err}. El retiro quedó a medias: resuelve lo que se dice y vuelve a lanzar "
+            f"Error: {str(err).rstrip('.')}. El retiro quedó a medias: resuelve lo que se dice y "
+            "vuelve a lanzar "
             f"`lictor retire {name}`, que lo termina.",
             err=True,
         )
@@ -1430,7 +1432,7 @@ def _retire_forgotten(
     foreign = foreign_leftovers(tree_entries_on_disk(worktree), tracked)
     if foreign:
         typer.echo(
-            f"Error: {leftovers_problem(str(worktree), foreign, marked=tracked is not None)}",
+            f"Error: {leftovers_problem(str(worktree), foreign, _leftovers_known(run, tracked))}",
             err=True,
         )
         return int(ExitCode.PRECONDITION)
@@ -1441,7 +1443,8 @@ def _retire_forgotten(
         if facts.checkpoint == "open":
             typer.echo(
                 f"Aviso: la ejecución de la rama {run.branch} no había terminado, y ya no se puede "
-                "reanudar: git no tiene su worktree. Su bitácora y su evidencia se guardan."
+                "reanudar: git no tiene su worktree. Su bitácora y su evidencia se guardan.",
+                err=True,
             )
         mark_retiring(main_root, run.branch)
     try:
@@ -1451,6 +1454,13 @@ def _retire_forgotten(
         return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
     _forget_in_git(repository, worktree)
     return None
+
+
+def _leftovers_known(run: RunEntry, tracked: set[str] | None) -> LeftoversKnown:
+    """What Lictor knows of what is left: the branch's paths, a mark without its branch, or none."""
+    if tracked is not None:
+        return "branch"
+    return "no_branch" if run.retiring else "unmarked"
 
 
 def _archive(run: RunEntry, name: str, main_root: Path) -> int | None:
@@ -1595,7 +1605,9 @@ def _indexed_runs(project_root: Path) -> list[RunEntry]:
     """The runs a main checkout started whose worktree is still there; none inside a worktree."""
     if checkout_repository(project_root).is_linked_worktree():
         return []
-    return [run for run in read_run_index(project_root) if Path(run.worktree).is_dir()]
+    return [
+        run for run in read_run_index(project_root) if Path(run.worktree).is_dir() or run.retiring
+    ]
 
 
 def _show_indexed_runs(main_root: Path, runs: list[RunEntry], *, as_json: bool) -> None:

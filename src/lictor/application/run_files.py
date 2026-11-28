@@ -220,14 +220,17 @@ def remove_tree(root: Path) -> None:
     Go extracts its module cache read-only, and a directory without write permission can't lose
     its entries: `git worktree remove` failed on it and left the worktree half removed (G7 of
     0.23.2). Write permission goes back only to `root` and the directories inside it, never to its
-    parent, and each path is tried again once; `rmtree` never follows a link out. Raises
+    parent, and each path is tried again once; `rmtree` never follows a link out, and a link in
+    place of `root` is removed, not followed. Raises
     CleanupError, naming the path, when something still can't be removed.
     """
     top = Path(os.path.abspath(root))
+    tried: set[str] = set()
 
     def retry(func: Callable[..., object], path: str, exc: BaseException) -> None:
-        if not isinstance(exc, PermissionError):
+        if not isinstance(exc, PermissionError) or path in tried:
             raise _cleanup_error(top, path, exc) from exc
+        tried.add(path)
         parent = Path(os.path.abspath(path)).parent
         try:
             for directory in (parent, Path(path)):
@@ -235,12 +238,15 @@ def remove_tree(root: Path) -> None:
                     _make_writable(directory)
             if func in (os.rmdir, os.unlink):
                 func(path)
-            else:  # a directory it couldn't open or list: now it can
+            else:  # a directory it couldn't open or list: now it can, or it fails again
                 shutil.rmtree(path, onexc=retry)
         except OSError as again:
             raise _cleanup_error(top, path, again) from again
 
-    if os.path.lexists(top):
+    if os.path.islink(top):
+        # A link in place of the directory is only the link: what it points to isn't Lictor's.
+        os.unlink(top)
+    elif os.path.lexists(top):
         shutil.rmtree(top, onexc=retry)
 
 

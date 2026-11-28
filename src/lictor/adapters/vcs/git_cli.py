@@ -225,18 +225,20 @@ class GitCli(Vcs, Worktrees, TextSearch):
         Each entry's `gitdir` names the worktree's `.git`, relative to the entry with
         `worktree.useRelativePaths`; both sides are resolved, so a path through a link (macOS's
         `/var`) still matches. The entry without a `.git` pointing back is what a moved checkout
-        or a deleted `.git` leaves, and `git worktree repair` fixes.
+        or a deleted `.git` leaves, and `git worktree repair` fixes; a stale entry for the same
+        path beside the live one doesn't make a sound worktree unlinked.
         """
         wanted = (path / ".git").resolve()
         entries = self._common_dir() / "worktrees"
-        for entry in sorted(entries.iterdir()) if entries.is_dir() else ():
-            gitdir = entry / "gitdir"
-            if not gitdir.is_file():
-                continue
-            if (entry / gitdir.read_text(encoding="utf-8").strip()).resolve() != wanted:
-                continue
-            return "linked" if _points_to(path / ".git", entry) else "unlinked"
-        return "orphan"
+        named = [
+            entry
+            for entry in (sorted(entries.iterdir()) if entries.is_dir() else ())
+            if (entry / "gitdir").is_file()
+            and (entry / (entry / "gitdir").read_text(encoding="utf-8").strip()).resolve() == wanted
+        ]
+        if any(_points_to(path / ".git", entry) for entry in named):
+            return "linked"
+        return "unlinked" if named else "orphan"
 
     def delete_branch(self, branch: str) -> None:
         """`-d`, never `-D`: a branch that isn't integrated stays."""

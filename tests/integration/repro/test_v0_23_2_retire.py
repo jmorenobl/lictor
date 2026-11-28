@@ -7,6 +7,7 @@ failed removal leaves isn't fixed (git stops at the first failure of each direct
 order), so these cases build each shape by hand instead of relying on what git leaves.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -254,3 +255,52 @@ def test_a_worktree_git_refuses_to_remove_stays_marked_and_retire_finishes_it_la
     git(root, "worktree", "unlock", str(worktree))
     assert _lictor("retire", "iva", "--cwd", str(root)).exit_code == 0
     assert not worktree.exists()
+
+
+def test_status_json_tells_where_a_run_that_cant_go_on_stands(
+    make_project: ProjectFactory,
+) -> None:
+    """P1 and P6 of the PR's review: a run retired halfway without its directory is listed too."""
+    root, worktree = _finished_run(make_project)
+    _only_lictor_left(root, worktree)
+
+    broken = json.loads(_lictor("status", "--json", "--cwd", str(root)).stdout)["runs"]
+    mark_retiring(root, "lictor/iva")
+    shutil.rmtree(worktree)
+    retiring = _lictor("status", "--cwd", str(root))
+
+    assert [(run["branch"], run["standing"]) for run in broken] == [("lictor/iva", "broken")]
+    assert "git ya no conoce su worktree" in broken[0]["reason"]
+    assert retiring.exit_code == 0
+    assert "Rama lictor/iva" in retiring.output
+    assert "el retiro quedó a medias: termínalo con `lictor retire iva`" in retiring.output
+
+
+def test_a_marked_retire_whose_branch_is_gone_says_so(make_project: ProjectFactory) -> None:
+    """V3: without its branch Lictor can't know what was git's to remove."""
+    root, worktree = _finished_run(make_project)
+    mark_retiring(root, "lictor/iva")
+    _git_forgets(root, worktree)
+    git(root, "branch", "-D", "lictor/iva")
+
+    result = _lictor("retire", "iva", "--cwd", str(root))
+
+    assert result.exit_code == 10, result.output
+    assert "La rama ya no existe" in result.output
+    assert "Lictor no dejó este retiro a medias" not in result.output
+    assert worktree.is_dir()
+
+
+def test_a_worktree_deleted_by_hand_leaves_git_nothing_holding_its_branch(
+    make_project: ProjectFactory,
+) -> None:
+    """C5: git kept its entry, and `git branch -d` refused a branch «used by worktree»."""
+    root, worktree = _finished_run(make_project)
+    git(root, "merge", "-q", "--ff-only", "lictor/iva")
+    shutil.rmtree(worktree)
+
+    result = _lictor("retire", "iva", "--delete-branch", "--cwd", str(root))
+
+    assert result.exit_code == 0, result.output
+    assert str(worktree) not in git(root, "worktree", "list")
+    assert "lictor/iva" not in git(root, "branch", "--list")

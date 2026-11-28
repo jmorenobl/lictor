@@ -31,6 +31,19 @@ Standing = Literal["retiring", "gone", "goes_on", "unlinked", "not_started", "fi
 
 EntryKind = Literal["file", "dir", "link"]
 
+LeftoversKnown = Literal["branch", "no_branch", "unmarked"]
+"""What Lictor knows of what a worktree git forgot still holds: `retire` marked it and the branch
+says what was git's to remove, it marked it but the branch is gone, or it never marked it."""
+
+_WHY: dict[LeftoversKnown, str] = {
+    "branch": "No son de la rama: si son ignorados que git iba a borrar con el worktree, "
+    "bórralos tú.",
+    "no_branch": "La rama ya no existe, así que Lictor no puede saber qué era suyo: revísalos y "
+    "bórralos tú.",
+    "unmarked": "Lictor no dejó este retiro a medias, así que no sabe si son tuyos: revísalos y "
+    "bórralos tú.",
+}
+
 _LISTED = 5
 _LICTOR_DIR = ".lictor"
 _GIT_POINTER = ".git"
@@ -156,17 +169,11 @@ def _branch_paths(tracked: Collection[str]) -> dict[str, bool]:
     return found
 
 
-def leftovers_problem(worktree: str, foreign: Sequence[str], *, marked: bool) -> str:
+def leftovers_problem(worktree: str, foreign: Sequence[str], known: LeftoversKnown) -> str:
     """Why `retire` leaves a worktree git forgot as it is: something in it may be the person's."""
     shown = ", ".join(foreign[:_LISTED])
     more = f" y {len(foreign) - _LISTED} más" if len(foreign) > _LISTED else ""
-    why = (
-        "No son de la rama: si son ignorados que git iba a borrar con el worktree, bórralos tú."
-        if marked
-        else "Lictor no dejó este retiro a medias, así que no sabe si son tuyos: revísalos y "
-        "bórralos tú."
-    )
     return (
-        f"git ya no conoce el worktree {worktree}, y en él queda {shown}{more}. {why} No se ha "
-        "tocado nada: después vuelve a lanzar `lictor retire`."
+        f"git ya no conoce el worktree {worktree}, y en él queda {shown}{more}. {_WHY[known]} No "
+        "se ha tocado nada: después vuelve a lanzar `lictor retire`."
     )

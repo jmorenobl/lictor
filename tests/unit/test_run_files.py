@@ -579,3 +579,35 @@ def test_the_tree_on_disk_lists_links_without_following_them(tmp_path: Path) -> 
         ("a/b/f", "file"),
         ("enlace", "link"),
     ]
+
+
+def test_a_link_in_place_of_the_tree_is_removed_not_followed(tmp_path: Path) -> None:
+    """P3 of the PR's review: `rmtree` refused a link, and `retire` gave 40 for good."""
+    target = tmp_path / "otro"
+    target.mkdir()
+    (target / "guardado").write_text("x", encoding="utf-8")
+    env = tmp_path / "verify-env"
+    env.symlink_to(target, target_is_directory=True)
+
+    remove_tree(env)
+
+    assert not os.path.lexists(env)
+    assert (target / "guardado").is_file()
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_a_directory_permission_cant_fix_fails_once_not_forever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A2: an ACL or SELinux the owner's permissions don't override; it recursed until it broke."""
+    env = tmp_path / "env"
+    (env / "cerrado").mkdir(parents=True)
+    (env / "cerrado" / "f").write_text("x", encoding="utf-8")
+    (env / "cerrado").chmod(0o000)
+    monkeypatch.setattr(os, "chmod", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(CleanupError, match="cerrado"):
+        remove_tree(env)
+
+    monkeypatch.undo()
+    (env / "cerrado").chmod(0o755)

@@ -141,15 +141,24 @@ def test_a_tracked_file_doesnt_make_a_directory_of_the_same_name_the_branchs() -
 
 
 def test_the_leftovers_message_lists_five_and_says_whose_they_may_be() -> None:
-    assert leftovers_problem("/w", [f"f{n}" for n in range(7)], marked=True) == (
+    assert leftovers_problem("/w", [f"f{n}" for n in range(7)], "branch") == (
         "git ya no conoce el worktree /w, y en él queda f0, f1, f2, f3, f4 y 2 más. No son de la "
         "rama: si son ignorados que git iba a borrar con el worktree, bórralos tú. No se ha tocado "
         "nada: después vuelve a lanzar `lictor retire`."
     )
-    assert leftovers_problem("/w", [f"f{n}" for n in range(5)], marked=False) == (
+    assert leftovers_problem("/w", [f"f{n}" for n in range(5)], "unmarked") == (
         "git ya no conoce el worktree /w, y en él queda f0, f1, f2, f3, f4. Lictor no dejó este "
         "retiro a medias, así que no sabe si son tuyos: revísalos y bórralos tú. No se ha tocado "
         "nada: después vuelve a lanzar `lictor retire`."
+    )
+
+
+def test_a_mark_without_its_branch_doesnt_claim_lictor_never_marked_it() -> None:
+    """P4 of the PR's review: the run was marked, but its branch was deleted since."""
+    assert leftovers_problem("/w", ["b"], "no_branch") == (
+        "git ya no conoce el worktree /w, y en él queda b. La rama ya no existe, así que Lictor no "
+        "puede saber qué era suyo: revísalos y bórralos tú. No se ha tocado nada: después vuelve a "
+        "lanzar `lictor retire`."
     )
 
 
