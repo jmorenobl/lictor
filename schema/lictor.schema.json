@@ -210,6 +210,11 @@
           "title": "Driver",
           "type": "boolean"
         },
+        "agent": {
+          "description": "Con false, el agente no recibe una regla para ejecutar la orden de este control: sin ella solo la ejecuta si agent_tools la permite. Con true (lo de siempre), un control que bloquea en cada intento se le concede tal cual (S17).",
+          "title": "Agent",
+          "type": "boolean"
+        },
         "when_exists": {
           "anyOf": [
             {

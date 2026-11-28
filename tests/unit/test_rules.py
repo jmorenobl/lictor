@@ -23,6 +23,7 @@ from lictor.domain.rules import (
     RedOracle,
     ScenarioClass,
     acceptance_failure,
+    acceptance_pending,
     ambiguous_with_sealed_driver,
     anchor_from_older_version,
     anchor_problems,
@@ -1958,8 +1959,6 @@ def test_the_implementer_hears_both_causes_and_the_person_what_to_do() -> None:
 def test_the_acceptance_is_pending_only_before_a_first_run(
     driver_files: bool, any_green: bool, shallow: bool, pending: bool
 ) -> None:
-    from lictor.domain.rules import acceptance_pending
-
     assert (
         acceptance_pending(driver_files=driver_files, any_green=any_green, shallow=shallow)
         is pending

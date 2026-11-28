@@ -924,24 +924,32 @@ def test_a_run_without_a_survey_dir_says_no_level(tmp_path: Path, bin_dir: Path)
     assert preconditions.PROOF_LEVEL not in _by_name(report)
 
 
-def test_what_the_agent_cant_run_is_warned_of(tmp_path: Path, bin_dir: Path) -> None:
+def test_what_every_attempt_runs_is_granted_and_only_an_opt_out_is_warned_of(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """S17: the acceptance and each blocking control are granted to the agent by an exact rule;
+    only a control with `"agent": false` is left out, and `doctor` says so (D10)."""
     parts = _with_contract(tmp_path, bin_dir)
     parts.use_case.proof = _BARE
     parts.use_case.acceptance_run = "gotestsum --junitfile {out} -- ./acceptance/..."
     parts.use_case.agent_tools = ["Bash(go test:*)"]
 
-    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    granted = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
 
-    told = _by_name(report)[preconditions.AGENT_COMMANDS]
+    assert preconditions.AGENT_COMMANDS not in _by_name(granted)
+    parts.use_case.head_controls = [
+        CommandControl(
+            id="lint", level="L1", run="golangci-lint run", report="exit-code", grants_agent=False
+        )
+    ]
+    left_out = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    told = _by_name(left_out)[preconditions.AGENT_COMMANDS]
     assert told.problems == ()
     assert told.warnings == (
-        "agent_tools no deja al agente ejecutar la aceptación (`gotestsum -- ./acceptance/...`): "
-        "no podrá comprobarlo antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) "
-        "que lo permita.",
+        "agent_tools no deja al agente ejecutar el control lint (`golangci-lint run`): no podrá "
+        "comprobarlo antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo "
+        "permita.",
     )
-    parts.use_case.agent_tools = ["Bash(gotestsum:*)"]
-    allowed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
-    assert preconditions.AGENT_COMMANDS not in _by_name(allowed)
 
 
 def test_a_proved_level_with_nothing_missing_passes_saying_it(

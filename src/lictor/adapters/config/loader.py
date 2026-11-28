@@ -401,7 +401,7 @@ def _merge_profile_defaults(
 
 # The fields of a run of its own, which a reader doesn't have (ADR-0008, point 2).
 # Fields of a run: a reader has none, so turning a control into one drops them (F83: agent_fix).
-RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit", "agent_fix")
+RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit", "agent_fix", "agent")
 
 
 def _resolve_controls(

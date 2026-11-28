@@ -53,6 +53,8 @@ class CommandControl:
     limit: int | None = None
     # Whether the driver's commit passes it before the seal (G3); the person may say it can't.
     checks_driver: bool = True
+    # Whether its check is granted to the agent by an exact rule, without `agent_tools` (S17).
+    grants_agent: bool = True
 
     def __post_init__(self) -> None:
         if (self.report == "complexity") != (self.limit is not None):
@@ -122,14 +124,20 @@ def allowed_by(command: str, agent_tools: Sequence[str]) -> bool:
     return False
 
 
-def bash_prefixes(agent_tools: Sequence[str]) -> list[str]:
-    """What the agent's Bash accepts, as it reads it: each rule's prefix or exact command."""
-    found = [
-        tool[len("Bash(") : -1].removesuffix(":*")
+def bash_admits(agent_tools: Sequence[str]) -> str:
+    """What the agent's Bash accepts, as its prompt says it: the prefixes, then the exact ones."""
+    rules = [
+        tool[len("Bash(") : -1]
         for tool in agent_tools
         if tool.startswith("Bash(") and tool.endswith(")")
     ]
-    return list(dict.fromkeys(found))
+    prefixes = list(dict.fromkeys(r.removesuffix(":*") for r in rules if r.endswith(":*")))
+    exact = list(dict.fromkeys(r for r in rules if not r.endswith(":*")))
+    started = ", ".join(f"`{p}`" for p in prefixes) or "ninguna"
+    if not exact:
+        return started
+    listed = ", ".join(f"`{e}`" for e in exact)
+    return f"{started}, y estas órdenes tal cual: {listed}"
 
 
 def counts_for_agent(control: Control, installed: Collection[str]) -> bool:
@@ -235,6 +243,33 @@ def _checks(
     return tuple(dict.fromkeys(c for c in found if c is not None and allowed_by(c, agent_tools)))
 
 
+def granted_tools(
+    controls: Sequence[Control],
+    acceptance_run: str,
+    agent_tools: Sequence[str],
+    installed: Collection[str],
+) -> tuple[str, ...]:
+    """The agent's tools, and an exact rule for each check that blocks every attempt (S17).
+
+    Verification runs those commands in every attempt, so the agent may run them too, exactly as
+    written: without this a control a project added never reached the agent unless it copied the
+    whole `agent_tools` of its profile. A control with `"agent": false` gets no rule.
+    """
+    counting = [c for c in controls if counts_for_agent(c, installed) and _grants(c)]
+    checks = [_check_of(c) for c in counting]
+    checks.append(without_report(acceptance_run) if acceptance_run else None)
+    granted = [
+        f"Bash({check})"
+        for check in dict.fromkeys(c for c in checks if c is not None)
+        if not allowed_by(check, agent_tools)
+    ]
+    return (*agent_tools, *granted)
+
+
+def _grants(control: Control) -> bool:
+    return not isinstance(control, CommandControl) or control.grants_agent
+
+
 def unrunnable_by_agent(
     controls: Sequence[Control],
     acceptance_run: str,
@@ -310,9 +345,8 @@ def agent_command_lines(
     """
     tools = agent_tools_with_files(agent_tools, files_dir)
     runnable = [c for raw in checks if (c := runnable_command(raw, files_dir)) is not None]
-    admitted = ", ".join(f"`{prefix}`" for prefix in bash_prefixes(tools))
     return {
-        "{bash_admite}": admitted or "ninguna",
+        "{bash_admite}": bash_admits(tools),
         "{comprobaciones}": commands_list(list(dict.fromkeys([*runnable, *extra]))),
         "{arreglos}": fixes_text(runnable_fixes(fixes, files_dir)),
     }

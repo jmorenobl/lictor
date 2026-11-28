@@ -35,7 +35,12 @@ from lictor.domain.blind_spots import (
     missing_plugins,
     program_problems,
 )
-from lictor.domain.controls import Control, command_controls, unrunnable_by_agent
+from lictor.domain.controls import (
+    Control,
+    command_controls,
+    granted_tools,
+    unrunnable_by_agent,
+)
 from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.head_controls import (
@@ -490,9 +495,10 @@ class CheckPreconditions:
             else PreconditionCheck(PROOF_LEVEL, detail=name)
         )
         checks = [level]
-        unrunnable = unrunnable_by_agent(
-            self.head_controls, self.acceptance_run, self.agent_tools, installed or ()
-        )
+        found = installed or ()
+        # What every attempt grants the agent by itself counts as runnable (S17 of 0.25.0).
+        tools = granted_tools(self.head_controls, self.acceptance_run, self.agent_tools, found)
+        unrunnable = unrunnable_by_agent(self.head_controls, self.acceptance_run, tools, found)
         if unrunnable:
             checks.append(PreconditionCheck(AGENT_COMMANDS, warnings=unrunnable))
         return checks, proof

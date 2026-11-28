@@ -58,7 +58,13 @@ from lictor.application.usecases.verify_attempt import (
 )
 from lictor.domain.api import UnresolvedBase
 from lictor.domain.blind_spots import blind_spots_record
-from lictor.domain.controls import ACCEPTANCE_ID, AgentCommands, Control, agent_commands
+from lictor.domain.controls import (
+    ACCEPTANCE_ID,
+    AgentCommands,
+    Control,
+    agent_commands,
+    granted_tools,
+)
 from lictor.domain.errors import (
     CandidateError,
     DriverError,
@@ -531,10 +537,18 @@ class _GraphNodes:
 
     def _agent_commands(self) -> AgentCommands:
         """What the agent runs before it ends, from the controls the run verifies (F83)."""
-        installed = self.ctx.environment.installed_plugins if self.ctx.environment else ()
         return agent_commands(
-            self.ctx.controls, self.ctx.acceptance_run, self.ctx.allowed_tools, installed
+            self.ctx.controls, self.ctx.acceptance_run, self._agent_tools(), self._installed()
         )
+
+    def _agent_tools(self) -> tuple[str, ...]:
+        """The agent's tools, with an exact rule for each check every attempt runs (S17)."""
+        return granted_tools(
+            self.ctx.controls, self.ctx.acceptance_run, self.ctx.allowed_tools, self._installed()
+        )
+
+    def _installed(self) -> tuple[str, ...]:
+        return self.ctx.environment.installed_plugins if self.ctx.environment else ()
 
     def build_driver(self, state: GraphState) -> dict[str, Any]:
         green_ids = [sid for sid, st in state.get("status", {}).items() if st == "green"]
@@ -543,7 +557,7 @@ class _GraphNodes:
                 project_root=self.ctx.project_root,
                 run_id=state["run_id"],
                 model=self.ctx.model,
-                allowed_tools=self.ctx.allowed_tools,
+                allowed_tools=self._agent_tools(),
                 max_turns=self.ctx.max_turns,
                 timeout_s=self.ctx.timeout_s,
                 paths_writable=self.ctx.paths_writable,
@@ -693,7 +707,7 @@ class _GraphNodes:
                     scenario=scenario,
                     attempt=state.get("attempt", 0),
                     model=self.ctx.model,
-                    allowed_tools=self.ctx.allowed_tools,
+                    allowed_tools=self._agent_tools(),
                     max_turns=self.ctx.max_turns,
                     timeout_s=self.ctx.timeout_s,
                     paths_writable=self.ctx.paths_writable,
@@ -893,7 +907,7 @@ class _GraphNodes:
                     attempt_slot=self._green_slot(state),
                     refactor_of=refactor_of,
                     model=self.ctx.model,
-                    allowed_tools=self.ctx.allowed_tools,
+                    allowed_tools=self._agent_tools(),
                     max_turns=self.ctx.max_turns,
                     timeout_s=self.ctx.timeout_s,
                     paths_writable=self.ctx.paths_writable,

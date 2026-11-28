@@ -22,7 +22,7 @@ from lictor.adapters.config.models import Profile, domain_controls
 from lictor.application.usecases.init_project import InitProjectResult
 from lictor.bootstrap import proof_defences
 from lictor.cli import describe_init
-from lictor.domain.controls import controls_of_stage
+from lictor.domain.controls import CommandControl, controls_of_stage
 from lictor.domain.errors import ConfigError, ExitCode
 from lictor.domain.proof_level import READ, proof_level
 from lictor.domain.stages import ATTEMPT
@@ -342,3 +342,26 @@ def test_a_control_the_person_exempts_from_the_driver_reaches_the_domain(tmp_pat
     assert checks["lint"] is False
     assert checks["largo"] is False
     assert checks["types"] is True
+
+
+def test_a_control_whose_check_the_person_keeps_from_the_agent_reaches_the_domain(
+    tmp_path: Path,
+) -> None:
+    """S17: `"agent": false` on a control keeps its exact rule from the agent."""
+    added = {"id": "secretos", "level": "L4", "run": "gitleaks dir", "report": "exit-code"}
+    config = load_config(
+        _write(
+            tmp_path,
+            profile="python-uv@0.2",
+            controls=[{"id": "lint", "agent": False}, added],
+        )
+    )
+
+    grants = {
+        control.id: control.grants_agent
+        for control in domain_controls(config)
+        if isinstance(control, CommandControl)
+    }
+
+    assert grants["lint"] is False
+    assert grants["secretos"] is True

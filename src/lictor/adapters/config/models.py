@@ -547,6 +547,11 @@ AGENT_FIX_DESCRIPTION = (
 )
 
 
+AGENT_DESCRIPTION = (
+    "Con false, el agente no recibe una regla para ejecutar la orden de este control: sin ella "
+    "solo la ejecuta si agent_tools la permite. Con true (lo de siempre), un control que bloquea "
+    "en cada intento se le concede tal cual (S17)."
+)
 DRIVER_DESCRIPTION = (
     "Con false, el commit del driver no pasa este control antes del sello (G3): para un control "
     "que un driver correcto no puede pasar, como un umbral propio de cobertura o el largo de línea "
@@ -568,6 +573,7 @@ class CommandControlConfig(BaseModel):
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
     driver: bool = Field(default=True, description=DRIVER_DESCRIPTION)
+    agent: bool = Field(default=True, description=AGENT_DESCRIPTION)
     when_exists: str | None = None
     # A plugin the control needs, as the profile lists them: without it the control is skipped.
     when_plugin: str | None = Field(default=None, min_length=1)
@@ -699,6 +705,7 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
         when_exists=control.when_exists,
         agent_fix=control.agent_fix,
         limit=control.limit,
+        grants_agent=control.agent,
         **_shared(control),
     )
 
@@ -803,6 +810,7 @@ class ControlChange(BaseModel):
     empty_exit_codes: list[int] = _unwritten()
     timeout_s: int = _unwritten(gt=0)
     driver: bool = _unwritten(description=DRIVER_DESCRIPTION)
+    agent: bool = _unwritten(description=AGENT_DESCRIPTION)
     when_exists: str | None = None
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
