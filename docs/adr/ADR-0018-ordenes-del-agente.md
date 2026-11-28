@@ -104,3 +104,12 @@ control garantice que HEAD está formateado reescribe ficheros ajenos y descarta
   - `lint` con otro `run` llega al implementador;
   - con `format` apagado nada pide formatear y el refactor no cae en `L0-alcance`;
   - con `format` en `block`, sí.
+
+## Enmienda de la 0.25.0 (2026-11-28): la orden de cada control que bloquea se concede tal cual
+
+`agent_tools` del proyecto sustituye entero al del perfil, así que un control añadido no llegaba al
+agente sin copiar todas las reglas del perfil (S17). Ahora la orden de comprobación de cada control
+que bloquea en cada intento, y la de la aceptación, se conceden al agente con una regla exacta
+(`granted_tools`), salvo con `"agent": false` en el control. La orden del agente dice aparte las
+órdenes exactas («y estas órdenes tal cual»), y la `agent_run` de un control concedido no necesita
+regla en `agent_tools`.

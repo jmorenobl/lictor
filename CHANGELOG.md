@@ -7,6 +7,53 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.25.0] - 2026-11-28
+
+Lo que salió de usar Lictor en un proyecto Django real.
+
+### Añadido
+
+- **Un escenario en verde que sale de `features/` se retira, y el run siguiente lo dice.**
+  `doctor` lo avisa; el driver nuevo lo oye y quita su test; su commit lo registra en
+  `Lictor-Retired`, y `report.md` lo lista en «Escenarios retirados». `features/` es el contrato
+  acumulado: lo ya integrado se queda y se vuelve a ejecutar en cada intento.
+- **`lictor_with_src`**, un lanzador del perfil `python-uv` para una herramienta que importa el
+  proyecto fuera de pytest (import-linter): añade `src` al final del camino de importación.
+- **`"agent": false`** en un control de `lictor.json`, para no concederle al agente su orden.
+- **`doctor` avisa de un plugin de pytest instalado que cambia el orden de los tests**
+  (`pytest-randomly`): carga en todas las órdenes de pytest de la verificación.
+
+### Cambiado
+
+- **La orden de cada control que bloquea en cada intento se le concede al agente tal cual**, con
+  una regla exacta: un control añadido ya no necesita copiar el `agent_tools` del perfil
+  (ADR-0018, enmienda). La orden del agente dice aparte las órdenes exactas.
+- **`.git/config` se vigila por claves** (ADR-0022): lo que un editor escribe bajo una rama, y las
+  secciones de otras ramas, no es manipulación ni se deshace; lo demás se nombra por su clave, y
+  la misma regla vale para el ancla de reanudación, que pasa al formato 3.
+- **`lint` y `format` de `python-uv` miran todo el proyecto**, según la configuración de ruff, no
+  solo `src`. `types` sigue en `src`.
+- **La evidencia de un run se copia al checkout en cada salida** (ADR-0005, enmienda), y `retire`
+  de un worktree que ya no existe dice dónde está o que se perdió.
+- **El resumen de `report.md` reparte las llamadas por todos los papeles**, la implementación
+  incluida: el reparto suma el total.
+
+### Corregido
+
+- **`lictor check` ya no falla la aceptación antes del primer run**: sin ningún fichero en
+  `paths.driver` ni ningún verde en git, dice «sin driver todavía». En un clon superficial la
+  ejecuta como antes y dice por qué.
+- **Un clon superficial se puede verificar**: el clon limpio no traía el commit
+  (`--update-shallow`), y `check`, `doctor` y un run acababan en un error interno en la CI.
+- **Un mínimo de cobertura no bloquea un proyecto que aún no tiene código**: en HEAD y en `check`
+  es un aviso; en un intento sigue fallando.
+- **Un corte de pytest-timeout no cuenta como rojo válido en la aceptación**: Lictor la marca con
+  `LICTOR_ACCEPTANCE` y el plugin del perfil deja sin temporizador sus tests; la corta Lictor.
+- **`doctor` rechaza un escenario o unos antecedentes que empiezan por «Y» o «Pero»**, que
+  pytest-bdd no carga.
+- **Las instrucciones del driver de `python-uv` piden patrones con tipo**, que no crucen comillas:
+  un `{x}` sin tipo casaba también con un paso más largo.
+
 ## [0.24.0] - 2026-11-28
 
 ### Añadido
@@ -1379,6 +1426,7 @@ con el CLI real de Claude Code (#8).
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
 [Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.2...HEAD
+[0.25.0]: https://github.com/jmorenobl/lictor/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/jmorenobl/lictor/compare/v0.23.2...v0.24.0
 [0.23.2]: https://github.com/jmorenobl/lictor/compare/v0.23.1...v0.23.2
 [0.23.1]: https://github.com/jmorenobl/lictor/compare/v0.23.0...v0.23.1
