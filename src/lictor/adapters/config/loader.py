@@ -9,6 +9,7 @@ from typing import Final
 
 from pydantic import ValidationError
 
+from lictor.adapters.config.json_text import set_member
 from lictor.adapters.config.models import (
     AcceptanceConfig,
     BackendConfig,
@@ -41,7 +42,7 @@ from lictor.adapters.config.models import (
 from lictor.application.ports import ConfigInitializer, ProfileInitConfig
 from lictor.application.verification_env import VerificationEnvSpec
 from lictor.domain.controls import complexity_limit_message
-from lictor.domain.errors import ConfigError
+from lictor.domain.errors import ConfigError, InternalLictorError
 from lictor.domain.interface_proof import InterfaceImpostor
 from lictor.domain.refactor_scope import code_paths_problem
 from lictor.domain.rules import Impostors, MapLink, StubConstant
@@ -922,19 +923,24 @@ def rule_files(config: LictorConfig, profiles_dir: Path | None = None) -> tuple[
 
 
 def write_reviewed_conventions(project_dir: Path, reviewed: Mapping[str, str]) -> None:
-    """Write `conventions.reviewed` into `lictor.json` and leave every other key as it is.
+    """Write `conventions.reviewed` into `lictor.json` and leave every other byte as it is.
 
-    It is written in `init`'s form; the file is replaced at once, so a kill leaves one or the
-    other. The file must load first: a broken one is the person's to fix, not to overwrite.
+    Only that value changes, or that member is added after the last one: the person's layout
+    stays (`set_member`). The file is replaced at once, so a kill leaves one or the other. The
+    file must load first: a broken one is the person's to fix, not to overwrite.
     """
     target = project_dir / CONFIG_FILENAME
     load_config(target)
-    raw = json.loads(target.read_text(encoding="utf-8"))
+    text = target.read_text(encoding="utf-8")
+    raw = json.loads(text)
     conventions = raw.get("conventions")
     written = dict(conventions) if isinstance(conventions, dict) else {}
     written["reviewed"] = dict(sorted(reviewed.items()))
     raw["conventions"] = written
-    payload = json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
+    payload = set_member(text, ("conventions", "reviewed"), written["reviewed"])
+    if json.loads(payload) != raw:
+        msg = f"Escribir conventions.reviewed en '{target}' cambiaría algo más: no se ha tocado"
+        raise InternalLictorError(msg)
     partial = target.with_name(f".{CONFIG_FILENAME}.tmp")
     try:
         partial.write_text(payload, encoding="utf-8")
