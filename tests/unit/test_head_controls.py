@@ -25,7 +25,12 @@ def test_a_control_failing_on_head_is_named_with_its_error_and_where_its_output_
 
 
 def test_a_tampering_on_head_names_what_changed() -> None:
-    assert "(seal.json, journal.jsonl)" in head_tampered(["seal.json", "journal.jsonl"])
+    assert head_tampered(["seal.json", "journal.jsonl"]) == (
+        "Los controles cambiaron el estado de Lictor al ejecutarse en HEAD "
+        "(seal.json, journal.jsonl); se ha restaurado. Lo escribió un control o, mientras corrían, "
+        "otro programa abierto sobre el repositorio (un editor con git, otra terminal): vuelve a "
+        "lanzar, y si se repite, es del proyecto."
+    )
 
 
 def _command(control_id: str, mode: str = "block") -> CommandControl:
@@ -86,3 +91,4 @@ def test_a_minimum_with_no_code_yet_is_told_not_failed() -> None:
         "'coverage' no midió nada: el proyecto aún no tiene código que medir. No bloquea hasta "
         "que lo haya; desde el primer verde tendrá que llegar a su mínimo."
     )
+    assert not_measured_yet(["a", "b"]).startswith("'a', 'b' no midió nada")

@@ -112,6 +112,7 @@ def test_a_first_step_that_follows_nothing_is_refused_in_a_scenario_and_a_backgr
 
     problems = spec_problems([feature])
 
+    assert {p.file for p in problems} == {"features/a.feature"}
     assert [(p.line, p.message, p.fix, p.blocking) for p in problems] == [
         (
             2,

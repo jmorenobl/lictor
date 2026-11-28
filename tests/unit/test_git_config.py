@@ -91,6 +91,9 @@ def test_a_changed_config_names_its_keys() -> None:
     assert config_change_text(["core.hookspath"]) == ".git/config (core.hookspath)"
     assert config_change_text([]) == ".git/config"
     assert config_change_text(["a", "b", "c", "d", "e"]) == ".git/config (a, b, c, d, e)"
+    assert (
+        config_change_text(["a", "b", "c", "d", "e", "f"]) == ".git/config (a, b, c, d, e y 1 más)"
+    )
     assert config_change_text(["a", "b", "c", "d", "e", "f", "g"]) == (
         ".git/config (a, b, c, d, e y 2 más)"
     )

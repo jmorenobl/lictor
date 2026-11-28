@@ -1975,6 +1975,7 @@ def test_what_is_said_of_a_retired_scenario() -> None:
         "la aceptación no carga. Si no querías retirarlos, devuélvelos a features/."
     )
     assert retired_rule([]) == ""
+    assert retired_rule(["A-1", "B-2"]).startswith("- Los escenarios A-1, B-2 se retiraron")
     assert retired_rule(["A-1"]) == (
         "- Los escenarios A-1 se retiraron de la especificación: quita del driver sus tests y lo "
         "que solo usaban ellos. Ningún otro test cambia por eso."

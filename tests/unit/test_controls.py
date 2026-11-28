@@ -694,15 +694,25 @@ def test_each_check_every_attempt_runs_is_granted_to_the_agent_exactly() -> None
         CommandControl(
             id="medida", level="L1", run="radon cc src", report="exit-code", mode="measure"
         ),
+        CommandControl(
+            id="con-plugin",
+            level="L2",
+            run="uv run pytest -p x",
+            report="exit-code",
+            when_plugin="x.plugin",
+        ),
     ]
     tools = ("Bash(uv run ruff:*)",)
 
-    granted = granted_tools(controls, "uv run pytest tests/acceptance --junitxml {out}", tools, ())
+    granted = granted_tools(
+        controls, "uv run pytest tests/acceptance --junitxml {out}", tools, ("x.plugin",)
+    )
 
     assert granted == (
         "Bash(uv run ruff:*)",
         "Bash(uv run lint-imports --config x)",
         "Bash(uv run pytest tests/unit)",
+        "Bash(uv run pytest -p x)",
         "Bash(uv run pytest tests/acceptance)",
     )
     assert granted_tools([], "", tools, ()) == tools
