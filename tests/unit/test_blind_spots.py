@@ -14,6 +14,7 @@ from lictor.domain.blind_spots import (
     configuration_problems,
     metadata_facts,
     missing_plugins,
+    noted_plugins,
     program_problems,
 )
 from lictor.domain.reports import InvalidReport
@@ -960,3 +961,15 @@ def test_entry_points_left_to_the_backend_warn_that_they_are_missing() -> None:
 
 def test_without_a_survey_of_metadata_nothing_is_told() -> None:
     assert metadata_facts(None) == (None, ())
+
+
+def test_a_plugin_that_changes_a_run_of_the_tests_is_named_only_when_it_loads() -> None:
+    """S11: every installed pytest plugin acts in every command; some change the order."""
+    noted = {"pytest_randomly": "baraja el orden", "random_order.plugin": "baraja"}
+
+    assert noted_plugins(noted, ("pytest_bdd.plugin", "pytest_randomly")) == (
+        "El plugin pytest_randomly está instalado y carga en cada orden de pytest de la "
+        "verificación: baraja el orden. Si no lo quieres ahí, ponlo en un grupo de dependencias "
+        "que no se instale por defecto.",
+    )
+    assert noted_plugins(noted, ()) == ()

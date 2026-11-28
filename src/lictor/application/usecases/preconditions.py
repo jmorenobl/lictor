@@ -33,6 +33,7 @@ from lictor.domain.blind_spots import (
     configuration_problems,
     metadata_facts,
     missing_plugins,
+    noted_plugins,
     program_problems,
 )
 from lictor.domain.controls import (
@@ -201,6 +202,7 @@ class CheckPreconditions:
     spec_source: SpecSource | None = None
     # The start contract (ADR-0015): what the acceptance needs, and how to read what is seen.
     needs_plugins: Mapping[str, str] = field(default_factory=dict)
+    plugins_noted: Mapping[str, str] = field(default_factory=dict)
     survey: StartSurvey | None = None
     start_rules: StartRules | None = None
     # The controls a run verifies with, and how to read them: those that block must pass on HEAD
@@ -643,8 +645,12 @@ class CheckPreconditions:
         programs, later = program_problems(surveyed, self.start_rules.check_only)
         programs += configuration_problems(surveyed)
         detail, metadata = metadata_facts(surveyed.metadata)
+        noted = noted_plugins(self.plugins_noted, environment.installed_plugins)
         dependencies = PreconditionCheck(
-            DEPENDENCIES, (*plugins, *programs), warnings=(*later, *metadata), detail=detail
+            DEPENDENCIES,
+            (*plugins, *programs),
+            warnings=(*later, *metadata, *noted),
+            detail=detail,
         )
         spots = blind_spots(surveyed, self.start_rules)
         if spots.skipped is not None:

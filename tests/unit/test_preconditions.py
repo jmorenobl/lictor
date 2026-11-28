@@ -1007,3 +1007,17 @@ def test_without_code_in_head_the_exclusion_is_left_to_the_first_refactor(
     [check] = [c for c in report.checks if c.name == "Rutas de código"]
     assert check.skipped == preconditions.NO_CODE_YET
     assert report.problems == []
+
+
+def test_doctor_warns_of_an_installed_plugin_that_changes_the_order_of_the_tests(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """S11: `pytest-randomly` shuffled every command of the verification just by being there."""
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.environment.installed_plugins = ("bdd.plugin", "pytest_randomly")
+    parts.use_case.plugins_noted = {"pytest_randomly": "baraja el orden"}
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    told = _by_name(report)[preconditions.DEPENDENCIES]
+    assert any(w.startswith("El plugin pytest_randomly está instalado") for w in told.warnings)

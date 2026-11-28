@@ -366,6 +366,9 @@ class ProfileVerification(BaseModel):
     plugin_variable: str = ""
     plugins: list[str] = Field(default_factory=list)
     plugins_command: str = ""
+    # Plugins that change what a run of the tests does just by being installed (their order, a
+    # random seed): `doctor` names those the environment loads, with why (S11 of 0.25.0).
+    plugins_noted: dict[str, str] = Field(default_factory=dict)
     files_dir_command: str = ""
     files: list[str] = Field(default_factory=list)
 
