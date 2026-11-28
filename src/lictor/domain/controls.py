@@ -268,13 +268,18 @@ def granted_tools(
     granted = [
         f"Bash({check})"
         for check in dict.fromkeys(c for c in checks if c is not None)
-        if not allowed_by(check, agent_tools) and not _WILDCARDS & set(check)
+        if _to_grant(check, agent_tools)
     ]
     return (*agent_tools, *granted)
 
 
 # What a rule of the agent's tools reads as a wildcard: a command with them isn't granted as is.
 _WILDCARDS: Final = frozenset("*?[")
+
+
+def _to_grant(check: str, agent_tools: Sequence[str]) -> bool:
+    """Whether a check needs a rule of its own, and an exact one can be written for it."""
+    return not allowed_by(check, agent_tools) and not _WILDCARDS & set(check)
 
 
 def _grants(control: Control) -> bool:

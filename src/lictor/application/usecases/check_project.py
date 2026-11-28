@@ -228,7 +228,7 @@ class CheckProject:
             added=selection.added,
             lent=lent,
             failures=tuple(failures),
-            not_measured=_not_measured(entries) if req.unstarted else (),
+            not_measured=_not_measured(entries, req.unstarted),
         )
         if first_failure is None:
             return done
@@ -356,6 +356,9 @@ def _blocking(outcome: Consequence) -> Block | None:
             assert_never(outcome)
 
 
-def _not_measured(entries: Sequence[ControlEntry]) -> tuple[str, ...]:
-    """The coverage controls whose report measured nothing: no code yet (S18)."""
+def _not_measured(entries: Sequence[ControlEntry], unstarted: bool) -> tuple[str, ...]:
+    """The coverage controls whose report measured nothing: no code yet (S18); none once a
+    scenario was green."""
+    if not unstarted:
+        return ()
     return tuple(entry.control.id for entry in entries if nothing_to_measure(entry))

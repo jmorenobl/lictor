@@ -79,6 +79,14 @@ def test_what_is_watched_and_what_changed_leave_the_inert_out() -> None:
     )
     # Fable's M2 of the PR: moving a section changes no key, so nothing to hash differently.
     assert watched(tuple(reversed(after)), "lictor/iva") == watched(after, "lictor/iva")
+    # By key only: a key's values keep their order, whatever they are.
+    repeated = (("remote.o.fetch", "b"), ("core.x", None), ("remote.o.fetch", "a"), ("core.x", ""))
+    assert watched(repeated, "lictor/iva") == (
+        ("core.x", None),
+        ("core.x", ""),
+        ("remote.o.fetch", "b"),
+        ("remote.o.fetch", "a"),
+    )
     assert changed_keys(before, after, "lictor/iva") == (
         "branch.lictor/iva.remote",
         "core.hookspath",
