@@ -1274,3 +1274,20 @@ def test_a_config_git_can_t_read_counts_as_changed_whole(git_repo: Path) -> None
 
     assert cli.restore(pin) == [".git/config"]
     assert "[roto" not in config.read_text(encoding="utf-8")
+
+
+def test_a_shallow_clone_exports_its_commit(git_repo: Path, tmp_path: Path) -> None:
+    """S20b: a CI clones without history; the export fetched nothing and the checkout failed."""
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "otro"], cwd=git_repo, check=True)
+    shallow = tmp_path / "superficial"
+    subprocess.run(
+        [GIT_BIN, "clone", "-q", "--depth", "1", git_repo.resolve().as_uri(), str(shallow)],
+        check=True,
+    )
+    cli = GitCli(repo_dir=shallow)
+
+    cli.export_tree("HEAD", tmp_path / "exportado")
+
+    assert cli.is_shallow()
+    assert not GitCli(repo_dir=git_repo).is_shallow()
+    assert (tmp_path / "exportado" / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"

@@ -252,6 +252,10 @@ class Vcs(Protocol):
         """Tell whether HEAD names a commit: a repository just created has none."""
         ...
 
+    def is_shallow(self) -> bool:
+        """Tell whether the clone lacks part of its history: a shallow one, as a CI makes."""
+        ...
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         ...

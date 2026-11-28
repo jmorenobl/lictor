@@ -1244,3 +1244,24 @@ def registration_problems(
 def minimum_text(minimum: float) -> str:
     """A declared minimum score as a person wrote it, with a decimal comma: «95», «92,5»."""
     return f"{minimum:g}".replace(".", ",")
+
+
+# What `lictor check` says of an acceptance it doesn't run because nothing has a driver yet (S20).
+NO_DRIVER_YET = (
+    "sin driver todavía: no hay ningún fichero en paths.driver ni ningún escenario en verde; la "
+    "escribe el primer `lictor run`"
+)
+SHALLOW_HISTORY = (
+    "Este clon no tiene la historia entera (clon superficial): sin ella no se sabe si algún "
+    "escenario estuvo en verde, y una aceptación sin driver no se da por pendiente. En la CI, "
+    "clona con la historia completa (`fetch-depth: 0`)."
+)
+
+
+def acceptance_pending(*, driver_files: bool, any_green: bool, shallow: bool) -> bool:
+    """Whether the acceptance has nothing to run yet: a project before its first run (S20).
+
+    Only with the whole history: in a shallow clone no green is seen, and a driver deleted after
+    one would pass for a project that hasn't started.
+    """
+    return not driver_files and not any_green and not shallow

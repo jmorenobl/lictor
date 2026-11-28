@@ -572,6 +572,7 @@ def check(
                     keep_going=keep_going,
                     error_max_chars=config.limits.error_max_chars,
                     api_base=base,
+                    driver_paths=config.paths.driver,
                 )
             )
 
@@ -579,6 +580,10 @@ def check(
         only_here = {c.id for c in runtime.graph_context.check_controls}
         for line in _check_output(res.check, only_here):
             typer.echo(line)
+        if res.acceptance_pending:
+            typer.echo(f"- acceptance: {res.acceptance_pending}")
+        if res.acceptance_note:
+            typer.echo(f"  {res.acceptance_note}")
         for line in _unexecuted_output(res.unexecuted):
             typer.echo(line)
         if res.api_uncompared:

@@ -25,7 +25,7 @@ from lictor.domain.api import ApiBase, UnresolvedBase
 from lictor.domain.controls import Control
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
-from lictor.domain.rules import NO_COMMITS
+from lictor.domain.rules import NO_COMMITS, NO_DRIVER_YET, SHALLOW_HISTORY, acceptance_pending
 from lictor.domain.unexecuted import UnexecutedChanges
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
@@ -45,6 +45,8 @@ class CheckWorkingTreeRequest:
     rev: str | None = None
     # A commit to compare the public API with (ADR-0017); without one it only gives facts.
     api_base: str | None = None
+    # Where the driver lives: without a file there nor a green in git, the acceptance waits (S20).
+    driver_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,10 @@ class CheckWorkingTreeResult:
     unexecuted: UnexecutedChanges | str | None = None
     # With a base and no API control, the API wasn't compared with it: said, not hidden (M4).
     api_uncompared: bool = False
+    # Why the acceptance didn't run although it was chosen: the project has no driver yet (S20).
+    acceptance_pending: str | None = None
+    # Why a missing driver can't be told from a project that hasn't started: a shallow clone.
+    acceptance_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,11 +107,12 @@ class CheckWorkingTree:
             check = CheckProject(EnvironmentRunner(environment), self.readers)
             api_base = self._api_base(base, environment)
             with verification_tree(self.vcs, subject.rev, self.project_root) as tree:
+                pending, note = self._acceptance_state(req, tree)
                 result = check.execute(
                     CheckProjectRequest(
                         project_root=self.project_root,
                         controls=req.controls,
-                        acceptance=req.acceptance,
+                        acceptance=None if pending else req.acceptance,
                         levels=req.levels,
                         error_max_chars=req.error_max_chars,
                         tree=tree,
@@ -121,8 +128,32 @@ class CheckWorkingTree:
             tampered = environment.ensure(req.run_id)
         uncompared = base is not None and self.api is None
         return CheckWorkingTreeResult(
-            subject.description, result, tampered, unexecuted, api_uncompared=uncompared
+            subject.description,
+            result,
+            tampered,
+            unexecuted,
+            api_uncompared=uncompared,
+            acceptance_pending=NO_DRIVER_YET if pending else None,
+            acceptance_note=note,
         )
+
+    def _acceptance_state(
+        self, req: CheckWorkingTreeRequest, tree: Path
+    ) -> tuple[bool, str | None]:
+        """Whether nothing has a driver yet (no file under `paths.driver`, no green in git), and
+        why that can't be told when the clone is shallow."""
+        if req.acceptance is None or not req.driver_paths:
+            return False, None
+        driver_files = any(
+            path.is_file() for root in req.driver_paths for path in (tree / root).rglob("*")
+        )
+        shallow = self.vcs.is_shallow()
+        pending = acceptance_pending(
+            driver_files=driver_files,
+            any_green=bool(self.vcs.trailer_commits("Scenario")),
+            shallow=shallow,
+        )
+        return pending, SHALLOW_HISTORY if shallow and not driver_files else None
 
     def _unexecuted(
         self, environment: VerificationCommands, base: str | None, rev: str

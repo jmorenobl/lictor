@@ -461,8 +461,17 @@ class GitCli(Vcs, Worktrees, TextSearch):
         dest.mkdir(parents=True)
         clone = GitCli(dest)
         clone._run_git(["init", "-q", "--template="], env=_NO_USER_CONFIG)
+        # From a shallow clone (a CI's) git fetches nothing without `--update-shallow`, and says
+        # nothing either: the checkout below then failed with an internal error (S20b of 0.25.0).
         clone._run_git(
-            ["fetch", "-q", "--no-tags", str(self.repo_dir.resolve()), _EXPORT_REF],
+            [
+                "fetch",
+                "-q",
+                "--no-tags",
+                "--update-shallow",
+                str(self.repo_dir.resolve()),
+                _EXPORT_REF,
+            ],
             env=_NO_USER_CONFIG,
         )
         clone._run_git(["checkout", "-q", "--detach", "FETCH_HEAD"], env=_NO_USER_CONFIG)
@@ -610,6 +619,10 @@ class GitCli(Vcs, Worktrees, TextSearch):
         """git exits 1 with nothing to say when two commits share no ancestor it has."""
         found = self._run_git(["merge-base", "--end-of-options", a, b], check=False)
         return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
+
+    def is_shallow(self) -> bool:
+        """A shallow clone keeps the list of its cut commits in `shallow`, beside `config`."""
+        return (self._common_dir() / "shallow").is_file()
 
     def has_commits(self) -> bool:
         """Ask for HEAD's commit quietly: without one, git fails and says nothing."""

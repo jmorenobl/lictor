@@ -1942,3 +1942,25 @@ def test_the_implementer_hears_both_causes_and_the_person_what_to_do() -> None:
         "como otro caso con el mismo ID. Recorre los casos dentro de un solo test, y que el "
         "mensaje de cada fallo diga cuál falló."
     )
+
+
+@pytest.mark.parametrize(
+    ("driver_files", "any_green", "shallow", "pending"),
+    [
+        (False, False, False, True),
+        # A driver, or a scenario once green, is a project that started: its acceptance runs.
+        (True, False, False, False),
+        (False, True, False, False),
+        # Without the whole history no green can be seen: nothing passes for not started.
+        (False, False, True, False),
+    ],
+)
+def test_the_acceptance_is_pending_only_before_a_first_run(
+    driver_files: bool, any_green: bool, shallow: bool, pending: bool
+) -> None:
+    from lictor.domain.rules import acceptance_pending
+
+    assert (
+        acceptance_pending(driver_files=driver_files, any_green=any_green, shallow=shallow)
+        is pending
+    )
