@@ -17,20 +17,24 @@ from langgraph.types import Command
 from lictor import __version__
 from lictor.application.anchor import observe_anchor
 from lictor.application.events import new_event
-from lictor.application.ports import Clock
+from lictor.application.ports import Clock, Worktrees
 from lictor.application.run_files import (
     DOCTOR_DIR,
     RETIRED_DIR,
+    VERIFY_ENV_DIR,
     archive_run_evidence,
     aside_dir,
     exclusive_run,
     holding_project,
     prune_runs,
+    remove_tree,
     sweep_scratch,
+    tree_entries_on_disk,
 )
 from lictor.application.run_index import (
     RunEntry,
     add_to_run_index,
+    mark_retiring,
     read_run_index,
     remove_from_run_index,
     run_worktree,
@@ -60,6 +64,7 @@ from lictor.bootstrap import (
     project_conventions,
     record_reviewed_conventions,
     retired_runs_kept,
+    run_facts,
     skill_content,
     unconfigured_preconditions,
 )
@@ -69,6 +74,7 @@ from lictor.domain.controls import ACCEPTANCE_ID, CommandControl, ReaderControl
 from lictor.domain.duplication import describe_duplication
 from lictor.domain.errors import (
     CandidateError,
+    CleanupError,
     ConfigError,
     ExitCode,
     LictorError,
@@ -104,10 +110,21 @@ from lictor.domain.rules import (
     retired_name,
 )
 from lictor.domain.run_branches import (
+    RUN_BRANCH_PREFIX,
     branch_name_problem,
     resume_choice,
     run_branch,
     uncommitted_left_out,
+)
+from lictor.domain.run_standing import (
+    LeftoversKnown,
+    WorktreeFacts,
+    counts_for_resume,
+    foreign_leftovers,
+    leftovers_problem,
+    run_standing,
+    standing_note,
+    unlinked_note,
 )
 from lictor.domain.unexecuted import UNEXECUTED_TITLE, UnexecutedChanges, unexecuted_lines
 from lictor.domain.verdicts import Passed
@@ -1053,15 +1070,68 @@ def _run_target(main_root: Path, *, force_new: bool, branch: str | None) -> RunE
             return int(ExitCode.PRECONDITION)
         wanted = run_branch(branch, "")
     with exclusive_run(main_root, "lictor run"):
-        if not force_new:
-            pending = {run.branch: run for run in read_run_index(main_root) if _can_go_on(run)}
-            chosen, problem = resume_choice(list(pending), wanted)
-            if problem is not None:
-                typer.echo(f"Error: {problem}", err=True)
-                return int(ExitCode.PRECONDITION)
-            if chosen is not None:
-                return pending[chosen]
-        return _new_run_target(main_root, wanted)
+        runs = read_run_index(main_root)
+        facts = {run.branch: run_facts(main_root, run, probe_lock=True) for run in runs}
+        refused = _unusable_runs(main_root, runs, facts, wanted)
+        if refused is not None:
+            return refused
+        resumed = None if force_new else _resumed_run(main_root, runs, facts, wanted)
+        return _new_run_target(main_root, wanted) if resumed is None else resumed
+
+
+def _resumed_run(
+    main_root: Path, runs: Sequence[RunEntry], facts: dict[str, WorktreeFacts], wanted: str | None
+) -> RunEntry | int | None:
+    """The run of the index to resume, an exit code if none may be chosen, or None for a new one.
+
+    An unlinked one counts so that choosing it refuses: it must not start another run beside it.
+    """
+    pending = {run.branch: run for run in runs if counts_for_resume(facts[run.branch])}
+    chosen, problem = resume_choice(list(pending), wanted)
+    if problem is not None:
+        typer.echo(f"Error: {problem}", err=True)
+        return int(ExitCode.PRECONDITION)
+    if chosen is None:
+        return None
+    note = _standing_note(main_root, pending[chosen], facts[chosen])
+    if note is not None:
+        typer.echo(f"Error: {note}", err=True)
+        return int(ExitCode.PRECONDITION)
+    return pending[chosen]
+
+
+def _unusable_runs(
+    main_root: Path,
+    runs: Sequence[RunEntry],
+    facts: dict[str, WorktreeFacts],
+    wanted: str | None,
+) -> int | None:
+    """Refuse the run `--branch` names when it can't go on, and warn of the others that can't.
+
+    A run broken or retired halfway is never resumed: before 0.23.2 it counted as one that goes on,
+    and `retire` asked for a `lictor run` that would have spent (G8). An unlinked one is told when
+    it is chosen, since it still counts for the choice.
+    """
+    for run in runs:
+        note = _standing_note(main_root, run, facts[run.branch])
+        if note is None:
+            continue
+        if run.branch == wanted:
+            typer.echo(f"Error: {note}", err=True)
+            return int(ExitCode.PRECONDITION)
+        if run_standing(facts[run.branch]) != "unlinked":
+            typer.echo(f"Aviso: {note}", err=True)
+    return None
+
+
+def _standing_note(main_root: Path, run: RunEntry, facts: WorktreeFacts) -> str | None:
+    return standing_note(
+        run_standing(facts),
+        facts,
+        name=run.branch.removeprefix(RUN_BRANCH_PREFIX),
+        worktree=run.worktree,
+        checkout=str(main_root),
+    )
 
 
 def _new_run_target(main_root: Path, wanted: str | None) -> RunEntry | int:
@@ -1092,23 +1162,6 @@ def _new_run_target(main_root: Path, wanted: str | None) -> RunEntry | int:
     add_to_run_index(main_root, entry)
     repository.add_worktree(worktree, branch)
     return entry
-
-
-def _can_go_on(entry: RunEntry) -> bool:
-    """A run of the index goes on if its worktree is there and its checkpoint hasn't finished.
-
-    One that never got to start counts too: its worktree exists and nothing ran in it yet.
-    """
-    worktree = Path(entry.worktree)
-    if not worktree.is_dir():
-        return False
-    try:
-        snapshot = _read_only_state(worktree, entry.run_id)
-    except LictorError:
-        return True  # the resume says what is wrong, with the run's own checks
-    if snapshot is None or not snapshot.values:
-        return True
-    return not (snapshot.values.get("exit_code") is not None and not snapshot.next)
 
 
 def _read_only_state(project_root: Path, run_id: str) -> Any:
@@ -1297,49 +1350,150 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
     """Take the worktree away, holding it, unless something in it could still be lost.
 
     Its journal, report and evidence go to the checkout first: without them a retired run left
-    nothing to measure or explain (F56). If they can't be copied, nothing is removed.
+    nothing to measure or explain (F56). If they can't be copied, nothing is removed. Before the
+    first removal the index records that the run is being retired, so whatever a failure leaves,
+    the next `retire` knows it found the tree clean and finishes the job (G8 of 0.23.2).
     """
     worktree = Path(run.worktree)
+    repository = checkout_repository(main_root)
     if not worktree.is_dir():
+        _forget_in_git(repository, worktree)
         return None
     with exclusive_run(worktree, "lictor retire"):
-        if _can_go_on(run):
-            typer.echo(
-                f"Error: la ejecución de la rama {run.branch} se puede reanudar. No se ha tocado "
-                f"nada: termínala con `lictor run --branch {name}` antes de retirarla.",
-                err=True,
-            )
-            return int(ExitCode.PRECONDITION)
-        repository = checkout_repository(worktree)
-        changed = repository.status()
-        if changed:
-            typer.echo(
-                f"Error: el worktree {worktree} tiene cambios sin confirmar: "
-                f"{', '.join(changed)}. No se ha tocado nada: confírmalos o descártalos allí y "
-                "vuelve a lanzar.",
-                err=True,
-            )
-            return int(ExitCode.PRECONDITION)
-        try:
-            kept = archive_run_evidence(
-                worktree,
-                main_root,
-                retired_name(name, run.run_id),
-                retired_runs_kept(main_root),
-            )
-        except OSError as exc:
-            typer.echo(
-                f"Error: no se ha podido guardar la evidencia del run en .lictor/{RETIRED_DIR}/ "
-                f"({exc}). No se ha tocado nada: libera espacio o corrige los permisos y vuelve a "
-                "lanzar.",
-                err=True,
-            )
-            return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
-        repository.remove_worktree(worktree)
-    if kept is not None:
-        typer.echo(f"Evidencia guardada en {kept.relative_to(main_root)}/")
+        facts = run_facts(main_root, run, probe_lock=False)
+        match run_standing(facts):
+            case "goes_on":
+                typer.echo(
+                    f"Error: la ejecución de la rama {run.branch} se puede reanudar. No se ha "
+                    f"tocado nada: termínala con `lictor run --branch {name}` antes de retirarla.",
+                    err=True,
+                )
+                return int(ExitCode.PRECONDITION)
+            case "unlinked":
+                typer.echo(
+                    f"Error: {unlinked_note(run.branch, run.worktree, str(main_root))}", err=True
+                )
+                return int(ExitCode.PRECONDITION)
+            case _ if facts.link == "linked":
+                refused = _retire_linked(run, name, main_root, archive=not run.retiring)
+            case _:
+                refused = _retire_forgotten(run, name, main_root, facts)
+    if refused is not None:
+        return refused
     typer.echo(f"Worktree retirado: {worktree}")
     return None
+
+
+def _retire_linked(run: RunEntry, name: str, main_root: Path, *, archive: bool) -> int | None:
+    """Retire a worktree git still has: clean tree, evidence kept, the mark, then git removes it."""
+    worktree = Path(run.worktree)
+    changed = checkout_repository(worktree).status()
+    if changed:
+        typer.echo(
+            f"Error: el worktree {worktree} tiene cambios sin confirmar: "
+            f"{', '.join(changed)}. No se ha tocado nada: confírmalos o descártalos allí y "
+            "vuelve a lanzar.",
+            err=True,
+        )
+        return int(ExitCode.PRECONDITION)
+    if archive:
+        refused = _archive(run, name, main_root)
+        if refused is not None:
+            return refused
+    mark_retiring(main_root, run.branch)
+    try:
+        # What a tool left read-only there (Go's module cache) git can't remove (G7).
+        remove_tree(worktree / ".lictor" / VERIFY_ENV_DIR)
+        checkout_repository(main_root).remove_worktree(worktree)
+    except (CandidateError, CleanupError) as err:
+        typer.echo(
+            f"Error: {str(err).rstrip('.')}. El retiro quedó a medias: resuelve lo que se dice y "
+            "vuelve a lanzar "
+            f"`lictor retire {name}`, que lo termina.",
+            err=True,
+        )
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+    return None
+
+
+def _retire_forgotten(
+    run: RunEntry, name: str, main_root: Path, facts: WorktreeFacts
+) -> int | None:
+    """Finish a worktree git no longer has, after checking that nothing in it is the person's.
+
+    Marked, `retire` had found its tree clean, so what the branch has is what git was removing;
+    unmarked (a removal Lictor didn't leave halfway) only `.lictor/` and a `.git` file are its own.
+    """
+    worktree = Path(run.worktree)
+    repository = checkout_repository(main_root)
+    tracked: set[str] | None = None
+    if run.retiring and repository.branch_exists(run.branch):
+        tracked = {entry.path for entry in repository.tree_entries(f"refs/heads/{run.branch}")}
+    foreign = foreign_leftovers(tree_entries_on_disk(worktree), tracked)
+    if foreign:
+        typer.echo(
+            f"Error: {leftovers_problem(str(worktree), foreign, _leftovers_known(run, tracked))}",
+            err=True,
+        )
+        return int(ExitCode.PRECONDITION)
+    if not run.retiring:
+        refused = _archive(run, name, main_root)
+        if refused is not None:
+            return refused
+        if facts.checkpoint == "open":
+            typer.echo(
+                f"Aviso: la ejecución de la rama {run.branch} no había terminado, y ya no se puede "
+                "reanudar: git no tiene su worktree. Su bitácora y su evidencia se guardan.",
+                err=True,
+            )
+        mark_retiring(main_root, run.branch)
+    try:
+        remove_tree(worktree)
+    except CleanupError as err:
+        typer.echo(f"Error: {err}", err=True)
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+    _forget_in_git(repository, worktree)
+    return None
+
+
+def _leftovers_known(run: RunEntry, tracked: set[str] | None) -> LeftoversKnown:
+    """What Lictor knows of what is left: the branch's paths, a mark without its branch, or none."""
+    if tracked is not None:
+        return "branch"
+    return "no_branch" if run.retiring else "unmarked"
+
+
+def _archive(run: RunEntry, name: str, main_root: Path) -> int | None:
+    """Keep the run's evidence in the checkout, or refuse with 40 having removed nothing."""
+    try:
+        kept = archive_run_evidence(
+            Path(run.worktree),
+            main_root,
+            retired_name(name, run.run_id),
+            retired_runs_kept(main_root),
+        )
+    except OSError as exc:
+        typer.echo(
+            f"Error: no se ha podido guardar la evidencia del run en .lictor/{RETIRED_DIR}/ "
+            f"({exc}). No se ha tocado nada: libera espacio o corrige los permisos y vuelve a "
+            "lanzar.",
+            err=True,
+        )
+        return int(ExitCode.ENVIRONMENT_UNAVAILABLE)
+    if kept is not None:
+        typer.echo(f"Evidencia guardada en {kept.relative_to(main_root)}/")
+    return None
+
+
+def _forget_in_git(repository: Worktrees, worktree: Path) -> None:
+    """Drop git's entry for a worktree whose directory is gone, and only that one.
+
+    `git worktree remove` with the directory absent removes just its entry; `prune` would take
+    every entry whose directory isn't there, a person's unmounted disk included. `git branch -d`
+    refuses a branch a worktree of git's still has.
+    """
+    if not worktree.exists() and repository.link_of(worktree) != "orphan":
+        repository.remove_worktree(worktree)
 
 
 def _retire_branch(main_root: Path, branch: str, *, delete: bool) -> int:
@@ -1424,11 +1578,11 @@ def status(
             found = _indexed_run(resolved_cwd, branch)
             if isinstance(found, int):
                 return found
-            _show_indexed_runs([found], as_json=as_json)
+            _show_indexed_runs(resolved_cwd, [found], as_json=as_json)
             return 0
         runs = _indexed_runs(resolved_cwd)
         if runs:
-            _show_indexed_runs(runs, as_json=as_json)
+            _show_indexed_runs(resolved_cwd, runs, as_json=as_json)
             return 0
         current_run_file = resolved_cwd / ".lictor" / "current_run"
         if not current_run_file.is_file():
@@ -1451,13 +1605,37 @@ def _indexed_runs(project_root: Path) -> list[RunEntry]:
     """The runs a main checkout started whose worktree is still there; none inside a worktree."""
     if checkout_repository(project_root).is_linked_worktree():
         return []
-    return [run for run in read_run_index(project_root) if Path(run.worktree).is_dir()]
+    return [
+        run for run in read_run_index(project_root) if Path(run.worktree).is_dir() or run.retiring
+    ]
 
 
-def _show_indexed_runs(runs: list[RunEntry], *, as_json: bool) -> None:
-    """Tell each run by its branch, the way `lictor run --branch` names it."""
+def _show_indexed_runs(main_root: Path, runs: list[RunEntry], *, as_json: bool) -> None:
+    """Tell each run by its branch, the way `lictor run --branch` names it.
+
+    One that can't go on is told by where it stands, without reading its configuration: a broken
+    one made the whole listing fail (G8 of 0.23.2).
+    """
     payloads: list[dict[str, Any]] = []
     for number, run in enumerate(runs):
+        facts = run_facts(main_root, run, probe_lock=True)
+        note = _standing_note(main_root, run, facts)
+        if note is not None:
+            if as_json:
+                payloads.append(
+                    {
+                        "branch": run.branch,
+                        "worktree": run.worktree,
+                        "standing": run_standing(facts),
+                        "reason": note,
+                    }
+                )
+                continue
+            if number:
+                typer.echo("")
+            typer.echo(f"Rama {run.branch} · {run.worktree}")
+            typer.echo(note[0].upper() + note[1:])
+            continue
         view, by_hand = _status_view(Path(run.worktree), run.run_id)
         if as_json:
             payloads.append(
@@ -1570,6 +1748,18 @@ def report(
             found = _indexed_run(resolved_cwd, branch)
             if isinstance(found, int):
                 return found
+            note = _standing_note(
+                resolved_cwd, found, run_facts(resolved_cwd, found, probe_lock=True)
+            )
+            if note is not None:
+                kept = aside_dir(resolved_cwd, RETIRED_DIR) / retired_name(branch, found.run_id)
+                where = (
+                    f" Su evidencia está en {kept.relative_to(resolved_cwd)}/."
+                    if kept.is_dir()
+                    else ""
+                )
+                typer.echo(f"Error: {note}{where}", err=True)
+                return int(ExitCode.PRECONDITION)
             resolved_cwd, target_run = Path(found.worktree), target_run or found.run_id
         lictor_dir = resolved_cwd / ".lictor"
 

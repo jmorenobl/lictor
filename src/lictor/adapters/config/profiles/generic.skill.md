@@ -71,7 +71,7 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   "banned_patterns": ["//\\s*nolint", "\\bt\\.Skip(Now|f)?\\("],
   "forbidden_paths": ["go.mod", "go.sum"],
   "verification": {
-    "env": {"GOCACHE": "{env_dir}/gocache", "GOMODCACHE": "{env_dir}/gomod", "GOPATH": "{env_dir}/gopath", "GOTOOLCHAIN": "local"}
+    "env": {"GOCACHE": "{env_dir}/gocache", "GOMODCACHE": "{env_dir}/gomod", "GOPATH": "{env_dir}/gopath", "GOTOOLCHAIN": "local", "GOFLAGS": "-modcacherw"}
   }
 }
 ```
@@ -84,12 +84,16 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
 - Entorno **sin `prepare`**: las cachés de Go cambian en cada compilación, y con `prepare` el hash
   del entorno fallaría en cada intento (`L0-entorno`). `GOCACHE`, `GOMODCACHE` y `GOPATH` van a
   `{env_dir}` en `verification.env`: heredarlas no basta, porque Go las saca de `HOME`, que es un
-  directorio vacío por orden.
+  directorio vacío por orden. `GOFLAGS=-modcacherw`: sin él Go deja la caché de módulos de solo
+  lectura, y `git worktree remove` no puede borrar el worktree al retirarlo (solo vale para lo que
+  se extrae desde entonces). Si el proyecto ya usa `GOFLAGS`, se juntan: `-mod=mod -modcacherw`.
 - `driver_hints`: «Un test por escenario llamado `Test_<ID>` (con guion bajo, `Test_IVA_001`) en
   `acceptance/`. Los stubs hacen `panic("no implementado")`. Cada test empieza con `defer
-  enEscenario(t)`, también dentro de cada `t.Run` y de cada goroutine que llame a la interfaz (ahí
-  con `t.Errorf`), y el helper es `func enEscenario(t *testing.T) { if r := recover(); r != nil
-  { t.Fatalf("pánico en el escenario: %v\n%s", r, debug.Stack()) } }`, sin `t.Helper()`. Cada
+  enEscenario(t)`, también dentro de cada goroutine que llame a la interfaz (ahí con
+  `t.Errorf`). Sin `t.Run`: cada subtest sale en el informe como otro caso con el mismo ID, y un
+  escenario es un solo caso; las filas de una tabla del Gherkin se recorren con un bucle dentro del
+  mismo test, y el mensaje de cada fallo nombra la fila. El helper es `func enEscenario(t
+  *testing.T) { if r := recover(); r != nil { t.Fatalf("pánico en el escenario: %v\n%s", r, debug.Stack()) } }`, sin `t.Helper()`. Cada
   test compara con el valor del Gherkin.» Con varios paquetes de aceptación, cada uno lleva su
   helper. No vetes `recover(`: el driver lo necesita.
 - Una función que devuelve `error` por su naturaleza tiene un stub que hace `panic` igual: si

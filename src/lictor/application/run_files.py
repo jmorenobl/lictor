@@ -20,9 +20,10 @@ from typing import NoReturn
 
 from lictor.application.ports import Vcs
 from lictor.application.seal import hash_file, hash_tree
-from lictor.domain.errors import EnvironmentUnavailableError, RunInProgressError
+from lictor.domain.errors import CleanupError, EnvironmentUnavailableError, RunInProgressError
 from lictor.domain.model import CommandOutput
 from lictor.domain.rules import retired_to_prune, runs_to_prune
+from lictor.domain.run_standing import EntryKind
 
 DRIVER_OWNER = "driver"
 # What `doctor` and `check` leave, apart from any run's and replaced by the next one.
@@ -30,6 +31,8 @@ DOCTOR_DIR = "doctor"
 CHECK_DIR = "check"
 RUN_LOCK = "run.lock"
 PRIVATE_MODE = 0o700
+# The run's verification environment, inside its worktree: `{env_dir}` of the profile's commands.
+VERIFY_ENV_DIR = "verify-env"
 
 
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:
@@ -87,9 +90,9 @@ def archive_run_evidence(worktree: Path, main_root: Path, name: str, keep: int) 
     """Copy a run's journal, report and evidence to the checkout before its worktree goes.
 
     The copy is written beside its place and renamed into it, so a failure halfway leaves nothing
-    that passes for evidence. Afterwards only the `keep` most recent stay. Returns the directory,
-    or None when the worktree has nothing to keep. Raises OSError when it can't copy: the caller
-    then refuses to remove the worktree.
+    that passes for evidence, and one already there is kept. Afterwards only the `keep` most
+    recent stay. Returns the directory, or None when the worktree has nothing to keep. Raises
+    OSError when it can't copy: the caller then refuses to remove the worktree.
     """
     source = worktree / ".lictor"
     present = [item for item in RETIRED_EVIDENCE if (source / item).exists()]
@@ -98,20 +101,26 @@ def archive_run_evidence(worktree: Path, main_root: Path, name: str, keep: int) 
     retired = own_dir(main_root) / RETIRED_DIR
     retired.mkdir(exist_ok=True)
     target = retired / name
-    partial = retired / f".{name}.partial"
-    shutil.rmtree(partial, ignore_errors=True)
-    partial.mkdir()
-    for item in present:
-        if (source / item).is_dir():
-            shutil.copytree(source / item, partial / item, symlinks=True)
-        else:
-            shutil.copy2(source / item, partial / item)
-    shutil.rmtree(target, ignore_errors=True)
-    partial.rename(target)
+    if target.is_dir():
+        # A retire that stopped halfway already kept it whole: what is left now may be less.
+        return target
+    _copy_into_place(source, present, retired / f".{name}.partial", target)
     entries = [p.name for p in retired.iterdir() if p.is_dir() and not p.name.startswith(".")]
     for old in retired_to_prune(entries, keep):
         shutil.rmtree(retired / old, ignore_errors=True)
     return target
+
+
+def _copy_into_place(source: Path, items: Sequence[str], partial: Path, target: Path) -> None:
+    """Copy `items` of `source` beside `target` and rename the copy into it, whole or not at all."""
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir()
+    for item in items:
+        if (source / item).is_dir():
+            shutil.copytree(source / item, partial / item, symlinks=True)
+        else:
+            shutil.copy2(source / item, partial / item)
+    partial.rename(target)
 
 
 def new_step_dir(path: Path) -> Path:
@@ -193,12 +202,67 @@ def scratch_dir(project_root: Path, prefix: str) -> Iterator[Path]:
 
 
 def sweep_scratch(project_root: Path) -> None:
-    """Remove what a killed run left behind, which nothing else would ever clean."""
+    """Remove what a killed run left behind, which nothing else would ever clean.
+
+    A courtesy: what can't go, as a file an orphaned process still writes, stays for the next one.
+    """
     root = _scratch_root(project_root)
     if not os.path.lexists(root):
         return
     _check_private(root)
-    shutil.rmtree(root, ignore_errors=True)
+    with contextlib.suppress(CleanupError):
+        remove_tree(root)
+
+
+def remove_tree(root: Path) -> None:
+    """Remove a tree of Lictor's own, even where a tool left a directory without write permission.
+
+    Go extracts its module cache read-only, and a directory without write permission can't lose
+    its entries: `git worktree remove` failed on it and left the worktree half removed (G7 of
+    0.23.2). Write permission goes back only to `root` and the directories inside it, never to its
+    parent, and each path is tried again once; `rmtree` never follows a link out, and a link in
+    place of `root` is removed, not followed. Raises
+    CleanupError, naming the path, when something still can't be removed.
+    """
+    top = Path(os.path.abspath(root))
+    tried: set[str] = set()
+
+    def retry(func: Callable[..., object], path: str, exc: BaseException) -> None:
+        if not isinstance(exc, PermissionError) or path in tried:
+            raise _cleanup_error(top, path, exc) from exc
+        tried.add(path)
+        parent = Path(os.path.abspath(path)).parent
+        try:
+            for directory in (parent, Path(path)):
+                if directory == top or directory.is_relative_to(top):
+                    _make_writable(directory)
+            if func in (os.rmdir, os.unlink):
+                func(path)
+            else:  # a directory it couldn't open or list: now it can, or it fails again
+                shutil.rmtree(path, onexc=retry)
+        except OSError as again:
+            raise _cleanup_error(top, path, again) from again
+
+    if os.path.islink(top):
+        # A link in place of the directory is only the link: what it points to isn't Lictor's.
+        os.unlink(top)
+    elif os.path.lexists(top):
+        shutil.rmtree(top, onexc=retry)
+
+
+def _make_writable(directory: Path) -> None:
+    """Give a real directory, not a link, its owner's full permissions back."""
+    info = os.lstat(directory)
+    if stat.S_ISDIR(info.st_mode):
+        os.chmod(directory, stat.S_IMODE(info.st_mode) | stat.S_IRWXU)
+
+
+def _cleanup_error(top: Path, path: str, exc: BaseException) -> CleanupError:
+    reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
+    return CleanupError(
+        f"no se ha podido borrar {path} ({reason}), dentro de {top}, que es de Lictor. Mira qué "
+        "lo retiene (un proceso que siga vivo, un fichero inmutable) y vuelve a lanzar."
+    )
 
 
 LICTOR_GITIGNORE = "*\n"
@@ -239,6 +303,38 @@ def holding_project(project_root: Path) -> Iterator[bool]:
         yield True
     finally:
         os.close(fd)
+
+
+def lock_held(project_root: Path) -> bool:
+    """Tell whether some process holds the project's lock, creating nothing to find out.
+
+    Without the lock file nobody holds it. Trying it takes it for an instant, and only another
+    process's hold makes it fail: `flock` belongs to the open file, so the caller must not hold it
+    through another descriptor of its own.
+    """
+    try:
+        fd = os.open(project_root / ".lictor" / RUN_LOCK, os.O_RDWR | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def tree_entries_on_disk(root: Path) -> list[tuple[str, EntryKind]]:
+    """Every path under `root`, relative to it, with its kind; links are listed, never followed."""
+    found: list[tuple[str, EntryKind]] = []
+    for directory, dirs, files in os.walk(root):
+        base = Path(directory)
+        for name in [*dirs, *files]:
+            path = base / name
+            kind: EntryKind = "link" if path.is_symlink() else "dir" if path.is_dir() else "file"
+            found.append((path.relative_to(root).as_posix(), kind))
+    return found
 
 
 @contextlib.contextmanager

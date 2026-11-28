@@ -63,3 +63,25 @@ La propuesta anterior descartaba el worktree **para el agente**, y ese motivo si
 - **Un clon por ejecución**, la propuesta del 2026-11-04. Aísla lo mismo, pero deja el resultado fuera del repositorio de la persona, duplica los objetos y no encaja con las herramientas que ya organizan el trabajo por worktrees.
 - **El agente en un worktree.** Comparte configuración, hooks y refs con el repositorio, y el agente es justo de quien hay que protegerlo. Además no ahorra nada: escribe todos los ficheros igual que una copia.
 - **Que la persona cree el worktree.** Funciona, y sigue funcionando por el punto 2 de la decisión, pero no puede ser la única vía: traslada a la persona un paso que Lictor hace mejor, con el blindaje de git incluido.
+
+## Enmienda de la 0.23.2: dónde está cada ejecución, y un retiro que se queda a medias
+
+En la pasada de Go, la caché de módulos de solo lectura hizo fallar `git worktree remove` a medias:
+git borró su propia entrada y parte del árbol, y dejó `.lictor/`. `retire` leyó lo que quedaba como
+una ejecución que se puede reanudar, porque no pudo cargar su `lictor.json`, y pidió un `lictor
+run` que habría gastado (G7 y G8).
+
+1. **Lo que no se puede leer nunca se reanuda.** Dónde está una ejecución del índice lo decide el
+   dominio con hechos que no pasan por su configuración: si existe su directorio, si el índice la
+   marca como «retirándose», si otro proceso tiene su cerrojo, cómo la conoce git leído desde el
+   checkout (enlazada; desenlazada, que `git worktree repair` arregla; o huérfana) y qué dice su
+   checkpoint, leído solo. Salen siete estados; `run` reanuda los que pueden seguir y avisa de los
+   demás, y `status` los cuenta sin fallar.
+2. **`retire` deja constancia antes de destruir.** Tras comprobar que el árbol está limpio y guardar
+   la evidencia, marca la entrada. Con la marca sabe que todo lo que hubiera en el worktree lo iba a
+   borrar git, y termina un retiro a medias se vea como se vea el directorio. Sin ella, solo borra
+   lo que es suyo, y antes de borrar nada mira qué queda.
+3. **Una ejecución que no empezó se retira**, y una desenlazada no se toca: se repara.
+4. **Lo suyo se borra aunque una herramienta lo deje de solo lectura**, devolviendo el permiso solo
+   dentro de lo suyo. Nunca `--force`, nunca `git worktree prune`, que se llevaría entradas ajenas.
+

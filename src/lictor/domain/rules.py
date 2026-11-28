@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from lictor.domain.errors import DriverError, ExitCode
+from lictor.domain.errors import AmbiguousMappingError, DriverError, ExitCode
 from lictor.domain.model import (
     AgentSignal,
     AgentStatus,
@@ -94,9 +94,7 @@ def map_test_cases_to_scenarios(
             raise DriverError(msg)
 
         if len(matches) > 1:
-            names = [m[1].name for m in matches]
-            msg = f"Múltiples casos de test encontrados para el escenario '{sid_str}': {names}"
-            raise DriverError(msg)
+            raise AmbiguousMappingError(sid_str, [m[1].name for m in matches])
 
         match_idx, matched_tc = matches[0]
         if match_idx in matched_tc_indices:
@@ -168,8 +166,7 @@ def _map_by_scenario(
                 "enlazado con su escenario del Gherkin"
             )
         if len(cases) > 1:
-            names = [case.name for case in cases]
-            raise DriverError(f"Múltiples casos de test ejecutan el escenario '{sid}': {names}")
+            raise AmbiguousMappingError(sid, [case.name for case in cases])
         mapped[sid] = cases[0]
     return mapped
 
@@ -894,6 +891,87 @@ def person_only_reason(scenario_id: str, paths: Sequence[str]) -> str:
         f"{scenario_id} necesita cambiar {joined}, que solo puede tocar una persona. Haz tú el "
         "cambio, confírmalo y vuelve a lanzar `lictor run`; si el escenario no debería "
         "necesitarlo, revisa el escenario."
+    )
+
+
+def ambiguous_with_sealed_driver(scenario: str, cases: Sequence[str]) -> str:
+    """What the implementer reads when, with the driver sealed, a scenario maps to several cases.
+
+    Its own test named after the scenario and run by the acceptance would do the same, and that it
+    can fix; the sealed driver's cases it can't, and the run stops if it happens again.
+    """
+    return (
+        f"El escenario '{scenario}' sale en {len(cases)} casos del informe de la aceptación: "
+        f"{list(cases)}, y cada escenario tiene que ser un solo caso. Si un test tuyo lleva el ID "
+        "en el nombre y la aceptación lo ejecuta, renómbralo. Si los casos son del driver sellado "
+        "(un subtest aparece cuando el código ya llega a él), no puedes cambiarlos: no toques nada "
+        "por eso, y si vuelve a pasar Lictor parará para pedírselo a una persona."
+    )
+
+
+def sealed_driver_cases(ambiguous: Sequence[str | None]) -> str | None:
+    """The scenario the last verifications of the run mapped to several cases, if they agree.
+
+    `ambiguous` holds, verification by verification of the implementer in the whole run, the
+    scenario that mapped to several cases, or None. It isn't per scenario: a declared conflict goes
+    to quarantine at once and `max_attempts: 1` gives one attempt, and with either a streak per
+    scenario never came, so every scenario spent its attempts on what none of them could fix. The
+    cases may change from one to the next: a second attempt may reach another subtest.
+    """
+    last = ambiguous[-PERSON_ONLY_STREAK:]
+    distinct = set(last)
+    if len(last) < PERSON_ONLY_STREAK or len(distinct) != 1:
+        return None
+    return distinct.pop()
+
+
+def with_mapping(
+    ambiguous: Sequence[str | None],
+    found: tuple[str, Sequence[str]] | None,
+    *,
+    mapped: bool,
+) -> list[str | None]:
+    """The run's history of ambiguous mappings after one more verification.
+
+    `found` is the scenario that mapped to several cases, with them. Only a verification whose
+    acceptance report was mapped, or failed to map for being ambiguous, says anything: one that
+    stopped at an L0 gate or crashed before (an attempt that, told not to touch the driver,
+    changed nothing) leaves the streak as it was.
+    """
+    if found is not None:
+        return [*ambiguous, found[0]]
+    return [*ambiguous, None] if mapped else list(ambiguous)
+
+
+def person_stop_reason(
+    scenario: str,
+    paths: Sequence[str],
+    ambiguous: Sequence[str | None],
+    found: tuple[str, Sequence[str]] | None,
+) -> str | None:
+    """Why the run stops after a verification of the implementer, when only a person can go on.
+
+    Either the scenario needs a path only a person may change, or the sealed driver keeps mapping
+    a scenario to several cases (G1 of 0.23.2).
+    """
+    if paths:
+        return person_only_reason(scenario, paths)
+    sealed = sealed_driver_cases(ambiguous)
+    if sealed is not None and found is not None:
+        return sealed_driver_reason(sealed, found[1])
+    return None
+
+
+def sealed_driver_reason(scenario: str, cases: Sequence[str]) -> str:
+    """Why the run stops: the sealed driver maps a scenario to several cases, and only a person can
+    change it."""
+    return (
+        f"El driver sellado da {len(cases)} casos para el escenario {scenario}: {list(cases)}, y "
+        "cada escenario tiene que ser un solo caso (un subtest o un test parametrizado sale como "
+        "otro). El implementador no puede cambiar un driver sellado, y así no se verifica ningún "
+        "escenario. Los verdes ya confirmados en la rama siguen valiendo: intégrala o descártala, "
+        "retira esta ejecución y lanza otra, que construye su driver de nuevo; antes, corrige "
+        "`driver_hints` para que no lo repita."
     )
 
 

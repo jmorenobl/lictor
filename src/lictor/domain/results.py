@@ -217,6 +217,8 @@ class VerifyResult:
     evidence: dict[str, str] = field(default_factory=dict)
     collateral: tuple[str, ...] = ()  # pending scenarios the candidate also turns green
     failure: tuple[str, str] | None = None  # kind and origin of the scenario's failed test
+    # The scenario the sealed driver's report gave several cases, with their names (G1 of 0.23.2).
+    ambiguous: tuple[str, tuple[str, ...]] | None = None
 
     def outcome(self, control_id: str) -> Outcome | None:
         """What the control with that id ended up with, if the verification reached it."""

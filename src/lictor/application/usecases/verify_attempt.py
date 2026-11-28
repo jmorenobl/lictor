@@ -42,7 +42,12 @@ from lictor.domain.controls import (
     RunStep,
     verification_steps,
 )
-from lictor.domain.errors import DriverError, InternalLictorError, SpecError
+from lictor.domain.errors import (
+    AmbiguousMappingError,
+    DriverError,
+    InternalLictorError,
+    SpecError,
+)
 from lictor.domain.model import (
     AgentResult,
     Candidate,
@@ -84,6 +89,7 @@ from lictor.domain.results import (
 from lictor.domain.rules import (
     MapLink,
     acceptance_failure,
+    ambiguous_with_sealed_driver,
     collateral_greens,
     condense_error,
     control_path_status,
@@ -154,6 +160,7 @@ class _Failure:
     failed_at: str
     reason: str
     label: str | None = None
+    ambiguous: tuple[str, tuple[str, ...]] | None = None  # the sealed driver's, with its cases
     cases: Sequence[TestCaseResult] = ()
     all_cases: Sequence[TestCaseResult] | None = None
     output: str = ""
@@ -468,6 +475,7 @@ class VerifyAttempt:
             reverted_files=failure.reverted_files,
             error_path=relative_to_project(error_path, self.project_root),
             failure=failure.failure,
+            ambiguous=failure.ambiguous,
         )
 
     def _tree(self, req: VerifyAttemptRequest) -> str:
@@ -687,15 +695,17 @@ class VerifyAttempt:
                 trusted.cases, req.all_scenario_ids, req.link, req.scenario_files
             )
         except DriverError as exc:
+            reason, ambiguous = _unmapped_reason(req, exc, trusted.cases, output)
             return self._fail(
                 req,
                 _Failure(
                     "acceptance",
-                    _cut_short_reason(req, str(exc), trusted.cases, output),
+                    reason,
                     cases=trusted.cases,
                     output=output,
                     controls=controls,
                     acceptance=acceptance,
+                    ambiguous=ambiguous,
                 ),
             )
 
@@ -729,6 +739,20 @@ class VerifyAttempt:
             acceptance=acceptance,
             scenario_results=scenario_results,
         )
+
+
+def _unmapped_reason(
+    req: VerifyAttemptRequest, exc: DriverError, cases: Sequence[TestCaseResult], output: str
+) -> tuple[str, tuple[str, tuple[str, ...]] | None]:
+    """Why the sealed driver's report doesn't map, and the scenario it gave several cases if so.
+
+    Several cases are what the implementer can't change (G1 of 0.23.2); a case missing was cut
+    short.
+    """
+    if isinstance(exc, AmbiguousMappingError):
+        found = (exc.scenario, exc.cases)
+        return ambiguous_with_sealed_driver(*found), found
+    return _cut_short_reason(req, str(exc), cases, output), None
 
 
 def _cut_short_reason(

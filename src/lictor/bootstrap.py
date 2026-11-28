@@ -48,7 +48,8 @@ from lictor.application.ports import (
     SpecSource,
     Vcs,
 )
-from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir
+from lictor.application.run_files import CHECK_DIR, DOCTOR_DIR, aside_dir, lock_held
+from lictor.application.run_index import RunEntry
 from lictor.application.skill import (
     ProjectProfile,
     profile_part,
@@ -84,8 +85,9 @@ from lictor.domain.model import Event
 from lictor.domain.proof_level import ProofDefences
 from lictor.domain.refactor_scope import CodePaths
 from lictor.domain.rules import NO_COMMITS, RedOracle, control_label
+from lictor.domain.run_standing import WorktreeFacts
 from lictor.domain.stages import ATTEMPT, CHECK
-from lictor.orchestration.graph import GraphContext
+from lictor.orchestration.graph import GraphContext, checkpoint_state
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,32 @@ def observed_journal(project_root: Path, observe: Callable[[Event], None]) -> Ev
 def checkout_repository(project_root: Path) -> GitCli:
     """The repository of a checkout, before any configuration is read: `run` starts here."""
     return GitCli(project_root.resolve())
+
+
+def run_facts(main_root: Path, run: RunEntry, *, probe_lock: bool) -> WorktreeFacts:
+    """What is known of a run of the checkout's index, read without the run's configuration (G8).
+
+    The checkpoint read is the run `current_run` names, which is what a resume goes on with: a
+    `lictor run` launched inside the worktree has an id of its own. `probe_lock` is False for
+    `retire`, which holds the worktree's lock itself.
+    """
+    worktree = Path(run.worktree)
+    if not worktree.is_dir():
+        return WorktreeFacts(exists=False, retiring=run.retiring)
+    current = worktree / ".lictor" / "current_run"
+    try:
+        run_id = current.read_text(encoding="utf-8").strip() or run.run_id
+    except OSError:
+        run_id = run.run_id
+    checkpoint, problem = checkpoint_state(worktree / ".lictor" / "checkpoints.sqlite", run_id)
+    return WorktreeFacts(
+        exists=True,
+        retiring=run.retiring,
+        held=probe_lock and lock_held(worktree),
+        link=checkout_repository(main_root).link_of(worktree),
+        checkpoint=checkpoint,
+        problem=problem,
+    )
 
 
 def retired_runs_kept(project_root: Path) -> int:

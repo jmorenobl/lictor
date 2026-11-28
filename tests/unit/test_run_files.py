@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -14,17 +15,25 @@ from lictor.application.run_files import (
     attempt_prefix,
     exclusive_run,
     holding_project,
+    lock_held,
     new_step_dir,
     own_dir,
     prune_runs,
     relative_to_project,
+    remove_tree,
     save_output,
     scratch_dir,
     sweep_scratch,
+    tree_entries_on_disk,
     unused_path,
 )
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
-from lictor.domain.errors import EnvironmentUnavailableError, ExitCode, RunInProgressError
+from lictor.domain.errors import (
+    CleanupError,
+    EnvironmentUnavailableError,
+    ExitCode,
+    RunInProgressError,
+)
 from lictor.domain.model import CommandOutput
 
 
@@ -402,3 +411,203 @@ def test_archiving_keeps_only_the_most_recent_retired_runs(tmp_path: Path) -> No
         f"uno-{ids[2]}",
         f"uno-{ids[3]}",
     ]
+
+
+ROOT_IGNORES_PERMISSIONS = pytest.mark.skipif(
+    os.geteuid() == 0, reason="root borra dentro de un directorio sin escritura: no prueba nada"
+)
+
+
+def _read_only_tree(root: Path) -> Path:
+    """What Go leaves as its module cache: directories without write permission, one unreadable."""
+    module = root / "gomod" / "example.com" / "dep@v1.0.0"
+    module.mkdir(parents=True)
+    (module / "dep.go").write_text("package dep\n", encoding="utf-8")
+    hidden = root / "oculto"
+    hidden.mkdir()
+    (hidden / "f").write_text("x", encoding="utf-8")
+    for directory in (module, module.parent, hidden):
+        directory.chmod(0o555)
+    hidden.chmod(0o000)
+    return module
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_remove_tree_removes_what_a_tool_left_read_only(tmp_path: Path) -> None:
+    """G7 of 0.23.2: without write permission `rmtree` couldn't empty Go's module cache."""
+    env = tmp_path / "verify-env"
+    _read_only_tree(env)
+
+    remove_tree(env)
+
+    assert not env.exists()
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_remove_tree_never_touches_what_is_outside(tmp_path: Path) -> None:
+    outside = tmp_path / "fuera"
+    outside.mkdir()
+    (outside / "guardado").write_text("x", encoding="utf-8")
+    outside.chmod(0o555)
+    env = tmp_path / "padre" / "verify-env"
+    _read_only_tree(env)
+    (env / "enlace").symlink_to(outside, target_is_directory=True)
+    env.parent.chmod(0o755)
+
+    remove_tree(env)
+
+    assert not env.exists()
+    assert (outside / "guardado").is_file()
+    assert oct(outside.stat().st_mode & 0o777) == "0o555", "fuera no se cambia ningún permiso"
+    outside.chmod(0o755)
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_remove_tree_never_gives_its_parent_write_permission(tmp_path: Path) -> None:
+    parent = tmp_path / "padre"
+    (parent / "verify-env").mkdir(parents=True)
+    parent.chmod(0o555)
+
+    with pytest.raises(CleanupError, match="no se ha podido borrar"):
+        remove_tree(parent / "verify-env")
+
+    assert oct(parent.stat().st_mode & 0o777) == "0o555"
+    parent.chmod(0o755)
+
+
+def test_remove_tree_of_nothing_does_nothing(tmp_path: Path) -> None:
+    remove_tree(tmp_path / "no-existe")
+
+
+def test_remove_tree_says_what_isnt_a_permission_it_cant_fix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tmp_path / "env"
+    (env / "a").mkdir(parents=True)
+    (env / "a" / "f").write_text("x", encoding="utf-8")
+
+    def busy(path: str, *, dir_fd: int | None = None) -> None:
+        raise OSError(16, "Device or resource busy", path)
+
+    monkeypatch.setattr(os, "unlink", busy)
+    with pytest.raises(CleanupError, match="Device or resource busy"):
+        remove_tree(env)
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_sweep_removes_a_read_only_cache_a_killed_doctor_left(project: Path) -> None:
+    """A `doctor` of Go killed left the module cache in the scratch root for good."""
+    with scratch_dir(project, "env-"):
+        pass
+    _read_only_tree(_scratch_root(project) / "env-muerto")
+
+    sweep_scratch(project)
+
+    assert not _scratch_root(project).exists()
+
+
+def test_sweep_leaves_what_it_cant_remove_without_failing(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with scratch_dir(project, "env-"):
+        pass
+    (_scratch_root(project) / "restos").write_text("x", encoding="utf-8")
+
+    def busy(path: str, *, dir_fd: int | None = None) -> None:
+        raise OSError(16, "Device or resource busy", path)
+
+    monkeypatch.setattr(os, "unlink", busy)
+    sweep_scratch(project)
+
+    assert (_scratch_root(project) / "restos").exists()
+
+
+def test_a_lock_nobody_holds_is_free_and_finding_out_creates_nothing(tmp_path: Path) -> None:
+    assert lock_held(tmp_path) is False
+    assert not (tmp_path / ".lictor").exists()
+    with holding_project(tmp_path):
+        pass
+    assert lock_held(tmp_path) is False
+
+
+def test_a_lock_another_process_holds_is_held(tmp_path: Path) -> None:
+    own_dir(tmp_path)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
+            "fcntl.flock(fd, fcntl.LOCK_EX); print('ok', flush=True); sys.stdin.read()",
+            str(tmp_path / ".lictor" / "run.lock"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ok"
+        assert lock_held(tmp_path) is True
+    finally:
+        holder.communicate("")
+    assert lock_held(tmp_path) is False
+
+
+def test_an_archive_already_kept_is_not_replaced(tmp_path: Path) -> None:
+    """C3: a retire that stopped halfway kept the whole evidence; what is left may be less."""
+    worktree, main = tmp_path / "wt", tmp_path / "main"
+    (worktree / ".lictor" / "runs").mkdir(parents=True)
+    (worktree / ".lictor" / "journal.jsonl").write_text("completa\n", encoding="utf-8")
+    first = archive_run_evidence(worktree, main, "iva-r1", 10)
+    (worktree / ".lictor" / "journal.jsonl").write_text("menos\n", encoding="utf-8")
+
+    second = archive_run_evidence(worktree, main, "iva-r1", 10)
+
+    assert first == second
+    assert second is not None
+    assert (second / "journal.jsonl").read_text(encoding="utf-8") == "completa\n"
+
+
+def test_the_tree_on_disk_lists_links_without_following_them(tmp_path: Path) -> None:
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "f").write_text("x", encoding="utf-8")
+    (tmp_path / "enlace").symlink_to(tmp_path / "a", target_is_directory=True)
+
+    assert sorted(tree_entries_on_disk(tmp_path)) == [
+        ("a", "dir"),
+        ("a/b", "dir"),
+        ("a/b/f", "file"),
+        ("enlace", "link"),
+    ]
+
+
+def test_a_link_in_place_of_the_tree_is_removed_not_followed(tmp_path: Path) -> None:
+    """P3 of the PR's review: `rmtree` refused a link, and `retire` gave 40 for good."""
+    target = tmp_path / "otro"
+    target.mkdir()
+    (target / "guardado").write_text("x", encoding="utf-8")
+    env = tmp_path / "verify-env"
+    env.symlink_to(target, target_is_directory=True)
+
+    remove_tree(env)
+
+    assert not os.path.lexists(env)
+    assert (target / "guardado").is_file()
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_a_directory_permission_cant_fix_fails_once_not_forever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A2: an ACL or SELinux the owner's permissions don't override; it recursed until it broke."""
+    env = tmp_path / "env"
+    (env / "cerrado").mkdir(parents=True)
+    (env / "cerrado" / "f").write_text("x", encoding="utf-8")
+    (env / "cerrado").chmod(0o000)
+    monkeypatch.setattr(os, "chmod", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(CleanupError, match="cerrado"):
+        remove_tree(env)
+
+    monkeypatch.undo()
+    (env / "cerrado").chmod(0o755)

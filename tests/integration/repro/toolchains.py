@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -158,7 +159,7 @@ GO_CONFIG: dict[str, object] = {
             "GOMODCACHE": "{env_dir}/gomod",
             "GOPATH": "{env_dir}/gopath",
             "GOTOOLCHAIN": "local",
-            "GOFLAGS": "-mod=mod",
+            "GOFLAGS": "-mod=mod -modcacherw",
         }
     },
 }
@@ -202,6 +203,56 @@ def go_project(root: Path, **config: object) -> Path:
         "\tif Longitud != 9 {\n\t\tt.Fatal(Longitud)\n\t}\n}\n",
     )
     _commit_project(root, {**GO_CONFIG, **config})
+    return root
+
+
+GO_DEPENDENCY = "example.com/dep"
+
+
+def go_proxy(where: Path) -> str:
+    """A module proxy on disk serving one dependency: Go downloads it into its cache, offline."""
+    module = f"{GO_DEPENDENCY}@v1.0.0"
+    versions = where / GO_DEPENDENCY / "@v"
+    versions.mkdir(parents=True)
+    go_mod = f"module {GO_DEPENDENCY}\n\ngo 1.22\n"
+    with zipfile.ZipFile(versions / "v1.0.0.zip", "w") as archive:
+        archive.writestr(f"{module}/go.mod", go_mod)
+        archive.writestr(f"{module}/dep.go", "package dep\n\n// Nueve es nueve.\nconst Nueve = 9\n")
+    (versions / "v1.0.0.mod").write_text(go_mod, encoding="utf-8")
+    (versions / "list").write_text("v1.0.0\n", encoding="utf-8")
+    return where.resolve().as_uri()
+
+
+def go_project_with_dependency(root: Path, proxy: str, *, flags: str, **config: object) -> Path:
+    """`go_project` whose unit test imports a module, so every verification fills the module cache.
+
+    `flags` is the environment's `GOFLAGS`: the recipe's `-modcacherw`, or without it, as before
+    0.23.2, which leaves the cache without write permission (G7).
+    """
+    env = dict(GO_CONFIG["verification"]["env"])  # type: ignore[index]
+    env |= {"GOFLAGS": flags, "GOPROXY": proxy, "GOSUMDB": "off"}
+    go_project(root, verification={"env": env}, **config)
+    write(root, "go.mod", f"module example.com/toy\n\ngo 1.22\n\nrequire {GO_DEPENDENCY} v1.0.0\n")
+    write(
+        root,
+        GO_UNIT_PATH,
+        f'package nif\n\nimport (\n\t"testing"\n\n\t"{GO_DEPENDENCY}"\n)\n\n'
+        "func TestLongitud(t *testing.T) {\n\tif Longitud != dep.Nueve {\n\t\tt.Fatal(Longitud)\n"
+        "\t}\n}\n",
+    )
+    with tempfile.TemporaryDirectory(dir=root.parent) as cache:
+        tidy_env = {
+            **os.environ,
+            "GOPROXY": proxy,
+            "GOSUMDB": "off",
+            "GOFLAGS": "-modcacherw",
+            "GOMODCACHE": f"{cache}/mod",
+            "GOCACHE": f"{cache}/build",
+            "GOTOOLCHAIN": "local",
+        }
+        subprocess.run(["go", "mod", "tidy"], cwd=root, env=tidy_env, check=True)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "chore: una dependencia")
     return root
 
 
