@@ -9,6 +9,7 @@ import pytest
 
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
+from lictor.domain.git_config import config_change_text, config_entries
 from lictor.domain.model import Candidate
 from lictor.domain.refactor_scope import LineSpan
 
@@ -640,9 +641,9 @@ def test_restore_brings_back_control_files_and_removes_planted_ones(git_repo: Pa
 
     changed = cli.restore(pin)
 
+    # The keys `git init` writes depend on the platform (`core.ignorecase` on macOS).
     assert sorted(changed) == [
-        ".git/config (core.bare, core.filemode, core.fsmonitor, core.logallrefupdates, "
-        "core.repositoryformatversion y 2 más)",
+        config_change_text(sorted(_keys_of(original) | {"core.fsmonitor"})),
         ".git/hooks/post-merge",
     ]
     assert config.read_bytes() == original
@@ -1291,3 +1292,14 @@ def test_a_shallow_clone_exports_its_commit(git_repo: Path, tmp_path: Path) -> N
     assert cli.is_shallow()
     assert not GitCli(repo_dir=git_repo).is_shallow()
     assert (tmp_path / "exportado" / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
+
+
+def _keys_of(config: bytes) -> set[str]:
+    """The keys of a config file, as git lists them."""
+    listed = subprocess.run(
+        [GIT_BIN, "config", "--file", "-", "--no-includes", "--list", "-z"],
+        input=config,
+        capture_output=True,
+        check=True,
+    ).stdout.decode()
+    return {key for key, _ in config_entries(listed)}

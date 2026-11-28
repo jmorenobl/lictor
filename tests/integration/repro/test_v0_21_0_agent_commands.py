@@ -21,7 +21,7 @@ from tests.integration.repro.harness import (
 )
 
 ALL = ["IVA-001", "IVA-002", "IVA-003"]
-FIX = "- Tras tu último cambio, ejecuta `uv run ruff format src` (el control format bloquea)"
+FIX = "- Tras tu último cambio, ejecuta `uv run ruff format` (el control format bloquea)"
 
 
 def test_the_implementer_checks_lint_with_the_run_the_project_wrote(
