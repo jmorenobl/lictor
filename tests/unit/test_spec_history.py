@@ -109,3 +109,6 @@ def test_a_green_the_specification_no_longer_has_is_retired_until_a_driver_says_
 
     assert history.retired({"A-1"}) == ("B-1",)
     assert history.retired({"A-1", "A-2", "B-1"}) == ()
+    # Fable's I1 of the PR: once retired it has no green, so coming back it is a new one.
+    assert set(history.records()) == {"A-1", "B-1"}
+    assert history.classify({"A-2": "h2"}) == {"A-2": "new"}

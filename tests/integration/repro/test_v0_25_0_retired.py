@@ -20,6 +20,7 @@ from tests.integration.repro.harness import (
     Agent,
     Outcome,
     git,
+    green_ids,
     require,
     run_lictor,
     write,
@@ -35,10 +36,11 @@ WITHOUT_THE_THIRD = DRIVER[: DRIVER.index('@scenario(FEATURE, "Importe negativo"
 )
 
 
-def _retire_the_third(root: Path) -> None:
+def _retire_the_third(root: Path) -> str:
     text = (root / FEATURE).read_text(encoding="utf-8")
     write(root, str(FEATURE), text[: text.index("  @IVA-003")].rstrip() + "\n")
     git(root, "commit", "-qam", "feat: se retira IVA-003")
+    return text
 
 
 def _doctor(root: Path) -> str:
@@ -71,3 +73,28 @@ def test_a_green_scenario_taken_out_is_retired_by_the_next_run(
     assert "## Escenarios retirados" in report
     assert "IVA-003" in report.split("## Escenarios retirados")[1].split("##")[0]
     assert "se retiraron" not in _doctor(root)
+
+
+def test_a_retired_scenario_that_comes_back_is_new_and_goes_green_again(
+    make_project: ProjectFactory,
+) -> None:
+    """Fable's I1 of the PR: it came back as green from before its retirement, the driver heard
+    it worked already, and the run ended in 10 with its test missing."""
+    root = make_project()
+    require(run_lictor(root, Agent()) == Outcome(0), "el primer run debía acabar en verde")
+    original = _retire_the_third(root)
+
+    def short(task: AgentTask, _attempt: int = 1) -> None:
+        write(task.cwd, DRIVER_PATH, WITHOUT_THE_THIRD)
+
+    require(run_lictor(root, Agent(driver=short), new=True) == Outcome(0), "el retiro debía entrar")
+    write(root, str(FEATURE), original)
+    git(root, "commit", "-qam", "feat: vuelve IVA-003")
+
+    def whole(task: AgentTask, _attempt: int = 1) -> None:
+        write(task.cwd, DRIVER_PATH, DRIVER)
+
+    agent = Agent(driver=whole)
+    assert run_lictor(root, agent, new=True) == Outcome(0)
+    # Its first green and a new one: the one from before the retirement no longer counted.
+    assert green_ids(root).count("IVA-003") == 2
