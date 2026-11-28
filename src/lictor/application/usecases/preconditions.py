@@ -21,7 +21,7 @@ from lictor.application.run_files import (
     verification_tree,
 )
 from lictor.application.skill import skill_stub_warning
-from lictor.application.spec_history import SpecHistory
+from lictor.application.spec_history import SpecHistory, specified
 from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
@@ -601,6 +601,7 @@ class CheckPreconditions:
                     keep_going=True,
                     installed_plugins=environment.installed_plugins,
                     unstarted=project_unstarted(
+                        specified=specified(tree),
                         any_green=bool(self.vcs.trailer_commits("Scenario")),
                         shallow=self.vcs.is_shallow(),
                     ),

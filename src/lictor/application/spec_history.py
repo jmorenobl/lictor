@@ -8,6 +8,7 @@ forged trailer still needs a tree whose features say the same.
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from lictor.application.ports import SpecSource, Vcs
 from lictor.domain.rules import RETIRED_TRAILER, ScenarioClass, classify_scenarios
@@ -101,3 +102,8 @@ def _latest(key: str, vcs: Vcs) -> dict[str, str]:
         for sid in scenario_ids:
             latest.setdefault(sid, sha)
     return latest
+
+
+def specified(tree: Path) -> bool:
+    """Whether a tree has scenarios for Lictor: a `.feature` under `features/`."""
+    return any((tree / FEATURES_DIR).rglob(f"*{_FEATURE_SUFFIX}"))

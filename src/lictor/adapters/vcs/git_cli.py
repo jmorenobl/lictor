@@ -221,7 +221,11 @@ class GitCli(Vcs, Worktrees, TextSearch):
         return changed_keys(before, after, branch)
 
     def main_checkout(self) -> Path:
-        """The checkout whose `.git` this one shares, read from files; itself when not linked."""
+        """The checkout whose `.git` this one shares, read from files; itself when not linked.
+
+        It takes the common directory's parent: with a bare repository and its worktrees that is
+        no checkout, its index is empty, and nothing is copied (Fable's N4 of the PR).
+        """
         return self._common_dir().parent if self.is_linked_worktree() else self.repo_dir
 
     def is_linked_worktree(self) -> bool:

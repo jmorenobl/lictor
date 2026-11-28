@@ -492,8 +492,9 @@ def _none_unchecked(info: Mapping[str, Any]) -> str:
 
 # What the report says above the scenarios whose tests this run's driver took out (S23).
 RETIRED_NOTE = (
-    "*Estaban en verde y ya no están en features/: el driver de este run quitó sus tests, y el "
-    "commit del driver lo dice en `Lictor-Retired`. Su no regresión deja de comprobarse.*"
+    "*Estaban en verde y ya no están en features/: el driver de este run tenía que quitar sus "
+    "tests, y su commit lo registra en `Lictor-Retired`. Su no regresión deja de comprobarse; "
+    "revisa en el driver que no quede ningún test suyo.*"
 )
 _MEASURES_NOTE = (
     "*Lo que vio el rojo de cada driver nuevo. «Con C» es lo que decidieron los impostores de "

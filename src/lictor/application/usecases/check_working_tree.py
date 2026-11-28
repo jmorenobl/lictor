@@ -13,7 +13,7 @@ from pathlib import Path
 from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
-from lictor.application.spec_history import FEATURES_DIR
+from lictor.application.spec_history import specified
 from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -132,7 +132,7 @@ class CheckWorkingTree:
                         deleted=subject.deleted,
                         installed_plugins=environment.installed_plugins,
                         api_base=api_base,
-                        unstarted=self._unstarted(),
+                        unstarted=self._unstarted(tree),
                     )
                 )
             unexecuted = self._unexecuted(environment, base, subject.rev)
@@ -148,9 +148,11 @@ class CheckWorkingTree:
             acceptance_note=note,
         )
 
-    def _unstarted(self) -> bool:
+    def _unstarted(self, tree: Path) -> bool:
         return project_unstarted(
-            any_green=bool(self.vcs.trailer_commits("Scenario")), shallow=self.vcs.is_shallow()
+            specified=specified(tree),
+            any_green=bool(self.vcs.trailer_commits("Scenario")),
+            shallow=self.vcs.is_shallow(),
         )
 
     def _acceptance_state(
@@ -161,16 +163,16 @@ class CheckWorkingTree:
         doesn't run the acceptance."""
         if not _runs_acceptance(req):
             return False, None
-        specified = any((tree / FEATURES_DIR).rglob("*.feature"))
+        is_specified = specified(tree)
         driver_files = bool(_driver_files(req, tree))
         shallow = self.vcs.is_shallow()
         pending = acceptance_pending(
-            specified=specified,
+            specified=is_specified,
             driver_files=driver_files,
             any_green=bool(self.vcs.trailer_commits("Scenario")),
             shallow=shallow,
         )
-        unknown = specified and shallow and not driver_files
+        unknown = is_specified and shallow and not driver_files
         return pending, SHALLOW_HISTORY if unknown else None
 
     def _unexecuted(

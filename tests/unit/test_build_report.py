@@ -5,6 +5,7 @@ import pytest
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.application.usecases.build_report import (
+    RETIRED_NOTE,
     BuildReport,
     BuildReportRequest,
 )
@@ -1448,3 +1449,15 @@ def test_a_basic_level_whose_impostors_never_ran_says_it_checks_no_test(tmp_path
 
     section = report.split("## Tests aceptados sin comprobar")[1].split("##")[0]
     assert "*Este perfil no comprueba los tests del driver: nivel básico.*" in section
+
+
+def test_the_retired_scenarios_are_listed(tmp_path: Path) -> None:
+    """S23: the seal says which scenarios this run's driver retired."""
+    sealed = _event("lictor.driver.sealed.v1", {"commit": "abc", "retired": ["IVA-003"]})
+
+    section = _report(tmp_path, [sealed]).split("## Escenarios retirados")[1].split("\n## ")[0]
+
+    assert RETIRED_NOTE in section
+    assert "IVA-003" in section
+    none = _event("lictor.driver.sealed.v1", {"commit": "abc", "retired": []})
+    assert "Ningún escenario retirado" in _report(tmp_path, [none])

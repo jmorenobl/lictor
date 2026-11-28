@@ -2266,3 +2266,20 @@ def test_a_driver_unchanged_with_retired_scenarios_is_still_committed_to_record_
     vcs.commit_tree.reset_mock()
     assert use_case._create_candidate(req) is None
     vcs.commit_tree.assert_not_called()
+    # Fable's N2 of the PR: a resume that finds this run's commit at HEAD makes no second one.
+    vcs.get_trailers.side_effect = lambda key, ref=None: {
+        "Lictor-Run": ["r1"],
+        "Lictor-Retired": ["A-3"],
+    }[key]
+    assert use_case._create_candidate(replace(req, retired_ids=["A-3"])) is None
+    vcs.commit_tree.assert_not_called()
+    vcs.get_trailers.side_effect = lambda key, ref=None: {"Lictor-Run": ["otro"]}.get(key, [])
+    assert use_case._create_candidate(replace(req, retired_ids=["A-3"])) is not None
+    # Fable's M7 of the PR: the seal after a resume reads them from this run's driver commit.
+    assert use_case._retired_by(replace(req, retired_ids=["A-3"]), "c") == ["A-3"]
+    assert use_case._retired_by(req, "c") == []
+    vcs.get_trailers.side_effect = lambda key, ref=None: {
+        "Lictor-Run": ["r1"],
+        "Lictor-Retired": ["A-3"],
+    }[key]
+    assert use_case._retired_by(req, "c") == ["A-3"]

@@ -1267,14 +1267,17 @@ def acceptance_pending(
     project's own suite, which no run writes. And only with the whole history: in a shallow
     clone no green is seen, and a driver deleted after one would pass for one that hasn't started.
     """
-    return (
-        specified and not driver_files and project_unstarted(any_green=any_green, shallow=shallow)
-    )
+    unstarted = project_unstarted(specified=specified, any_green=any_green, shallow=shallow)
+    return not driver_files and unstarted
 
 
-def project_unstarted(*, any_green: bool, shallow: bool) -> bool:
-    """Whether nothing was ever green here, which only the whole history can tell (S18, S20)."""
-    return not any_green and not shallow
+def project_unstarted(*, specified: bool, any_green: bool, shallow: bool) -> bool:
+    """Whether a project Lictor specifies has had nothing green yet (S18, S20).
+
+    Only with scenarios in `features/`: without them nothing will ever be green, so «not
+    started» would hold for good (Fable's N1 of the PR). And only with the whole history.
+    """
+    return specified and not any_green and not shallow
 
 
 # Set in every run of the acceptance, and only there: the profile's plugins tell it from the

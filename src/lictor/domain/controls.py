@@ -294,12 +294,13 @@ def unrunnable_by_agent(
 ) -> tuple[str, ...]:
     """What decides an attempt that the agent's tools don't let it check, as warnings (D10).
 
-    Each such command drops out of the agent's list: it works blind on what it can't run.
+    Each such command drops out of the agent's list: it works blind on what it can't run. A
+    control with `"agent": false` is the person's decision, and isn't warned of (Fable's N3).
     """
     found = [
         (f"el control {c.id}", c.run, _check_of(c))
         for c in command_controls(controls)
-        if counts_for_agent(c, installed)
+        if counts_for_agent(c, installed) and c.grants_agent
     ]
     if acceptance_run:
         found.append(("la aceptación", acceptance_run, without_report(acceptance_run)))
@@ -317,6 +318,12 @@ def _unrunnable_text(what: str, run: str, command: str | None) -> str:
             f"el agente no tiene orden para comprobar {what} (`{run}`): su informe `{{out}}` va "
             "como argumento suelto y no se puede quitar sin cambiar la orden, así que no podrá "
             "comprobarlo antes de acabar."
+        )
+    if _WILDCARDS & set(command):
+        return (
+            f"el agente no tiene orden para comprobar {what} (`{command}`): lleva `*`, `?` o `[`, "
+            "que en una regla son comodines, así que no se le concede tal cual. Dale un "
+            'agent_run sin ellos, o "agent": false si no debe comprobarlo.'
         )
     return (
         f"agent_tools no deja al agente ejecutar {what} (`{command}`): no podrá comprobarlo antes "

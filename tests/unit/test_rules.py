@@ -56,6 +56,7 @@ from lictor.domain.rules import (
     person_stop_reason,
     precondition_exit_code,
     present_scenarios,
+    project_unstarted,
     red_failure_problem,
     registration_problems,
     registration_subject,
@@ -1982,3 +1983,20 @@ def test_what_is_said_of_a_retired_scenario() -> None:
         "- Los escenarios A-1 se retiraron de la especificación: quita del driver sus tests y lo "
         "que solo usaban ellos. Ningún otro test cambia por eso."
     )
+
+
+@pytest.mark.parametrize(
+    ("specified", "any_green", "shallow", "unstarted"),
+    [
+        (True, False, False, True),
+        (True, True, False, False),
+        (True, False, True, False),
+        # Fable's N1 of the PR: without scenarios nothing will ever be green.
+        (False, False, False, False),
+    ],
+)
+def test_a_project_is_unstarted_only_with_scenarios_none_green_and_the_whole_history(
+    specified: bool, any_green: bool, shallow: bool, unstarted: bool
+) -> None:
+    told = project_unstarted(specified=specified, any_green=any_green, shallow=shallow)
+    assert told is unstarted

@@ -924,11 +924,12 @@ def test_a_run_without_a_survey_dir_says_no_level(tmp_path: Path, bin_dir: Path)
     assert preconditions.PROOF_LEVEL not in _by_name(report)
 
 
-def test_what_every_attempt_runs_is_granted_and_only_an_opt_out_is_warned_of(
+def test_what_every_attempt_runs_is_granted_and_an_opt_out_is_not_warned_of(
     tmp_path: Path, bin_dir: Path
 ) -> None:
     """S17: the acceptance and each blocking control are granted to the agent by an exact rule;
-    only a control with `"agent": false` is left out, and `doctor` says so (D10)."""
+    a control with `"agent": false` is the person's decision, and `doctor` doesn't warn of it
+    (Fable's N3 of the PR). A command with a wildcard isn't granted, and is told why."""
     parts = _with_contract(tmp_path, bin_dir)
     parts.use_case.proof = _BARE
     parts.use_case.acceptance_run = "gotestsum --junitfile {out} -- ./acceptance/..."
@@ -940,15 +941,16 @@ def test_what_every_attempt_runs_is_granted_and_only_an_opt_out_is_warned_of(
     parts.use_case.head_controls = [
         CommandControl(
             id="lint", level="L1", run="golangci-lint run", report="exit-code", grants_agent=False
-        )
+        ),
+        CommandControl(id="glob", level="L1", run="vet ./*", report="exit-code"),
     ]
     left_out = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
     told = _by_name(left_out)[preconditions.AGENT_COMMANDS]
     assert told.problems == ()
     assert told.warnings == (
-        "agent_tools no deja al agente ejecutar el control lint (`golangci-lint run`): no podrá "
-        "comprobarlo antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) que lo "
-        "permita.",
+        "el agente no tiene orden para comprobar el control glob (`vet ./*`): lleva `*`, `?` o "
+        "`[`, que en una regla son comodines, así que no se le concede tal cual. Dale un "
+        'agent_run sin ellos, o "agent": false si no debe comprobarlo.',
     )
 
 

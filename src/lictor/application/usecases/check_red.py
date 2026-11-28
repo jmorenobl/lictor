@@ -875,12 +875,14 @@ class CheckRed:
 
         That is the case after a crash that left it committed, and when the driver needed no change.
         With retired scenarios it is committed even unchanged: the person took their tests out
-        with the scenarios, and this commit is what says so (Fable's I5 of the PR). After a crash
-        that left it committed, nothing is retired any more, so nothing is committed twice.
+        with the scenarios, and this commit is what says so (Fable's I5 of the PR). Not twice: a
+        resume that finds this run's driver commit at HEAD takes it (Fable's N2).
         """
         if not request.driver_fresh or request.tree is None:
             return None
-        if self.vcs.get_tree("HEAD") == request.tree and not request.retired_ids:
+        if self.vcs.get_tree("HEAD") == request.tree and (
+            not request.retired_ids or self._committed_by_this_run(request)
+        ):
             return None
         trailers: dict[str, str | list[str]] = {"Lictor-Run": request.run_id}
         if request.retired_ids:
@@ -892,6 +894,21 @@ class CheckRed:
             trailers=trailers,
             empty=bool(request.retired_ids),
         )
+
+    def _retired_by(self, request: CheckRedRequest, commit: str) -> list[str]:
+        """What this run's driver commit retired: after a resume nothing is left to retire, and
+        its trailer still says it (Fable's M7 of the PR). An older driver retired nothing here."""
+        if request.retired_ids:
+            return list(request.retired_ids)
+        if request.run_id not in self.vcs.get_trailers("Lictor-Run", commit):
+            return []
+        return self.vcs.get_trailers(RETIRED_TRAILER, commit)
+
+    def _committed_by_this_run(self, request: CheckRedRequest) -> bool:
+        """Whether HEAD is the driver commit this run made, its retired scenarios recorded."""
+        return request.run_id in self.vcs.get_trailers("Lictor-Run", "HEAD") and set(
+            request.retired_ids
+        ) <= set(self.vcs.get_trailers(RETIRED_TRAILER, "HEAD"))
 
     def _check_tree(
         self,
@@ -1487,7 +1504,7 @@ class CheckRed:
                 "stub_impostors": registration.stub_impostors,
                 "stub_unchecked": list(registration.stub_unchecked),
                 "unchecked_why": registration.unchecked_why,
-                "retired": list(request.retired_ids),
+                "retired": self._retired_by(request, commit_sha),
                 "driver_exempt": [
                     c.id for c in request.controls if c.mode == "block" and not c.checks_driver
                 ],
