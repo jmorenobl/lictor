@@ -18,15 +18,12 @@ from tests.integration.repro.harness import (
     Outcome,
     events_of,
     green_ids,
-    known_limitation,
-    require,
     run_lictor,
     write,
 )
 from tests.integration.repro.toolchains import (
     GO_DRIVER_PATH,
     GO_IMPL,
-    GO_LENIENT,
     GO_REFACTORED,
     GO_STUB,
     GO_UNIT_PATH,
@@ -76,7 +73,7 @@ def _cli(*args: str) -> str:
     return result.output
 
 
-def test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_level(
+def test_go_reaches_green_with_its_refactor_and_every_report_says_its_level(
     tmp_path: Path,
 ) -> None:
     root = go_project(tmp_path / "nif", refactor={"enabled": True})
@@ -85,8 +82,8 @@ def test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_leve
     doctor = _cli("doctor", "--cwd", str(root))
     outcome = run_lictor(root, agent)
 
-    assert "✓ Configuración válida: perfil 'generic@0.1' (alpha)" in doctor
-    assert "⚠ Nivel de prueba: básico" in doctor
+    assert "✓ Configuración válida: perfil 'generic@0.2' (alpha)" in doctor
+    assert "⚠ Nivel de prueba: resultado leído" in doctor
     assert "⚠ Órdenes del agente" not in doctor
     assert outcome == Outcome(0)
     assert agent.calls == ["driver", "NIF-001", "refactor:NIF-001"]
@@ -95,12 +92,12 @@ def test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_leve
     refactored = events_of(root, "scenario.refactored")
     assert [e["data"]["outcome"] for e in refactored] == ["applied"]
     started = events_of(root, "run.started")[0]["data"]
-    assert started["proof"]["level"] == "basico"
+    assert started["proof"]["level"] == "resultado_leido"
     report = (root / ".lictor" / "report.md").read_text(encoding="utf-8")
-    assert "- **Nivel de prueba**: básico" in report
+    assert "- **Nivel de prueba**: resultado leído" in report
     assert "## Lo que este nivel no comprueba" in report
     assert "No se puede saber: el perfil no declara cómo leer" in report
-    assert "Nivel de prueba: básico (" in _cli("status", "--cwd", str(root))
+    assert "Nivel de prueba: resultado leído (" in _cli("status", "--cwd", str(root))
     checked = _cli("check", "--cwd", str(root), "--level", "L1,L2")
     assert "✓ vet" in checked
     assert "✓ unit" in checked
@@ -118,7 +115,7 @@ def test_go_without_the_recover_in_its_first_test_is_rejected_saying_why(
     assert green_ids(root) == []
     rejected = events_of(root, "driver.rejected")
     assert rejected[0]["data"]["reason"] == "mapeo"
-    assert "panic: no implementado" in agent.prompts["driver"][1]
+    assert "panic: lictor: no implementado" in agent.prompts["driver"][1]
 
 
 def test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry(tmp_path: Path) -> None:
@@ -133,32 +130,6 @@ def test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry(tmp_path:
     assert run_lictor(root, agent) == Outcome(0)
     assert "undefined: nif.NoExiste" in agent.prompts["driver"][1]
     assert green_ids(root) == ["NIF-001", "NIF-002"]
-    assert go_false_greens(root) == []
-
-
-@known_limitation("un test que no compara nada pasa con cualquier código", until="0.24.0")
-def test_go_a_vacuous_test_is_no_green(tmp_path: Path) -> None:
-    """The basic level's gap: NIF-002 asserts nothing, and code that ignores the letter passes."""
-    root = go_project(tmp_path / "nif")
-    agent = Agent(driver=_go_driver(go_driver(second="vacuo")), impl=_go_impl(GO_LENIENT))
-
-    require(run_lictor(root, agent) == Outcome(0), "el run debía llegar a verde")
-    require(green_ids(root) == ["NIF-001", "NIF-002"], "los dos escenarios debían quedar en verde")
-
-    assert go_false_greens(root) == []
-
-
-@known_limitation(
-    "un test que no compara con el escenario pasa con cualquier código", until="0.24.0"
-)
-def test_go_a_weak_assertion_is_no_green(tmp_path: Path) -> None:
-    """The other half of the gap: NIF-002 fails at the red by the stub, never by its comparison."""
-    root = go_project(tmp_path / "nif")
-    agent = Agent(driver=_go_driver(go_driver(second="debil")), impl=_go_impl(GO_LENIENT))
-
-    require(run_lictor(root, agent) == Outcome(0), "el run debía llegar a verde")
-    require(green_ids(root) == ["NIF-001", "NIF-002"], "los dos escenarios debían quedar en verde")
-
     assert go_false_greens(root) == []
 
 

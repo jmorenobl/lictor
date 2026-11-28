@@ -83,3 +83,32 @@ def head_api_broken(comparison: ApiComparison, ref: str, *, blocks: bool) -> str
             "acepta esas roturas en `api.accepted` de lictor.json, o pon 'api' en measure."
         )
     return head + "El run solo avisará de lo que rompa de nuevo."
+
+
+def driver_controls(controls: Sequence[Control]) -> tuple[str, ...]:
+    """The blocking controls the driver's commit passes before the seal (G3).
+
+    Every one but those the person said a right driver can't pass (`"driver": false`).
+    """
+    checked = [control for control in controls if control.checks_driver]
+    return blocking_on_head(checked, ())[0]
+
+
+def driver_control_problem(control_id: str, error: str) -> str:
+    """What the driver's agent reads of a blocking control its commit doesn't pass (G3)."""
+    return (
+        f"El commit del driver no pasa el control '{control_id}', que bloquea cada intento: lo "
+        "que escribe el driver (sus tests y sus stubs) tiene que pasarlo, porque una vez sellado "
+        f"nadie puede cambiarlo.\n{error.strip()}"
+    )
+
+
+def driver_controls_note(control_ids: Sequence[str]) -> str:
+    """For the person, once the driver's attempts run out on a control: what they can change."""
+    names = ", ".join(f"'{cid}'" for cid in control_ids)
+    return (
+        f"Si un driver correcto no puede pasar {names} (un umbral propio, el largo de la línea de "
+        "un stub, algo que choca con las instrucciones del driver), cambia una de las dos cosas: "
+        'el control, o acceptance.driver_hints; o escribe "driver": false en ese control de '
+        "lictor.json, y el commit del driver dejará de pasarlo antes del sello."
+    )

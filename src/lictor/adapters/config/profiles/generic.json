@@ -1,9 +1,11 @@
 {
   "name": "generic",
-  "version": "0.1",
+  "version": "0.2",
   "status": "alpha",
+  "retired_versions": {"0.1": "pide que cada stub lleve la marca «lictor: no implementado» y sus constantes («lictor-impostor:»), con las que Lictor comprueba que cada test mira el resultado"},
   "detect": [],
   "controls": [],
+  "oracle": {"declared_impostors": true},
   "forbidden_paths": [".gitignore", ".gitattributes", ".claude", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".vscode", ".github"],
   "verification": {
     "env": {"HOME": "{home_dir}"},

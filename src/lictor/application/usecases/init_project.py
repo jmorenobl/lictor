@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lictor.application.ports import ConfigInitializer
+from lictor.application.run_files import own_dir
 from lictor.application.skill import install_skill_stub
 from lictor.domain.errors import ConfigError
 from lictor.domain.gitignore import missing_entries
@@ -34,6 +35,7 @@ class InitProjectResult:
     model: str = ""
     hints: str = ""
     gitignore_added: tuple[str, ...] = ()
+    gitignore_checked: bool = False  # the profile named entries for it, added or already there
     to_write: tuple[str, ...] = ()
     status: str = "stable"
 
@@ -60,12 +62,13 @@ class InitProject:
 
         config_path.write_text(init_data.config_json.rstrip() + "\n", encoding="utf-8")
 
-        lictor_dir = req.project_root / STATE_DIR
-        lictor_dir.mkdir(parents=True, exist_ok=True)
+        # Its own `.gitignore` makes git ignore all of `.lictor/` (F53): the project's is left
+        # alone for it, and only gets what the profile's tools leave in a working tree (G6).
+        own_dir(req.project_root)
 
         added = self._update_gitignore(
             project_root=req.project_root,
-            entries=[f"{STATE_DIR}/", *init_data.gitignore_entries],
+            entries=list(init_data.gitignore_entries),
         )
 
         return InitProjectResult(
@@ -76,6 +79,7 @@ class InitProject:
             model=init_data.model,
             hints=init_data.hints,
             gitignore_added=added,
+            gitignore_checked=bool(init_data.gitignore_entries),
             to_write=tuple(init_data.to_write),
             status=init_data.status,
         )

@@ -791,6 +791,42 @@ def test_a_throwaway_is_built_from_its_commit_apart_from_the_runs(tmp_path: Path
     assert not environment.manifest.exists()
 
 
+def test_doctor_keeps_its_environment_and_rebuilds_it_only_for_another_key(
+    tmp_path: Path,
+) -> None:
+    """G5: what `doctor` says decides no green, so its environment may stay between runs."""
+    builder = _Builder()
+    environment, _ = _environment(tmp_path, builder)
+    kept_dir = tmp_path / ".lictor" / "doctor-env"
+    logs = tmp_path / ".lictor" / "doctor"
+
+    first = environment.kept(kept_dir, "HEAD", logs)
+    first.ensure("doctor-clave-1")
+    assert not first.reused
+    again = environment.kept(kept_dir, "HEAD", logs)
+    again.ensure("doctor-clave-1")
+    other = environment.kept(kept_dir, "HEAD", logs)
+    other.ensure("doctor-clave-2")
+
+    assert again.reused
+    assert again.env_dir == kept_dir / "env"
+    assert not other.reused
+    assert cast(MagicMock, environment.vcs).export_tree.call_count == 2
+    assert not environment.env_dir.exists()
+
+
+def test_without_prepare_doctor_keeps_what_its_commands_left(tmp_path: Path) -> None:
+    environment, _ = _environment(tmp_path, _Builder(), VerificationEnvSpec())
+    kept_dir = tmp_path / ".lictor" / "doctor-env"
+    (kept_dir / "env" / "gocache").mkdir(parents=True)
+
+    kept = environment.kept(kept_dir, "HEAD", tmp_path / "logs")
+
+    assert kept.ensure("doctor-clave") is None
+    assert kept.reused
+    assert (kept.env_dir / "gocache").is_dir()
+
+
 def test_commands_look_for_their_program_on_the_path_they_get(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

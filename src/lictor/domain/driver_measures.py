@@ -10,6 +10,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from typing import Literal, TypeGuard, get_args
 
+from lictor.domain.basic_stub_proof import (
+    BasicOutcome,
+    BasicVerdict,
+    VariantFact,
+    basic_verdict,
+)
 from lictor.domain.gherkin_proof import GherkinFacts
 from lictor.domain.interface_proof import ALTERED_STEPS, InterfaceProof, ProofOutcome, provoked_in
 from lictor.domain.model import (
@@ -58,6 +64,31 @@ class StubMeasure:
         return stub_verdict(StubProof(self.outcome), proof)
 
 
+VariantWord = Literal["pasa", "falla", "marca", "no_cuenta"]
+
+
+@dataclass(frozen=True)
+class DeclaredMeasure:
+    """How a pending scenario's test fared with each variant of the driver's own constants, and
+    what the basic rule made of it (ADR-0021)."""
+
+    by_variant: tuple[VariantWord, ...]
+    outcome: BasicOutcome
+
+    @property
+    def verdict(self) -> BasicVerdict:
+        return basic_verdict(self.outcome)
+
+
+def variant_word(fact: VariantFact | None) -> VariantWord:
+    """One variant's fact, as the journal and the report say it."""
+    if fact is None:
+        return "no_cuenta"
+    if fact.passed:
+        return "pasa"
+    return "marca" if fact.marked else "falla"
+
+
 @dataclass(frozen=True)
 class InterfaceMeasure:
     """What the impostor of the interface proved of one scenario, and what it saw step by step."""
@@ -85,6 +116,7 @@ class DriverMeasures:
     red: Mapping[str, RedMeasure]
     stubs: Mapping[str, StubMeasure] | None = None
     interface: Mapping[str, InterfaceMeasure] | None = None
+    declared: Mapping[str, DeclaredMeasure] | None = None
 
 
 def red_measures(
@@ -186,21 +218,32 @@ def measures_record(measures: DriverMeasures) -> dict[str, object]:
             sid: {"step": m.step, "caught": m.caught, "status": m.status}
             for sid, m in sorted(measures.red.items())
         },
-        "stubs": None
-        if measures.stubs is None
-        else {
-            sid: {
-                "by_constant": dict(m.by_constant),
-                "outcome": m.outcome,
-                "interface": m.interface,
-                "verdict": m.verdict,
-            }
-            for sid, m in sorted(measures.stubs.items())
-        },
-        "interface": None
-        if measures.interface is None
-        else {sid: _interface_record(m) for sid, m in sorted(measures.interface.items())},
+        "stubs": _section(measures.stubs, _stub_record),
+        "interface": _section(measures.interface, _interface_record),
+        "declared": _section(measures.declared, _declared_record),
     }
+
+
+def _section[M](
+    measured: Mapping[str, M] | None, record: Callable[[M], dict[str, object]]
+) -> dict[str, dict[str, object]] | None:
+    """One impostor's measures by scenario, in order; None where it didn't run."""
+    if measured is None:
+        return None
+    return {sid: record(m) for sid, m in sorted(measured.items())}
+
+
+def _stub_record(m: StubMeasure) -> dict[str, object]:
+    return {
+        "by_constant": dict(m.by_constant),
+        "outcome": m.outcome,
+        "interface": m.interface,
+        "verdict": m.verdict,
+    }
+
+
+def _declared_record(m: DeclaredMeasure) -> dict[str, object]:
+    return {"by_variant": list(m.by_variant), "outcome": m.outcome, "verdict": m.verdict}
 
 
 def _interface_record(m: InterfaceMeasure) -> dict[str, object]:
@@ -239,9 +282,10 @@ def measures_from_record(raw: object) -> DriverMeasures | None:
     red = _each(raw.get("red"), _red_from)
     stubs = _optional(raw.get("stubs"), _stub_from)
     interface = _optional(raw.get("interface"), _interface_from)
-    if red is None or stubs is False or interface is False:
+    declared = _optional(raw.get("declared"), _declared_from)
+    if red is None or stubs is False or interface is False or declared is False:
         return None
-    return DriverMeasures(red, stubs, interface)
+    return DriverMeasures(red, stubs, interface, declared)
 
 
 def _optional[T](
@@ -305,6 +349,21 @@ def _stub_from(raw: Mapping[str, object]) -> StubMeasure | None:
     if by_constant is None or outcome is None or (interface is not None and proof is None):
         return None
     return StubMeasure(by_constant, outcome, proof)
+
+
+_VARIANT_WORDS: tuple[VariantWord, ...] = get_args(VariantWord)
+_BASIC_OUTCOMES: tuple[BasicOutcome, ...] = get_args(BasicOutcome)
+
+
+def _declared_from(raw: Mapping[str, object]) -> DeclaredMeasure | None:
+    words = raw.get("by_variant")
+    outcome = _one_of(raw.get("outcome"), _BASIC_OUTCOMES)
+    if not isinstance(words, list) or outcome is None:
+        return None
+    read = [_one_of(word, _VARIANT_WORDS) for word in words]
+    if any(word is None for word in read):
+        return None
+    return DeclaredMeasure(tuple(w for w in read if w is not None), outcome)
 
 
 def _counts_from(raw: object) -> StepCounts | None:
@@ -409,7 +468,7 @@ def _names(raw: object) -> TypeGuard[list[str]]:
 
 
 # The phases of a red check, as `report.md` and the journal name them, in the order they run.
-RED_PHASES = ("red", "stubs", "interface", "gherkin")
+RED_PHASES = ("red", "stubs", "interface", "gherkin", "controls")
 
 
 def red_check_phase(run_dir_name: str, step_dir_name: str) -> str:

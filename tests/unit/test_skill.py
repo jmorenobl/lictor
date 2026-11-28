@@ -152,8 +152,9 @@ def test_every_packaged_profile_has_its_essentials_and_its_detail() -> None:
         assert critical in python_uv.essentials
     generic = parse_profile_skill("generic", catalog.skill_text("generic") or "")
     for critical in (
-        "lea una vez el\n  driver sellado",
-        "nunca devuelven un valor",
+        "lea una\n  vez el driver sellado",
+        "`lictor-impostor: <A> | <B>`",
+        "**ninguno su cero**",
         "`code_exclude`",
         "`agent_tools`",
         "lictor register",

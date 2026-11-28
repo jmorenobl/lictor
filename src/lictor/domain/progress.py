@@ -9,6 +9,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from lictor.domain.basic_stub_proof import seal_warning
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.model import Event
 from lictor.domain.proof_level import (
@@ -83,6 +84,7 @@ _RED_PHASE_TEXT = {
     "stubs": "stubs",
     "interface": "interfaz",
     "gherkin": "Gherkin",
+    "controls": "controles",
 }
 
 
@@ -198,6 +200,7 @@ class RunProgress:
     collateral: list[str] = field(default_factory=list)
     # New scenarios the code already met: the impostor of the interface proved it (ADR-0011).
     already_met: list[str] = field(default_factory=list)
+    unchecked: int = 0  # new tests the driver's own constants left unchecked (ADR-0021)
     reregistered: list[str] = field(default_factory=list)
     quarantined: list[str] = field(default_factory=list)
     # How each refactor ended (ADR-0010), by scenario: applied, discarded or unchanged.
@@ -403,7 +406,13 @@ class RunProgress:
         spend = self.spend(DRIVER_OWNER)
         timing = red_timing_text(event.data)
         took = f", {timing}" if timing else ""
-        return [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)}{took})."]
+        lines = [f"driver: sellado ({calls_text(spend.calls)}, {cost_text(spend.cost_usd)}{took})."]
+        unchecked = event.data.get("stub_unchecked")
+        ids = [str(sid) for sid in unchecked] if isinstance(unchecked, list) else []
+        warning = seal_warning(event.data.get("unchecked_why"), ids)
+        if warning is not None:
+            self.unchecked = len(ids)
+        return [*lines, f"⚠ {warning}"] if warning else lines
 
     def _reregistered(self, event: Event) -> list[str]:
         sid = str(event.scenarioid)
@@ -671,6 +680,11 @@ def describe_status(view: StatusView) -> list[str]:
         f"Ejecución: {view.run_id}",
         *_state_line(view),
         *([status_line(view.progress.proof)] if view.progress.proof is not None else []),
+        *(
+            [f"{view.progress.unchecked} tests del driver aceptados sin comprobar (ver report.md)"]
+            if view.progress.unchecked
+            else []
+        ),
         *_attempt_line(view),
         _greens_line(view, status),
         _spend_line(view.progress),

@@ -9,6 +9,7 @@ from lictor.domain.proof_level import (
     CONTROL_WITHOUT_PLUGIN,
     PLUGINS_UNCHECKED,
     PROVED,
+    READ,
     Gap,
     ProofDefences,
     ProofLevel,
@@ -26,7 +27,8 @@ from lictor.domain.proof_level import (
 PYTHON_UV = ProofDefences(
     link="scenario",
     red_kinds=True,
-    stub_impostors=True,
+    stub_rule_c=True,
+    declared_stubs=False,
     interface_impostor=True,
     gherkin=True,
     env_hashed=True,
@@ -38,7 +40,8 @@ PYTHON_UV = ProofDefences(
 GENERIC = ProofDefences(
     link="name",
     red_kinds=False,
-    stub_impostors=False,
+    stub_rule_c=False,
+    declared_stubs=False,
     interface_impostor=False,
     gherkin=False,
     env_hashed=False,
@@ -85,20 +88,40 @@ def test_without_the_environment_the_plugins_are_unchecked_not_assumed() -> None
     assert _codes(proof_level(GENERIC, None)) == _codes(proof_level(GENERIC, ()))
 
 
+def test_without_rule_c_nor_the_drivers_constants_it_is_basic() -> None:
+    proof = proof_level(replace(PYTHON_UV, stub_rule_c=False), INSTALLED)
+
+    assert proof == ProofLevel(BASIC)
+
+
 @pytest.mark.parametrize(
     ("change", "gap"),
     [
-        ({"stub_impostors": False}, None),
         ({"red_kinds": False}, "rojo_sin_clase"),
         ({"link": "name"}, "enlace_por_nombre"),
         ({"interface_impostor": False, "gherkin": False}, "ya_cumplido_sin_prueba"),
     ],
 )
-def test_any_part_of_the_oracle_missing_gives_basic(change: dict[str, object], gap: str) -> None:
+def test_rule_c_without_the_rest_of_the_oracle_reads_the_result(
+    change: dict[str, object], gap: str
+) -> None:
     proof = proof_level(replace(PYTHON_UV, **change), INSTALLED)
 
-    assert proof.level == BASIC
-    assert _codes(proof) == ([gap] if gap else [])
+    assert proof == ProofLevel(READ, (Gap(gap),))
+
+
+def test_generic_with_the_drivers_constants_reads_the_result_with_the_same_gaps() -> None:
+    proof = proof_level(replace(GENERIC, declared_stubs=True), ())
+
+    assert proof.level == READ
+    assert proof.gaps == proof_level(GENERIC, ()).gaps
+
+
+def test_the_drivers_constants_never_prove_the_result_without_rule_c() -> None:
+    """A core with the whole oracle but the basic rule: no class of the red judged its tests."""
+    defences = replace(PYTHON_UV, stub_rule_c=False, declared_stubs=True)
+
+    assert proof_level(defences, INSTALLED).level == READ
 
 
 @pytest.mark.parametrize(
@@ -127,9 +150,12 @@ def test_the_gherkin_without_the_interface_is_no_gap_of_its_own() -> None:
 
 def test_names_and_limits_of_each_level() -> None:
     assert level_name(BASIC) == "básico"
+    assert level_name(READ) == "resultado leído"
     assert level_name(PROVED) == "resultado probado"
     assert level_name("otro") == "otro"
     assert level_limit(BASIC).startswith("No se comprueba que el test compare nada: uno sin")
+    assert level_limit(READ).startswith("No se comprueba que el test compare con el valor")
+    assert "las dos constantes rompen" in level_limit(READ)
     assert level_limit(PROVED).startswith("No se comprueba que el test compare con el valor")
     assert level_limit("otro") == ""
 
@@ -146,7 +172,7 @@ def test_every_gap_has_its_own_sentence() -> None:
     assert gap_text(Gap(PLUGINS_UNCHECKED)).startswith("No se comprobó qué controles")
 
 
-def test_what_is_unchecked_starts_with_the_level_and_warnings_only_with_the_basic_one() -> None:
+def test_what_is_unchecked_starts_with_the_level_and_warnings_below_proved() -> None:
     basic = proof_level(GENERIC, ())
     proved = proof_level(PYTHON_UV, ("pytest_bdd.plugin",))
 
@@ -159,6 +185,7 @@ def test_what_is_unchecked_starts_with_the_level_and_warnings_only_with_the_basi
     )
     assert warning_lines(proved) == ("coverage no corre: falta pytest_cov.plugin",)
     assert warning_lines(ProofLevel(PROVED)) == ()
+    assert warning_lines(ProofLevel(READ)) == (level_limit(READ),)
 
 
 def test_status_says_the_level_and_how_many_gaps() -> None:
@@ -186,6 +213,7 @@ def test_the_record_keeps_codes_and_reads_back() -> None:
     }
     assert proof_from_record(record) == proof
     assert proof_from_record(proof_record(ProofLevel(PROVED))) == ProofLevel(PROVED)
+    assert proof_from_record(proof_record(ProofLevel(READ))) == ProofLevel(READ)
 
 
 @pytest.mark.parametrize(

@@ -266,7 +266,8 @@ def proof_defences(defences: Defences, controls: Sequence[Control]) -> ProofDefe
     return ProofDefences(
         link=defences.map_link,
         red_kinds=bool(defences.red_kinds),
-        stub_impostors=defences.impostors is not None,
+        stub_rule_c=defences.impostors is not None,
+        declared_stubs=defences.declared_impostors,
         interface_impostor=defences.interface_impostor is not None,
         gherkin=defences.interface_impostor is not None
         and defences.interface_impostor.gherkin is not None,
@@ -388,7 +389,7 @@ def bootstrap_runtime(
     spec_history = SpecHistory(vcs, spec_source)
     check_red_uc = CheckRed(
         environment=environment,
-        reader=readers.junit,
+        readers=readers,
         vcs=vcs,
         history=spec_history,
         audit=audit_sink,
@@ -523,6 +524,7 @@ def bootstrap_runtime(
         ),
         map_link=defences.map_link,
         impostors=defences.impostors,
+        declared_impostors=defences.declared_impostors,
         interface_impostor=defences.interface_impostor,
         # The refactor after each implemented green (ADR-0010), unless the project turned it off.
         refactor_scenario=(

@@ -42,7 +42,9 @@ Característica: NIF
 GO_STUB = (
     "package nif\n\n"
     "// Valido dice si la letra del NIF es la que toca.\n"
-    'func Valido(nif string) bool { panic("no implementado") }\n'
+    "func Valido(nif string) bool {\n"
+    '\tpanic("lictor: no implementado") // lictor-impostor: return false | return true\n'
+    "}\n"
 )
 GO_IMPL = """package nif
 
@@ -124,7 +126,7 @@ GO_ORACLE = {
 
 GO_CONFIG: dict[str, object] = {
     "version": "0.1",
-    "profile": "generic@0.1",
+    "profile": "generic@0.2",
     "backend": {"kind": "fake"},
     "hints": "Go. El paquete nif/ expone Valido(nif string) bool.",
     "paths": {
@@ -307,7 +309,11 @@ Característica: IVA
     Cuando calculo el IVA general
     Entonces el total es 121
 """
-NODE_STUB = 'export function general(importe) {\n  throw new Error("no implementado");\n}\n'
+NODE_STUB = (
+    "export function general(importe) {\n"
+    '  throw new Error("lictor: no implementado"); // lictor-impostor: return 1; | return 2;\n'
+    "}\n"
+)
 NODE_IMPL = (
     'import { centimos } from "redondeo";\n\n'
     "export function general(importe) {\n  return centimos(importe * 1.21);\n}\n"
@@ -322,7 +328,7 @@ NODE_LINK = 'ln -sfn "$LNM" node_modules'
 
 NODE_CONFIG: dict[str, object] = {
     "version": "0.1",
-    "profile": "generic@0.1",
+    "profile": "generic@0.2",
     "backend": {"kind": "fake"},
     "hints": "Node, ESM. iva/index.js exporta general(importe).",
     "refactor": {"enabled": False},

@@ -244,6 +244,7 @@ class GraphContext:
     oracle: RedOracle = field(default_factory=RedOracle)
     map_link: MapLink = "name"
     impostors: Impostors | None = None
+    declared_impostors: bool = False
     interface_impostor: InterfaceImpostor | None = None
     # The controls only `lictor check` runs: a run names them, in `run.started` and the reason.
     check_controls: tuple[Control, ...] = ()
@@ -552,6 +553,7 @@ class _GraphNodes:
                 hints=self.ctx.hints,
                 conventions=self.ctx.conventions,
                 interface_impostor=self.ctx.interface_impostor is not None,
+                declared_impostors=self.ctx.declared_impostors,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
                 driver_attempts=state.get("driver_attempts", 0),
@@ -561,9 +563,10 @@ class _GraphNodes:
                 forbidden_paths=self.ctx.forbidden_paths,
                 driver_exempt_paths=self.ctx.driver_exempt_paths,
                 max_driver_attempts=self.ctx.max_driver_attempts,
-                # The driver gets the fixes in its list, not the line that asks for them: what it
-                # leaves unformatted in the code the first implementer formats (F83).
-                check_commands=self._agent_commands().all,
+                # Its commit passes the blocking controls before the seal (G3): it hears the fixes
+                # as the implementer does, after its checks.
+                check_commands=self._agent_commands().checks,
+                fixes=self._agent_commands().fixes,
                 suppressions=self.ctx.suppressions,
                 banned_patterns=self.ctx.banned_patterns,
             )
@@ -612,6 +615,8 @@ class _GraphNodes:
                     oracle=self.ctx.oracle,
                     link=self.ctx.map_link,
                     impostors=self.ctx.impostors,
+                    declared_impostors=self.ctx.declared_impostors,
+                    controls=self.ctx.controls,
                     interface_impostor=self.ctx.interface_impostor,
                     suppressions=self.ctx.suppressions,
                     banned_patterns=self.ctx.banned_patterns,

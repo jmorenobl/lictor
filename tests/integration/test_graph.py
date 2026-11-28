@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import threading
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -196,7 +197,7 @@ Característica: IVA de facturas
     )
     check_red = CheckRed(
         environment=environment,
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=spec_history,
         audit=AuditSink(event_log=event_log, clock=clock),

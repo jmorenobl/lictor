@@ -2,6 +2,7 @@ import contextlib
 import html
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -24,6 +25,8 @@ from lictor.application.usecases.check_red import (
     DRIVER_COMMIT_MESSAGE,
     CheckRed,
     CheckRedRequest,
+    _joined,
+    _Rejection,
 )
 from lictor.application.verification_env import VerificationEnvironment, VerificationEnvSpec
 from lictor.domain.errors import DriverError
@@ -37,6 +40,7 @@ from lictor.domain.model import (
 )
 from lictor.domain.reports import JUnitReport
 from lictor.domain.rules import Impostors, RedOracle, StubConstant
+from tests.readers import all_readers
 
 
 def _environment(
@@ -86,7 +90,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -156,7 +160,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -200,7 +204,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -251,7 +255,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -302,7 +306,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -379,7 +383,7 @@ def _real_check(
     clock.now_iso.return_value = "2026-10-31T10:00:00Z"
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=JUnitReader(),
+        readers=all_readers(),
         vcs=vcs,
         history=_history(spec_source, greens),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -2206,3 +2210,19 @@ def test_check_red_a_value_the_then_never_reads_is_told_to_the_agent_without_mor
     assert len(runner.told) == 4  # the red and the interface's three: the code says it
     assert result.last_error is not None
     assert "el Entonces «el IVA es 21» recibe «21» del escenario y no lo usa" in result.last_error
+
+
+def test_one_rejection_joins_what_the_impostor_and_the_controls_found() -> None:
+    """I6 of the design: two attempts may be all the driver has, so both reasons go at once."""
+    impostor = _Rejection("impostor", "el test pasa también")
+    control = _Rejection("control", "no pasa el lint")
+    tampered = _Rejection("L0-estado", "cambió el estado")
+
+    assert _joined(impostor, control) == _Rejection(
+        "impostor", "el test pasa también\n\nno pasa el lint"
+    )
+    assert _joined(None, control) == control
+    assert _joined(impostor, None) == impostor
+    assert _joined(None, None) is None
+    # What the agent can't fix in the same retry stands alone.
+    assert _joined(impostor, tampered) == tampered

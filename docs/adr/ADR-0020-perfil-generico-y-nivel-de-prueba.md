@@ -100,3 +100,14 @@ era solo del perfil, y `paths` y `acceptance` eran obligatorios en él.
 - Los casos `repro` con la marca `toolchain`: Go y Node a verde con el agente simulado, los stubs
   con `panic` recogido, el olvido del `defer`, el driver que no compila y el entorno de Node con
   hash; y el test vacuo de Go como `@known_limitation`, un `xfail` estricto hasta la 0.24.0.
+
+## Enmienda de la 0.24.0 (2026-11-28): el nivel intermedio
+
+El sitio reservado lo ocupa **«resultado leído»** (`resultado_leido`), con un impostor de stubs (la
+regla C, o las constantes que declara el driver, ADR-0021) y sin el oráculo entero. Qué no
+comprueba: «que el test compare con el valor del escenario: uno que copia lo que devuelve el
+código, o cuya comparación es más débil que la igualdad y las dos constantes rompen, pasa. Un test
+que no consta que llegue a un stub se acepta sin comprobar, y se dice». «Resultado probado» sigue
+exigiendo la regla C. `generic@0.2` declara el impostor, así que su nivel es «resultado leído»;
+`generic@0.1` queda retirado. El falso verde declarado de D11 se cierra para los tests que llegan
+a un stub.

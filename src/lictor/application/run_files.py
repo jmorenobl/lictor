@@ -33,6 +33,8 @@ RUN_LOCK = "run.lock"
 PRIVATE_MODE = 0o700
 # The run's verification environment, inside its worktree: `{env_dir}` of the profile's commands.
 VERIFY_ENV_DIR = "verify-env"
+# `doctor`'s environment, kept from one `doctor` to the next; no run nor `check` uses it (G5).
+DOCTOR_ENV_DIR = "doctor-env"
 
 
 def attempt_prefix(project_root: Path, run_id: str, owner: str, attempt: int) -> Path:

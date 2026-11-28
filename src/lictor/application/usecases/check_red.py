@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from lictor.application.events import new_event
-from lictor.application.ports import AuditSink, ReportReader, SpecSource, Vcs
+from lictor.application.ports import AuditSink, ReportReader, ReportReaders, SpecSource, Vcs
 from lictor.application.run_files import (
     DRIVER_OWNER,
     attempt_prefix,
@@ -22,9 +22,36 @@ from lictor.application.run_files import (
     write_text,
 )
 from lictor.application.spec_history import SpecHistory
+from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
 from lictor.application.usecases.verify_attempt import IntegritySnapshot, describe_tampering
-from lictor.application.verification_env import VerificationEnvironment
+from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
+from lictor.domain.basic_stub_proof import (
+    BASIC_LIMITS_NOTE,
+    UNCHECKED_BY_INTERFACE,
+    UNCHECKED_WITHOUT_STUB,
+    UNMARKED,
+    UNMARKED_WITH_CODE,
+    BasicOutcome,
+    VariantFact,
+    ambiguous_variant_reason,
+    basic_proof,
+    basic_reason,
+    basic_verdict,
+    carries_mark,
+    unjudged_reason,
+    variant_fact,
+)
+from lictor.domain.controls import Control
+from lictor.domain.declared_stubs import (
+    VARIANTS,
+    DeclaredStub,
+    declared_stubs,
+    declared_variant,
+    form_problem_text,
+    single_variant,
+)
 from lictor.domain.driver_measures import (
+    DeclaredMeasure,
     DriverMeasures,
     interface_measures,
     measures_record,
@@ -32,9 +59,15 @@ from lictor.domain.driver_measures import (
     red_check_timing,
     red_measures,
     stub_measures,
+    variant_word,
 )
-from lictor.domain.errors import DriverError
+from lictor.domain.errors import AmbiguousMappingError, DriverError
 from lictor.domain.gherkin_proof import GherkinFacts, gherkin_facts, static_facts, to_change
+from lictor.domain.head_controls import (
+    driver_control_problem,
+    driver_controls,
+    driver_controls_note,
+)
 from lictor.domain.interface_proof import (
     ALTERED_STEPS,
     InterfaceImpostor,
@@ -49,6 +82,7 @@ from lictor.domain.interface_proof import (
 )
 from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseResult
 from lictor.domain.reports import JUnitReport
+from lictor.domain.results import verification_duration
 from lictor.domain.rules import (
     NOT_IMPLEMENTED,
     Impostors,
@@ -120,6 +154,7 @@ RejectionKind = Literal[
     "impostor",
     "sin_prueba",
     "especificacion_cambiada",
+    "control",
 ]
 
 
@@ -144,9 +179,12 @@ class CheckRedRequest:
     oracle: RedOracle = field(default_factory=RedOracle)
     link: MapLink = "name"
     impostors: Impostors | None = None
+    declared_impostors: bool = False  # the driver's own constants, judged without a plugin
     interface_impostor: InterfaceImpostor | None = None
     suppressions: Sequence[str] = ()
     banned_patterns: Sequence[str] = ()
+    # The `attempt` controls: the blocking ones the driver's commit passes before the seal (G3).
+    controls: Sequence[Control] = ()
 
 
 @dataclass(frozen=True)
@@ -169,14 +207,18 @@ class _Registration:
     new_pending: tuple[str, ...] = ()  # nothing has proved their tests yet
     pending_kinds: Mapping[str, str] = field(default_factory=dict)  # how each pending one failed
     pending_names: Mapping[str, str] = field(default_factory=dict)  # the test of each, to name it
+    # Whether each one's red carried the stub's mark: it reached a stub (ADR-0021).
+    pending_marked: Mapping[str, bool] = field(default_factory=dict)
     # New, passing with a fresh driver: the impostor of the interface may prove them (ADR-0011).
     unproven: Mapping[str, TestCaseResult] = field(default_factory=dict)
     already_met: tuple[str, ...] = ()  # those it proved: the code already met them
     red_cases: tuple[TestCaseResult, ...] = ()  # every case of the red, for the full error
     red_output: str = ""
     stub_impostors: int | None = None  # stubs the impostors replaced; None if they didn't run
-    # Accepted without a proof: the interface found nothing it could alter (ADR-0012).
+    # Accepted without a proof: the interface found nothing it could alter (ADR-0012), or the
+    # driver's constants couldn't say whether a test reached a stub (ADR-0021).
     stub_unchecked: tuple[str, ...] = ()
+    unchecked_why: str = ""  # "interfaz", "sin_stub" or "sin_marca": the person reads why
     measures: DriverMeasures | None = None  # what the stricter rules would say; a fresh driver's
 
     @property
@@ -245,6 +287,59 @@ class _ToProve:
     stubs_at: StubConstant | None = None
 
 
+@dataclass
+class _DeclaredRuns:
+    """What each variant of the driver's own constants reported (None: it told nothing), and why
+    the ones that told nothing didn't, with their output (ADR-0021)."""
+
+    reported: list[Mapping[str, TestCaseResult] | None] = field(default_factory=list)
+    unjudged: list[str] = field(default_factory=list)
+    outputs: list[str] = field(default_factory=list)
+
+    def facts(self, sid: str) -> list[VariantFact | None]:
+        """What each variant said of one scenario's test."""
+        return [None if run is None else variant_fact(run.get(sid)) for run in self.reported]
+
+
+def _test_lines(
+    registration: _Registration,
+    outcomes: Mapping[str, BasicOutcome],
+    ran: _DeclaredRuns,
+    writable: Sequence[str],
+) -> list[str]:
+    """A line per rejected test: none may let the driver be sealed silently. With no variant that
+    ran, what failed is the variants, said apart, not each test (V1 of Fable's second look)."""
+    ran_some = any(run is not None for run in ran.reported)
+    return [
+        basic_reason(sid, registration.pending_names.get(sid, sid), outcome, writable)
+        for sid, outcome in outcomes.items()
+        if outcome in ("sobrevive", "sigue_sin_implementar")
+        or (outcome == "sin_juzgar" and ran_some)
+    ]
+
+
+def _with_declared(
+    registration: _Registration, ran: _DeclaredRuns, outcomes: Mapping[str, BasicOutcome]
+) -> _Registration:
+    """The registration with what the basic rule measured and left unchecked."""
+    measures = registration.measures
+    if measures is not None:
+        declared = {
+            sid: DeclaredMeasure(tuple(variant_word(f) for f in ran.facts(sid)), outcome)
+            for sid, outcome in outcomes.items()
+        }
+        measures = replace(measures, declared=declared)
+    unchecked = tuple(
+        sid for sid, outcome in outcomes.items() if basic_verdict(outcome) == "sin_comprobar"
+    )
+    return replace(
+        registration,
+        measures=measures,
+        stub_unchecked=unchecked,
+        unchecked_why=UNCHECKED_WITHOUT_STUB if unchecked else "",
+    )
+
+
 # Each run of the stubs' impostors: the constant, and what it reported of each scenario.
 _StubRuns = list[tuple[str, Mapping[str, TestCaseResult]]]
 
@@ -266,13 +361,15 @@ class CheckRed:
     def __init__(
         self,
         environment: VerificationEnvironment,
-        reader: ReportReader[JUnitReport],
+        readers: ReportReaders,
         vcs: Vcs,
         history: SpecHistory,
         audit: AuditSink,
     ) -> None:
         self.environment = environment
-        self.reader = reader
+        # The acceptance's JUnit, and every format for the controls of the driver's commit (G3).
+        self.readers = readers
+        self.reader: ReportReader[JUnitReport] = readers.junit
         self.vcs = vcs
         self.history = history
         self.spec_source: SpecSource = history.spec_source
@@ -340,7 +437,9 @@ class CheckRed:
         if env_problem:
             rejection = _Rejection("L0-entorno", env_problem)
         if rejection is None:
-            rejection, registration = self._stubs_step(request, step_dir, rev, tree, registration)
+            rejection, registration = self._stub_impostors(
+                request, step_dir, rev, tree, registration
+            )
         proofs: dict[str, InterfaceProof] | None = None
         if rejection is None:
             rejection, registration, proofs = self._interface_step(
@@ -348,6 +447,7 @@ class CheckRed:
             )
         if registration.measures is not None:
             self._measured(request, step_dir, registration.measures)
+        rejection = self._with_controls(request, step_dir, rev, rejection)
         if rejection is not None:
             return self._reject_or_raise(request, step_dir, rejection)
         if registration.unproven:
@@ -382,9 +482,247 @@ class CheckRed:
             )
             measures = replace(measures, stubs=found)
         registration = replace(
-            registration, stub_impostors=stubs, measures=measures, stub_unchecked=unchecked
+            registration,
+            stub_impostors=stubs,
+            measures=measures,
+            stub_unchecked=unchecked,
+            unchecked_why=UNCHECKED_BY_INTERFACE if unchecked else "",
         )
         return self._stub_rejection(request, registration, proofs, interface), registration
+
+    def _deleted_by_driver(self, request: CheckRedRequest) -> list[str]:
+        """The paths the driver's tree removes from HEAD."""
+        if request.tree is None:
+            return []
+        return [change.path for change in self.vcs.changes(request.tree) if change.is_deleted]
+
+    def _stub_impostors(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        tree: Path,
+        registration: _Registration,
+    ) -> tuple[_Rejection | None, _Registration]:
+        """The profile's constants judged by rule C, or the driver's by the basic rule."""
+        if request.declared_impostors:
+            return self._declared_step(request, step_dir, rev, tree, registration)
+        return self._stubs_step(request, step_dir, rev, tree, registration)
+
+    def _with_controls(
+        self, request: CheckRedRequest, step_dir: Path, rev: str, rejection: _Rejection | None
+    ) -> _Rejection | None:
+        """Every reason the agent can fix, in one rejection: two attempts may be all it has (I6).
+
+        A rejection for what it can't fix in the same retry stands alone, without the controls.
+        """
+        if rejection is not None and rejection.kind not in _JOINED:
+            return rejection
+        return _joined(rejection, self._driver_controls(request, step_dir, rev))
+
+    def _driver_controls(
+        self, request: CheckRedRequest, step_dir: Path, rev: str
+    ) -> _Rejection | None:
+        """Run on the driver's commit the controls that block every attempt (G3).
+
+        Every other commit Lictor makes passed them, and a sealed driver that doesn't would fail
+        each attempt with nothing the implementer can change. A minimum score doesn't apply: the
+        stubs are uncovered on purpose, and the first green has to meet it.
+        """
+        if not request.driver_fresh:
+            return None
+        controls = [replace(control, min_score=None) for control in request.controls]
+        blocking = driver_controls(controls)
+        if not blocking:
+            return None
+        evidence = step_dir / "controles"
+        evidence.mkdir()
+        snapshot = IntegritySnapshot(
+            request.project_root / ".lictor", request.project_root, self.vcs
+        )
+        with verification_tree(self.vcs, rev, request.project_root) as tree:
+            result = CheckProject(EnvironmentRunner(self.environment), self.readers).execute(
+                CheckProjectRequest(
+                    project_root=request.project_root,
+                    controls=controls,
+                    control_ids=blocking,
+                    tree=tree,
+                    evidence_dir=evidence,
+                    keep_going=True,
+                    error_max_chars=request.error_max_chars,
+                    # A `when_exists` the driver removed fails, as in an attempt: once sealed it
+                    # would be skipped for good (Fable's M1 of the PR).
+                    deleted=self._deleted_by_driver(request),
+                    installed_plugins=self.environment.installed_plugins,
+                )
+            )
+        snapshot.verify_and_restore()
+        self._runs.append(("controls", verification_duration(result.controls, None)))
+        if snapshot.changes:
+            return _Rejection("L0-estado", describe_tampering(snapshot.changes))
+        env_problem = self.environment.ensure(request.run_id)
+        if env_problem:
+            return _Rejection("L0-entorno", env_problem)
+        if not result.blocked:
+            return None
+        lines = [driver_control_problem(f.id, f.condensed()) for f in result.blocked]
+        if request.driver_attempts >= request.max_driver_attempts:
+            lines.append(driver_controls_note([f.id for f in result.blocked]))
+        return _Rejection("control", "\n\n".join(lines))
+
+    def _declared_step(
+        self,
+        request: CheckRedRequest,
+        step_dir: Path,
+        rev: str,
+        tree: Path,
+        registration: _Registration,
+    ) -> tuple[_Rejection | None, _Registration]:
+        """Run the acceptance with each of the driver's own constants, and judge each new test by
+        what it did with them (ADR-0021). A driver that declared no stub is accepted unchecked."""
+        if not (request.driver_fresh and registration.new_pending):
+            return None, registration
+        stubs, problems = self._declared_in(request, tree)
+        if problems:
+            return _Rejection("impostor", "\n".join(problems)), registration
+        if not stubs:
+            why = UNMARKED_WITH_CODE if self._wrote_code(request, rev) else UNMARKED
+            unchecked = registration.new_pending
+            return None, replace(
+                registration, stub_impostors=0, stub_unchecked=unchecked, unchecked_why=why
+            )
+        variants = 1 if single_variant(stubs) else VARIANTS
+        ran = self._declared_runs(request, step_dir, rev, variants)
+        registration = replace(registration, stub_impostors=len(stubs))
+        if isinstance(ran, _Rejection):
+            return ran, registration
+        outcomes = {
+            sid: basic_proof(registration.pending_marked.get(sid, False), ran.facts(sid))
+            for sid in registration.new_pending
+        }
+        registration = _with_declared(registration, ran, outcomes)
+        return self._declared_rejection(request, registration, outcomes, ran), registration
+
+    def _declared_runs(
+        self, request: CheckRedRequest, step_dir: Path, rev: str, variants: int
+    ) -> "_DeclaredRuns | _Rejection":
+        """Run each variant; one that tells nothing is kept as None, with why and its output."""
+        runs = _DeclaredRuns()
+        for variant in range(variants):
+            ran = self._declared_run(request, step_dir, rev, variant)
+            if isinstance(ran, _Rejection):
+                return ran
+            mapped, problem, output = ran
+            runs.reported.append(mapped)
+            if problem is not None:
+                runs.unjudged.append(unjudged_reason(variant, problem))
+                runs.outputs.append(output)
+        return runs
+
+    def _declared_rejection(
+        self,
+        request: CheckRedRequest,
+        registration: _Registration,
+        outcomes: Mapping[str, BasicOutcome],
+        ran: "_DeclaredRuns",
+    ) -> _Rejection | None:
+        """One rejection with every test the basic rule rejected, each with what to change."""
+        lines = _test_lines(registration, outcomes, ran, request.oracle.writable)
+        left_unjudged = "sin_juzgar" in outcomes.values()
+        if left_unjudged:
+            lines.extend(ran.unjudged)
+        if not lines:
+            return None
+        survived = any(outcome == "sobrevive" for outcome in outcomes.values())
+        if survived and request.driver_attempts >= request.max_driver_attempts:
+            # Only what passes with every constant may be a right test of «there is a result».
+            lines.append(BASIC_LIMITS_NOTE)
+        output = "\n".join(ran.outputs) if left_unjudged else ""
+        return _Rejection("impostor", "\n".join(lines), output=output)
+
+    def _declared_in(
+        self, request: CheckRedRequest, tree: Path
+    ) -> tuple[list[DeclaredStub], list[str]]:
+        """Every stub the code the agent may write declares, and what the driver wrote wrong.
+
+        A line written wrong is the driver's only if it added it: one already in HEAD isn't.
+        """
+        added = set(self.vcs.added_lines(request.tree)) if request.tree is not None else set()
+        stubs: list[DeclaredStub] = []
+        problems: list[str] = []
+        for path, rel in _writable_files(tree, request.oracle):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            found, wrong = declared_stubs(text)
+            stubs.extend(found)
+            lines = text.splitlines()
+            problems.extend(
+                form_problem_text(rel, problem)
+                for problem in wrong
+                if lines[problem.line - 1] in added
+            )
+        return stubs, problems
+
+    def _wrote_code(self, request: CheckRedRequest, rev: str) -> bool:
+        """Whether the driver changed something in the code the agent may write, outside its own."""
+        if rev == "HEAD":
+            return False
+        changed = self.vcs.changed_paths(self.vcs.get_head_sha(), rev)
+        oracle = request.oracle
+        return any(_inside(p, oracle.writable) and not _inside(p, oracle.driver) for p in changed)
+
+    def _declared_run(
+        self, request: CheckRedRequest, step_dir: Path, rev: str, variant: int
+    ) -> tuple[Mapping[str, TestCaseResult] | None, str | None, str] | _Rejection:
+        """Run the acceptance with every stub at its constant `variant`, in a clean clone.
+
+        Return what it reported of each scenario, or None and why it doesn't count, with its
+        output. A tampering, a changed environment or an ambiguous mapping rejects the driver.
+        """
+        run_dir = step_dir / f"impostor-{variant + 1}"
+        run_dir.mkdir()
+        with verification_tree(self.vcs, rev, request.project_root) as clone:
+            for path, _ in _writable_files(clone, request.oracle):
+                try:
+                    # Each line keeps its own end: `\r\n` stays as it was written.
+                    text = path.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                changed, count = declared_variant(text, variant)
+                if count:
+                    path.write_bytes(changed.encode("utf-8"))
+            command, output, tampered = self._run_acceptance_suite(
+                request, run_dir / "acceptance.xml", clone
+            )
+        broken = self._after_run(request, run_dir, (command, output, tampered))
+        if broken is not None:
+            return broken
+        raw_output = format_output(output)
+        junit = self.reader.read(run_dir / "acceptance.xml")
+        trusted = trust(
+            junit,
+            Execution.of(output, request.acceptance_timeout_s),
+            request.acceptance_failure_exit_codes,
+        )
+        if isinstance(trusted, Crashed):
+            # What the compiler said of a constant reaches the retry, as at the red.
+            return None, describe_crash(trusted.reason, raw_output), raw_output
+        ids = [_scenario_str(s) for s in request.all_scenario_ids]
+        try:
+            mapped = map_test_cases_to_scenarios(
+                trusted.cases, ids, request.link, request.scenario_files
+            )
+        except AmbiguousMappingError as exc:
+            # One variant reaching a subtest the other doesn't would seal it (G1): never let it.
+            reason = ambiguous_variant_reason(variant, str(exc))
+            return _Rejection("mapeo", reason, trusted.cases, output=raw_output)
+        except DriverError as exc:
+            present = present_scenarios(trusted.cases, ids, request.link)
+            why = mapping_failure_reason(str(exc), ids, present, sealed=False, output=raw_output)
+            return None, why, raw_output
+        return mapped, None, raw_output
 
     def _judge_stubs(
         self,
@@ -614,6 +952,7 @@ class CheckRed:
             new_pending=new_pending,
             pending_kinds={sid: mapped[sid].failure_kind for sid in new_pending},
             pending_names={sid: mapped[sid].name for sid in new_pending},
+            pending_marked=_marked(mapped, new_pending),
             unproven={sid: mapped[sid] for sid in verdict.unproven},
             red_cases=tuple(cases),
             red_output=raw_output,
@@ -671,12 +1010,9 @@ class CheckRed:
                 command, output, tampered = self._run_acceptance_suite(
                     request, run_dir / "acceptance.xml", clone
                 )
-            save_output(run_dir / "acceptance.log", command, output)
-            if tampered:
-                return _Rejection("L0-estado", describe_tampering(tampered)), runs
-            env_problem = self.environment.ensure(request.run_id)
-            if env_problem:
-                return _Rejection("L0-entorno", env_problem), runs
+            broken = self._after_run(request, run_dir, (command, output, tampered))
+            if broken is not None:
+                return broken, runs
             results, problem, kept = self._impostor_results(request, run_dir, output)
             if kept is not None:
                 reason = f"No se pudo construir el impostor {constant.name!r}: {kept}"
@@ -866,13 +1202,29 @@ class CheckRed:
             command, output, tampered = self._run_acceptance_suite(
                 request, run_dir / "acceptance.xml", clone, env
             )
+        broken = self._after_run(request, run_dir, (command, output, tampered))
+        if broken is not None:
+            return broken
+        return _Ran(run_dir, output, told.mode)
+
+    def _after_run(
+        self,
+        request: CheckRedRequest,
+        run_dir: Path,
+        ran: tuple[Sequence[str], CommandOutput, Sequence[str]],
+    ) -> _Rejection | None:
+        """Keep a run of the impostors' log, and say if it tampered or changed the environment.
+
+        `ran` is what `_run_acceptance_suite` gave: the command, its output and what it changed.
+        """
+        command, output, tampered = ran
         save_output(run_dir / "acceptance.log", command, output)
         if tampered:
             return _Rejection("L0-estado", describe_tampering(tampered))
         env_problem = self.environment.ensure(request.run_id)
         if env_problem:
             return _Rejection("L0-entorno", env_problem)
-        return _Ran(run_dir, output, told.mode)
+        return None
 
     def _interface_results(
         self, request: CheckRedRequest, ran: "_Ran", ids: Sequence[str]
@@ -1121,6 +1473,10 @@ class CheckRed:
                 "files": seal_data.get("files", {}),
                 "stub_impostors": registration.stub_impostors,
                 "stub_unchecked": list(registration.stub_unchecked),
+                "unchecked_why": registration.unchecked_why,
+                "driver_exempt": [
+                    c.id for c in request.controls if c.mode == "block" and not c.checks_driver
+                ],
                 "already_met": list(registration.already_met),
                 "evidence": step_evidence(step_dir, request.project_root),
                 **self._timing(),
@@ -1241,3 +1597,21 @@ def _writable_files(tree: Path, oracle: RedOracle) -> list[tuple[Path, str]]:
 
 def _inside(path: str, roots: Sequence[str]) -> bool:
     return any(path == r.strip("/") or path.startswith(f"{r.strip('/')}/") for r in roots)
+
+
+# The rejections the controls' failures join: what the agent can fix in the same retry (I6).
+_JOINED: tuple[RejectionKind, ...] = ("impostor",)
+
+
+def _joined(first: _Rejection | None, second: _Rejection | None) -> _Rejection | None:
+    """One rejection with both reasons; a tampering or a changed environment stands alone."""
+    if first is None or second is None:
+        return first or second
+    if second.kind not in ("control",):
+        return second
+    return replace(first, reason=f"{first.reason}\n\n{second.reason}")
+
+
+def _marked(mapped: Mapping[str, TestCaseResult], pending: Sequence[str]) -> dict[str, bool]:
+    """Whether each pending test's red carried the stub's mark: it reached a stub (ADR-0021)."""
+    return {sid: carries_mark(mapped[sid]) for sid in pending}

@@ -73,6 +73,7 @@ class Defences:
     map_link: MapLink = "name"
     red_kinds: Sequence[str] = ()
     impostors: Impostors | None = None
+    declared_impostors: bool = False
     interface_impostor: InterfaceImpostor | None = None
     # What a project needs before a run, and how to read what its controls see (ADR-0015).
     needs_plugins: dict[str, str] = field(default_factory=dict)
@@ -873,6 +874,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         map_link=profile.oracle.link,
         red_kinds=tuple(profile.oracle.red_kinds),
         impostors=_impostors(profile.oracle),
+        declared_impostors=profile.oracle.declared_impostors,
         interface_impostor=_interface_impostor(profile.oracle),
         needs_plugins=dict(profile.acceptance.needs_plugins) if profile.acceptance else {},
         survey_run=profile.survey.run if profile.survey is not None else None,

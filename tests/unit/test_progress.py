@@ -816,3 +816,49 @@ def test_status_says_the_level_and_its_gaps() -> None:
     assert progress.proof is not None
     assert "Nivel de prueba: básico (2 huecos; ver report.md)" in _status([], {}, progress)
     assert not any("Nivel de prueba" in line for line in _status([], {}))
+
+
+def test_a_driver_sealed_with_tests_its_constants_couldnt_check_warns_of_them() -> None:
+    """ADR-0021: the level is of the defences; what a seal left unchecked is said there."""
+    progress = RunProgress()
+    sealed = _event(
+        "driver.sealed", stub_unchecked=["A-1", "A-2"], unchecked_why="sin_marca_con_codigo"
+    )
+
+    lines = _lines(progress, _finished(None, 0.03, 1000), sealed)
+
+    assert lines == [
+        "driver: sellado (1 llamada, 0,03 $).",
+        "⚠ 2 tests aceptados sin comprobar: el driver no declaró ningún stub; escribió código "
+        "sin la marca «lictor: no implementado»",
+    ]
+    assert progress.unchecked == 2
+
+
+def test_tests_the_interface_left_unchecked_are_no_warning_of_the_seal() -> None:
+    progress = RunProgress()
+    sealed = _event("driver.sealed", stub_unchecked=["A-1"], unchecked_why="interfaz")
+
+    assert _lines(progress, sealed) == ["driver: sellado (0 llamadas, 0,00 $)."]
+    assert progress.unchecked == 0
+
+
+def test_status_counts_the_tests_the_seal_left_unchecked() -> None:
+    sealed = _event("driver.sealed", stub_unchecked=["A-1", "A-2"], unchecked_why="sin_stub")
+    progress = _folded(_event("run.started", proof=_BASIC), sealed)
+
+    status = _status([], {}, progress)
+
+    level = status.index("Nivel de prueba: básico (2 huecos; ver report.md)")
+    assert status[level + 1] == "2 tests del driver aceptados sin comprobar (ver report.md)"
+    started = _folded(_event("run.started", proof=_BASIC))
+    assert not any("sin comprobar" in line for line in _status([], {}, started))
+
+
+def test_the_seal_names_the_tests_its_rule_couldnt_check() -> None:
+    sealed = _event("driver.sealed", stub_unchecked=["A-1"], unchecked_why="sin_stub")
+
+    assert _lines(RunProgress(), sealed)[1] == (
+        "⚠ 1 tests aceptados sin comprobar (A-1): fallan con todas las constantes de sus stubs, y "
+        "su rojo no llevaba «lictor: no implementado»"
+    )

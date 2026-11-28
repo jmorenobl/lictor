@@ -228,7 +228,8 @@ def test_cli_init_summarizes_what_it_wrote_and_says_the_next_step(tmp_path: Path
     assert "Perfil: python-uv@0.2" in out
     assert "Modelo: claude-sonnet-5-5" in out
     assert "Python >=3.14" in out
-    assert ".gitignore: añadidas .lictor/" in out
+    assert ".gitignore: añadidas __pycache__/" in out
+    assert ".lictor" not in (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "Siguiente paso:" in out
     assert out.index("commit") < out.index("lictor doctor")
 
