@@ -127,6 +127,9 @@ class CheckProjectRequest:
     deleted: Sequence[str] = ()
     # The base the public API is compared with (`--base`), measured already (ADR-0017).
     api_base: ApiBase | None = None
+    # Nothing was ever green, and the whole history says so: a minimum of coverage with no code
+    # to measure doesn't block yet (S18; `project_unstarted`). Never in an attempt.
+    unstarted: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,7 +228,7 @@ class CheckProject:
             added=selection.added,
             lent=lent,
             failures=tuple(failures),
-            not_measured=_not_measured(entries),
+            not_measured=_not_measured(entries) if req.unstarted else (),
         )
         if first_failure is None:
             return done
@@ -278,7 +281,7 @@ class CheckProject:
         failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
         if failure is None:
             return found, None
-        if nothing_to_measure(ctrl_run.entry):
+        if req.unstarted and nothing_to_measure(ctrl_run.entry):
             return tuple(replace(f, mode="measure") for f in found), None
         reason = failure_reason(step, ctrl_run.entry, failure.reason)
         return found, replace(failure, reason=reason)

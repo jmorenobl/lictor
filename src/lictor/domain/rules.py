@@ -1267,7 +1267,14 @@ def acceptance_pending(
     project's own suite, which no run writes. And only with the whole history: in a shallow
     clone no green is seen, and a driver deleted after one would pass for one that hasn't started.
     """
-    return specified and not driver_files and not any_green and not shallow
+    return (
+        specified and not driver_files and project_unstarted(any_green=any_green, shallow=shallow)
+    )
+
+
+def project_unstarted(*, any_green: bool, shallow: bool) -> bool:
+    """Whether nothing was ever green here, which only the whole history can tell (S18, S20)."""
+    return not any_green and not shallow
 
 
 # Set in every run of the acceptance, and only there: the profile's plugins tell it from the

@@ -26,7 +26,13 @@ from lictor.domain.api import ApiBase, UnresolvedBase
 from lictor.domain.controls import Control, check_selection
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
-from lictor.domain.rules import NO_COMMITS, NO_DRIVER_YET, SHALLOW_HISTORY, acceptance_pending
+from lictor.domain.rules import (
+    NO_COMMITS,
+    NO_DRIVER_YET,
+    SHALLOW_HISTORY,
+    acceptance_pending,
+    project_unstarted,
+)
 from lictor.domain.unexecuted import UnexecutedChanges
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
@@ -123,6 +129,7 @@ class CheckWorkingTree:
                         deleted=subject.deleted,
                         installed_plugins=environment.installed_plugins,
                         api_base=api_base,
+                        unstarted=self._unstarted(),
                     )
                 )
             unexecuted = self._unexecuted(environment, base, subject.rev)
@@ -136,6 +143,11 @@ class CheckWorkingTree:
             api_uncompared=uncompared,
             acceptance_pending=NO_DRIVER_YET if pending else None,
             acceptance_note=note,
+        )
+
+    def _unstarted(self) -> bool:
+        return project_unstarted(
+            any_green=bool(self.vcs.trailer_commits("Scenario")), shallow=self.vcs.is_shallow()
         )
 
     def _acceptance_state(

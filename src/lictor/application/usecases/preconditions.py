@@ -69,6 +69,7 @@ from lictor.domain.rules import (
     control_label,
     missing_executables,
     path_within,
+    project_unstarted,
     retired_text,
 )
 from lictor.domain.run_branches import uncommitted_left_out
@@ -599,6 +600,10 @@ class CheckPreconditions:
                     evidence_dir=evidence,
                     keep_going=True,
                     installed_plugins=environment.installed_plugins,
+                    unstarted=project_unstarted(
+                        any_green=bool(self.vcs.trailer_commits("Scenario")),
+                        shallow=self.vcs.is_shallow(),
+                    ),
                 )
             )
         snapshot.verify_and_restore()

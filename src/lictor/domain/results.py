@@ -770,13 +770,26 @@ def nothing_to_measure(entry: ControlEntry) -> bool:
     """Whether a coverage control's report measured nothing: a project with no code yet (S18).
 
     Its minimum can't be met before there is code, and the first green has to meet it: where
-    nothing an agent wrote is judged (HEAD, `check`) it doesn't block. In an attempt it still fails.
+    nothing an agent wrote is judged (HEAD, `check`) and nothing was ever green, it doesn't
+    block. In an attempt it still fails.
+
+    A command whose run failed is a failure whatever its report says: tests that fail and measure
+    nothing aren't a project without code (Fable's B1 of the PR). A reader ran nothing: the
+    tests' own control judges how they ended.
     """
     outcome = entry.outcome
     if isinstance(outcome, Read):
         report: object = outcome.report
     elif isinstance(outcome, Executed) and isinstance(outcome.judgement, Judged):
+        if not _ended_well(outcome.ran.execution, entry.control):
+            return False
         report = outcome.judgement.report
     else:
         return False
     return isinstance(report, CoverageReport) and not report.measured
+
+
+def _ended_well(execution: Execution, control: CommandControl | ReaderControl) -> bool:
+    """Whether a command finished in time with 0, or with a code that means nothing to run."""
+    codes = (0, *control.empty_exit_codes) if isinstance(control, CommandControl) else (0,)
+    return not execution.timed_out and execution.exit_code in codes

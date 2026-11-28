@@ -574,6 +574,7 @@ def test_a_minimum_of_coverage_with_no_code_to_measure_doesnt_block_the_check(
         Leaves(junit=_GREEN, coverage=coverage_json(0, 0)),
         controls=(_LINT, _UNIT, reader),
         control_ids=["coverage"],
+        unstarted=True,
     )
 
     assert result.ok
@@ -588,6 +589,23 @@ def test_a_minimum_of_coverage_that_measured_code_still_blocks(tmp_path: Path) -
     result, _ = _check(
         tmp_path,
         Leaves(junit=_GREEN, coverage=coverage_json(1, 2)),
+        controls=(_LINT, _UNIT, reader),
+        control_ids=["coverage"],
+        unstarted=True,
+    )
+
+    assert not result.ok
+    assert result.not_measured == ()
+    assert [f.id for f in result.blocked] == ["coverage"]
+
+
+def test_nothing_to_measure_blocks_once_a_scenario_was_green(tmp_path: Path) -> None:
+    """Fable's B1 of the PR: with a green in git, a `--cov` that measures nothing is a fault."""
+    reader = replace(_READER, min_score=90.0, mode="block")
+
+    result, _ = _check(
+        tmp_path,
+        Leaves(junit=_GREEN, coverage=coverage_json(0, 0)),
         controls=(_LINT, _UNIT, reader),
         control_ids=["coverage"],
     )

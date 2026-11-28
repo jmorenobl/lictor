@@ -560,5 +560,15 @@ def test_only_a_coverage_report_that_measured_nothing_is_nothing_to_measure() ->
     assert not nothing_to_measure(ReaderEntry(reader, Read("unit", MissingReport(), Failed("x"))))
     ran = Ran(("pytest",), Execution(0, 1), "log")
     assert nothing_to_measure(CommandEntry(command, Executed(ran, Judged(empty, Failed("x")))))
+    # Fable's B1 of the PR: tests that fail, or a cut, measure nothing and still fail.
+    failed = Ran(("pytest",), Execution(1, 1), "log")
+    cut = Ran(("pytest",), Execution(0, 1, timed_out=True), "log")
+    for bad in (failed, cut):
+        assert not nothing_to_measure(
+            CommandEntry(command, Executed(bad, Judged(empty, Failed("x"))))
+        )
+    lenient = replace(command, empty_exit_codes=(5,))
+    no_tests = Ran(("pytest",), Execution(5, 1), "log")
+    assert nothing_to_measure(CommandEntry(lenient, Executed(no_tests, Judged(empty, Failed("x")))))
     assert not nothing_to_measure(CommandEntry(command, Executed(ran, Judged(None, Passed()))))
     assert not nothing_to_measure(CommandEntry(command, Skipped("no")))
