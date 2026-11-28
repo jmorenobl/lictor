@@ -28,6 +28,7 @@ from lictor.adapters.config.models import (
     allow_empty_message,
     code_exclude_message,
     driver_hints_message,
+    granted_check,
     needs_plugins_message,
     plugin_without_list_message,
     prepare_message,
@@ -707,7 +708,7 @@ def _reject_unrunnable_agent_runs(
         problem
         for control in config.controls
         for name in _AGENT_COMMANDS
-        if (control.id, name) in asked
+        if (control.id, name) in asked and not (name == "agent_run" and granted_check(control))
         for problem in agent_run_problems([_only(control, name)], config.agent_tools)
     ]
     if problems:

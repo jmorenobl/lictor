@@ -754,13 +754,23 @@ def agent_run_problems(
 def _unrunnable(
     control: CommandControlConfig | ReaderControlConfig, agent_tools: Sequence[str]
 ) -> dict[str, None]:
-    """The agent's commands of a control its tools don't allow, to drop them."""
+    """The agent's commands of a control its tools don't allow, to drop them.
+
+    The check of a control granted to the agent (S17) is allowed whatever its tools say.
+    """
     return {
         name: None
         for name in _AGENT_FIELDS
         if (command := getattr(control, name, None)) is not None
         and not allowed_by(command, agent_tools)
+        and not (name == "agent_run" and granted_check(control))
     }
+
+
+def granted_check(control: CommandControlConfig | ReaderControlConfig) -> bool:
+    """Whether the check of `control` reaches the agent by its own rule (S17): one that blocks
+    every attempt and that the person didn't keep from it."""
+    return control.mode == "block" and control.stage == ATTEMPT and getattr(control, "agent", True)
 
 
 def _no_default(schema: JsonDict) -> None:
