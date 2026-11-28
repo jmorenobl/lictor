@@ -126,18 +126,23 @@ def allowed_by(command: str, agent_tools: Sequence[str]) -> bool:
 
 def bash_admits(agent_tools: Sequence[str]) -> str:
     """What the agent's Bash accepts, as its prompt says it: the prefixes, then the exact ones."""
-    rules = [
-        tool[len("Bash(") : -1]
-        for tool in agent_tools
-        if tool.startswith("Bash(") and tool.endswith(")")
-    ]
-    prefixes = list(dict.fromkeys(r.removesuffix(":*") for r in rules if r.endswith(":*")))
-    exact = list(dict.fromkeys(r for r in rules if not r.endswith(":*")))
+    prefixes, exact = _bash_rules(agent_tools)
     started = ", ".join(f"`{p}`" for p in prefixes) or "ninguna"
     if not exact:
         return started
-    listed = ", ".join(f"`{e}`" for e in exact)
-    return f"{started}, y estas órdenes tal cual: {listed}"
+    return f"{started}, y estas órdenes tal cual: {', '.join(f'`{e}`' for e in exact)}"
+
+
+def _bash_rules(agent_tools: Sequence[str]) -> tuple[list[str], list[str]]:
+    """The prefixes of the `Bash(<p>:*)` rules and the exact commands of the others, each once."""
+    rules = [tool[len("Bash(") : -1] for tool in agent_tools if _is_bash_rule(tool)]
+    prefixes = [rule.removesuffix(":*") for rule in rules if rule.endswith(":*")]
+    exact = [rule for rule in rules if not rule.endswith(":*")]
+    return list(dict.fromkeys(prefixes)), list(dict.fromkeys(exact))
+
+
+def _is_bash_rule(tool: str) -> bool:
+    return tool.startswith("Bash(") and tool.endswith(")")
 
 
 def counts_for_agent(control: Control, installed: Collection[str]) -> bool:

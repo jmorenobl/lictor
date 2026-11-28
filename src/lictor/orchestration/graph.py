@@ -484,7 +484,7 @@ class _GraphNodes:
         reopened = [sid for sid, cls in classes.items() if cls == "reopened"]
         for sid in reopened:
             self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
-        retired = list(self.ctx.spec_history.retired({s.id.value for s in scenarios}))
+        retired = list(self.ctx.spec_history.retired(classes.keys()))
 
         event = new_event(
             self.ctx.clock,

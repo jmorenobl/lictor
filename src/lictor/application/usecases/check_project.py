@@ -185,23 +185,15 @@ class CheckProject:
         lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
         failures: list[ControlFailure] = []
-        not_measured: list[str] = []
 
         for step in steps:
             ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
             entries.append(ctrl_run.entry)
             if note := lent_note(step, ctrl_run.entry):
                 lent[step.control.id] = note
-            failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
-            unmeasured = failure is not None and nothing_to_measure(ctrl_run.entry)
-            found = self._failures(req, step, ctrl_run)
-            # A minimum before there is code to measure doesn't block here (S18 of 0.25.0).
-            failures.extend(replace(f, mode="measure") if unmeasured else f for f in found)
-            if unmeasured:
-                not_measured.append(step.control.id)
-            elif failure is not None:
-                reason = failure_reason(step, ctrl_run.entry, failure.reason)
-                failure = replace(failure, reason=reason)
+            found, failure = self._judge_turn(req, step, ctrl_run)
+            failures.extend(found)
+            if failure is not None:
                 first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
@@ -233,7 +225,7 @@ class CheckProject:
             added=selection.added,
             lent=lent,
             failures=tuple(failures),
-            not_measured=tuple(not_measured),
+            not_measured=_not_measured(entries),
         )
         if first_failure is None:
             return done
@@ -274,6 +266,22 @@ class CheckProject:
         evidence = partial(self._evidence, req)
         judging = Judging(self.readers, req.api_base)
         return run_control(step, judging, evidence, execute, readings)
+
+    def _judge_turn(
+        self, req: CheckProjectRequest, step: Step, ctrl_run: ControlRun
+    ) -> tuple[tuple[ControlFailure, ...], Block | None]:
+        """A turn's failures, and what blocks of it, with its reason as the agent reads it.
+
+        A minimum of coverage before there is code to measure doesn't block (S18 of 0.25.0).
+        """
+        found = self._failures(req, step, ctrl_run)
+        failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
+        if failure is None:
+            return found, None
+        if nothing_to_measure(ctrl_run.entry):
+            return tuple(replace(f, mode="measure") for f in found), None
+        reason = failure_reason(step, ctrl_run.entry, failure.reason)
+        return found, replace(failure, reason=reason)
 
     def _failures(
         self, req: CheckProjectRequest, step: Step, ctrl_run: ControlRun
@@ -343,3 +351,8 @@ def _blocking(outcome: Consequence) -> Block | None:
             return Block(describe_tampering(changes))
         case _:
             assert_never(outcome)
+
+
+def _not_measured(entries: Sequence[ControlEntry]) -> tuple[str, ...]:
+    """The coverage controls whose report measured nothing: no code yet (S18)."""
+    return tuple(entry.control.id for entry in entries if nothing_to_measure(entry))

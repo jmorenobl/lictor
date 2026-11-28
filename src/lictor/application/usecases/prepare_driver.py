@@ -124,6 +124,12 @@ def _command_lines(request: PrepareDriverRequest) -> dict[str, str]:
     return {**lines, "{arreglos}": f"{fixes}\n" if fixes else ""}
 
 
+def _changed_lines(request: PrepareDriverRequest) -> str:
+    """The reopened and the retired, each on its line; nothing without either (S23)."""
+    lines = (_reopened_line(request.reopened_ids), retired_rule(request.retired_ids))
+    return "\n".join(line for line in lines if line)
+
+
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
     if not reopened_ids:
         return ""
@@ -228,14 +234,7 @@ class PrepareDriver:
             **_command_lines(request),
             "{regla_verdes}": greens_rule(request.green_ids, "driver"),
             # The reopened and the retired, each on its line; nothing without either (S23).
-            "{reabiertos}": "\n".join(
-                line
-                for line in (
-                    _reopened_line(request.reopened_ids),
-                    retired_rule(request.retired_ids),
-                )
-                if line
-            ),
+            "{reabiertos}": _changed_lines(request),
             "{driver_hints}": request.driver_hints,
             "{hints}": request.hints,
             "{bloque_de_error}": error_block,

@@ -1,7 +1,7 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +81,11 @@ _CACHE_NOTE = (
     "*La entrada incluye la caché: los tokens leídos y escritos en ella, que son casi toda la "
     "entrada de un agente.*"
 )
+
+
+def _calls_of(owners: Iterable[Mapping[str, Any]]) -> int:
+    """The agent calls of a set of owners of evidence: the scenarios, or the refactors."""
+    return sum(int(owner["calls"]) for owner in owners)
 
 
 def _owner_totals(owners: list[dict[str, Any]]) -> dict[str, int | float]:
@@ -441,11 +446,7 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         *(sorted(info["collateral"]) or ["- *Ningún verde colateral.*"]),
         "",
         "## Escenarios retirados",
-        *(
-            [RETIRED_NOTE, *sorted(info["retired"])]
-            if info["retired"]
-            else ["- *Ningún escenario retirado en esta ejecución.*"]
-        ),
+        *_retired_lines(info),
         "",
         "## Ya se cumplían",
         *(
@@ -457,6 +458,13 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         *([_unchecked_text(info)] if info["stub_unchecked"] else [_none_unchecked(info)]),
         *_exempt_lines(info),
     ]
+
+
+def _retired_lines(info: Mapping[str, Any]) -> list[str]:
+    """The scenarios whose tests this run's driver took out, retired from `features/` (S23)."""
+    if not info["retired"]:
+        return ["- *Ningún escenario retirado en esta ejecución.*"]
+    return [RETIRED_NOTE, *sorted(info["retired"])]
 
 
 def _exempt_lines(info: Mapping[str, Any]) -> list[str]:
@@ -1179,8 +1187,8 @@ class BuildReport:
         totals = _owner_totals(owners)
         split = calls_by_role(
             driver=info["driver"]["calls"],
-            implement=sum(scenario["calls"] for scenario in info["scenarios"].values()),
-            refactor=sum(r["calls"] for r in refactors),
+            implement=_calls_of(info["scenarios"].values()),
+            refactor=_calls_of(refactors),
         )
 
         lines = [

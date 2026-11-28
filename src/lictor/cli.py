@@ -48,7 +48,10 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
     ControlFailure,
 )
-from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
+from lictor.application.usecases.check_working_tree import (
+    CheckWorkingTreeRequest,
+    CheckWorkingTreeResult,
+)
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
     CheckPreconditions,
@@ -578,13 +581,12 @@ def check(
 
         typer.echo(f"Verificado: {res.subject}")
         only_here = {c.id for c in runtime.graph_context.check_controls}
-        for line in _check_output(res.check, only_here):
-            typer.echo(line)
-        if res.acceptance_pending:
-            typer.echo(f"- acceptance: {res.acceptance_pending}")
-        if res.acceptance_note:
-            typer.echo(f"  {res.acceptance_note}")
-        for line in _unexecuted_output(res.unexecuted):
+        told = (
+            *_check_output(res.check, only_here),
+            *_acceptance_notes(res),
+            *_unexecuted_output(res.unexecuted),
+        )
+        for line in told:
             typer.echo(line)
         if res.api_uncompared:
             typer.echo(f"\n{API_UNCOMPARED}")
@@ -597,6 +599,12 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+def _acceptance_notes(res: CheckWorkingTreeResult) -> list[str]:
+    """Why the acceptance didn't run before the first run, or why that can't be told (S20)."""
+    notes = [f"- acceptance: {res.acceptance_pending}"] if res.acceptance_pending else []
+    return [*notes, f"  {res.acceptance_note}"] if res.acceptance_note else notes
 
 
 # `--base` without an API control: the rest compares with it, the API doesn't (M4 of 0.20.0).

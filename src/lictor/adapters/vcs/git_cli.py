@@ -185,15 +185,12 @@ class GitCli(Vcs, Worktrees, TextSearch):
         for name in sorted(current.keys() | pin.files.keys()):
             if (only is not None and name not in only) or current.get(name) == pin.files.get(name):
                 continue
-            if name == _CONFIG:
-                keys = self._config_keys(pin, current.get(name))
-                if keys == ():
-                    # Only inert keys changed: what wrote them (an editor, the person's own
-                    # branch) keeps them (S22 of 0.25.0).
-                    continue
-                changed.append(config_change_text(keys or ()))
-            else:
-                changed.append(name if name == ".git" else f".git/{name}")
+            shown = self._changed_name(pin, name, current.get(name))
+            if shown is None:
+                # Only inert keys of the config changed: what wrote them (an editor, the
+                # person's own branch) keeps them (S22 of 0.25.0).
+                continue
+            changed.append(shown)
             target = paths.get(name) or self._common_dir() / name
             if name in pin.files:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -202,6 +199,13 @@ class GitCli(Vcs, Worktrees, TextSearch):
             else:
                 target.unlink()
         return changed
+
+    def _changed_name(self, pin: RepoPin, name: str, now: bytes | None) -> str | None:
+        """How a changed control file is named, or None when only inert keys of the config did."""
+        if name != _CONFIG:
+            return name if name == ".git" else f".git/{name}"
+        keys = self._config_keys(pin, now)
+        return None if keys == () else config_change_text(keys or ())
 
     def _config_keys(self, pin: RepoPin, now: bytes | None) -> tuple[str, ...] | None:
         """The guarded keys a change of the config touched; () when only inert ones did, and

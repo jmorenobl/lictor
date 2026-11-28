@@ -1,7 +1,7 @@
 import hashlib
 import json
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -709,12 +709,24 @@ def _reject_unrunnable_agent_runs(
         problem
         for control in config.controls
         for name in _AGENT_COMMANDS
-        if (control.id, name) in asked and not (name == "agent_run" and granted_check(control))
+        if _asked_and_not_granted(asked, control, name)
         for problem in agent_run_problems([_only(control, name)], config.agent_tools)
     ]
     if problems:
         msg = f"Configuración inválida en '{config_path}': " + "\n".join(problems)
         raise ConfigError(msg)
+
+
+def _asked_and_not_granted(
+    asked: Collection[tuple[str, str]],
+    control: CommandControlConfig | ReaderControlConfig,
+    name: str,
+) -> bool:
+    """Whether the project wrote this command and it needs a rule of its own: the `agent_run` of
+    a control granted to the agent doesn't (S17)."""
+    if (control.id, name) not in asked:
+        return False
+    return not (name == "agent_run" and granted_check(control))
 
 
 def _only(
