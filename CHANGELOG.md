@@ -7,6 +7,43 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+## [0.24.0] - 2026-11-28
+
+### Añadido
+
+- **El impostor básico de stubs, para un perfil sin plugin (ADR-0021).** El driver escribe, en la
+  línea de cada stub, sus dos constantes: `panic("lictor: no implementado") // lictor-impostor:
+  return 1 | return 2`. Lictor corre la aceptación con cada una y rechaza, reintentable, el test
+  que pasa con las dos: el que no compara nada y el que solo mira que el resultado no está vacío.
+  Las constantes no pueden ser el cero de su tipo (salvo un booleano) ni nulas, y una función que
+  no devuelve nada lleva una sola (`return`). Un test que falla con las dos sin haber llegado a un
+  stub, o un driver sin stubs, se acepta sin comprobar y el sellado lo avisa con ⚠, `status` lo
+  cuenta y `report.md` dice por qué.
+- **El nivel de prueba «resultado leído»** (ADR-0020, enmienda): con un impostor de stubs y sin el
+  oráculo entero. `generic` está en él.
+- **`lictor doctor --fresh`**, que rehace el entorno de `doctor` en vez de reutilizar el anterior.
+- **`"driver": false` en un control de `lictor.json`**: el commit del driver no lo pasa antes del
+  sello, para un control que un driver correcto no puede pasar.
+
+### Cambiado
+
+- **`generic@0.2`**, con el impostor básico. `generic@0.1` queda retirado: sus stubs no llevan las
+  constantes.
+- **El commit del driver pasa los controles que bloquean cada intento antes del sello** (G3), como
+  cualquier otro commit de Lictor, sin aplicar mínimos de puntuación. Un driver que no los pasa se
+  rechaza, reintentable, con la salida del control, y su orden le pide los arreglos (formatear) como
+  al implementador. Un solo rechazo junta los motivos del impostor y de los controles.
+- **Un `t.Run` al que llega una constante se rechaza antes del sello** (G1), reintentable, en vez de
+  sellarse y gastar los intentos del implementador.
+- **`lictor doctor` conserva su entorno** en `.lictor/doctor-env/` de una vez a la siguiente (G5): en
+  kitlegal, de 149 s a 100 s; el resto son los tests con `-race` del proyecto. Con `prepare`, se
+  rehace cuando cambian la configuración o el árbol de HEAD. Un run sigue construyendo el suyo, y
+  `retire` también borra el de `doctor`.
+- **`lictor init` ya no añade `.lictor/` al `.gitignore`** (G6): `.lictor/` lleva el suyo propio desde
+  la 0.19.0 (F53). Solo añade lo que el perfil dice que dejan sus herramientas; con `generic`, nada.
+- **La receta de Go, Node y Python de `generic`** pide los stubs con la marca y sus constantes, y en Go
+  un centinela del paquete para una función que solo devuelve `error`.
+
 ## [0.23.2] - 2026-11-28
 
 ### Cambiado
@@ -1342,6 +1379,7 @@ con el CLI real de Claude Code (#8).
   solo puede correr una ejecución por checkout. Cada ejecución en su clon y su rama es el ADR-0005.
 
 [Sin publicar]: https://github.com/jmorenobl/lictor/compare/v0.23.2...HEAD
+[0.24.0]: https://github.com/jmorenobl/lictor/compare/v0.23.2...v0.24.0
 [0.23.2]: https://github.com/jmorenobl/lictor/compare/v0.23.1...v0.23.2
 [0.23.1]: https://github.com/jmorenobl/lictor/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/jmorenobl/lictor/compare/v0.22.0...v0.23.0

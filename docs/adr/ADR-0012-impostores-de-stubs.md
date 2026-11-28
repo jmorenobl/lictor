@@ -182,3 +182,10 @@ con ella se sella al primer intento.
 
 **Límite:** los otros métodos especiales siguen sin constante que valga.
 
+
+## Enmienda de la 0.24.0 (2026-11-28): la regla C es la de un perfil con clases
+
+La regla C lee la clase de cada fallo, su paso y su marco, que da el plugin de `python-uv`. Un
+perfil sin ellos (`generic`) usa otro impostor, en el que el driver declara las constantes de cada
+stub y el juicio solo mira si el test pasa con ellas: la ADR-0021. Esta ADR sigue valiendo entera
+para `python-uv`, y `oracle.impostors` sigue exigiendo `red_kinds`.
