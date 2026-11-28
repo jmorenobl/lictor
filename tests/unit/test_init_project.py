@@ -51,9 +51,11 @@ def test_init_project_creates_files_and_gitignore(tmp_path: Path) -> None:
         encoding="utf-8"
     ).strip() == '{"profile": "python-uv@0.2"}'
     assert (tmp_path / ".lictor").is_dir()
+    # G6: git ignores `.lictor/` by its own `.gitignore`, so the project's doesn't name it.
+    assert (tmp_path / ".lictor" / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
     gitignore_content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-    assert ".lictor/" in gitignore_content
+    assert ".lictor" not in gitignore_content
     assert "__pycache__/" in gitignore_content
     assert ".venv/" in gitignore_content
 
@@ -90,7 +92,7 @@ def test_init_project_existing_gitignore_preserves_content_and_appends_missing(
 
     content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert content.startswith("# My rules\n.venv/\n")
-    assert ".lictor/" in content
+    assert ".lictor" not in content
     assert "__pycache__/" in content
     # .venv/ should not be duplicated
     assert content.count(".venv/") == 1
@@ -117,7 +119,7 @@ def test_init_project_says_what_it_decided(tmp_path: Path) -> None:
     assert res.profile_name == "python-uv@0.2"
     assert res.model == "claude-sonnet-5-5"
     assert res.hints == "Python >=3.14, gestor uv."
-    assert res.gitignore_added == (".lictor/", "__pycache__/")
+    assert res.gitignore_added == ("__pycache__/",)
 
 
 def test_init_project_with_a_complete_gitignore_adds_nothing(tmp_path: Path) -> None:
@@ -137,5 +139,16 @@ def test_init_project_doesnt_repeat_what_uv_init_left_in_gitignore(tmp_path: Pat
 
     res = InitProject(initializer).execute(InitProjectRequest(project_root=tmp_path))
 
-    assert res.gitignore_added == (".lictor/",)
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == f"{uv_init}.lictor/\n"
+    assert res.gitignore_added == ()
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == uv_init
+
+
+def test_init_without_entries_of_the_profile_leaves_no_gitignore(tmp_path: Path) -> None:
+    """G6: with `generic`, which declares none, `init` doesn't touch the project's `.gitignore`."""
+    res = InitProject(FakeConfigInitializer(gitignore_entries=[])).execute(
+        InitProjectRequest(project_root=tmp_path)
+    )
+
+    assert not res.gitignore_updated
+    assert not (tmp_path / ".gitignore").exists()
+    assert (tmp_path / ".lictor" / ".gitignore").is_file()

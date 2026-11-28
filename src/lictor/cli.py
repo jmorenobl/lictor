@@ -20,6 +20,7 @@ from lictor.application.events import new_event
 from lictor.application.ports import Clock, Worktrees
 from lictor.application.run_files import (
     DOCTOR_DIR,
+    DOCTOR_ENV_DIR,
     RETIRED_DIR,
     VERIFY_ENV_DIR,
     archive_run_evidence,
@@ -196,9 +197,17 @@ def _main(
 _UNDO_OR_START_OVER = "Si fuiste tú, deshazlo y relanza, o empieza de nuevo con `lictor run --new`."
 
 
+def _gitignore_line(res: InitProjectResult) -> str:
+    """What `init` did to the project's `.gitignore`: only what the profile's tools leave (G6)."""
+    if res.gitignore_added:
+        return f"  .gitignore: añadidas {', '.join(res.gitignore_added)}"
+    if res.gitignore_checked:
+        return "  .gitignore: ya tenía todo"
+    return "  .gitignore: sin tocar (.lictor/ se ignora con su propio .gitignore)"
+
+
 def describe_init(res: InitProjectResult) -> str:
     """Say what `init` decided for the person, what to review, and what comes next (F08)."""
-    added = ", ".join(res.gitignore_added)
     status = f" ({res.status}: puede cambiar sin aviso)" if res.status != "stable" else ""
     lines = [
         f"Configuración inicializada en '{res.config_path.name}':",
@@ -206,7 +215,7 @@ def describe_init(res: InitProjectResult) -> str:
         f"  Modelo: {res.model} (backend.model; otro con --model)",
         f"  hints: «{res.hints}»",
         "    Lo lee el agente en cada llamada: ajústalo a tu proyecto.",
-        f"  .gitignore: añadidas {added}" if added else "  .gitignore: ya tenía todo",
+        _gitignore_line(res),
     ]
     helper = ""
     if res.skill_path:
@@ -385,17 +394,31 @@ def conventions_command(
     _safe_run(_execute)
 
 
-def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None]:
-    """The checks `doctor` makes, and why the configuration didn't load, if it didn't."""
+def _doctor_checks(root: Path) -> tuple[CheckPreconditions, Clock, str | None, str]:
+    """The checks `doctor` makes, why the configuration didn't load, if it didn't, and the key
+    its kept environment is rebuilt for: the configuration's hash (G5)."""
     try:
         runtime = bootstrap_runtime(root)
     except ConfigError as err:
         # Everything that doesn't need the configuration is still worth telling (F30).
         checks, clock = unconfigured_preconditions(root)
-        return checks, clock, str(err)
+        return checks, clock, str(err), ""
     status = "" if runtime.profile_status == "stable" else f" ({runtime.profile_status})"
     typer.echo(f"✓ Configuración válida: perfil '{runtime.config.profile}'{status}")
-    return runtime.preconditions, runtime.clock, None
+    return runtime.preconditions, runtime.clock, None, runtime.config_hash
+
+
+def _doctor_env_key(root: Path, config_hash: str) -> str:
+    """What `doctor`'s kept environment is built for: the configuration and HEAD's tree (G5).
+
+    `prepare` runs on a clean clone of HEAD, so either changing rebuilds it; without a commit
+    there is nothing to build from, and the run's id stands for the key.
+    """
+    try:
+        tree = checkout_repository(root).get_tree("HEAD")
+    except LictorError:
+        return ""
+    return f"doctor-{config_hash}-{tree}"
 
 
 def _echo_check(check: PreconditionCheck) -> None:
@@ -438,21 +461,33 @@ def doctor(
             hidden=True,
         ),
     ] = DEFAULT_CWD,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help="Rehace el entorno de verificación de doctor en vez de reutilizar el anterior",
+        ),
+    ] = False,
 ) -> None:
     """Comprueba las precondiciones de `lictor run` sin llamar al agente."""
 
     def _execute() -> int:
         resolved_cwd = cwd.resolve()
-        preconditions, clock, config_problem = _doctor_checks(resolved_cwd)
+        preconditions, clock, config_problem, config_hash = _doctor_checks(resolved_cwd)
 
         # Building takes the temporary directory, which a run starting now would sweep.
         with holding_project(resolved_cwd) as held:
             log_dir = aside_dir(resolved_cwd, DOCTOR_DIR)
+            kept_dir = aside_dir(resolved_cwd, DOCTOR_ENV_DIR)
             if held:
                 shutil.rmtree(log_dir, ignore_errors=True)
+                if fresh:
+                    remove_tree(kept_dir)
             request = PreconditionsRequest(
                 run_id=f"doctor-{clock.generate_run_id()}",
-                environment="throwaway" if held else "none",
+                environment="kept" if held else "none",
+                kept_dir=kept_dir,
+                env_key=_doctor_env_key(resolved_cwd, config_hash),
                 log_dir=log_dir,
                 skip_reason="no comprobado: hay una ejecución en curso",
                 features=True,
@@ -1404,6 +1439,7 @@ def _retire_linked(run: RunEntry, name: str, main_root: Path, *, archive: bool) 
     try:
         # What a tool left read-only there (Go's module cache) git can't remove (G7).
         remove_tree(worktree / ".lictor" / VERIFY_ENV_DIR)
+        remove_tree(worktree / ".lictor" / DOCTOR_ENV_DIR)
         checkout_repository(main_root).remove_worktree(worktree)
     except (CandidateError, CleanupError) as err:
         typer.echo(

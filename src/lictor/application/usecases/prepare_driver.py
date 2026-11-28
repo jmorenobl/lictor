@@ -22,8 +22,9 @@ from lictor.application.usecases.agent_events import (
     tamper_event,
 )
 from lictor.application.usecases.verify_attempt import AgentCopyOutcome, IntegritySnapshot
-from lictor.domain.controls import agent_command_lines, agent_tools_with_files
+from lictor.domain.controls import AgentFix, agent_command_lines, agent_tools_with_files
 from lictor.domain.conventions import conventions_block
+from lictor.domain.declared_stubs import declared_stubs_rule
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import AgentResult, AgentSignal, AgentTask, TreeChange
 from lictor.domain.prompt_lists import (
@@ -71,9 +72,13 @@ class PrepareDriverRequest:
     # The regexes `L0-supresiones` also judges a fresh driver by: with them alone it still rejects.
     banned_patterns: Sequence[str] = ()
     check_commands: Sequence[str] = ()  # the only commands Bash admits
+    # What leaves done what a control checks: the driver's commit passes them before the seal (G3).
+    fixes: Sequence[AgentFix] = ()
     conventions: str = ""  # the project's rules of code, from `lictor.json` (F79)
     # Whether the profile proves an already met scenario by altering the interface (ADR-0011).
     interface_impostor: bool = False
+    # Whether each stub carries its constants, for a profile without a plugin (ADR-0021).
+    declared_impostors: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,6 +112,13 @@ def already_met_line(interface_impostor: bool) -> str:
         "resultado: rechaza el driver y, al agotar sus intentos,\npara para que una persona "
         "registre el escenario. No lo cambies para que falle."
     )
+
+
+def _command_lines(request: PrepareDriverRequest) -> dict[str, str]:
+    """The driver's commands: its checks, and the fixes to run before them on a line of its own."""
+    lines = agent_command_lines(request.allowed_tools, request.check_commands, request.fixes, None)
+    fixes = lines["{arreglos}"]
+    return {**lines, "{arreglos}": f"{fixes}\n" if fixes else ""}
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -208,8 +220,9 @@ class PrepareDriver:
                 "driver",
                 gated=bool(request.suppressions or request.banned_patterns),
             ),
+            "{regla_stubs}": declared_stubs_rule(request.declared_impostors),
             # The driver's call has no copy of the profile's files: what names them can't run.
-            **agent_command_lines(request.allowed_tools, request.check_commands, (), None),
+            **_command_lines(request),
             "{regla_verdes}": greens_rule(request.green_ids, "driver"),
             "{reabiertos}": _reopened_line(request.reopened_ids),
             "{driver_hints}": request.driver_hints,

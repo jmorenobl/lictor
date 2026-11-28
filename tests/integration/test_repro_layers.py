@@ -197,14 +197,24 @@ def test_a_case_turns_the_refactor_off_unless_it_decides_it(tmp_path: Path) -> N
 # job leaves them out by this mark, and losing it would run them where they can't.
 TOOLCHAIN = {
     "test_v0_23_0_toolchains": (
-        "test_go_reaches_green_with_its_refactor_and_every_report_says_the_basic_level",
+        "test_go_reaches_green_with_its_refactor_and_every_report_says_its_level",
         "test_go_without_the_recover_in_its_first_test_is_rejected_saying_why",
         "test_go_driver_that_doesnt_compile_hears_the_compiler_on_its_retry",
-        "test_go_a_vacuous_test_is_no_green",
-        "test_go_a_weak_assertion_is_no_green",
         "test_go_an_exclusion_of_every_code_file_stops_before_any_agent",
         "test_node_builds_its_dependencies_into_a_hashed_environment_and_reaches_green",
         "test_node_a_dependency_changed_in_the_agents_turn_fails_the_environment",
+    ),
+    # The stubs' impostor without a plugin (ADR-0021), and [M6] with a sealed driver.
+    "test_v0_24_0_toolchains": (
+        "test_go_a_test_that_passes_with_every_constant_is_rejected_and_its_retry_is_green",
+        "test_go_a_right_driver_is_sealed_at_once_and_reaches_green",
+        "test_go_a_weak_test_of_a_string_is_rejected_with_constants_that_arent_empty",
+        "test_go_a_constant_that_doesnt_compile_reaches_the_retry_with_the_compiler",
+        "test_go_a_stub_line_without_its_constants_is_named_before_anything_runs",
+        "test_go_a_driver_without_the_mark_is_sealed_unchecked_and_says_so",
+        "test_node_a_test_that_asserts_nothing_is_rejected",
+        "test_go_a_paused_run_whose_code_is_all_excluded_is_refused_on_resume",
+        "test_go_doctor_keeps_its_environment_until_told_otherwise",
     ),
 }
 

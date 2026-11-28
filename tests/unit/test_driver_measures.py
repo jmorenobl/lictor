@@ -2,7 +2,9 @@
 
 import pytest
 
+from lictor.domain.basic_stub_proof import VariantFact
 from lictor.domain.driver_measures import (
+    DeclaredMeasure,
     DriverMeasures,
     InterfaceMeasure,
     RedMeasure,
@@ -14,6 +16,7 @@ from lictor.domain.driver_measures import (
     red_check_timing,
     red_measures,
     stub_measures,
+    variant_word,
 )
 from lictor.domain.gherkin_proof import GherkinFacts
 from lictor.domain.interface_proof import InterfaceProof, ProofOutcome
@@ -378,3 +381,64 @@ def test_the_red_keeps_the_junit_status_through_the_record() -> None:
 
     assert found is not None
     assert found.red["A-1"].status == "error"
+
+
+DECLARED = DriverMeasures(
+    red={},
+    declared={
+        "A-1": DeclaredMeasure(("falla", "pasa"), "probado"),
+        "A-2": DeclaredMeasure(("pasa", "no_cuenta"), "sin_juzgar"),
+        "A-3": DeclaredMeasure(("marca",), "sigue_sin_implementar"),
+    },
+)
+
+
+def test_the_driver_s_own_constants_read_back_with_their_verdict() -> None:
+    """ADR-0021: what each variant did of a test, and what the basic rule made of it."""
+    record = measures_record(DECLARED)
+
+    assert record["declared"] == {
+        "A-1": {"by_variant": ["falla", "pasa"], "outcome": "probado", "verdict": "aceptado"},
+        "A-2": {
+            "by_variant": ["pasa", "no_cuenta"],
+            "outcome": "sin_juzgar",
+            "verdict": "rechazado",
+        },
+        "A-3": {
+            "by_variant": ["marca"],
+            "outcome": "sigue_sin_implementar",
+            "verdict": "rechazado",
+        },
+    }
+    assert measures_from_record(record) == DECLARED
+    assert measures_record(DriverMeasures(red={}))["declared"] is None
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"by_variant": "falla", "outcome": "probado"},
+        {"by_variant": ["falla", "luego"], "outcome": "probado"},
+        {"by_variant": ["falla"], "outcome": "cazado"},
+        {"outcome": "probado"},
+    ],
+)
+def test_a_record_of_the_driver_s_constants_that_doesn_t_follow_reads_as_none(
+    entry: dict[str, object],
+) -> None:
+    record = {**measures_record(DECLARED), "declared": {"A-1": entry}}
+
+    assert measures_from_record(record) is None
+
+
+@pytest.mark.parametrize(
+    ("fact", "word"),
+    [
+        (None, "no_cuenta"),
+        (VariantFact(passed=True, marked=False), "pasa"),
+        (VariantFact(passed=False, marked=False), "falla"),
+        (VariantFact(passed=False, marked=True), "marca"),
+    ],
+)
+def test_each_variant_is_said_in_one_word(fact: VariantFact | None, word: str) -> None:
+    assert variant_word(fact) == word

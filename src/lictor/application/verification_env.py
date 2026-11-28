@@ -107,6 +107,9 @@ class EnvironmentPlace:
 class VerificationEnvironment:
     """Builds the verification environment and tells whether it is still what was built."""
 
+    # Whether this environment is one a `doctor` before left, as it left it (G5).
+    reused: bool = False
+
     def __init__(
         self,
         vcs: Vcs,
@@ -121,6 +124,7 @@ class VerificationEnvironment:
         self.project_root = project_root
         self.spec = spec
         self._installed_plugins: list[str] = []
+        self.reused = False
         self._move_to(
             EnvironmentPlace(
                 project_root / ".lictor" / VERIFY_ENV_DIR,
@@ -146,6 +150,21 @@ class VerificationEnvironment:
             )
             other._move_to(EnvironmentPlace(tmp / "env", tmp / "env.json", rev, log_dir))
             yield other
+
+    def kept(self, root: Path, rev: str, log_dir: Path) -> "VerificationEnvironment":
+        """An environment for `rev` that stays in `root` from one `doctor` to the next (G5).
+
+        No run nor `check` uses it: what it says decides no green, and a new run checks the
+        controls on HEAD again in its own. `ensure` with a key rebuilds it when the key changes;
+        without `prepare` there is nothing to build, and what the commands left there (their
+        caches) stays.
+        """
+        other = VerificationEnvironment(
+            self.vcs, self.runner, self.audit, self.project_root, self.spec
+        )
+        other._move_to(EnvironmentPlace(root / "env", root / "env.json", rev, log_dir))
+        other.reused = (root / "env").is_dir()
+        return other
 
     @property
     def installed_plugins(self) -> tuple[str, ...]:
@@ -257,6 +276,7 @@ class VerificationEnvironment:
         return recorded if isinstance(recorded, dict) else None
 
     def _build(self, run_id: str, reason: str) -> None:
+        self.reused = False
         started = time.monotonic()
         self.manifest.unlink(missing_ok=True)
         # Building over what a tool left read-only isn't the environment the hash vouches for.

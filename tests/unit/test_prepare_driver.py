@@ -11,6 +11,7 @@ from lictor.application.usecases.prepare_driver import (
     PrepareDriverRequest,
     PrepareDriverResult,
 )
+from lictor.domain.controls import AgentFix
 from lictor.domain.errors import CandidateError
 from lictor.domain.model import (
     AgentResult,
@@ -527,6 +528,44 @@ def test_driver_prompt_names_the_only_commands_bash_admits(tmp_path: Path) -> No
     assert "lictor_files" not in prompt
     assert "un intérprete o un script" in prompt
     assert "Lee con Read, Grep y Glob" in prompt
+
+
+def test_the_driver_hears_the_fixes_after_its_checks_since_its_commit_passes_them(
+    tmp_path: Path,
+) -> None:
+    """G3: the driver's commit passes the blocking controls, so it hears their fixes too."""
+    _, executor, _ = _execute_driver(
+        tmp_path,
+        AgentResult(status="ok"),
+        check_commands=["make lint"],
+        fixes=[AgentFix("format", "make fmt")],
+        allowed_tools=["Bash(make:*)"],
+    )
+
+    assert (
+        "  - `make lint`\n- Tras tu último cambio, ejecuta `make fmt` (el control format bloquea) "
+        "y después las comprobaciones.\n- Cada test debe llevar"
+    ) in _prompt(executor)
+
+
+def test_without_fixes_nothing_stands_between_the_checks_and_the_next_rule(tmp_path: Path) -> None:
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), check_commands=["make lint"], allowed_tools=[]
+    )
+
+    assert "  - `make lint`\n- Cada test debe llevar" in _prompt(executor)
+
+
+def test_the_driver_hears_the_form_of_the_stubs_only_with_declared_impostors(
+    tmp_path: Path,
+) -> None:
+    _, declared, _ = _execute_driver(tmp_path, AgentResult(status="ok"), declared_impostors=True)
+    _, plain, _ = _execute_driver(tmp_path / "otro", AgentResult(status="ok"))
+
+    assert "`lictor-impostor: <A> | <B>`" in _prompt(declared)
+    assert "su traza.\n- Cada stub falla en una línea sola" in _prompt(declared)
+    assert "lictor-impostor" not in _prompt(plain)
+    assert "su traza.\n- Un test cuyo escenario espera un error" in _prompt(plain)
 
 
 def test_the_driver_hears_the_projects_rules_and_names_the_code_by_them(tmp_path: Path) -> None:

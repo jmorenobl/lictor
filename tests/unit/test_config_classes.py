@@ -24,7 +24,7 @@ from lictor.bootstrap import proof_defences
 from lictor.cli import describe_init
 from lictor.domain.controls import controls_of_stage
 from lictor.domain.errors import ConfigError, ExitCode
-from lictor.domain.proof_level import BASIC, proof_level
+from lictor.domain.proof_level import READ, proof_level
 from lictor.domain.stages import ATTEMPT
 
 BARE = {
@@ -254,7 +254,7 @@ def test_the_packaged_generic_profile_loads_what_a_go_project_writes(tmp_path: P
     config = load_config(
         _write(
             tmp_path,
-            profile="generic@0.1",
+            profile="generic@0.2",
             paths=PATHS,
             acceptance=ACCEPTANCE,
             code_paths=["iva/"],
@@ -266,11 +266,25 @@ def test_the_packaged_generic_profile_loads_what_a_go_project_writes(tmp_path: P
 
     proof = proof_level(proof_defences(defences, controls), ())
 
-    assert proof.level == BASIC
+    assert proof.level == READ
+    assert defences.declared_impostors
+    assert defences.impostors is None
     assert len(proof.gaps) == 7
     assert defences.forbidden_paths[0] == ".gitignore"
     assert defences.refactor_hints.startswith("- Funciones cortas")
     assert "src/<paquete>" not in defences.refactor_hints
+
+
+def test_the_first_generic_profile_is_retired_saying_what_its_stubs_now_carry(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigError) as raised:
+        load_config(_write(tmp_path, profile="generic@0.1", paths=PATHS, acceptance=ACCEPTANCE))
+
+    assert "El perfil generic@0.1 ya no existe: usa generic@0.2, que pide que cada stub" in str(
+        raised.value
+    )
+    assert "«lictor-impostor:»" in str(raised.value)
 
 
 def test_init_with_generic_names_what_the_person_writes(tmp_path: Path) -> None:

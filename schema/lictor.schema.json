@@ -205,6 +205,11 @@
           "title": "Timeout S",
           "type": "integer"
         },
+        "driver": {
+          "description": "Con false, el commit del driver no pasa este control antes del sello (G3): para un control que un driver correcto no puede pasar, como un umbral propio de cobertura o el largo de línea contra la línea de un stub. Los intentos lo siguen pasando.",
+          "title": "Driver",
+          "type": "boolean"
+        },
         "when_exists": {
           "anyOf": [
             {

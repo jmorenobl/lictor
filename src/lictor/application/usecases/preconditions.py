@@ -65,7 +65,13 @@ from lictor.domain.rules import (
 from lictor.domain.run_branches import uncommitted_left_out
 from lictor.domain.stages import check_controls_warning
 
-EnvironmentCheck = Literal["run", "throwaway", "none"]
+# What `doctor` says of an environment it kept from a `doctor` before (G5).
+KEPT = (
+    "reutilizado de un doctor anterior, en .lictor/doctor-env/ (lictor doctor --fresh lo rehace; "
+    "un run construye el suyo)"
+)
+
+EnvironmentCheck = Literal["run", "throwaway", "kept", "none"]
 UNCONFIGURED = "no comprobado: la configuración no carga"
 DEPENDENCIES = "Dependencias de la verificación"
 BLIND_SPOTS = "Lo que los controles no ven"
@@ -127,6 +133,10 @@ class PreconditionsRequest:
     survey_dir: Path | None = None
     # `doctor` tells the rule files whose content the person hasn't reviewed (F79).
     conventions: bool = False
+    # With `kept`, where `doctor`'s environment stays between runs of it, and the key it is
+    # rebuilt for when it changes: the configuration's and HEAD's tree (G5).
+    kept_dir: Path | None = None
+    env_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -398,6 +408,10 @@ class CheckPreconditions:
             if req.log_dir is None:
                 raise InternalLictorError("Un entorno desechable necesita dónde dejar su log")
             source = self.aside or environment
+            if req.environment == "kept" and req.kept_dir is not None:
+                kept = source.kept(req.kept_dir, "HEAD", req.log_dir)
+                kept.ensure(req.env_key or req.run_id)
+                return self._built(kept, req)
             with source.throwaway("HEAD", req.log_dir) as env:
                 env.ensure(req.run_id)
                 return self._built(env, req)
@@ -593,6 +607,8 @@ class CheckPreconditions:
     ) -> tuple[list[PreconditionCheck], BlindSpots | None]:
         """The environment's check, and what the project needs and its controls don't see."""
         detail = None if self.env_prepared else UNPREPARED
+        if environment.reused is True:
+            detail = KEPT if detail is None else f"{detail}; {KEPT}"
         checks = [PreconditionCheck("Entorno de verificación", detail=detail)]
         if req.survey_dir is None:
             return checks, None

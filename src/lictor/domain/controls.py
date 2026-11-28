@@ -51,6 +51,8 @@ class CommandControl:
     agent_fix: str | None = None
     # The complexity no function may exceed; only, and always, with a complexity report.
     limit: int | None = None
+    # Whether the driver's commit passes it before the seal (G3); the person may say it can't.
+    checks_driver: bool = True
 
     def __post_init__(self) -> None:
         if (self.report == "complexity") != (self.limit is not None):
@@ -91,6 +93,7 @@ class ReaderControl:
     when_plugin: str | None = None
     min_score: float | None = None
     agent_run: str | None = None
+    checks_driver: bool = True
 
 
 type Control = CommandControl | ReaderControl

@@ -2,6 +2,7 @@ import contextlib
 import html
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -37,6 +38,7 @@ from lictor.domain.model import (
 )
 from lictor.domain.reports import JUnitReport
 from lictor.domain.rules import Impostors, RedOracle, StubConstant
+from tests.readers import all_readers
 
 
 def _environment(
@@ -86,7 +88,7 @@ def test_check_red_fresh_driver_success(tmp_path: Path) -> None:
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -156,7 +158,7 @@ def test_check_red_fresh_driver_retry_when_under_max_attempts(tmp_path: Path) ->
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -200,7 +202,7 @@ def test_check_red_fresh_driver_raises_when_attempts_exhausted(tmp_path: Path) -
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ("IVA-001",)),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -251,7 +253,7 @@ def test_check_red_idempotency_after_crash_with_clean_tree(tmp_path: Path) -> No
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -302,7 +304,7 @@ def test_check_red_detects_state_tampering_via_integrity_snapshot(tmp_path: Path
 
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=reader,
+        readers=replace(all_readers(), junit=reader),
         vcs=vcs,
         history=_history(spec_source, ()),
         audit=AuditSink(event_log=event_log, clock=clock),
@@ -379,7 +381,7 @@ def _real_check(
     clock.now_iso.return_value = "2026-10-31T10:00:00Z"
     use_case = CheckRed(
         environment=_environment(runner, vcs, tmp_path),
-        reader=JUnitReader(),
+        readers=all_readers(),
         vcs=vcs,
         history=_history(spec_source, greens),
         audit=AuditSink(event_log=event_log, clock=clock),

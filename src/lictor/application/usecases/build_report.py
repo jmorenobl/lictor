@@ -10,6 +10,7 @@ from typing import Any, Final
 from lictor.application.ports import EventLog, TextSearch
 from lictor.application.seal import hash_file, hash_tree
 from lictor.domain.api import break_line, describe_api
+from lictor.domain.basic_stub_proof import UNCHECKED_BY_INTERFACE, unchecked_text
 from lictor.domain.blind_spots import blind_spot_lines
 from lictor.domain.complexity import describe_over
 from lictor.domain.conventions import conventions_report_lines
@@ -437,18 +438,22 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         ),
         "",
         "## Tests aceptados sin comprobar",
-        *(
-            [unchecked_note(info["stub_unchecked"])]
-            if info["stub_unchecked"]
-            else [_none_unchecked(info)]
-        ),
+        *([_unchecked_text(info)] if info["stub_unchecked"] else [_none_unchecked(info)]),
     ]
+
+
+def _unchecked_text(info: Mapping[str, Any]) -> str:
+    """Why the seal accepted some tests unchecked: the interface, or the driver's own constants."""
+    why = info["unchecked_why"]
+    if why in ("", UNCHECKED_BY_INTERFACE):
+        return unchecked_note(info["stub_unchecked"])
+    return unchecked_text(why, info["stub_unchecked"])
 
 
 def _none_unchecked(info: Mapping[str, Any]) -> str:
     """Nothing unchecked, or nothing checked at all: a basic level whose impostors never ran."""
     proof: ProofLevel | None = info["proof"]
-    ran = any(m.stubs is not None for *_, m in info["driver_measures"])
+    ran = any(m.stubs is not None or m.declared is not None for *_, m in info["driver_measures"])
     if proof is not None and proof.level == BASIC and not ran:
         return "- *Este perfil no comprueba los tests del driver: nivel básico.*"
     return "- *Ninguno: cada test pendiente del driver se comprobó.*"
@@ -506,6 +511,7 @@ def _driver_measure_lines(
     if not entries:
         return ["- *Ningún driver nuevo medido.*"]
     if not classified and all(m.stubs is None and m.interface is None for *_, m in entries):
+        # Without the classes only the JUnit status and the driver's own constants can be said.
         return _status_lines(entries)
     lines = [_MEASURES_NOTE]
     for attempt, step, measures in sorted(entries, key=lambda entry: entry[:2]):
@@ -523,15 +529,46 @@ def _driver_measure_lines(
 
 
 def _status_lines(entries: list[tuple[int, str, DriverMeasures]]) -> list[str]:
+    """The red by JUnit status and, when they ran, the driver's own constants (ADR-0021)."""
     lines = [_UNCLASSIFIED_NOTE]
     for attempt, step, measures in sorted(entries, key=lambda entry: entry[:2]):
         where = f" (`{step}`)" if step else ""
-        lines += ["", f"### Intento {attempt}{where}", "", "| Escenario | Rojo |", "|---|---|"]
-        lines += [
-            f"| {sid} | {_STATUS_WORDS.get(red.status, 'sin resultado')} |"
-            for sid, red in sorted(measures.red.items())
-        ]
+        lines += ["", f"### Intento {attempt}{where}", ""]
+        declared = measures.declared
+        if declared is None:
+            lines += ["| Escenario | Rojo |", "|---|---|"]
+        else:
+            lines += [
+                "| Escenario | Rojo | Con cada constante | Regla básica |",
+                "|---|---|---|---|",
+            ]
+        for sid, red in sorted(measures.red.items()):
+            row = f"| {sid} | {_STATUS_WORDS.get(red.status, 'sin resultado')} |"
+            found = None if declared is None else declared.get(sid)
+            if declared is not None:
+                row += (
+                    f" {', '.join(_VARIANT_WORDS[w] for w in found.by_variant)} |"
+                    f" {_BASIC_WORDS[found.outcome]} |"
+                    if found is not None
+                    else " - | - |"
+                )
+            lines.append(row)
     return lines
+
+
+_VARIANT_WORDS = {
+    "pasa": "pasa",
+    "falla": "falla",
+    "marca": "falla con la marca",
+    "no_cuenta": "no cuenta",
+}
+_BASIC_WORDS = {
+    "probado": "aceptado",
+    "sobrevive": "rechazado: pasa con todas",
+    "sigue_sin_implementar": "rechazado: sigue con la marca",
+    "sin_stub": "sin comprobar: no consta que llegue a un stub",
+    "sin_juzgar": "rechazado: sin juzgar",
+}
 
 
 def _measured_ids(measures: DriverMeasures) -> list[str]:
@@ -808,6 +845,7 @@ class BuildReport:
             "collateral": [],
             "already_met": [],
             "stub_unchecked": [],
+            "unchecked_why": "",
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -936,6 +974,7 @@ class BuildReport:
         unchecked = ev.data.get("stub_unchecked")
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]
+            info["unchecked_why"] = str(ev.data.get("unchecked_why", "") or "")
 
     def _on_driver_checked(self, ev: Event, info: dict[str, Any]) -> None:
         _note_red_check(info, "comprobado", ev)

@@ -148,8 +148,13 @@ SUBTEST = (
 )
 
 
-def test_go_a_subtest_in_the_sealed_driver_stops_the_run_with_10(tmp_path: Path) -> None:
-    """G1: the recipe asked for `defer enEscenario(t)` «inside every `t.Run`» too."""
+def test_go_a_subtest_the_code_reaches_is_rejected_before_the_seal(tmp_path: Path) -> None:
+    """G1: the recipe asked for `defer enEscenario(t)` «inside every `t.Run`» too.
+
+    Since 0.24.0 the driver's constants reach the subtest at the red (ADR-0021): the driver is
+    rejected there, where its agent can still fix it, instead of being sealed and spending every
+    attempt of the implementer.
+    """
     root = go_project(tmp_path / "nif")
     header, _, rest = go_driver().partition("func Test_NIF_001")
     second = rest[rest.index("func Test_NIF_002") :]
@@ -159,8 +164,10 @@ def test_go_a_subtest_in_the_sealed_driver_stops_the_run_with_10(tmp_path: Path)
     agent = _agent(source)
     assert run_lictor(root, agent) == Outcome(10)
 
-    assert agent.calls == ["driver", "NIF-001", "NIF-001"]
-    (finished,) = events_of(root, "run.finished")
-    reason = finished["data"]["reason"]
-    assert "El driver sellado da 2 casos para el escenario NIF-001" in reason
-    assert "Test_NIF_001/otra_fila" in reason
+    assert agent.calls == ["driver", "driver"]
+    rejected = events_of(root, "driver.rejected")
+    assert [e["data"]["reason"] for e in rejected] == ["mapeo", "mapeo"]
+    told = agent.prompts["driver"][1]
+    assert "la aceptación da varios casos de un escenario" in told
+    assert "Test_NIF_001/otra_fila" in told
+    assert events_of(root, "driver.sealed") == []

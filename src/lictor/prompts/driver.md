@@ -13,14 +13,14 @@ Reglas:
   hacer fallar solo al test que la llama: los demás se ejecutan y salen en el informe. Si en tu
   lenguaje ese fallo para el proceso de tests entero, recógelo en el driver, en cada test, y
   conviértelo en el fallo de ese test con su traza.
-- Un test cuyo escenario espera un error comprueba cuál es (su clase o su mensaje), no solo que
+{regla_stubs}- Un test cuyo escenario espera un error comprueba cuál es (su clase o su mensaje), no solo que
   lo hay.
 {regla_protegidas}{regla_prohibidas}- Trabajas en una copia sin historial: no hay git ni commits.
 {regla_supresiones}- Lee con Read, Grep y Glob, y crea y edita archivos solo con Edit y Write.
 - Bash solo admite órdenes que empiecen por: {bash_admite}. Cualquier otra orden,
   un intérprete o un script incluidos, se deniega y te cuesta turnos. El proyecto se comprueba con:
 {comprobaciones}
-- Cada test debe llevar el ID de su escenario en el nombre.
+{arreglos}- Cada test debe llevar el ID de su escenario en el nombre.
 - Toma los valores esperados del Gherkin, nunca de ejecutar el código: un test que copia lo que
   devuelve el código no comprueba el escenario.
 {regla_verdes}{reabiertos}

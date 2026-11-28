@@ -1,8 +1,13 @@
 """How a blocking control that fails on HEAD is told to the person."""
 
+from dataclasses import replace
+
 from lictor.domain.controls import CommandControl, ReaderControl
 from lictor.domain.head_controls import (
     blocking_on_head,
+    driver_control_problem,
+    driver_controls,
+    driver_controls_note,
     head_control_problem,
     head_not_started,
     head_tampered,
@@ -43,4 +48,33 @@ def test_the_controls_left_out_are_named() -> None:
     assert head_not_started(["unit", "cobertura"]) == (
         "No se ejecutan en HEAD 'unit', 'cobertura': su programa no arranca, como dice "
         "«Comandos de verificación»."
+    )
+
+
+def test_the_drivers_commit_passes_every_blocking_control_but_those_said_it_cant() -> None:
+    """G3: the person writes `"driver": false` on a control a right driver can't pass."""
+    controls = [
+        _command("lint"),
+        replace(_command("largo"), checks_driver=False),
+        _command("medida", "measure"),
+        ReaderControl(id="cobertura", level="L4", reads="lint", adds="--x", checks_driver=False),
+        ReaderControl(id="otra", level="L4", reads="lint", adds="--y"),
+    ]
+
+    assert driver_controls(controls) == ("lint", "otra")
+
+
+def test_the_driver_hears_why_its_commit_must_pass_a_control() -> None:
+    message = driver_control_problem("lint", "Falló lint\n\nmain.go:3: x\n")
+
+    assert message == (
+        "El commit del driver no pasa el control 'lint', que bloquea cada intento: lo que escribe "
+        "el driver (sus tests y sus stubs) tiene que pasarlo, porque una vez sellado nadie puede "
+        "cambiarlo.\nFalló lint\n\nmain.go:3: x"
+    )
+    assert driver_controls_note(["lint", "largo"]) == (
+        "Si un driver correcto no puede pasar 'lint', 'largo' (un umbral propio, el largo de la "
+        "línea de un stub, algo que choca con las instrucciones del driver), cambia una de las dos "
+        'cosas: el control, o acceptance.driver_hints; o escribe "driver": false en ese control de '
+        "lictor.json, y el commit del driver dejará de pasarlo antes del sello."
     )

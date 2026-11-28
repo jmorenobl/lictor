@@ -66,8 +66,8 @@ def _only_lictor_left(root: Path, worktree: Path) -> None:
             shutil.rmtree(path) if path.is_dir() else path.unlink()
 
 
-def _read_only_cache(worktree: Path) -> Path:
-    module = worktree / ".lictor" / "verify-env" / "gomod" / "example.com" / "dep@v1.0.0"
+def _read_only_cache(worktree: Path, env: str = "verify-env") -> Path:
+    module = worktree / ".lictor" / env / "gomod" / "example.com" / "dep@v1.0.0"
     module.mkdir(parents=True)
     (module / "dep.go").write_text("package dep\n", encoding="utf-8")
     module.chmod(0o555)
@@ -185,6 +185,21 @@ def test_a_read_only_cache_in_the_environment_doesnt_stop_retire(
     assert not worktree.exists()
     assert str(worktree) not in git(root, "worktree", "list")
     assert read_run_index(root) == []
+
+
+@ROOT_IGNORES_PERMISSIONS
+def test_a_read_only_cache_in_doctors_kept_environment_doesnt_stop_retire(
+    make_project: ProjectFactory,
+) -> None:
+    """0.24.0, G5: a `doctor` run inside the worktree keeps its environment there, Go's module
+    cache included; `retire` removes it as it removes the run's, or G7 would come back."""
+    root, worktree = _finished_run(make_project)
+    _read_only_cache(worktree, "doctor-env/env")
+
+    result = _lictor("retire", "iva", "--cwd", str(root))
+
+    assert result.exit_code == 0, result.output
+    assert not worktree.exists()
 
 
 def test_a_run_that_never_started_is_retired(make_project: ProjectFactory) -> None:

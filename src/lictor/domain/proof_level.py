@@ -3,30 +3,42 @@
 The level answers one question: can a test that doesn't compare with its scenario end green? With
 the profile's whole oracle (the stubs' impostors, the classes of red, the link to the scenario
 and the impostor of the interface) it can't, for every test Lictor checked: that is `proved`.
-Anything else is `basic`, saying less, never more (a partial oracle included). What doesn't change
+With a stubs' impostor and less than that (the basic rule of a profile without a plugin, ADR-0021,
+or rule C without the interface's), a test that doesn't read what the interface returns can't, but
+one whose comparison is weaker than the scenario's can: that is `read`. Anything else is `basic`,
+saying less, never more. What doesn't change
 that answer (an environment without a hash, no suppressions, a control without its plugin) is a
 gap: the gaps Lictor knows how to compute, each with a stable code and its sentence.
 
-The 0.24.0 will add an intermediate level with a condition of its own (the impostor of two
-constants for profiles without a plugin); until then there are two.
 """
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
-LevelCode = Literal["basico", "resultado_probado"]
+LevelCode = Literal["basico", "resultado_leido", "resultado_probado"]
 
 BASIC: Final[LevelCode] = "basico"
+READ: Final[LevelCode] = "resultado_leido"
 PROVED: Final[LevelCode] = "resultado_probado"
 
-_LEVEL_NAMES: Final[Mapping[str, str]] = {BASIC: "básico", PROVED: "resultado probado"}
+_LEVEL_NAMES: Final[Mapping[LevelCode, str]] = {
+    BASIC: "básico",
+    READ: "resultado leído",
+    PROVED: "resultado probado",
+}
 
 # What the level itself leaves unchecked: one sentence each, never repeated as a gap.
 _LEVEL_LIMITS: Final[Mapping[str, str]] = {
     BASIC: (
         "No se comprueba que el test compare nada: uno sin aserción falla en el rojo porque la "
         "interfaz no está implementada, y pasa después con cualquier código"
+    ),
+    READ: (
+        "No se comprueba que el test compare con el valor del escenario: uno que copia lo que "
+        "devuelve el código, o cuya comparación es más débil que la igualdad y las dos constantes "
+        "rompen, pasa. Un test que no consta que llegue a un stub se acepta sin comprobar, y se "
+        "dice"
     ),
     PROVED: (
         "No se comprueba que el test compare con el valor del escenario: un test que copia en "
@@ -85,7 +97,8 @@ class ProofDefences:
 
     link: str
     red_kinds: bool
-    stub_impostors: bool
+    stub_rule_c: bool  # the profile's constants, judged by rule C (ADR-0012)
+    declared_stubs: bool  # the driver's constants, judged by the basic rule (ADR-0021)
     interface_impostor: bool
     gherkin: bool
     env_hashed: bool
@@ -117,13 +130,20 @@ def proof_level(defences: ProofDefences, installed: Collection[str] | None) -> P
     `installed` is what the verification environment loads, or None when it wasn't built: then
     the controls that need a plugin can't be judged, and that is a gap of its own.
     """
+    return ProofLevel(_level(defences), _gaps(defences, installed))
+
+
+def _level(defences: ProofDefences) -> LevelCode:
+    """Proved needs rule C: the basic rule doesn't know a red's class, whatever else is there."""
     proved = (
-        defences.stub_impostors
+        defences.stub_rule_c
         and defences.red_kinds
         and defences.link == "scenario"
         and defences.interface_impostor
     )
-    return ProofLevel(PROVED if proved else BASIC, _gaps(defences, installed))
+    if proved:
+        return PROVED
+    return READ if defences.stub_rule_c or defences.declared_stubs else BASIC
 
 
 def _gaps(defences: ProofDefences, installed: Collection[str] | None) -> tuple[Gap, ...]:
@@ -151,8 +171,8 @@ def _gaps(defences: ProofDefences, installed: Collection[str] | None) -> tuple[G
 
 
 def level_name(level: str) -> str:
-    """How a person reads the level: «básico», «resultado probado»."""
-    return _LEVEL_NAMES.get(level, level)
+    """How a person reads the level: «básico», «resultado leído», «resultado probado»."""
+    return next((name for code, name in _LEVEL_NAMES.items() if code == level), level)
 
 
 def level_limit(level: str) -> str:
@@ -173,11 +193,11 @@ def unchecked_lines(proof: ProofLevel) -> tuple[str, ...]:
 
 
 def warning_lines(proof: ProofLevel) -> tuple[str, ...]:
-    """What `doctor` and the start of a run warn of: the basic level's limit, and every gap.
+    """What `doctor` and the start of a run warn of: the level's limit below proved, and every gap.
 
     The limit of the proved level is said in the report, not warned of: no profile closes it.
     """
-    limit = (level_limit(BASIC),) if proof.level == BASIC else ()
+    limit = (level_limit(proof.level),) if proof.level != PROVED else ()
     return (*limit, *(gap_text(gap) for gap in proof.gaps))
 
 
@@ -206,14 +226,19 @@ def proof_from_record(record: object) -> ProofLevel | None:
     """The level a journal kept, or None if it kept none or not in this form."""
     if not isinstance(record, Mapping):
         return None
-    level = record.get("level")
+    level = _level_code(record.get("level"))
     gaps = record.get("gaps")
-    if level not in _LEVEL_NAMES or not isinstance(gaps, Sequence):
+    if level is None or not isinstance(gaps, Sequence):
         return None
     read = [_gap_from(gap) for gap in gaps]
     if any(gap is None for gap in read):
         return None
-    return ProofLevel(BASIC if level == BASIC else PROVED, tuple(g for g in read if g is not None))
+    return ProofLevel(level, tuple(g for g in read if g is not None))
+
+
+def _level_code(level: object) -> LevelCode | None:
+    """A level as a journal kept it, or None if it is none of the codes."""
+    return next((code for code in _LEVEL_NAMES if code == level), None)
 
 
 def _gap_from(record: object) -> Gap | None:

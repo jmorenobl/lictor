@@ -459,6 +459,9 @@ class ProfileOracle(BaseModel):
     link: MapLinkKind = "name"
     red_kinds: list[RedKind] = Field(default_factory=list)
     impostors: ImpostorConfig | None = None
+    # The driver declares each stub's constants on its line, for a profile without a plugin: its
+    # tests are judged by what they do with them, not by a failure's class (ADR-0021).
+    declared_impostors: bool = False
     interface_impostor: InterfaceImpostorConfig | None = None
 
 
@@ -544,6 +547,13 @@ AGENT_FIX_DESCRIPTION = (
 )
 
 
+DRIVER_DESCRIPTION = (
+    "Con false, el commit del driver no pasa este control antes del sello (G3): para un control "
+    "que un driver correcto no puede pasar, como un umbral propio de cobertura o el largo de línea "
+    "contra la línea de un stub. Los intentos lo siguen pasando."
+)
+
+
 class CommandControlConfig(BaseModel):
     """Un control que ejecuta su propio comando (`run`) y se juzga por lo que deja."""
 
@@ -557,6 +567,7 @@ class CommandControlConfig(BaseModel):
     stage: Stage = ATTEMPT
     empty_exit_codes: list[int] = Field(default_factory=list)
     timeout_s: int = Field(default=600, gt=0)
+    driver: bool = Field(default=True, description=DRIVER_DESCRIPTION)
     when_exists: str | None = None
     # A plugin the control needs, as the profile lists them: without it the control is skipped.
     when_plugin: str | None = Field(default=None, min_length=1)
@@ -610,6 +621,7 @@ class ReaderControlConfig(BaseModel):
     report: Literal["coverage"]
     mode: ControlMode = "block"
     stage: Stage = ATTEMPT
+    driver: bool = Field(default=True, description=DRIVER_DESCRIPTION)
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
     agent_run: str | None = Field(default=None, min_length=1, description=AGENT_RUN_DESCRIPTION)
@@ -677,33 +689,32 @@ def domain_control(control: CommandControlConfig | ReaderControlConfig) -> Contr
     """A resolved control as the domain sees it."""
     if isinstance(control, ReaderControlConfig):
         return ReaderControl(
-            id=control.id,
-            level=control.level,
-            reads=control.reads,
-            adds=control.adds,
-            report=control.report,
-            mode=control.mode,
-            stage=control.stage,
-            when_plugin=control.when_plugin,
-            min_score=control.min_score,
-            agent_run=control.agent_run,
+            reads=control.reads, adds=control.adds, report=control.report, **_shared(control)
         )
     return CommandControl(
-        id=control.id,
-        level=control.level,
         run=control.run,
         report=control.report,
-        mode=control.mode,
-        stage=control.stage,
         empty_exit_codes=tuple(control.empty_exit_codes),
         timeout_s=control.timeout_s,
         when_exists=control.when_exists,
-        when_plugin=control.when_plugin,
-        min_score=control.min_score,
-        agent_run=control.agent_run,
         agent_fix=control.agent_fix,
         limit=control.limit,
+        **_shared(control),
     )
+
+
+def _shared(control: CommandControlConfig | ReaderControlConfig) -> dict[str, Any]:
+    """What both shapes of a control have, as the domain names it."""
+    return {
+        "id": control.id,
+        "level": control.level,
+        "mode": control.mode,
+        "stage": control.stage,
+        "when_plugin": control.when_plugin,
+        "min_score": control.min_score,
+        "agent_run": control.agent_run,
+        "checks_driver": control.driver,
+    }
 
 
 def _check_readers(controls: Sequence[CommandControlConfig | ReaderControlConfig]) -> None:
@@ -791,6 +802,7 @@ class ControlChange(BaseModel):
     stage: Stage = _unwritten()
     empty_exit_codes: list[int] = _unwritten()
     timeout_s: int = _unwritten(gt=0)
+    driver: bool = _unwritten(description=DRIVER_DESCRIPTION)
     when_exists: str | None = None
     when_plugin: str | None = Field(default=None, min_length=1)
     min_score: float | None = Field(default=None, ge=0, le=100)
@@ -933,10 +945,15 @@ class Profile(BaseModel):
 
     @model_validator(mode="after")
     def _validate_impostors_have_red_kinds(self) -> Self:
-        """Without the class of each failure the stubs' impostors reject right tests too: until
-        a profile has its own judge without the plugin (0.24.0), it is a mistake (ADR-0020)."""
+        """Without the class of each failure rule C rejects right tests too: a profile without
+        the plugin declares the driver's own constants instead (ADR-0020, ADR-0021)."""
         if self.oracle.impostors is not None and not self.oracle.red_kinds:
             raise ValueError("oracle.impostors necesita oracle.red_kinds")
+        if self.oracle.impostors is not None and self.oracle.declared_impostors:
+            raise ValueError(
+                "oracle.impostors y oracle.declared_impostors son dos fuentes de las constantes de "
+                "los stubs: un perfil declara una"
+            )
         return self
 
     @model_validator(mode="after")

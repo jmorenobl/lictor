@@ -1,22 +1,31 @@
 Para cualquier lenguaje que deje un informe JUnit (Go, Node, Python sin `uv` o sin `src/`): perfil `alpha`, nunca se detecta, `lictor init --profile generic`.
 
-- **El nivel de prueba es básico.** Lictor comprueba que el test de cada escenario falla antes del
-  código y pasa después, en un clon limpio y con el driver sellado, pero **no que compare nada**:
-  un test sin aserción falla en el rojo porque la interfaz no está implementada, y pasa después
-  con cualquier código. Díselo a la persona antes del primer run, y pídele que **lea una vez el
-  driver sellado** (el commit «chore(lictor): driver de aceptación», en `paths.driver`): es el único sitio
-  donde se ve un test vacuo. Mete en `acceptance.driver_hints` «cada test compara con el valor
-  del Gherkin».
+- **El nivel de prueba es «resultado leído».** Lictor comprueba que el test de cada escenario
+  falla antes del código y pasa después, en un clon limpio y con el driver sellado, y que **mira
+  lo que devuelve la interfaz**: corre la aceptación con las dos constantes que el driver escribe
+  en cada stub, y rechaza el test que pasa con las dos (el vacuo, el que solo mira que no está
+  vacío). No comprueba que compare con el valor del escenario: un test que copia lo que devuelve
+  el código pasa. Un test que no llega a un stub, o un driver sin stubs, se acepta sin comprobar,
+  y el sellado lo avisa con ⚠. Díselo a la persona antes del primer run, y pídele que **lea una
+  vez el driver sellado** (el commit «chore(lictor): driver de aceptación»). Mete en
+  `acceptance.driver_hints` «cada test compara con el valor del Gherkin».
 - **La persona escribe lo que el perfil no sabe**, con tu ayuda y su aprobación: `paths`,
   `acceptance` (la orden que deja un JUnit en `{out}`, y `failure_exit_codes`, los códigos que
   significan «fallaron tests»), `code_paths` (dónde está el código, dentro de `paths.writable`) y
   `agent_tools` (lo que el agente puede ejecutar: la aceptación y cada control, con la misma
   orden; si no, se le caen de la lista y `doctor` avisa en «Órdenes del agente»).
-- **Los stubs fallan con el «no implementado» del lenguaje y nunca devuelven un valor**, con la
-  firma del código terminado. Si ese fallo para el proceso de tests (un `panic` de Go,
-  `process.exit`), el driver lo recoge en cada test. Un test que espera un error comprueba
-  **cuál** (su clase o su mensaje): uno que solo mira que hay error pasa en el rojo y se rechaza.
-  La forma de cada lenguaje va en `acceptance.driver_hints` (recetas, abajo).
+- **Los stubs fallan con el texto `lictor: no implementado` y llevan sus constantes**, con la
+  firma del código terminado. La línea que falla va sola dentro de su función, y acaba con un
+  comentario `lictor-impostor: <A> | <B>`: dos sentencias que la sustituyen devolviendo dos
+  valores distintos de su tipo, **ninguno su cero** salvo en un booleano (1 y 2, `"a"` y `"b"`,
+  una lista de uno y otra de dos, una estructura con cada campo lleno), nunca nulos, y que solo
+  usan lo que ya usa la firma; una sola (`return`) si la función no devuelve nada. Si el fallo
+  para el proceso de tests (un `panic` de Go, `process.exit`), el driver lo recoge en cada test.
+  Un test que espera un error comprueba **cuál** (su clase o su mensaje). La forma de cada
+  lenguaje va en `acceptance.driver_hints` (recetas, abajo).
+- **Un escenario pide un valor con el que comparar.** Uno que solo pide que haya resultado («recibe
+  un identificador», «el saldo es positivo») pasa con las dos constantes y su driver no se sella:
+  el run para y pide un valor concreto en el escenario.
 - **El nombre del test lleva el ID con un borde**: `Test_IVA_001`, `"IVA-001 …"`. Ni
   `TestIVA_001` ni un subtest con el ID.
 - **Las supresiones del lenguaje** van en `suppressions` (texto, lo lee el agente) y en
@@ -35,7 +44,7 @@ Para cualquier lenguaje que deje un informe JUnit (Go, Node, Python sin `uv` o s
 
 <!-- lictor: detalle -->
 
-**Lo que `lictor doctor` dice con este perfil.** «Nivel de prueba: básico», con un ⚠ por cada
+**Lo que `lictor doctor` dice con este perfil.** «Nivel de prueba: resultado leído», con un ⚠ por cada
 hueco: cualquier fallo cuenta como rojo (también uno de compilación), el test se empareja por su
 nombre, un escenario ya cumplido no se prueba, el entorno no se vigila si no hay `prepare`, ninguna
 supresión se rechaza si no las escribes, y sin controles un verde solo pasó la aceptación.
@@ -47,7 +56,7 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
 ```json
 {
   "version": "0.1",
-  "profile": "generic@0.1",
+  "profile": "generic@0.2",
   "backend": {"model": "…"},
   "hints": "Go 1.26. El paquete iva/ expone Calcular(base float64) float64.",
   "paths": {
@@ -88,7 +97,11 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   lectura, y `git worktree remove` no puede borrar el worktree al retirarlo (solo vale para lo que
   se extrae desde entonces). Si el proyecto ya usa `GOFLAGS`, se juntan: `-mod=mod -modcacherw`.
 - `driver_hints`: «Un test por escenario llamado `Test_<ID>` (con guion bajo, `Test_IVA_001`) en
-  `acceptance/`. Los stubs hacen `panic("no implementado")`. Cada test empieza con `defer
+  `acceptance/`. Los stubs hacen `panic("lictor: no implementado") // lictor-impostor: return 1 | return 2`,
+  con la llave de la función en otra línea (gofmt la deja así). Un `error` junto a un resultado
+  va `nil` en las dos constantes; una función que solo devuelve `error` usa dos centinelas del
+  paquete (`var ErrX = errors.New(…)`), nunca un `errors.New` en la constante, porque el import
+  no compilaría en el rojo o en la variante. Cada test empieza con `defer
   enEscenario(t)`, también dentro de cada goroutine que llame a la interfaz (ahí con
   `t.Errorf`). Sin `t.Run`: cada subtest sale en el informe como otro caso con el mismo ID, y un
   escenario es un solo caso; las filas de una tabla del Gherkin se recorren con un bucle dentro del
@@ -98,13 +111,17 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   helper. No vetes `recover(`: el driver lo necesita.
 - Una función que devuelve `error` por su naturaleza tiene un stub que hace `panic` igual: si
   devolviera un error de «no implementado», un escenario que espera un error pasaría en el rojo.
+- La línea del stub con una estructura entera es larga: si el lint del proyecto mide el largo de
+  línea, ese control lleva `"driver": false`, porque el commit del driver pasa los controles que
+  bloquean antes de sellarse.
 - Controles: `go vet ./...` (L1) y los tests unitarios con `gotestsum` (L2).
 
 **Node:**
 
 - Aceptación: `node --test --test-reporter=junit --test-reporter-destination={out} acceptance/*.test.js`
   (el patrón, no el directorio: con un directorio, Node 24 da un único caso y el driver se rechaza).
-  Los stubs lanzan `new Error("no implementado")`, que solo tumba su test. Coma flotante:
+  Los stubs lanzan `new Error("lictor: no implementado"); // lictor-impostor: return 1; | return 2;`,
+  que solo tumba su test. Coma flotante:
   `100 * 1.1 !== 110`; el test compara con un margen o en céntimos.
 - Con dependencias, `prepare` las instala en el entorno:
   `sh -c 'npm ci --ignore-scripts && mkdir -p {env_dir} && mv node_modules {env_dir}/node_modules'`,
@@ -129,8 +146,9 @@ sabe leer las órdenes de tu cadena. Son hechos, no errores: no cambian el códi
   y la aceptación es `sh -c '"$PY" -m pytest tests/acceptance --junitxml "$0"' {out}`. Sin
   `"$PY"`, el `python` del `PATH` no es el del entorno, y los tests corren fuera de él. (Receta sin
   medir: la pasada de Go no la cubre.)
+- Stubs: `raise NotImplementedError("lictor: no implementado")  # lictor-impostor: return 1 | return 2`.
 - `banned_patterns`: `#\s*noqa`, `#\s*type:\s*ignore`, `pytest\.(skip|xfail)\(`.
 
 **Lo que este perfil aún no hace:** probar un escenario que el código ya cumple, saber qué ve cada
-control y detectar un test vacuo. Lo cubrirá una versión posterior con un impostor propio; hasta
-entonces, la lectura del driver sellado es de la persona.
+control y comprobar que un test compara con el valor del escenario (no solo que mira el
+resultado). La lectura del driver sellado sigue siendo de la persona.
