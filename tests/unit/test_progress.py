@@ -9,6 +9,7 @@ from lictor.domain.model import Event
 from lictor.domain.progress import (
     RunProgress,
     StatusView,
+    calls_by_role,
     calls_text,
     cost_text,
     describe_status,
@@ -862,3 +863,19 @@ def test_the_seal_names_the_tests_its_rule_couldnt_check() -> None:
         "⚠ 1 tests aceptados sin comprobar (A-1): fallan con todas las constantes de sus stubs, y "
         "su rojo no llevaba «lictor: no implementado»"
     )
+
+
+@pytest.mark.parametrize(
+    ("driver", "implement", "refactor", "text"),
+    [
+        (1, 7, 7, " (driver: 1, implementación: 7, refactor: 7)"),
+        (1, 0, 0, " (driver: 1)"),
+        (0, 2, 0, " (implementación: 2)"),
+        (0, 0, 0, ""),
+    ],
+)
+def test_the_calls_are_split_by_every_role_that_had_any(
+    driver: int, implement: int, refactor: int, text: str
+) -> None:
+    """S24: «15 (driver: 1, refactor: 7)» left the implementer's 7 out of the split."""
+    assert calls_by_role(driver=driver, implement=implement, refactor=refactor) == text

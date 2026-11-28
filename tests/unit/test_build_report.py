@@ -915,7 +915,8 @@ def _summary_run() -> list[Event]:
 def test_report_gives_the_calls_and_cost_of_the_whole_run(tmp_path: Path) -> None:
     report = _report(tmp_path, _summary_run())
 
-    assert "- **Llamadas al agente**: 2 (driver: 1, refactor: 0)" in report
+    # S24: the split adds up to the total, the implementer's calls included.
+    assert "- **Llamadas al agente**: 2 (driver: 1, implementación: 1)" in report
     assert "- **Coste total**: 0,1220 $" in report
     assert "- **Duración total**: 2 min 7 s (agente 2 min 2 s, verificación 4 s)" in report
 
@@ -1045,7 +1046,7 @@ def test_the_implementers_call_and_the_refactors_are_both_kept(tmp_path: Path) -
     """Same scenario and attempt: only the role tells them apart, and both count."""
     report = _report(tmp_path, _refactor_run("applied"))
 
-    assert "- **Llamadas al agente**: 3 (driver: 1, refactor: 1)" in report
+    assert "- **Llamadas al agente**: 3 (driver: 1, implementación: 1, refactor: 1)" in report
     assert "- **Coste total**: 0,1520 $" in report
 
 

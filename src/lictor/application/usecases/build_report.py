@@ -31,6 +31,7 @@ from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
     REFACTOR_ROLE,
+    calls_by_role,
     calls_text,
     cost_text,
     duration_text,
@@ -1176,8 +1177,11 @@ class BuildReport:
             *refactors,
         ]
         totals = _owner_totals(owners)
-        driver_calls = info["driver"]["calls"]
-        refactor_calls = sum(r["calls"] for r in refactors)
+        split = calls_by_role(
+            driver=info["driver"]["calls"],
+            implement=sum(scenario["calls"] for scenario in info["scenarios"].values()),
+            refactor=sum(r["calls"] for r in refactors),
+        )
 
         lines = [
             "# Informe de ejecución de Lictor",
@@ -1189,10 +1193,7 @@ class BuildReport:
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
             *([f"- **Motivo**: {info['exit_reason']}"] if info["exit_reason"] else []),
-            (
-                f"- **Llamadas al agente**: {totals['calls']} (driver: {driver_calls}, "
-                f"refactor: {refactor_calls})"
-            ),
+            f"- **Llamadas al agente**: {totals['calls']}{split}",
             f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
             f"- **Duración total**: {_total_duration(info)}",
             *_proof_summary(info["proof"]),
