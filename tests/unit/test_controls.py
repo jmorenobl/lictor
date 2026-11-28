@@ -721,3 +721,17 @@ def test_each_check_every_attempt_runs_is_granted_to_the_agent_exactly() -> None
         id="cov", level="L4", run="uv run coverage report --include=*/d/*", report="exit-code"
     )
     assert granted_tools([globbed], "", tools, ()) == tools
+
+
+def test_an_opt_out_is_not_warned_of_and_a_wildcard_is_told_why() -> None:
+    """Fable's N3 of the PR: `"agent": false` is the person's decision; a `*` is a wildcard."""
+    opted_out = CommandControl(
+        id="secretos", level="L4", run="gitleaks dir", report="exit-code", grants_agent=False
+    )
+    globbed = CommandControl(id="vet", level="L1", run="vet ./*", report="exit-code")
+
+    assert unrunnable_by_agent([opted_out, globbed], "", (), ()) == (
+        "el agente no tiene orden para comprobar el control vet (`vet ./*`): lleva `*`, `?` o "
+        "`[`, que en una regla son comodines, así que no se le concede tal cual. Dale un "
+        'agent_run sin ellos, o "agent": false si no debe comprobarlo.',
+    )
