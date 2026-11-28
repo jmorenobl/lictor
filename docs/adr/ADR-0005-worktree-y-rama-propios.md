@@ -85,3 +85,12 @@ run` que habría gastado (G7 y G8).
 4. **Lo suyo se borra aunque una herramienta lo deje de solo lectura**, devolviendo el permiso solo
    dentro de lo suyo. Nunca `--force`, nunca `git worktree prune`, que se llevaría entradas ajenas.
 
+
+## Enmienda de la 0.25.0 (2026-11-28): la evidencia sale del worktree al terminar
+
+Integrar la rama de un run con una herramienta que la borra (`gh pr merge --delete-branch`) puede
+llevarse el worktree y su `.lictor/`, y `retire` lo olvidaba sin guardar nada ni decirlo (S21).
+Ahora, en cada salida de un run lanzado desde el checkout, también en una pausa, su diario, su
+informe y `runs/` se copian a `.lictor/retired/<nombre>-<run id>/` del checkout, sustituyendo la
+copia anterior; `retire` la conserva. `retire` de un worktree que ya no existe dice dónde está su
+evidencia o que se perdió.

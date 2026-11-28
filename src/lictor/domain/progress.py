@@ -74,6 +74,13 @@ def node_text(node: str) -> str:
     return _NODE_TEXT.get(node, node)
 
 
+def calls_by_role(*, driver: int, implement: int, refactor: int) -> str:
+    """The calls of each role that had any, in a fixed order, so the split adds up (S24)."""
+    named = (("driver", driver), ("implementación", implement), ("refactor", refactor))
+    shown = ", ".join(f"{role}: {calls}" for role, calls in named if calls)
+    return f" ({shown})" if shown else ""
+
+
 def cost_text(usd: float, decimals: int = 2) -> str:
     """A cost in dollars with a decimal comma: `0,12 $`."""
     return f"{usd:.{decimals}f} $".replace(".", ",")

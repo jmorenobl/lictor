@@ -1090,8 +1090,8 @@ def _spied_environment(problems: list[str | None], runner: FakeRunner | None = N
     environment = MagicMock(spec=VerificationEnvironment)
     environment.ensure.side_effect = problems
     if runner is not None:
-        environment.run.side_effect = lambda cmd, cwd, timeout_s: runner.run(
-            cmd, cwd, timeout_s, env={"VAR": "1"}
+        environment.run.side_effect = lambda cmd, cwd, timeout_s, extra_env=None: runner.run(
+            cmd, cwd, timeout_s, env={"VAR": "1", **(extra_env or {})}
         )
     return environment
 
@@ -1132,7 +1132,11 @@ def test_verify_commands_get_the_environment_variables(tmp_path: Path) -> None:
     assert verifier.execute(req).ok is True
 
     assert verifier.environment.ensure.call_count == 2
-    assert [call["env"] for call in runner.calls] == [{"VAR": "1"}, {"VAR": "1"}]
+    # The acceptance, and only it, is told it is one (S10 of 0.25.0).
+    assert [call["env"] for call in runner.calls] == [
+        {"VAR": "1"},
+        {"VAR": "1", "LICTOR_ACCEPTANCE": "1"},
+    ]
 
 
 def test_verify_tree_dir_comes_from_execute(tmp_path: Path) -> None:

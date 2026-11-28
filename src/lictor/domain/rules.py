@@ -1108,7 +1108,7 @@ def baseline_head_accepted(
 
 
 # 0.3.0 also hashes the common directory of a linked worktree; 0.2.0 anchors carry no format.
-ANCHOR_FORMAT = "2"
+ANCHOR_FORMAT = "3"
 
 
 def anchor_from_older_version(anchor: Mapping[str, str]) -> bool:
@@ -1244,3 +1244,66 @@ def registration_problems(
 def minimum_text(minimum: float) -> str:
     """A declared minimum score as a person wrote it, with a decimal comma: «95», «92,5»."""
     return f"{minimum:g}".replace(".", ",")
+
+
+# What `lictor check` says of an acceptance it doesn't run because nothing has a driver yet (S20).
+NO_DRIVER_YET = (
+    "sin driver todavía: no hay ningún fichero en paths.driver ni ningún escenario en verde; la "
+    "escribe el primer `lictor run`"
+)
+SHALLOW_HISTORY = (
+    "Este clon no tiene la historia entera (clon superficial): sin ella no se sabe si algún "
+    "escenario estuvo en verde, y una aceptación sin driver no se da por pendiente. En la CI, "
+    "clona con la historia completa (`fetch-depth: 0`)."
+)
+
+
+def acceptance_pending(
+    *, specified: bool, driver_files: bool, any_green: bool, shallow: bool
+) -> bool:
+    """Whether the acceptance has nothing to run yet: a project before its first run (S20).
+
+    Only for a project with scenarios in `features/`: without them the acceptance is the
+    project's own suite, which no run writes. And only with the whole history: in a shallow
+    clone no green is seen, and a driver deleted after one would pass for one that hasn't started.
+    """
+    unstarted = project_unstarted(specified=specified, any_green=any_green, shallow=shallow)
+    return not driver_files and unstarted
+
+
+def project_unstarted(*, specified: bool, any_green: bool, shallow: bool) -> bool:
+    """Whether a project Lictor specifies has had nothing green yet (S18, S20).
+
+    Only with scenarios in `features/`: without them nothing will ever be green, so «not
+    started» would hold for good (Fable's N1 of the PR). And only with the whole history.
+    """
+    return specified and not any_green and not shallow
+
+
+# Set in every run of the acceptance, and only there: the profile's plugins tell it from the
+# controls' runs of the same runner (S10 of 0.25.0). `LICTOR_*` is reserved to Lictor.
+ACCEPTANCE_VARIABLE = "LICTOR_ACCEPTANCE"
+ACCEPTANCE_ENV = {ACCEPTANCE_VARIABLE: "1"}
+
+
+# The trailer of the driver's commit that took out the tests of scenarios no longer specified (S23).
+RETIRED_TRAILER = "Lictor-Retired"
+
+
+def retired_text(ids: Sequence[str]) -> str:
+    """What `doctor` warns of scenarios green in git that `features/` no longer has (S23)."""
+    return (
+        f"{', '.join(ids)} estaban en verde y ya no están en features/: se retiraron. El próximo "
+        "run quita sus tests del driver y lo deja escrito; hasta entonces, si el driver aún los "
+        "lee, la aceptación no carga. Si no querías retirarlos, devuélvelos a features/."
+    )
+
+
+def retired_rule(ids: Sequence[str]) -> str:
+    """The rule of the driver's order on the scenarios that were retired, or none without any."""
+    if not ids:
+        return ""
+    return (
+        f"- Los escenarios {', '.join(ids)} se retiraron de la especificación: quita del driver "
+        "sus tests y lo que solo usaban ellos. Ningún otro test cambia por eso."
+    )

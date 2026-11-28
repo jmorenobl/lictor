@@ -19,7 +19,7 @@ from tests.integration.repro.harness import (
 
 BINARY_OUTPUT_TEST = (
     "import atexit\nimport os\n\n"
-    "atexit.register(lambda: os.write(1, b'\\xff\\xfe'))\n\n\n"
+    'atexit.register(lambda: os.write(1, b"\\xff\\xfe"))\n\n\n'
     "def test_b():\n    assert True\n"
 )
 DOCSTRING_FEATURE = '''# language: es

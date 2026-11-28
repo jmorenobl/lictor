@@ -764,3 +764,33 @@ def recorded_duration(
     if acceptance is not None:
         durations.append(acceptance.ran.duration_ms)
     return sum(durations)
+
+
+def nothing_to_measure(entry: ControlEntry) -> bool:
+    """Whether a coverage control's report measured nothing: a project with no code yet (S18).
+
+    Its minimum can't be met before there is code, and the first green has to meet it: where
+    nothing an agent wrote is judged (HEAD, `check`) and nothing was ever green, it doesn't
+    block. In an attempt it still fails.
+
+    A command whose run failed is a failure whatever its report says: tests that fail and measure
+    nothing aren't a project without code (Fable's B1 of the PR). A reader ran nothing: the
+    tests' own control judges how they ended.
+    """
+    if isinstance(entry, ReaderEntry):
+        report: object = entry.outcome.report if isinstance(entry.outcome, Read) else None
+    else:
+        report = _measured_if_ended_well(entry)
+    return isinstance(report, CoverageReport) and not report.measured
+
+
+def _measured_if_ended_well(entry: CommandEntry) -> Report | None:
+    """The report of a command that finished in time with 0, or with a code that means
+    nothing to run; None otherwise."""
+    outcome = entry.outcome
+    if not isinstance(outcome, Executed) or not isinstance(outcome.judgement, Judged):
+        return None
+    execution = outcome.ran.execution
+    if execution.timed_out or execution.exit_code not in (0, *entry.control.empty_exit_codes):
+        return None
+    return outcome.judgement.report

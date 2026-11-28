@@ -1,7 +1,7 @@
 import hashlib
 import json
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -28,6 +28,7 @@ from lictor.adapters.config.models import (
     allow_empty_message,
     code_exclude_message,
     driver_hints_message,
+    granted_check,
     needs_plugins_message,
     plugin_without_list_message,
     prepare_message,
@@ -77,6 +78,7 @@ class Defences:
     interface_impostor: InterfaceImpostor | None = None
     # What a project needs before a run, and how to read what its controls see (ADR-0015).
     needs_plugins: dict[str, str] = field(default_factory=dict)
+    plugins_noted: dict[str, str] = field(default_factory=dict)
     survey_run: str | None = None
     ci_hooks: dict[str, str] = field(default_factory=dict)
     detect: Sequence[str] = ()
@@ -401,7 +403,7 @@ def _merge_profile_defaults(
 
 # The fields of a run of its own, which a reader doesn't have (ADR-0008, point 2).
 # Fields of a run: a reader has none, so turning a control into one drops them (F83: agent_fix).
-RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit", "agent_fix")
+RUN_FIELDS = ("empty_exit_codes", "timeout_s", "when_exists", "limit", "agent_fix", "agent")
 
 
 def _resolve_controls(
@@ -707,12 +709,24 @@ def _reject_unrunnable_agent_runs(
         problem
         for control in config.controls
         for name in _AGENT_COMMANDS
-        if (control.id, name) in asked
+        if _asked_and_not_granted(asked, control, name)
         for problem in agent_run_problems([_only(control, name)], config.agent_tools)
     ]
     if problems:
         msg = f"Configuración inválida en '{config_path}': " + "\n".join(problems)
         raise ConfigError(msg)
+
+
+def _asked_and_not_granted(
+    asked: Collection[tuple[str, str]],
+    control: CommandControlConfig | ReaderControlConfig,
+    name: str,
+) -> bool:
+    """Whether the project wrote this command and it needs a rule of its own: the `agent_run` of
+    a control granted to the agent doesn't (S17)."""
+    if (control.id, name) not in asked:
+        return False
+    return not (name == "agent_run" and granted_check(control))
 
 
 def _only(
@@ -877,6 +891,7 @@ def resolve_defences(config: LictorConfig, profiles_dir: Path | None = None) -> 
         declared_impostors=profile.oracle.declared_impostors,
         interface_impostor=_interface_impostor(profile.oracle),
         needs_plugins=dict(profile.acceptance.needs_plugins) if profile.acceptance else {},
+        plugins_noted=dict(profile.verification.plugins_noted),
         survey_run=profile.survey.run if profile.survey is not None else None,
         ci_hooks=dict(profile.survey.ci_hooks) if profile.survey is not None else {},
         detect=tuple(profile.detect),

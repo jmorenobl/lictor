@@ -84,7 +84,9 @@ from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseRe
 from lictor.domain.reports import JUnitReport
 from lictor.domain.results import verification_duration
 from lictor.domain.rules import (
+    ACCEPTANCE_ENV,
     NOT_IMPLEMENTED,
+    RETIRED_TRAILER,
     Impostors,
     MapLink,
     RedOracle,
@@ -185,6 +187,8 @@ class CheckRedRequest:
     banned_patterns: Sequence[str] = ()
     # The `attempt` controls: the blocking ones the driver's commit passes before the seal (G3).
     controls: Sequence[Control] = ()
+    # Green in git, no longer specified: the fresh driver's commit records them (S23).
+    retired_ids: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -870,16 +874,41 @@ class CheckRed:
         """Take the fresh driver from what the agent left, unless HEAD already holds it.
 
         That is the case after a crash that left it committed, and when the driver needed no change.
+        With retired scenarios it is committed even unchanged: the person took their tests out
+        with the scenarios, and this commit is what says so (Fable's I5 of the PR). Not twice: a
+        resume that finds this run's driver commit at HEAD takes it (Fable's N2).
         """
         if not request.driver_fresh or request.tree is None:
             return None
-        if self.vcs.get_tree("HEAD") == request.tree:
+        if self.vcs.get_tree("HEAD") == request.tree and (
+            not request.retired_ids or self._committed_by_this_run(request)
+        ):
             return None
+        trailers: dict[str, str | list[str]] = {"Lictor-Run": request.run_id}
+        if request.retired_ids:
+            # Their tests went with this driver: from here on they are no longer pending.
+            trailers[RETIRED_TRAILER] = list(request.retired_ids)
         return self.vcs.commit_tree(
             request.tree,
             message=DRIVER_COMMIT_MESSAGE,
-            trailers={"Lictor-Run": request.run_id},
+            trailers=trailers,
+            empty=bool(request.retired_ids),
         )
+
+    def _retired_by(self, request: CheckRedRequest, commit: str) -> list[str]:
+        """What this run's driver commit retired: after a resume nothing is left to retire, and
+        its trailer still says it (Fable's M7 of the PR). An older driver retired nothing here."""
+        if request.retired_ids:
+            return list(request.retired_ids)
+        if request.run_id not in self.vcs.get_trailers("Lictor-Run", commit):
+            return []
+        return self.vcs.get_trailers(RETIRED_TRAILER, commit)
+
+    def _committed_by_this_run(self, request: CheckRedRequest) -> bool:
+        """Whether HEAD is the driver commit this run made, its retired scenarios recorded."""
+        return request.run_id in self.vcs.get_trailers("Lictor-Run", "HEAD") and set(
+            request.retired_ids
+        ) <= set(self.vcs.get_trailers(RETIRED_TRAILER, "HEAD"))
 
     def _check_tree(
         self,
@@ -1316,7 +1345,8 @@ class CheckRed:
 
         lictor_dir = request.project_root / ".lictor"
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
-        output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s, extra_env)
+        env = {**ACCEPTANCE_ENV, **(extra_env or {})}
+        output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s, env)
         snapshot.verify_and_restore()
         phase = red_check_phase(out_file.parent.name, self._step_name)
         self._runs.append((phase, output.duration_ms))
@@ -1474,6 +1504,7 @@ class CheckRed:
                 "stub_impostors": registration.stub_impostors,
                 "stub_unchecked": list(registration.stub_unchecked),
                 "unchecked_why": registration.unchecked_why,
+                "retired": self._retired_by(request, commit_sha),
                 "driver_exempt": [
                     c.id for c in request.controls if c.mode == "block" and not c.checks_driver
                 ],

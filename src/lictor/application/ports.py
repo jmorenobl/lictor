@@ -89,6 +89,10 @@ class Worktrees(Protocol):
         """Tell, by reading files and not by asking git, whether this checkout is linked."""
         ...
 
+    def main_checkout(self) -> Path:
+        """The checkout whose `.git` this one shares; itself when it isn't linked."""
+        ...
+
     def current_branch(self) -> str:
         """Name the branch HEAD points to, or "" when it is detached."""
         ...
@@ -252,6 +256,10 @@ class Vcs(Protocol):
         """Tell whether HEAD names a commit: a repository just created has none."""
         ...
 
+    def is_shallow(self) -> bool:
+        """Tell whether the clone lacks part of its history: a shallow one, as a CI makes."""
+        ...
+
     def get_head_sha(self) -> str:
         """Return the commit sha of HEAD."""
         ...
@@ -290,8 +298,14 @@ class VerificationCommands(Protocol):
         """Build it if needed; say what changed under the last commands, if anything."""
         ...
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
-        """Run a verification command inside the environment."""
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        """Run a verification command inside the environment; `extra_env` is Lictor's own."""
         ...
 
 

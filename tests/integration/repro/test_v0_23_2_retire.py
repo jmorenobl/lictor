@@ -319,3 +319,63 @@ def test_a_worktree_deleted_by_hand_leaves_git_nothing_holding_its_branch(
     assert result.exit_code == 0, result.output
     assert str(worktree) not in git(root, "worktree", "list")
     assert "lictor/iva" not in git(root, "branch", "--list")
+
+
+def test_a_run_s_evidence_reaches_the_checkout_when_it_ends(make_project: ProjectFactory) -> None:
+    """S21 (0.25.0): integrating the branch with `--delete-branch` took the worktree and its
+    `.lictor/` with it, and `retire` then forgot the run with nothing kept and nothing said."""
+    root, worktree = _finished_run(make_project)
+    (run,) = read_run_index(root)
+    kept = root / ".lictor" / "retired" / f"iva-{run.run_id}"
+
+    assert (kept / "journal.jsonl").is_file()
+    assert (kept / "report.md").is_file()
+    shutil.rmtree(worktree)
+    result = _lictor("retire", "iva", "--cwd", str(root))
+
+    assert result.exit_code == 0, result.output
+    assert f"su evidencia está en .lictor/retired/iva-{run.run_id}" in result.output
+    assert read_run_index(root) == []
+
+
+def test_retiring_a_run_whose_worktree_and_evidence_are_gone_says_it_was_lost(
+    make_project: ProjectFactory,
+) -> None:
+    root, worktree = _finished_run(make_project)
+    shutil.rmtree(root / ".lictor" / "retired")
+    shutil.rmtree(worktree)
+
+    result = _lictor("retire", "iva", "--cwd", str(root))
+
+    assert result.exit_code == 0, result.output
+    assert "⚠ El worktree de lictor/iva ya no existía" in result.output
+    assert "su evidencia se ha perdido" in result.output
+
+
+def test_retire_keeps_what_came_after_the_run_s_last_exit(make_project: ProjectFactory) -> None:
+    """Fable's I2 of the PR: each exit leaves a copy, and `retire` found it there and kept it,
+    without what a resume inside the worktree, `register` or `report` wrote after it."""
+    root, worktree = _finished_run(make_project)
+    (run,) = read_run_index(root)
+    later = Path("runs") / str(run.run_id) / "despues.txt"
+    write(worktree / ".lictor", str(later), "escrito tras la última salida\n")
+
+    result = _lictor("retire", "iva", "--cwd", str(root))
+
+    assert result.exit_code == 0, result.output
+    kept = root / ".lictor" / "retired" / f"iva-{run.run_id}"
+    assert (kept / later).is_file()
+
+
+def test_a_run_interrupted_keeps_its_evidence_in_the_checkout(make_project: ProjectFactory) -> None:
+    """Fable's I3 of the PR: the copy came only when the run returned, not with Ctrl-C."""
+    root = make_project()
+
+    def interrupted(task: object, scenario_id: str, attempt: int) -> None:
+        raise KeyboardInterrupt
+
+    outcome = run_from_checkout(root, Agent(impl=interrupted), branch="iva")
+
+    (run,) = read_run_index(root)
+    require(outcome.exit_code != 0, f"el run no debía acabar en verde: {outcome}")
+    assert (root / ".lictor" / "retired" / f"iva-{run.run_id}" / "journal.jsonl").is_file()

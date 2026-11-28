@@ -646,3 +646,16 @@ def test_the_driver_prompt_without_lists_reads_whole(tmp_path: Path) -> None:
     assert "{regla_" not in prompt
     assert "ninguno ya funcionan" not in prompt
     assert "- No implementes la funcionalidad.\n- Trabajas en una copia" in prompt
+
+
+def test_the_reopened_and_the_retired_go_each_on_its_line(tmp_path: Path) -> None:
+    """S23: the driver hears which scenarios left the specification, beside the reopened ones."""
+    _, executor, _ = _execute_driver(
+        tmp_path, AgentResult(status="ok"), reopened_ids=["A-1"], retired_ids=["B-2"]
+    )
+
+    prompt = _prompt(executor)
+    assert (
+        "actualiza sus tests para que comprueben lo que piden ahora.\n- Los escenarios B-2 se"
+        in (prompt)
+    )

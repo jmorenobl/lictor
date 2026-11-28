@@ -522,7 +522,7 @@ def test_retire_removes_nothing_when_the_evidence_cant_be_kept(
     (Path(run_uno.worktree) / ".lictor").mkdir(exist_ok=True)
     (Path(run_uno.worktree) / ".lictor" / "report.md").write_text("# Informe\n", "utf-8")
 
-    def fails(*_args: object) -> None:
+    def fails(*_args: object, **_kwargs: object) -> None:
         raise OSError("disco lleno")
 
     monkeypatch.setattr("lictor.cli.archive_run_evidence", fails)

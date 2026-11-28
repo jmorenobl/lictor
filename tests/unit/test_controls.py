@@ -22,7 +22,7 @@ from lictor.domain.controls import (
     agent_measures,
     agent_measures_text,
     allowed_by,
-    bash_prefixes,
+    bash_admits,
     check_selection,
     command_controls,
     commands_list,
@@ -31,6 +31,7 @@ from lictor.domain.controls import (
     effective_command,
     executed_as,
     fixes_text,
+    granted_tools,
     lent_by_check,
     reader_of,
     reader_problems,
@@ -446,7 +447,20 @@ def test_the_agents_tools_allow_by_prefix_or_exact_command(command: str, allowed
 def test_what_bash_admits_is_each_rule_once() -> None:
     tools = (*_TOOLS, "Bash(uv run ruff:*)", "Bash(*)")
 
-    assert bash_prefixes(tools) == ["uv run ruff", "uv run pytest", "make lint", "*"]
+    assert bash_admits(tools) == (
+        "`uv run ruff`, `uv run pytest`, y estas órdenes tal cual: `make lint`, `*`"
+    )
+
+
+def test_bash_names_its_exact_commands_apart_from_its_prefixes() -> None:
+    """S17: an exact rule isn't a prefix; the prompt says each as it is."""
+    tools = ("Bash(uv run pytest:*)", "Bash(gitleaks dir)", "Bash(gitleaks dir)")
+
+    assert bash_admits(tools) == "`uv run pytest`, y estas órdenes tal cual: `gitleaks dir`"
+    assert bash_admits(("Bash(gitleaks dir)",)) == (
+        "ninguna, y estas órdenes tal cual: `gitleaks dir`"
+    )
+    assert bash_admits(()) == "ninguna"
 
 
 @pytest.mark.parametrize(
@@ -610,7 +624,7 @@ def test_a_fix_naming_the_profiles_files_runs_only_with_them() -> None:
 def test_only_a_bash_rule_allows_a_command() -> None:
     """Another tool whose rule looks the same allows nothing in Bash."""
     assert not allowed_by("uv run ruff check", ("Task(uv run ruff:*)",))
-    assert bash_prefixes(("Task(uv run ruff:*)", "Bash(make:*)")) == ["make"]
+    assert bash_admits(("Task(uv run ruff:*)", "Bash(make:*)")) == "`make`"
 
 
 def test_without_an_acceptance_there_is_no_empty_command() -> None:
@@ -662,3 +676,62 @@ def test_a_report_given_alone_leaves_the_agent_without_a_check_and_says_so() -> 
 
     assert told.startswith(f"el agente no tiene orden para comprobar la aceptación (`{run}`)")
     assert told.endswith("así que no podrá comprobarlo antes de acabar.")
+
+
+def test_each_check_every_attempt_runs_is_granted_to_the_agent_exactly() -> None:
+    """S17: a control a project adds reaches the agent without copying its profile's tools."""
+    controls = [
+        CommandControl(id="lint", level="L1", run="uv run ruff check src", report="exit-code"),
+        CommandControl(
+            id="imports", level="L4", run="uv run lint-imports --config x", report="exit-code"
+        ),
+        CommandControl(
+            id="unit", level="L2", run="uv run pytest tests/unit --junitxml {out}", report="junit"
+        ),
+        CommandControl(
+            id="secretos", level="L4", run="gitleaks dir", report="exit-code", grants_agent=False
+        ),
+        CommandControl(
+            id="medida", level="L1", run="radon cc src", report="exit-code", mode="measure"
+        ),
+        CommandControl(
+            id="con-plugin",
+            level="L2",
+            run="uv run pytest -p x",
+            report="exit-code",
+            when_plugin="x.plugin",
+        ),
+    ]
+    tools = ("Bash(uv run ruff:*)",)
+
+    granted = granted_tools(
+        controls, "uv run pytest tests/acceptance --junitxml {out}", tools, ("x.plugin",)
+    )
+
+    assert granted == (
+        "Bash(uv run ruff:*)",
+        "Bash(uv run lint-imports --config x)",
+        "Bash(uv run pytest tests/unit)",
+        "Bash(uv run pytest -p x)",
+        "Bash(uv run pytest tests/acceptance)",
+    )
+    assert granted_tools([], "", tools, ()) == tools
+    # Fable's M3 of the PR: a `*` in a rule is a wildcard, so that command isn't granted.
+    globbed = CommandControl(
+        id="cov", level="L4", run="uv run coverage report --include=*/d/*", report="exit-code"
+    )
+    assert granted_tools([globbed], "", tools, ()) == tools
+
+
+def test_an_opt_out_is_not_warned_of_and_a_wildcard_is_told_why() -> None:
+    """Fable's N3 of the PR: `"agent": false` is the person's decision; a `*` is a wildcard."""
+    opted_out = CommandControl(
+        id="secretos", level="L4", run="gitleaks dir", report="exit-code", grants_agent=False
+    )
+    globbed = CommandControl(id="vet", level="L1", run="vet ./*", report="exit-code")
+
+    assert unrunnable_by_agent([opted_out, globbed], "", (), ()) == (
+        "el agente no tiene orden para comprobar el control vet (`vet ./*`): lleva `*`, `?` o "
+        "`[`, que en una regla son comodines, así que no se le concede tal cual. Dale un "
+        'agent_run sin ellos, o "agent": false si no debe comprobarlo.',
+    )

@@ -87,6 +87,7 @@ from lictor.domain.results import (
     control_record,
 )
 from lictor.domain.rules import (
+    ACCEPTANCE_ENV,
     MapLink,
     acceptance_failure,
     ambiguous_with_sealed_driver,
@@ -657,7 +658,9 @@ class VerifyAttempt:
         cmd_tokens = fill_report_paths([(req.acceptance_run, out_file)])
 
         snapshot = IntegritySnapshot(self.project_root / ".lictor", self.project_root, self.vcs)
-        cmd_out = self._run_project_command(cmd_tokens, req, req.acceptance_timeout_s)
+        cmd_out = self.environment.run(
+            cmd_tokens, self._tree_dir(req), req.acceptance_timeout_s, ACCEPTANCE_ENV
+        )
         tampered = not snapshot.verify_and_restore()
         save_output(log_file, cmd_tokens, cmd_out)
         execution = Execution.of(cmd_out, req.acceptance_timeout_s)

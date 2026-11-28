@@ -40,6 +40,7 @@ from lictor.domain.rules import (
     forbidden_paths,
     keeps_attempt,
     path_within,
+    retired_rule,
 )
 
 
@@ -61,6 +62,8 @@ class PrepareDriverRequest:
     green_ids: Sequence[str]
     driver_attempts: int
     reopened_ids: Sequence[str] = ()
+    # Green in git and no longer in the specification: their tests go (S23).
+    retired_ids: Sequence[str] = ()
     last_error: str | None = None
     failed_at: str | None = None
     prompt_template: str | None = None
@@ -119,6 +122,12 @@ def _command_lines(request: PrepareDriverRequest) -> dict[str, str]:
     lines = agent_command_lines(request.allowed_tools, request.check_commands, request.fixes, None)
     fixes = lines["{arreglos}"]
     return {**lines, "{arreglos}": f"{fixes}\n" if fixes else ""}
+
+
+def _changed_lines(request: PrepareDriverRequest) -> str:
+    """The reopened and the retired, each on its line; nothing without either (S23)."""
+    lines = (_reopened_line(request.reopened_ids), retired_rule(request.retired_ids))
+    return "\n".join(line for line in lines if line)
 
 
 def _reopened_line(reopened_ids: Sequence[str]) -> str:
@@ -224,7 +233,8 @@ class PrepareDriver:
             # The driver's call has no copy of the profile's files: what names them can't run.
             **_command_lines(request),
             "{regla_verdes}": greens_rule(request.green_ids, "driver"),
-            "{reabiertos}": _reopened_line(request.reopened_ids),
+            # The reopened and the retired, each on its line; nothing without either (S23).
+            "{reabiertos}": _changed_lines(request),
             "{driver_hints}": request.driver_hints,
             "{hints}": request.hints,
             "{bloque_de_error}": error_block,

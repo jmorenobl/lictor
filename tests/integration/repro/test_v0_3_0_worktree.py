@@ -84,7 +84,7 @@ def test_the_common_directory_reached_by_absolute_path_is_detected_and_undone(
     assert "L0-estado" in _failed_at(worktree)
     changes = events_of(worktree, "state.tampered")[0]["data"]["changes"]
     assert ".git/hooks/post-commit" in changes
-    assert ".git/config" in changes
+    assert ".git/config (core.lictorplantado)" in changes
     assert not (common / "hooks" / "post-commit").exists()
     assert (common / "config").read_bytes() == config
     assert green_ids(worktree) == ["IVA-001", "IVA-002", "IVA-003"]

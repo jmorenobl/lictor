@@ -5,6 +5,7 @@ import pytest
 from lictor.application.ports import EventLog
 from lictor.application.seal import hash_file, hash_tree
 from lictor.application.usecases.build_report import (
+    RETIRED_NOTE,
     BuildReport,
     BuildReportRequest,
 )
@@ -915,7 +916,8 @@ def _summary_run() -> list[Event]:
 def test_report_gives_the_calls_and_cost_of_the_whole_run(tmp_path: Path) -> None:
     report = _report(tmp_path, _summary_run())
 
-    assert "- **Llamadas al agente**: 2 (driver: 1, refactor: 0)" in report
+    # S24: the split adds up to the total, the implementer's calls included.
+    assert "- **Llamadas al agente**: 2 (driver: 1, implementación: 1)" in report
     assert "- **Coste total**: 0,1220 $" in report
     assert "- **Duración total**: 2 min 7 s (agente 2 min 2 s, verificación 4 s)" in report
 
@@ -1045,7 +1047,7 @@ def test_the_implementers_call_and_the_refactors_are_both_kept(tmp_path: Path) -
     """Same scenario and attempt: only the role tells them apart, and both count."""
     report = _report(tmp_path, _refactor_run("applied"))
 
-    assert "- **Llamadas al agente**: 3 (driver: 1, refactor: 1)" in report
+    assert "- **Llamadas al agente**: 3 (driver: 1, implementación: 1, refactor: 1)" in report
     assert "- **Coste total**: 0,1520 $" in report
 
 
@@ -1447,3 +1449,15 @@ def test_a_basic_level_whose_impostors_never_ran_says_it_checks_no_test(tmp_path
 
     section = report.split("## Tests aceptados sin comprobar")[1].split("##")[0]
     assert "*Este perfil no comprueba los tests del driver: nivel básico.*" in section
+
+
+def test_the_retired_scenarios_are_listed(tmp_path: Path) -> None:
+    """S23: the seal says which scenarios this run's driver retired."""
+    sealed = _event("lictor.driver.sealed.v1", {"commit": "abc", "retired": ["IVA-003"]})
+
+    section = _report(tmp_path, [sealed]).split("## Escenarios retirados")[1].split("\n## ")[0]
+
+    assert RETIRED_NOTE in section
+    assert "IVA-003" in section
+    none = _event("lictor.driver.sealed.v1", {"commit": "abc", "retired": []})
+    assert "Ningún escenario retirado" in _report(tmp_path, [none])

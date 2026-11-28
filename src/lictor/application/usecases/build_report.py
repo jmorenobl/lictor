@@ -1,7 +1,7 @@
 """BuildReport use case for generating .lictor/report.md from event log."""
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from lictor.domain.model import Event, JournalDamage
 from lictor.domain.progress import (
     DRIVER_OWNER,
     REFACTOR_ROLE,
+    calls_by_role,
     calls_text,
     cost_text,
     duration_text,
@@ -80,6 +81,11 @@ _CACHE_NOTE = (
     "*La entrada incluye la caché: los tokens leídos y escritos en ella, que son casi toda la "
     "entrada de un agente.*"
 )
+
+
+def _calls_of(owners: Iterable[Mapping[str, Any]]) -> int:
+    """The agent calls of a set of owners of evidence: the scenarios, or the refactors."""
+    return sum(int(owner["calls"]) for owner in owners)
 
 
 def _owner_totals(owners: list[dict[str, Any]]) -> dict[str, int | float]:
@@ -439,6 +445,9 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         "## Verdes colaterales",
         *(sorted(info["collateral"]) or ["- *Ningún verde colateral.*"]),
         "",
+        "## Escenarios retirados",
+        *_retired_lines(info),
+        "",
         "## Ya se cumplían",
         *(
             sorted(info["already_met"])
@@ -449,6 +458,13 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         *([_unchecked_text(info)] if info["stub_unchecked"] else [_none_unchecked(info)]),
         *_exempt_lines(info),
     ]
+
+
+def _retired_lines(info: Mapping[str, Any]) -> list[str]:
+    """The scenarios whose tests this run's driver took out, retired from `features/` (S23)."""
+    if not info["retired"]:
+        return ["- *Ningún escenario retirado en esta ejecución.*"]
+    return [RETIRED_NOTE, *sorted(info["retired"])]
 
 
 def _exempt_lines(info: Mapping[str, Any]) -> list[str]:
@@ -474,6 +490,12 @@ def _none_unchecked(info: Mapping[str, Any]) -> str:
     return "- *Ninguno: cada test pendiente del driver se comprobó.*"
 
 
+# What the report says above the scenarios whose tests this run's driver took out (S23).
+RETIRED_NOTE = (
+    "*Estaban en verde y ya no están en features/: el driver de este run quitó sus tests (el rojo "
+    "rechaza un test sin escenario), y su commit lo registra en `Lictor-Retired`. Su no "
+    "regresión deja de comprobarse.*"
+)
 _MEASURES_NOTE = (
     "*Lo que vio el rojo de cada driver nuevo. «Con C» es lo que decidieron los impostores de "
     "stubs (ADR-0012): alguna constante tiene que hacer fallar una aserción del driver en un "
@@ -862,6 +884,7 @@ class BuildReport:
             "stub_unchecked": [],
             "unchecked_why": "",
             "driver_exempt": [],
+            "retired": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -990,6 +1013,9 @@ class BuildReport:
         exempt = ev.data.get("driver_exempt")
         if isinstance(exempt, list):
             info["driver_exempt"] = [str(cid) for cid in exempt]
+        retired = ev.data.get("retired")
+        if isinstance(retired, list):
+            info["retired"] = [str(sid) for sid in retired]
         unchecked = ev.data.get("stub_unchecked")
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]
@@ -1160,8 +1186,11 @@ class BuildReport:
             *refactors,
         ]
         totals = _owner_totals(owners)
-        driver_calls = info["driver"]["calls"]
-        refactor_calls = sum(r["calls"] for r in refactors)
+        split = calls_by_role(
+            driver=info["driver"]["calls"],
+            implement=_calls_of(info["scenarios"].values()),
+            refactor=_calls_of(refactors),
+        )
 
         lines = [
             "# Informe de ejecución de Lictor",
@@ -1173,10 +1202,7 @@ class BuildReport:
             f"- **Escenarios pendientes**: {pending}",
             f"- **Código de salida**: {info['exit_code']}",
             *([f"- **Motivo**: {info['exit_reason']}"] if info["exit_reason"] else []),
-            (
-                f"- **Llamadas al agente**: {totals['calls']} (driver: {driver_calls}, "
-                f"refactor: {refactor_calls})"
-            ),
+            f"- **Llamadas al agente**: {totals['calls']}{split}",
             f"- **Coste total**: {cost_text(float(totals['cost_usd']), _COST_DECIMALS)}",
             f"- **Duración total**: {_total_duration(info)}",
             *_proof_summary(info["proof"]),

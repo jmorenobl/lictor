@@ -23,6 +23,7 @@ from lictor.domain.rules import (
     RedOracle,
     ScenarioClass,
     acceptance_failure,
+    acceptance_pending,
     ambiguous_with_sealed_driver,
     anchor_from_older_version,
     anchor_problems,
@@ -55,11 +56,14 @@ from lictor.domain.rules import (
     person_stop_reason,
     precondition_exit_code,
     present_scenarios,
+    project_unstarted,
     red_failure_problem,
     registration_problems,
     registration_subject,
     render_full_error,
     retired_name,
+    retired_rule,
+    retired_text,
     retired_to_prune,
     routes_rejected,
     run_outcome,
@@ -1942,3 +1946,57 @@ def test_the_implementer_hears_both_causes_and_the_person_what_to_do() -> None:
         "como otro caso con el mismo ID. Recorre los casos dentro de un solo test, y que el "
         "mensaje de cada fallo diga cuál falló."
     )
+
+
+@pytest.mark.parametrize(
+    ("specified", "driver_files", "any_green", "shallow", "pending"),
+    [
+        (True, False, False, False, True),
+        # A driver, or a scenario once green, is a project that started: its acceptance runs.
+        (True, True, False, False, False),
+        (True, False, True, False, False),
+        # Without the whole history no green can be seen: nothing passes for not started.
+        (True, False, False, True, False),
+        # Without scenarios the acceptance is the project's own suite (Lictor's, its repro cases).
+        (False, False, False, False, False),
+    ],
+)
+def test_the_acceptance_is_pending_only_before_a_first_run(
+    specified: bool, driver_files: bool, any_green: bool, shallow: bool, pending: bool
+) -> None:
+    told = acceptance_pending(
+        specified=specified, driver_files=driver_files, any_green=any_green, shallow=shallow
+    )
+    assert told is pending
+
+
+def test_what_is_said_of_a_retired_scenario() -> None:
+    """S23: `doctor` warns of it; the driver's order tells it to take its tests out."""
+    assert retired_text(["A-1", "B-2"]) == (
+        "A-1, B-2 estaban en verde y ya no están en features/: se retiraron. El próximo run "
+        "quita sus tests del driver y lo deja escrito; hasta entonces, si el driver aún los lee, "
+        "la aceptación no carga. Si no querías retirarlos, devuélvelos a features/."
+    )
+    assert retired_rule([]) == ""
+    assert retired_rule(["A-1", "B-2"]).startswith("- Los escenarios A-1, B-2 se retiraron")
+    assert retired_rule(["A-1"]) == (
+        "- Los escenarios A-1 se retiraron de la especificación: quita del driver sus tests y lo "
+        "que solo usaban ellos. Ningún otro test cambia por eso."
+    )
+
+
+@pytest.mark.parametrize(
+    ("specified", "any_green", "shallow", "unstarted"),
+    [
+        (True, False, False, True),
+        (True, True, False, False),
+        (True, False, True, False),
+        # Fable's N1 of the PR: without scenarios nothing will ever be green.
+        (False, False, False, False),
+    ],
+)
+def test_a_project_is_unstarted_only_with_scenarios_none_green_and_the_whole_history(
+    specified: bool, any_green: bool, shallow: bool, unstarted: bool
+) -> None:
+    told = project_unstarted(specified=specified, any_green=any_green, shallow=shallow)
+    assert told is unstarted

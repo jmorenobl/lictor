@@ -105,7 +105,7 @@ def test_repro_projects_use_the_real_profile(make_project: ProjectFactory) -> No
     root: Path = make_project(sync=False)
     config = load_config(root)
     runs = [control.run for control in config.controls if isinstance(control, CommandControlConfig)]
-    assert "uv run ruff check src" in runs
+    assert "uv run ruff check" in runs
     assert "uv run mypy src" in runs
     reads = [
         control.reads for control in config.controls if isinstance(control, ReaderControlConfig)

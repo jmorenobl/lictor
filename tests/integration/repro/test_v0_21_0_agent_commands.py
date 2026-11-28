@@ -21,7 +21,7 @@ from tests.integration.repro.harness import (
 )
 
 ALL = ["IVA-001", "IVA-002", "IVA-003"]
-FIX = "- Tras tu último cambio, ejecuta `uv run ruff format src` (el control format bloquea)"
+FIX = "- Tras tu último cambio, ejecuta `uv run ruff format` (el control format bloquea)"
 
 
 def test_the_implementer_checks_lint_with_the_run_the_project_wrote(
@@ -36,7 +36,7 @@ def test_the_implementer_checks_lint_with_the_run_the_project_wrote(
     assert green_ids(root) == ALL
     [prompt, *_] = agent.prompts["IVA-001"]
     assert "  - `uv run ruff check src -q`\n" in prompt
-    assert "  - `uv run ruff check src`\n" not in prompt
+    assert "  - `uv run ruff check`\n" not in prompt
     assert "  - `uv run pytest tests/acceptance -q`\n" in prompt
     assert false_greens(root) == []
 
@@ -75,5 +75,5 @@ def test_with_format_blocking_the_agent_formats_and_then_checks(
 
     [prompt, *_] = agent.prompts["IVA-001"]
     assert any(line.startswith(FIX) for line in prompt.splitlines())
-    assert "  - `uv run ruff format --check src`\n" in prompt
+    assert "  - `uv run ruff format --check`\n" in prompt
     assert green_ids(root) == ALL

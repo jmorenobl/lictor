@@ -13,6 +13,7 @@ from pathlib import Path
 from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
+from lictor.application.spec_history import specified
 from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -22,10 +23,17 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
 from lictor.domain.api import ApiBase, UnresolvedBase
-from lictor.domain.controls import Control
+from lictor.domain.controls import Control, check_selection
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
-from lictor.domain.rules import NO_COMMITS
+from lictor.domain.rules import (
+    NO_COMMITS,
+    NO_DRIVER_YET,
+    SHALLOW_HISTORY,
+    acceptance_pending,
+    forbidden_paths,
+    project_unstarted,
+)
 from lictor.domain.unexecuted import UnexecutedChanges
 
 CANDIDATE_MESSAGE = "chore(lictor): árbol de trabajo verificado por lictor check"
@@ -45,6 +53,10 @@ class CheckWorkingTreeRequest:
     rev: str | None = None
     # A commit to compare the public API with (ADR-0017); without one it only gives facts.
     api_base: str | None = None
+    # Where the driver lives: without a file there nor a green in git, the acceptance waits (S20).
+    driver_paths: Sequence[str] = ()
+    # What the profile lets live beside the driver (`conftest.py`): none of it is a driver.
+    driver_exempt_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +70,10 @@ class CheckWorkingTreeResult:
     unexecuted: UnexecutedChanges | str | None = None
     # With a base and no API control, the API wasn't compared with it: said, not hidden (M4).
     api_uncompared: bool = False
+    # Why the acceptance didn't run although it was chosen: the project has no driver yet (S20).
+    acceptance_pending: str | None = None
+    # Why a missing driver can't be told from a project that hasn't started: a shallow clone.
+    acceptance_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,11 +117,12 @@ class CheckWorkingTree:
             check = CheckProject(EnvironmentRunner(environment), self.readers)
             api_base = self._api_base(base, environment)
             with verification_tree(self.vcs, subject.rev, self.project_root) as tree:
+                pending, note = self._acceptance_state(req, tree)
                 result = check.execute(
                     CheckProjectRequest(
                         project_root=self.project_root,
                         controls=req.controls,
-                        acceptance=req.acceptance,
+                        acceptance=None if pending else req.acceptance,
                         levels=req.levels,
                         error_max_chars=req.error_max_chars,
                         tree=tree,
@@ -115,14 +132,48 @@ class CheckWorkingTree:
                         deleted=subject.deleted,
                         installed_plugins=environment.installed_plugins,
                         api_base=api_base,
+                        unstarted=self._unstarted(tree),
                     )
                 )
             unexecuted = self._unexecuted(environment, base, subject.rev)
             tampered = environment.ensure(req.run_id)
         uncompared = base is not None and self.api is None
         return CheckWorkingTreeResult(
-            subject.description, result, tampered, unexecuted, api_uncompared=uncompared
+            subject.description,
+            result,
+            tampered,
+            unexecuted,
+            api_uncompared=uncompared,
+            acceptance_pending=NO_DRIVER_YET if pending else None,
+            acceptance_note=note,
         )
+
+    def _unstarted(self, tree: Path) -> bool:
+        return project_unstarted(
+            specified=specified(tree),
+            any_green=bool(self.vcs.trailer_commits("Scenario")),
+            shallow=self.vcs.is_shallow(),
+        )
+
+    def _acceptance_state(
+        self, req: CheckWorkingTreeRequest, tree: Path
+    ) -> tuple[bool, str | None]:
+        """Whether nothing has a driver yet (scenarios, no file under `paths.driver`, no green in
+        git), and why that can't be told when the clone is shallow. Nothing when this check
+        doesn't run the acceptance."""
+        if not _runs_acceptance(req):
+            return False, None
+        is_specified = specified(tree)
+        driver_files = bool(_driver_files(req, tree))
+        shallow = self.vcs.is_shallow()
+        pending = acceptance_pending(
+            specified=is_specified,
+            driver_files=driver_files,
+            any_green=bool(self.vcs.trailer_commits("Scenario")),
+            shallow=shallow,
+        )
+        unknown = is_specified and shallow and not driver_files
+        return pending, SHALLOW_HISTORY if unknown else None
 
     def _unexecuted(
         self, environment: VerificationCommands, base: str | None, rev: str
@@ -182,3 +233,24 @@ class CheckWorkingTree:
             f"árbol de trabajo ({len(changes)} ficheros sin confirmar) sobre HEAD {head[:12]}",
             tuple(change.path for change in changes if change.is_deleted),
         )
+
+
+def _runs_acceptance(req: CheckWorkingTreeRequest) -> bool:
+    """Whether this check runs the acceptance: it has one, and `--level`/`--control` choose it."""
+    if req.acceptance is None or not req.driver_paths:
+        return False
+    return check_selection(req.controls, req.levels, req.control_ids, ()).acceptance
+
+
+def _driver_files(req: CheckWorkingTreeRequest, tree: Path) -> list[str]:
+    """The files under `paths.driver` that the profile doesn't exempt: a `conftest.py` there
+    before the first run is no driver (Fable's M9 of the PR). A path that is a file counts
+    itself (M10)."""
+    found = [
+        path.relative_to(tree).as_posix()
+        for root in req.driver_paths
+        for path in ((tree / root), *(tree / root).rglob("*"))
+        if path.is_file()
+    ]
+    exempt = set(forbidden_paths(found, req.driver_exempt_paths))
+    return [path for path in found if path not in exempt]

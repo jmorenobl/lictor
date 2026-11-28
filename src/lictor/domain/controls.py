@@ -53,6 +53,8 @@ class CommandControl:
     limit: int | None = None
     # Whether the driver's commit passes it before the seal (G3); the person may say it can't.
     checks_driver: bool = True
+    # Whether its check is granted to the agent by an exact rule, without `agent_tools` (S17).
+    grants_agent: bool = True
 
     def __post_init__(self) -> None:
         if (self.report == "complexity") != (self.limit is not None):
@@ -122,14 +124,25 @@ def allowed_by(command: str, agent_tools: Sequence[str]) -> bool:
     return False
 
 
-def bash_prefixes(agent_tools: Sequence[str]) -> list[str]:
-    """What the agent's Bash accepts, as it reads it: each rule's prefix or exact command."""
-    found = [
-        tool[len("Bash(") : -1].removesuffix(":*")
-        for tool in agent_tools
-        if tool.startswith("Bash(") and tool.endswith(")")
-    ]
-    return list(dict.fromkeys(found))
+def bash_admits(agent_tools: Sequence[str]) -> str:
+    """What the agent's Bash accepts, as its prompt says it: the prefixes, then the exact ones."""
+    prefixes, exact = _bash_rules(agent_tools)
+    started = ", ".join(f"`{p}`" for p in prefixes) or "ninguna"
+    if not exact:
+        return started
+    return f"{started}, y estas órdenes tal cual: {', '.join(f'`{e}`' for e in exact)}"
+
+
+def _bash_rules(agent_tools: Sequence[str]) -> tuple[list[str], list[str]]:
+    """The prefixes of the `Bash(<p>:*)` rules and the exact commands of the others, each once."""
+    rules = [tool[len("Bash(") : -1] for tool in agent_tools if _is_bash_rule(tool)]
+    prefixes = [rule.removesuffix(":*") for rule in rules if rule.endswith(":*")]
+    exact = [rule for rule in rules if not rule.endswith(":*")]
+    return list(dict.fromkeys(prefixes)), list(dict.fromkeys(exact))
+
+
+def _is_bash_rule(tool: str) -> bool:
+    return tool.startswith("Bash(") and tool.endswith(")")
 
 
 def counts_for_agent(control: Control, installed: Collection[str]) -> bool:
@@ -235,6 +248,44 @@ def _checks(
     return tuple(dict.fromkeys(c for c in found if c is not None and allowed_by(c, agent_tools)))
 
 
+def granted_tools(
+    controls: Sequence[Control],
+    acceptance_run: str,
+    agent_tools: Sequence[str],
+    installed: Collection[str],
+) -> tuple[str, ...]:
+    """The agent's tools, and an exact rule for each check that blocks every attempt (S17).
+
+    Verification runs those commands in every attempt, so the agent may run them too, exactly as
+    written: without this a control a project added never reached the agent unless it copied the
+    whole `agent_tools` of its profile. A control with `"agent": false` gets no rule, and nor
+    does a command with `*`, `?` or `[`: in a rule they are wildcards, and it would admit more
+    than the command (Fable's M3 of the PR); `doctor` says it can't run it, as before.
+    """
+    counting = [c for c in controls if counts_for_agent(c, installed) and _grants(c)]
+    checks = [_check_of(c) for c in counting]
+    checks.append(without_report(acceptance_run) if acceptance_run else None)
+    granted = [
+        f"Bash({check})"
+        for check in dict.fromkeys(c for c in checks if c is not None)
+        if _to_grant(check, agent_tools)
+    ]
+    return (*agent_tools, *granted)
+
+
+# What a rule of the agent's tools reads as a wildcard: a command with them isn't granted as is.
+_WILDCARDS: Final = frozenset("*?[")
+
+
+def _to_grant(check: str, agent_tools: Sequence[str]) -> bool:
+    """Whether a check needs a rule of its own, and an exact one can be written for it."""
+    return not allowed_by(check, agent_tools) and not _WILDCARDS & set(check)
+
+
+def _grants(control: Control) -> bool:
+    return not isinstance(control, CommandControl) or control.grants_agent
+
+
 def unrunnable_by_agent(
     controls: Sequence[Control],
     acceptance_run: str,
@@ -243,12 +294,13 @@ def unrunnable_by_agent(
 ) -> tuple[str, ...]:
     """What decides an attempt that the agent's tools don't let it check, as warnings (D10).
 
-    Each such command drops out of the agent's list: it works blind on what it can't run.
+    Each such command drops out of the agent's list: it works blind on what it can't run. A
+    control with `"agent": false` is the person's decision, and isn't warned of (Fable's N3).
     """
     found = [
         (f"el control {c.id}", c.run, _check_of(c))
         for c in command_controls(controls)
-        if counts_for_agent(c, installed)
+        if counts_for_agent(c, installed) and c.grants_agent
     ]
     if acceptance_run:
         found.append(("la aceptación", acceptance_run, without_report(acceptance_run)))
@@ -266,6 +318,12 @@ def _unrunnable_text(what: str, run: str, command: str | None) -> str:
             f"el agente no tiene orden para comprobar {what} (`{run}`): su informe `{{out}}` va "
             "como argumento suelto y no se puede quitar sin cambiar la orden, así que no podrá "
             "comprobarlo antes de acabar."
+        )
+    if _WILDCARDS & set(command):
+        return (
+            f"el agente no tiene orden para comprobar {what} (`{command}`): lleva `*`, `?` o `[`, "
+            "que en una regla son comodines, así que no se le concede tal cual. Dale un "
+            'agent_run sin ellos, o "agent": false si no debe comprobarlo.'
         )
     return (
         f"agent_tools no deja al agente ejecutar {what} (`{command}`): no podrá comprobarlo antes "
@@ -310,9 +368,8 @@ def agent_command_lines(
     """
     tools = agent_tools_with_files(agent_tools, files_dir)
     runnable = [c for raw in checks if (c := runnable_command(raw, files_dir)) is not None]
-    admitted = ", ".join(f"`{prefix}`" for prefix in bash_prefixes(tools))
     return {
-        "{bash_admite}": admitted or "ninguna",
+        "{bash_admite}": bash_admits(tools),
         "{comprobaciones}": commands_list(list(dict.fromkeys([*runnable, *extra]))),
         "{arreglos}": fixes_text(runnable_fixes(fixes, files_dir)),
     }

@@ -9,6 +9,7 @@ import pytest
 
 from lictor.adapters.vcs.git_cli import GitCli
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
+from lictor.domain.git_config import config_change_text, config_entries
 from lictor.domain.model import Candidate
 from lictor.domain.refactor_scope import LineSpan
 
@@ -585,6 +586,19 @@ def test_advance_head_refuses_if_the_branch_went_back(git_repo: Path, tmp_path: 
     assert _head(git_repo) == behind
 
 
+def _only_config_reads(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """No git may run in the repository: only `git config --file` on a copy, outside it (S22)."""
+    real_run = subprocess.run
+
+    def no_git_in_the_repository(args: list[str], **kwargs: object) -> object:
+        outside = not Path(str(kwargs.get("cwd"))).resolve().is_relative_to(repo.resolve())
+        if "--file" in args and "--no-includes" in args and outside:
+            return real_run(args, **kwargs)  # type: ignore[call-overload]
+        raise AssertionError("no debe ejecutarse git en el repositorio")
+
+    monkeypatch.setattr(subprocess, "run", no_git_in_the_repository)
+
+
 def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -592,10 +606,7 @@ def test_fingerprint_changes_with_the_control_files_and_runs_no_git(
     before = cli.fingerprint()
     assert cli.fingerprint() == before
 
-    def no_git(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("no debe ejecutarse git")
-
-    monkeypatch.setattr(subprocess, "run", no_git)
+    _only_config_reads(monkeypatch, git_repo)
     for rel_path in ("config", "hooks/pre-commit", "info/attributes"):
         target = git_repo / ".git" / rel_path
         target.parent.mkdir(exist_ok=True)
@@ -630,7 +641,11 @@ def test_restore_brings_back_control_files_and_removes_planted_ones(git_repo: Pa
 
     changed = cli.restore(pin)
 
-    assert sorted(changed) == [".git/config", ".git/hooks/post-merge"]
+    # The keys `git init` writes depend on the platform (`core.ignorecase` on macOS).
+    assert sorted(changed) == [
+        config_change_text(sorted(_keys_of(original) | {"core.fsmonitor"})),
+        ".git/hooks/post-merge",
+    ]
     assert config.read_bytes() == original
     assert not hook.exists()
     assert cli.restore(pin) == []
@@ -858,10 +873,7 @@ def test_a_linked_worktree_sees_the_control_files_of_the_common_directory(
     cli = GitCli(repo_dir=worktree)
     before = cli.fingerprint()
 
-    def no_git(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("no debe ejecutarse git")
-
-    monkeypatch.setattr(subprocess, "run", no_git)
+    _only_config_reads(monkeypatch, worktree)
     targets = [
         git_repo / ".git" / "config",
         git_repo / ".git" / "hooks" / "post-commit",
@@ -873,7 +885,9 @@ def test_a_linked_worktree_sees_the_control_files_of_the_common_directory(
     for target in targets:
         target.parent.mkdir(exist_ok=True)
         original = target.read_bytes() if target.exists() else None
-        target.write_bytes((original or b"") + b"\n# x\n")
+        # The config counts by its guarded entries (S22): a comment alone changes none of them.
+        added = b"\n[core]\n\tx = 1\n" if target.name == "config" else b"\n# x\n"
+        target.write_bytes((original or b"") + added)
         assert cli.fingerprint() != before, target
         if original is None:
             target.unlink()
@@ -896,7 +910,7 @@ def test_restore_in_a_linked_worktree_brings_back_the_common_directory(
 
     changed = cli.restore(pin)
 
-    assert sorted(changed) == [".git/config", ".git/hooks/post-commit"]
+    assert [c.split(" ")[0] for c in sorted(changed)] == [".git/config", ".git/hooks/post-commit"]
     assert config.read_bytes() == original
     assert not hook.exists()
     assert cli.restore(pin) == []
@@ -918,23 +932,33 @@ def test_restore_follows_the_pointers_it_put_back(git_repo: Path, tmp_path: Path
     changed = cli.restore(pin)
 
     assert ".git/commondir" in changed
-    assert ".git/config" in changed
+    assert any(c.startswith(".git/config (") for c in changed)
     assert commondir.read_bytes() == original
     assert b"fsmonitor" not in config.read_bytes()
     assert not (decoy / "config").exists()
 
 
 def test_a_normal_checkout_keeps_the_fingerprint_it_had(git_repo: Path) -> None:
-    """Same files, same names: a checkout that isn't a linked worktree hashes as in 0.2.0."""
+    """Same files, same names: a checkout that isn't a linked worktree hashes them as they are,
+    but its config by the entries Lictor guards (S22 of 0.25.0, anchor format 3)."""
     git_dir = git_repo / ".git"
     files = {"HEAD": git_dir / "HEAD", "config": git_dir / "config"}
     for directory in ("hooks", "info"):
         for path in (git_dir / directory).rglob("*"):
             files[path.relative_to(git_dir).as_posix()] = path
+    listed = subprocess.run(
+        [GIT_BIN, "config", "--file", str(git_dir / "config"), "--no-includes", "--list", "-z"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    # By key, each key's values in their order (Fable's M2 of the PR).
+    records = [record for record in listed.split(b"\0") if record]
+    guarded = b"\0".join(sorted(records, key=lambda record: record.partition(b"\n")[0]))
     digest = hashlib.sha256()
     for name, path in sorted(files.items()):
         if path.is_file():
-            digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+            content = guarded if name == "config" else path.read_bytes()
+            digest.update(name.encode() + b"\0" + content + b"\0")
 
     assert GitCli(repo_dir=git_repo).fingerprint() == f"sha256:{digest.hexdigest()}"
 
@@ -1201,3 +1225,81 @@ def test_a_stale_entry_beside_the_live_one_doesnt_unlink_a_sound_worktree(
     (stale / "gitdir").write_text(f"{worktree / '.git'}\n", encoding="utf-8")
 
     assert GitCli(git_repo).link_of(worktree) == "linked"
+
+
+def _set(repo: Path, key: str, value: str) -> None:
+    subprocess.run([GIT_BIN, "config", key, value], cwd=repo, check=True)
+
+
+def _get(repo: Path, key: str) -> str:
+    return subprocess.run(
+        [GIT_BIN, "config", "--get", key], cwd=repo, capture_output=True, text=True, check=False
+    ).stdout.strip()
+
+
+def test_an_editor_s_key_under_a_branch_is_neither_a_change_nor_undone(git_repo: Path) -> None:
+    """S22: an editor writes `branch.<x>.vscode-merge-base` after a `git switch -c`, and the
+    person sets up a branch of their own; none of it is Lictor's to guard."""
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    print_before = cli.fingerprint()
+    _set(git_repo, "branch.main.vscode-merge-base", "origin/main")
+    _set(git_repo, "branch.feat.remote", "origin")
+
+    assert cli.restore(pin) == []
+    assert _get(git_repo, "branch.main.vscode-merge-base") == "origin/main"
+    assert _get(git_repo, "branch.feat.remote") == "origin"
+    assert cli.fingerprint() == print_before
+
+
+def test_a_guarded_key_is_named_restored_and_changes_the_anchor(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    print_before = cli.fingerprint()
+    _set(git_repo, "core.hooksPath", "/srv/hooks")
+    _set(git_repo, "branch.main.mergeOptions", "--no-ff")
+    _set(git_repo, "branch.main.vscode-merge-base", "origin/main")
+    print_after = cli.fingerprint()
+
+    assert cli.restore(pin) == [".git/config (branch.main.mergeoptions, core.hookspath)"]
+    assert _get(git_repo, "core.hooksPath") == ""
+    assert print_after != print_before
+    assert cli.fingerprint() == print_before
+
+
+def test_a_config_git_can_t_read_counts_as_changed_whole(git_repo: Path) -> None:
+    cli = GitCli(repo_dir=git_repo)
+    pin = cli.pin()
+    config = git_repo / ".git" / "config"
+    config.write_text(config.read_text(encoding="utf-8") + "[roto\n", encoding="utf-8")
+
+    assert cli.restore(pin) == [".git/config"]
+    assert "[roto" not in config.read_text(encoding="utf-8")
+
+
+def test_a_shallow_clone_exports_its_commit(git_repo: Path, tmp_path: Path) -> None:
+    """S20b: a CI clones without history; the export fetched nothing and the checkout failed."""
+    subprocess.run([GIT_BIN, "commit", "--allow-empty", "-qm", "otro"], cwd=git_repo, check=True)
+    shallow = tmp_path / "superficial"
+    subprocess.run(
+        [GIT_BIN, "clone", "-q", "--depth", "1", git_repo.resolve().as_uri(), str(shallow)],
+        check=True,
+    )
+    cli = GitCli(repo_dir=shallow)
+
+    cli.export_tree("HEAD", tmp_path / "exportado")
+
+    assert cli.is_shallow()
+    assert not GitCli(repo_dir=git_repo).is_shallow()
+    assert (tmp_path / "exportado" / "README.md").read_text(encoding="utf-8") == "# Test Repo\n"
+
+
+def _keys_of(config: bytes) -> set[str]:
+    """The keys of a config file, as git lists them."""
+    listed = subprocess.run(
+        [GIT_BIN, "config", "--file", "-", "--no-includes", "--list", "-z"],
+        input=config,
+        capture_output=True,
+        check=True,
+    ).stdout.decode()
+    return {key for key, _ in config_entries(listed)}

@@ -29,7 +29,9 @@ def head_tampered(changes: Sequence[str]) -> str:
     """Tell that running the controls on HEAD changed Lictor's state, which was restored."""
     return (
         "Los controles cambiaron el estado de Lictor al ejecutarse en HEAD "
-        f"({', '.join(changes)}); se ha restaurado. Algo del proyecto escribe fuera de su árbol."
+        f"({', '.join(changes)}); se ha restaurado. Lo escribió un control o, mientras corrían, "
+        "otro programa abierto sobre el repositorio (un editor con git, otra terminal): vuelve a "
+        "lanzar, y si se repite, es del proyecto."
     )
 
 
@@ -111,4 +113,13 @@ def driver_controls_note(control_ids: Sequence[str]) -> str:
         "un stub, algo que choca con las instrucciones del driver), cambia una de las dos cosas: "
         'el control, o acceptance.driver_hints; o escribe "driver": false en ese control de '
         "lictor.json, y el commit del driver dejará de pasarlo antes del sello."
+    )
+
+
+def not_measured_yet(control_ids: Sequence[str]) -> str:
+    """What `doctor` tells of a coverage control with a minimum before the project has code."""
+    names = ", ".join(f"'{cid}'" for cid in control_ids)
+    return (
+        f"{names} no midió nada: el proyecto aún no tiene código que medir. No bloquea hasta "
+        "que lo haya; desde el primer verde tendrá que llegar a su mínimo."
     )

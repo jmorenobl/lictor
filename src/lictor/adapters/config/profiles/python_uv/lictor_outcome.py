@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import inspect
+import os
 import sys
 import tokenize
 from pathlib import Path
@@ -73,6 +74,31 @@ def failure_kind(excinfo: pytest.ExceptionInfo[BaseException], when: str) -> str
     if excinfo.errisinstance((AssertionError, pytest.fail.Exception)):
         return "assertion"
     return "error"
+
+
+# Lictor sets it in every run of the acceptance, and only there (S10 of 0.25.0).
+ACCEPTANCE_VARIABLE = "LICTOR_ACCEPTANCE"
+
+
+def _in_the_acceptance() -> bool:
+    return os.environ.get(ACCEPTANCE_VARIABLE) == "1"
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_timeout_set_timer(item: pytest.Item, settings: Any) -> bool | None:
+    """In the acceptance, pytest-timeout sets no timer: Lictor cuts it by its own timeout.
+
+    Its cut fails the test with `pytest.fail`, which reads as an assertion: a stub that hangs
+    would pass for a valid red (S10). The hook is pytest-timeout's own, with `firstresult`, so
+    returning True leaves its timer unset; without the plugin it is never called.
+    """
+    return True if _in_the_acceptance() else None
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_timeout_cancel_timer(item: pytest.Item) -> bool | None:
+    """The timer set above, which is none, is cancelled as none: pytest-timeout's stays idle."""
+    return True if _in_the_acceptance() else None
 
 
 @pytest.hookimpl(optionalhook=True)

@@ -84,7 +84,7 @@ solo lo ve:
   ["tests/integration/"]}`. Deja de repetirse y solo se cuenta. Luego, `lictor register` de lo que el
   código ya cumple, antes del primer run.
 
-**Controles del perfil:** `lint` (ruff), `format` (`ruff format --check src`), `types` (mypy) y
+**Controles del perfil:** `lint` (ruff), `format` (`ruff format --check`, todo el proyecto según la configuración de ruff), `types` (mypy) y
 `unit` (pytest de `tests/unit`), y la aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` en modo
 `measure`: no bloquea nada, y su porcentaje sale en «Puntuaciones» de `report.md` y en
 `lictor check`. No ejecuta nada: lee la ejecución de `unit`, que recibe al final de su comando
@@ -92,6 +92,23 @@ solo lo ve:
 una sola vez. Solo mide si el proyecto tiene `pytest-cov`; sin él, `unit` corre tal cual y cada run
 muestra `coverage` como omitido, no como fallido. Si la persona quiere medir cobertura, o un
 mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
+
+**Plugins de pytest:** cada plugin instalado en el grupo por defecto carga en todas las órdenes de
+pytest de la verificación, `unit` y la aceptación incluidas (no hay `PYTEST_ADDOPTS` que lo
+evite). Uno que cambia el orden o la semilla (`pytest-randomly`) va en un grupo que no se instala
+por defecto (`[dependency-groups]` aparte, `uv sync --group <grupo>` en la CI); `doctor` avisa de
+los que conoce. Un `timeout` de pytest-timeout no corta la aceptación: la corta Lictor.
+
+**Una herramienta que importa el proyecto fuera de pytest** (import-linter): el proyecto no está
+instalado, así que se lanza con el lanzador del perfil, que pone `src` al final del camino:
+`"run": "uv run python -I -B -m lictor_with_src lint-imports --config pyproject.toml"` y
+`"agent_run": "uv run python -I -B {lictor_files}/lictor_with_src.py lint-imports --config
+pyproject.toml"`. No uses `uv run --directory src`: mete `src` delante de las dependencias.
+
+**Tests que vigilan al agente** (reglas de arquitectura como tests): en una ruta de la persona,
+`tests/architecture/` en `paths.protected`, con su control en cada intento (`"stage":
+"attempt"`, `"mode": "block"`), y el aviso de «Lo que los controles no ven» aceptado en
+`blind_spots.accepted`: el agente no puede relajarlos.
 
 **Cobertura con pytest:**
 

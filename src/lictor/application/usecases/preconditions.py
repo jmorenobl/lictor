@@ -21,6 +21,7 @@ from lictor.application.run_files import (
     verification_tree,
 )
 from lictor.application.skill import skill_stub_warning
+from lictor.application.spec_history import SpecHistory, specified
 from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
@@ -33,9 +34,15 @@ from lictor.domain.blind_spots import (
     configuration_problems,
     metadata_facts,
     missing_plugins,
+    noted_plugins,
     program_problems,
 )
-from lictor.domain.controls import Control, command_controls, unrunnable_by_agent
+from lictor.domain.controls import (
+    Control,
+    command_controls,
+    granted_tools,
+    unrunnable_by_agent,
+)
 from lictor.domain.conventions import CONVENTIONS_CHECK
 from lictor.domain.errors import EnvironmentUnavailableError, InternalLictorError
 from lictor.domain.head_controls import (
@@ -44,6 +51,7 @@ from lictor.domain.head_controls import (
     head_control_problem,
     head_not_started,
     head_tampered,
+    not_measured_yet,
 )
 from lictor.domain.model import CommandOutput, PreconditionProblem
 from lictor.domain.proof_level import (
@@ -61,6 +69,8 @@ from lictor.domain.rules import (
     control_label,
     missing_executables,
     path_within,
+    project_unstarted,
+    retired_text,
 )
 from lictor.domain.run_branches import uncommitted_left_out
 from lictor.domain.stages import check_controls_warning
@@ -195,6 +205,7 @@ class CheckPreconditions:
     spec_source: SpecSource | None = None
     # The start contract (ADR-0015): what the acceptance needs, and how to read what is seen.
     needs_plugins: Mapping[str, str] = field(default_factory=dict)
+    plugins_noted: Mapping[str, str] = field(default_factory=dict)
     survey: StartSurvey | None = None
     start_rules: StartRules | None = None
     # The controls a run verifies with, and how to read them: those that block must pass on HEAD
@@ -302,11 +313,13 @@ class CheckPreconditions:
         if self.spec_source is None:
             raise InternalLictorError("Comprobar los escenarios necesita un SpecSource")
         problems = self.spec_source.problems(self.project_root / "features")
-        return PreconditionCheck(
-            "Escenarios",
-            tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking),
-            warnings=tuple(str(p) for p in problems if not p.blocking),
-        )
+        blocking = tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking)
+        warnings = tuple(str(p) for p in problems if not p.blocking)
+        if not blocking and self.vcs.has_commits():
+            current = {s.id.value for s in self.spec_source.load(self.project_root / "features")}
+            if retired := SpecHistory(self.vcs, self.spec_source).retired(current):
+                warnings = (*warnings, retired_text(retired))
+        return PreconditionCheck("Escenarios", blocking, warnings=warnings)
 
     def _conventions(self) -> PreconditionCheck | None:
         """The rule files of HEAD not reviewed as they are now; nothing without any (F79)."""
@@ -490,9 +503,10 @@ class CheckPreconditions:
             else PreconditionCheck(PROOF_LEVEL, detail=name)
         )
         checks = [level]
-        unrunnable = unrunnable_by_agent(
-            self.head_controls, self.acceptance_run, self.agent_tools, installed or ()
-        )
+        found = installed or ()
+        # What every attempt grants the agent by itself counts as runnable (S17 of 0.25.0).
+        tools = granted_tools(self.head_controls, self.acceptance_run, self.agent_tools, found)
+        unrunnable = unrunnable_by_agent(self.head_controls, self.acceptance_run, tools, found)
         if unrunnable:
             checks.append(PreconditionCheck(AGENT_COMMANDS, warnings=unrunnable))
         return checks, proof
@@ -586,6 +600,11 @@ class CheckPreconditions:
                     evidence_dir=evidence,
                     keep_going=True,
                     installed_plugins=environment.installed_plugins,
+                    unstarted=project_unstarted(
+                        specified=specified(tree),
+                        any_green=bool(self.vcs.trailer_commits("Scenario")),
+                        shallow=self.vcs.is_shallow(),
+                    ),
                 )
             )
         snapshot.verify_and_restore()
@@ -596,6 +615,8 @@ class CheckPreconditions:
             )
             for failure in result.blocked
         ]
+        if result.not_measured:
+            notes = (*notes, not_measured_yet(result.not_measured))
         if snapshot.changes:
             problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
         if tampered := environment.ensure(_env_id(req)):
@@ -634,8 +655,12 @@ class CheckPreconditions:
         programs, later = program_problems(surveyed, self.start_rules.check_only)
         programs += configuration_problems(surveyed)
         detail, metadata = metadata_facts(surveyed.metadata)
+        noted = noted_plugins(self.plugins_noted, environment.installed_plugins)
         dependencies = PreconditionCheck(
-            DEPENDENCIES, (*plugins, *programs), warnings=(*later, *metadata), detail=detail
+            DEPENDENCIES,
+            (*plugins, *programs),
+            warnings=(*later, *metadata, *noted),
+            detail=detail,
         )
         spots = blind_spots(surveyed, self.start_rules)
         if spots.skipped is not None:

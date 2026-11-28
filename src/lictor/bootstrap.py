@@ -460,6 +460,7 @@ def bootstrap_runtime(
         ),
         spec_source=spec_source,
         needs_plugins=defences.needs_plugins,
+        plugins_noted=defences.plugins_noted,
         survey=unexecuted.survey if unexecuted is not None else None,
         start_rules=_start_rules(active_config, defences),
         head_controls=attempt_controls,

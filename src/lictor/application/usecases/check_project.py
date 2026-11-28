@@ -56,8 +56,10 @@ from lictor.domain.results import (
     acceptance_cases,
     consequence,
     failure_of,
+    nothing_to_measure,
 )
 from lictor.domain.rules import (
+    ACCEPTANCE_ENV,
     condense_error,
     control_path_status,
     plugin_skip_reason,
@@ -125,6 +127,9 @@ class CheckProjectRequest:
     deleted: Sequence[str] = ()
     # The base the public API is compared with (`--base`), measured already (ADR-0017).
     api_base: ApiBase | None = None
+    # Nothing was ever green, and the whole history says so: a minimum of coverage with no code
+    # to measure doesn't block yet (S18; `project_unstarted`). Never in an attempt.
+    unstarted: bool = False
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,8 @@ class CheckProjectResult:
     lent: Mapping[str, str] = field(default_factory=dict)
     # Each control that ran and failed, in the order they ran, whatever its mode.
     failures: tuple[ControlFailure, ...] = ()
+    # The coverage controls that measured nothing: a project with no code yet (S18).
+    not_measured: tuple[str, ...] = ()
 
     @property
     def blocked(self) -> tuple[ControlFailure, ...]:
@@ -187,11 +194,9 @@ class CheckProject:
             entries.append(ctrl_run.entry)
             if note := lent_note(step, ctrl_run.entry):
                 lent[step.control.id] = note
-            failures.extend(self._failures(req, step, ctrl_run))
-            failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
+            found, failure = self._judge_turn(req, step, ctrl_run)
+            failures.extend(found)
             if failure is not None:
-                reason = failure_reason(step, ctrl_run.entry, failure.reason)
-                failure = replace(failure, reason=reason)
                 first_failure = first_failure or (step.control.id, failure)
                 if not req.keep_going:
                     break
@@ -223,6 +228,7 @@ class CheckProject:
             added=selection.added,
             lent=lent,
             failures=tuple(failures),
+            not_measured=_not_measured(entries, req.unstarted),
         )
         if first_failure is None:
             return done
@@ -263,6 +269,22 @@ class CheckProject:
         evidence = partial(self._evidence, req)
         judging = Judging(self.readers, req.api_base)
         return run_control(step, judging, evidence, execute, readings)
+
+    def _judge_turn(
+        self, req: CheckProjectRequest, step: Step, ctrl_run: ControlRun
+    ) -> tuple[tuple[ControlFailure, ...], Block | None]:
+        """A turn's failures, and what blocks of it, with its reason as the agent reads it.
+
+        A minimum of coverage before there is code to measure doesn't block (S18 of 0.25.0).
+        """
+        found = self._failures(req, step, ctrl_run)
+        failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
+        if failure is None:
+            return found, None
+        if req.unstarted and nothing_to_measure(ctrl_run.entry):
+            return tuple(replace(f, mode="measure") for f in found), None
+        reason = failure_reason(step, ctrl_run.entry, failure.reason)
+        return found, replace(failure, reason=reason)
 
     def _failures(
         self, req: CheckProjectRequest, step: Step, ctrl_run: ControlRun
@@ -311,7 +333,9 @@ class CheckProject:
         evidence = self._evidence(req, ACCEPTANCE_ID)
         command = fill_report_paths([(acceptance.run, evidence.report)])
         tree = req.tree or req.project_root
-        cmd_out = self.runner.run(cmd=command, cwd=tree, timeout_s=acceptance.timeout_s)
+        cmd_out = self.runner.run(
+            cmd=command, cwd=tree, timeout_s=acceptance.timeout_s, env=ACCEPTANCE_ENV
+        )
         save_output(evidence.log, command, cmd_out)
         junit = self.readers.junit.read(evidence.report)
         execution = Execution.of(cmd_out, acceptance.timeout_s)
@@ -330,3 +354,11 @@ def _blocking(outcome: Consequence) -> Block | None:
             return Block(describe_tampering(changes))
         case _:
             assert_never(outcome)
+
+
+def _not_measured(entries: Sequence[ControlEntry], unstarted: bool) -> tuple[str, ...]:
+    """The coverage controls whose report measured nothing: no code yet (S18); none once a
+    scenario was green."""
+    if not unstarted:
+        return ()
+    return tuple(entry.control.id for entry in entries if nothing_to_measure(entry))

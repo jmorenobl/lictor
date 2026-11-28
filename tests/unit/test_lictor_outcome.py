@@ -13,6 +13,7 @@ from lictor.adapters.config.profiles.python_uv import lictor_outcome
 from lictor.adapters.readers.junit import JUnitReader
 from lictor.domain.model import TestCaseResult
 from lictor.domain.reports import JUnitReport
+from lictor.domain.rules import ACCEPTANCE_VARIABLE
 
 TESTS = """
 from types import SimpleNamespace
@@ -493,3 +494,38 @@ def test_a_step_whose_wrapped_chain_is_a_cycle_still_gives_its_own_code() -> Non
     paso.__wrapped__ = paso  # type: ignore[attr-defined]
 
     assert lictor_outcome._codes(paso) == (paso.__code__,)
+
+
+SLOW = "import time\n\n\ndef test_lento():\n    time.sleep(2)\n"
+
+
+@pytest.mark.parametrize(("acceptance", "status"), [(True, "passed"), (False, "failure")])
+def test_pytest_timeout_sets_no_timer_in_the_acceptance(
+    tmp_path: Path, acceptance: bool, status: str
+) -> None:
+    """S10: pytest-timeout's cut fails with `pytest.fail`, which reads as an assertion: a hung stub
+    would pass for a valid red. In the acceptance Lictor cuts by its own timeout instead."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_lento.py").write_text(SLOW, encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntimeout = 1\ntimeout_method = "signal"\n', encoding="utf-8"
+    )
+    env = {
+        **{k: v for k, v in os.environ.items() if not k.startswith(("PYTEST", "LICTOR_"))},
+        "PYTHONPATH": str(DEFAULT_PROFILES_DIR / "python_uv"),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        **({lictor_outcome.ACCEPTANCE_VARIABLE: "1"} if acceptance else {}),
+    }
+    report = tmp_path / "out.xml"
+    command = [sys.executable, "-B", "-m", "pytest", "-p", "lictor_outcome", "-p", "pytest_timeout"]
+    command += ["-p", "no:cacheprovider", "-q", "tests", "--junitxml", str(report)]
+
+    subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, check=False, timeout=120)
+
+    result = JUnitReader().read(report)
+    assert isinstance(result, JUnitReport), result
+    assert [case.status for case in result.cases] == [status]
+
+
+def test_the_plugin_and_lictor_name_the_acceptance_with_one_variable() -> None:
+    assert lictor_outcome.ACCEPTANCE_VARIABLE == ACCEPTANCE_VARIABLE

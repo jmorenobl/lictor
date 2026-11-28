@@ -28,6 +28,8 @@ from lictor.application.run_files import (
     exclusive_run,
     holding_project,
     prune_runs,
+    recover_aside,
+    relative_to_project,
     remove_tree,
     sweep_scratch,
     tree_entries_on_disk,
@@ -47,7 +49,10 @@ from lictor.application.usecases.check_project import (
     CheckProjectResult,
     ControlFailure,
 )
-from lictor.application.usecases.check_working_tree import CheckWorkingTreeRequest
+from lictor.application.usecases.check_working_tree import (
+    CheckWorkingTreeRequest,
+    CheckWorkingTreeResult,
+)
 from lictor.application.usecases.init_project import InitProjectRequest, InitProjectResult
 from lictor.application.usecases.preconditions import (
     CheckPreconditions,
@@ -571,14 +576,19 @@ def check(
                     keep_going=keep_going,
                     error_max_chars=config.limits.error_max_chars,
                     api_base=base,
+                    driver_paths=config.paths.driver,
+                    driver_exempt_paths=runtime.graph_context.driver_exempt_paths,
                 )
             )
 
         typer.echo(f"Verificado: {res.subject}")
         only_here = {c.id for c in runtime.graph_context.check_controls}
-        for line in _check_output(res.check, only_here):
-            typer.echo(line)
-        for line in _unexecuted_output(res.unexecuted):
+        told = (
+            *_check_output(res.check, only_here),
+            *_acceptance_notes(res),
+            *_unexecuted_output(res.unexecuted),
+        )
+        for line in told:
             typer.echo(line)
         if res.api_uncompared:
             typer.echo(f"\n{API_UNCOMPARED}")
@@ -591,6 +601,12 @@ def check(
         return 0
 
     _safe_run(_execute)
+
+
+def _acceptance_notes(res: CheckWorkingTreeResult) -> list[str]:
+    """Why the acceptance didn't run before the first run, or why that can't be told (S20)."""
+    notes = [f"- acceptance: {res.acceptance_pending}"] if res.acceptance_pending else []
+    return [*notes, f"  {res.acceptance_note}"] if res.acceptance_note else notes
 
 
 # `--base` without an API control: the rest compares with it, the API doesn't (M4 of 0.20.0).
@@ -1077,18 +1093,88 @@ def _execute_run(
                 err=True,
             )
             return int(ExitCode.PRECONDITION)
-        return _run_here(resolved_cwd, force_new, progress)
+        main_root = repository.main_checkout()
+        return _run_keeping(
+            _indexed(main_root, resolved_cwd),
+            main_root,
+            lambda: _run_here(resolved_cwd, force_new, progress),
+        )
 
     target = _run_target(resolved_cwd, force_new=force_new, branch=branch)
     if isinstance(target, int):
         return target
     typer.echo(f"Ejecución en la rama {target.branch}, en {target.worktree}", err=True)
     try:
-        return _run_here(Path(target.worktree), False, progress, run_id=target.run_id)
+        return _run_keeping(
+            target,
+            resolved_cwd,
+            lambda: _run_here(Path(target.worktree), False, progress, run_id=target.run_id),
+        )
     except RunInProgressError as err:
         raise RunInProgressError(
             f"{err} Para lanzar otra en paralelo, dale un nombre: `lictor run --branch <nombre>`."
         ) from err
+
+
+def _indexed(main_root: Path, worktree: Path) -> RunEntry | None:
+    """The run of the checkout's index that works in this worktree, if one does."""
+    return next(
+        (run for run in read_run_index(main_root) if Path(run.worktree).resolve() == worktree),
+        None,
+    )
+
+
+def _run_keeping(target: RunEntry | None, main_root: Path, run: Callable[[], int]) -> int:
+    """Run, and copy the evidence at every exit: a return, an error, an interrupt (S21).
+
+    Not when another process holds the run: nothing of this one started (Fable's I3 of the PR).
+    """
+    try:
+        code = run()
+    except RunInProgressError:
+        raise
+    except BaseException:
+        if target is not None:
+            _keep_evidence(target, main_root)
+        raise
+    if target is not None:
+        _keep_evidence(target, main_root)
+    return code
+
+
+def _keep_evidence(target: RunEntry, main_root: Path) -> None:
+    """Copy the run's evidence to the checkout at every exit, pause included (S21 of 0.25.0).
+
+    Integrating the branch with a tool that deletes it can take the worktree and its `.lictor/`
+    with it: what is in the checkout stays. A copy that fails is told, never the end of the run.
+    """
+    worktree = Path(target.worktree)
+    run_id = _current_run_id(worktree) or target.run_id
+    if run_id is None:
+        return
+    name = target.branch.removeprefix(RUN_BRANCH_PREFIX)
+    try:
+        archive_run_evidence(
+            worktree,
+            main_root,
+            retired_name(name, run_id),
+            retired_runs_kept(main_root),
+            replace=True,
+        )
+    except OSError as exc:
+        typer.echo(
+            f"⚠ No se ha podido copiar la evidencia del run a .lictor/{RETIRED_DIR}/ ({exc}): "
+            "sigue en su worktree, y `lictor retire` la copiará.",
+            err=True,
+        )
+
+
+def _current_run_id(worktree: Path) -> str | None:
+    """The run `current_run` names in a worktree, or None when it names none."""
+    try:
+        return (worktree / ".lictor" / "current_run").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 def _run_target(main_root: Path, *, force_new: bool, branch: str | None) -> RunEntry | int:
@@ -1392,6 +1478,7 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
     repository = checkout_repository(main_root)
     if not worktree.is_dir():
         _forget_in_git(repository, worktree)
+        _tell_evidence_of_gone(run, name, main_root)
         return None
     with exclusive_run(worktree, "lictor retire"):
         facts = run_facts(main_root, run, probe_lock=False)
@@ -1416,6 +1503,21 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
         return refused
     typer.echo(f"Worktree retirado: {worktree}")
     return None
+
+
+def _tell_evidence_of_gone(run: RunEntry, name: str, main_root: Path) -> None:
+    """Say where the evidence of a run whose worktree is already gone is, or that it was lost."""
+    kept = aside_dir(main_root, RETIRED_DIR) / retired_name(name, run.run_id)
+    recover_aside(kept)
+    if kept.is_dir():
+        shown = relative_to_project(kept, main_root)
+        typer.echo(f"El worktree ya no existía; su evidencia está en {shown}.")
+        return
+    typer.echo(
+        f"⚠ El worktree de {run.branch} ya no existía, y su evidencia no se había copiado al "
+        "checkout: su evidencia se ha perdido. Retira un run antes de borrar su rama.",
+        err=True,
+    )
 
 
 def _retire_linked(run: RunEntry, name: str, main_root: Path, *, archive: bool) -> int | None:
@@ -1499,13 +1601,18 @@ def _leftovers_known(run: RunEntry, tracked: set[str] | None) -> LeftoversKnown:
 
 
 def _archive(run: RunEntry, name: str, main_root: Path) -> int | None:
-    """Keep the run's evidence in the checkout, or refuse with 40 having removed nothing."""
+    """Keep the run's evidence in the checkout, or refuse with 40 having removed nothing.
+
+    It replaces the copy each exit of the run left: what came after it (a resume inside the
+    worktree, `register`, `report`) is in the worktree only (Fable's I2 of the PR).
+    """
     try:
         kept = archive_run_evidence(
             Path(run.worktree),
             main_root,
             retired_name(name, run.run_id),
             retired_runs_kept(main_root),
+            replace=True,
         )
     except OSError as exc:
         typer.echo(

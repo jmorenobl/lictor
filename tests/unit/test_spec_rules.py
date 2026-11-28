@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from lictor.domain.spec_rules import (
     FeatureFile,
     ScenarioSeen,
@@ -101,6 +103,30 @@ def test_an_outline_is_refused_and_says_what_to_write_instead() -> None:
     assert problem.line == 4
     assert "Esquema del escenario" in problem.message
     assert "un escenario por cada fila" in problem.fix
+
+
+def test_a_first_step_that_follows_nothing_is_refused_in_a_scenario_and_a_background() -> None:
+    """S6: `Y`/`Pero` first follow no step; pytest-bdd refuses the file at collection."""
+    scenario = ScenarioSeen("Uno", 4, (TagSeen("@ROM-001", 3),), leading_conjunction=5)
+    feature = replace(_file(scenario), leading_background_conjunctions=(2,))
+
+    problems = spec_problems([feature])
+
+    assert {p.file for p in problems} == {"features/a.feature"}
+    assert [(p.line, p.message, p.fix, p.blocking) for p in problems] == [
+        (
+            2,
+            "el primer paso de unos antecedentes empieza por «Y» o «Pero», que siguen a otro paso",
+            "Empiézalo por Dado, Cuando o Entonces.",
+            True,
+        ),
+        (
+            5,
+            "el primer paso del escenario «Uno» empieza por «Y» o «Pero», que siguen a otro paso",
+            "Empiézalo por Dado, Cuando o Entonces.",
+            True,
+        ),
+    ]
 
 
 def test_a_scenario_without_tags_has_no_id() -> None:

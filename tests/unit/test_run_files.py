@@ -19,6 +19,7 @@ from lictor.application.run_files import (
     new_step_dir,
     own_dir,
     prune_runs,
+    recover_aside,
     relative_to_project,
     remove_tree,
     save_output,
@@ -568,6 +569,23 @@ def test_an_archive_already_kept_is_not_replaced(tmp_path: Path) -> None:
     assert (second / "journal.jsonl").read_text(encoding="utf-8") == "completa\n"
 
 
+def test_each_exit_of_a_run_replaces_its_copy_whole(tmp_path: Path) -> None:
+    """S21: a run copies its evidence at every exit; the newer copy takes the older's place."""
+    worktree, main = tmp_path / "wt", tmp_path / "main"
+    (worktree / ".lictor" / "runs").mkdir(parents=True)
+    (worktree / ".lictor" / "journal.jsonl").write_text("pausa\n", encoding="utf-8")
+    archive_run_evidence(worktree, main, "iva-r1", 10, replace=True)
+    (worktree / ".lictor" / "journal.jsonl").write_text("pausa\nfin\n", encoding="utf-8")
+    (worktree / ".lictor" / "report.md").write_text("# informe\n", encoding="utf-8")
+
+    kept = archive_run_evidence(worktree, main, "iva-r1", 10, replace=True)
+
+    assert kept is not None
+    assert (kept / "journal.jsonl").read_text(encoding="utf-8") == "pausa\nfin\n"
+    assert (kept / "report.md").is_file()
+    assert sorted(p.name for p in kept.parent.iterdir()) == ["iva-r1"]
+
+
 def test_the_tree_on_disk_lists_links_without_following_them(tmp_path: Path) -> None:
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "a" / "b" / "f").write_text("x", encoding="utf-8")
@@ -611,3 +629,18 @@ def test_a_directory_permission_cant_fix_fails_once_not_forever(
 
     monkeypatch.undo()
     (env / "cerrado").chmod(0o755)
+
+
+def test_a_copy_moved_aside_by_a_replacement_cut_short_is_put_back(tmp_path: Path) -> None:
+    """Fable's M8 of the PR: between the two renames only the hidden copies are left."""
+    target = tmp_path / "iva-r1"
+    old = tmp_path / ".iva-r1.old"
+    old.mkdir()
+    (old / "journal.jsonl").write_text("{}\n", encoding="utf-8")
+
+    recover_aside(target)
+
+    assert (target / "journal.jsonl").is_file()
+    assert not old.exists()
+    recover_aside(target)
+    assert target.is_dir()

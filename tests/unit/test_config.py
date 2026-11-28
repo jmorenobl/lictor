@@ -60,6 +60,7 @@ from lictor.adapters.config.profiles.python_uv import (
     lictor_outcome,
     lictor_project_path,
     lictor_survey,
+    lictor_with_src,
 )
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
@@ -603,6 +604,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_coverage.py",
         "lictor_survey.py",
         "lictor_api.py",
+        "lictor_with_src.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -663,6 +665,7 @@ def _runtime_nodes(tree: ast.Module) -> list[ast.AST]:
                 "collections",
                 "contextlib",
                 "inspect",
+                "os",
                 "pathlib",
                 "pytest",
                 "sys",
@@ -1028,6 +1031,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_coverage.__file__,
         lictor_survey.__file__,
         lictor_api.__file__,
+        lictor_with_src.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 
@@ -1239,10 +1243,10 @@ def test_the_profiles_agent_commands_come_from_its_controls(tmp_path: Path) -> N
     """F83: the list `agent_commands` had, in its order, plus the check of what the fix fixes."""
     derived = _derived(load_config(_project(tmp_path)))
 
-    assert derived.fixes == (AgentFix("format", "uv run ruff format src"),)
+    assert derived.fixes == (AgentFix("format", "uv run ruff format"),)
     assert derived.checks == (
-        "uv run ruff check src",
-        "uv run ruff format --check src",
+        "uv run ruff check",
+        "uv run ruff format --check",
         "uv run mypy src",
         "uv run pytest tests/unit -q",
         "uv run pytest tests/acceptance -q",

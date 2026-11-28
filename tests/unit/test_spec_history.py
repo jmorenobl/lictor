@@ -95,3 +95,20 @@ def test_a_green_without_either_trailer_was_registered_by_hand_by_someone() -> N
     )
 
     assert history.records()["A-2"] == GreenRecord("c1", "h2", False, None)
+
+
+def test_a_green_the_specification_no_longer_has_is_retired_until_a_driver_says_so() -> None:
+    """S23: removing an integrated scenario retires it; the driver that drops its tests records
+    it in `Lictor-Retired`, and from a commit after its green on, it is no longer pending."""
+    history, vcs, _ = _history(
+        [("c2", ["A-1"]), ("c1", ["A-1", "A-2", "B-1"])],
+        {"Lictor-Retired": [("d1", ["A-2"]), ("d0", ["B-1"])]},
+    )
+    # d1 comes after A-2's green (c1); d0 came before B-1's green, which it doesn't descend from.
+    vcs.merge_base.side_effect = lambda a, b: a if (a, b) == ("c1", "d1") else "x"
+
+    assert history.retired({"A-1"}) == ("B-1",)
+    assert history.retired({"A-1", "A-2", "B-1"}) == ()
+    # Fable's I1 of the PR: once retired it has no green, so coming back it is a new one.
+    assert set(history.records()) == {"A-1", "B-1"}
+    assert history.classify({"A-2": "h2"}) == {"A-2": "new"}

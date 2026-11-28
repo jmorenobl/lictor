@@ -924,24 +924,34 @@ def test_a_run_without_a_survey_dir_says_no_level(tmp_path: Path, bin_dir: Path)
     assert preconditions.PROOF_LEVEL not in _by_name(report)
 
 
-def test_what_the_agent_cant_run_is_warned_of(tmp_path: Path, bin_dir: Path) -> None:
+def test_what_every_attempt_runs_is_granted_and_an_opt_out_is_not_warned_of(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """S17: the acceptance and each blocking control are granted to the agent by an exact rule;
+    a control with `"agent": false` is the person's decision, and `doctor` doesn't warn of it
+    (Fable's N3 of the PR). A command with a wildcard isn't granted, and is told why."""
     parts = _with_contract(tmp_path, bin_dir)
     parts.use_case.proof = _BARE
     parts.use_case.acceptance_run = "gotestsum --junitfile {out} -- ./acceptance/..."
     parts.use_case.agent_tools = ["Bash(go test:*)"]
 
-    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    granted = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
 
-    told = _by_name(report)[preconditions.AGENT_COMMANDS]
+    assert preconditions.AGENT_COMMANDS not in _by_name(granted)
+    parts.use_case.head_controls = [
+        CommandControl(
+            id="lint", level="L1", run="golangci-lint run", report="exit-code", grants_agent=False
+        ),
+        CommandControl(id="glob", level="L1", run="vet ./*", report="exit-code"),
+    ]
+    left_out = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+    told = _by_name(left_out)[preconditions.AGENT_COMMANDS]
     assert told.problems == ()
     assert told.warnings == (
-        "agent_tools no deja al agente ejecutar la aceptación (`gotestsum -- ./acceptance/...`): "
-        "no podrá comprobarlo antes de acabar. Añade a agent_tools una regla Bash(<prefijo>:*) "
-        "que lo permita.",
+        "el agente no tiene orden para comprobar el control glob (`vet ./*`): lleva `*`, `?` o "
+        "`[`, que en una regla son comodines, así que no se le concede tal cual. Dale un "
+        'agent_run sin ellos, o "agent": false si no debe comprobarlo.',
     )
-    parts.use_case.agent_tools = ["Bash(gotestsum:*)"]
-    allowed = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
-    assert preconditions.AGENT_COMMANDS not in _by_name(allowed)
 
 
 def test_a_proved_level_with_nothing_missing_passes_saying_it(
@@ -999,3 +1009,17 @@ def test_without_code_in_head_the_exclusion_is_left_to_the_first_refactor(
     [check] = [c for c in report.checks if c.name == "Rutas de código"]
     assert check.skipped == preconditions.NO_CODE_YET
     assert report.problems == []
+
+
+def test_doctor_warns_of_an_installed_plugin_that_changes_the_order_of_the_tests(
+    tmp_path: Path, bin_dir: Path
+) -> None:
+    """S11: `pytest-randomly` shuffled every command of the verification just by being there."""
+    parts = _with_contract(tmp_path, bin_dir)
+    parts.environment.installed_plugins = ("bdd.plugin", "pytest_randomly")
+    parts.use_case.plugins_noted = {"pytest_randomly": "baraja el orden"}
+
+    report = parts.use_case.execute(PreconditionsRequest(run_id="r1", survey_dir=tmp_path))
+
+    told = _by_name(report)[preconditions.DEPENDENCIES]
+    assert any(w.startswith("El plugin pytest_randomly está instalado") for w in told.warnings)

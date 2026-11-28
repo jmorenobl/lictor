@@ -1,6 +1,6 @@
 """A verification environment for tests that verify without building one."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from lictor.application.ports import CommandRunner
@@ -24,5 +24,11 @@ class PlainEnvironment:
     def ensure(self, run_id: str) -> str | None:
         return None
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
         return self.runner.run(cmd, cwd=cwd, timeout_s=timeout_s)

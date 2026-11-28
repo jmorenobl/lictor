@@ -88,7 +88,9 @@ class EnvironmentRunner:
         timeout_s: int | None = None,
         env: Mapping[str, str] | None = None,
     ) -> CommandOutput:
-        return self.environment.run(cmd, cwd, timeout_s)
+        # Only Lictor's own variables pass, for one command (`ACCEPTANCE_VARIABLE`).
+        lictor_only = {k: v for k, v in (env or {}).items() if k.startswith("LICTOR_")}
+        return self.environment.run(cmd, cwd, timeout_s, lictor_only or None)
 
 
 @dataclass(frozen=True)
