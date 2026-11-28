@@ -93,6 +93,23 @@ una sola vez. Solo mide si el proyecto tiene `pytest-cov`; sin él, `unit` corre
 muestra `coverage` como omitido, no como fallido. Si la persona quiere medir cobertura, o un
 mínimo, que lo añada antes del run con `uv add --dev pytest-cov`.
 
+**Plugins de pytest:** cada plugin instalado en el grupo por defecto carga en todas las órdenes de
+pytest de la verificación, `unit` y la aceptación incluidas (no hay `PYTEST_ADDOPTS` que lo
+evite). Uno que cambia el orden o la semilla (`pytest-randomly`) va en un grupo que no se instala
+por defecto (`[dependency-groups]` aparte, `uv sync --group <grupo>` en la CI); `doctor` avisa de
+los que conoce. Un `timeout` de pytest-timeout no corta la aceptación: la corta Lictor.
+
+**Una herramienta que importa el proyecto fuera de pytest** (import-linter): el proyecto no está
+instalado, así que se lanza con el lanzador del perfil, que pone `src` al final del camino:
+`"run": "uv run python -I -B -m lictor_with_src lint-imports --config pyproject.toml"` y
+`"agent_run": "uv run python -I -B {lictor_files}/lictor_with_src.py lint-imports --config
+pyproject.toml"`. No uses `uv run --directory src`: mete `src` delante de las dependencias.
+
+**Tests que vigilan al agente** (reglas de arquitectura como tests): en una ruta de la persona,
+`tests/architecture/` en `paths.protected`, con su control en cada intento (`"stage":
+"attempt"`, `"mode": "block"`), y el aviso de «Lo que los controles no ven» aceptado en
+`blind_spots.accepted`: el agente no puede relajarlos.
+
 **Cobertura con pytest:**
 
 - **Por qué `min_score` y no `fail_under`.** El perfil pasa `--cov-fail-under=0`, así que un

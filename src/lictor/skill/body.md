@@ -44,8 +44,16 @@ Lo que funciona:
 - Un comportamiento nuevo por escenario. Los que el mismo código ya cumple salen en verde sin
   llamar al agente (verdes colaterales): el coste lo marcan los escenarios que introducen algo
   nuevo, no su número, así que no ahorres escenarios por coste.
-- Un rechazo comprueba el código de salida o la excepción, y un fragmento fijo del mensaje.
+- Un rechazo comprueba el código de salida o la excepción, y un fragmento fijo del mensaje. Si
+  el mensaje se traduce, un código de error del dominio (`Entonces se rechaza con el código
+  "IMPORTE_NEGATIVO"`).
 - Los límites: el menor y el mayor valor válidos, y el primero inválido de cada lado.
+
+**`features/` acumula.** Es el contrato del proyecto, no la lista del run en curso: un escenario ya
+integrado se queda y se vuelve a ejecutar en cada intento (es su no regresión). Retirar un
+comportamiento es quitar su escenario en un commit de la persona: `doctor` lo avisa, y el
+siguiente run quita su test del driver y lo deja escrito. Lánzalo justo después: hasta entonces,
+la aceptación puede no cargar.
 
 **Comportamiento o interfaz:**
 
@@ -168,7 +176,9 @@ ejecutar, y el run lo salta.
    su escenario (otro fichero que ya existía lo descarta en `L0-alcance`): entra como un commit
    `refactor(<ID>)` propio o se descarta, y el verde se queda; `"refactor": {"enabled": false}` lo
    apaga. Al acabar, la persona integra la rama (un merge o una pull request) y
-   `lictor retire <nombre>` retira el worktree.
+   `lictor retire <nombre>` retira el worktree. Retira antes de borrar la rama: una pull
+   request integrada con `--delete-branch` puede llevarse el worktree. La evidencia del run queda
+   además en `.lictor/retired/` desde que termina.
 
 ## 4. Diagnosticar
 
@@ -184,6 +194,10 @@ ejecutar, y el run lo salta.
 - Si hace falta más: `.lictor/runs/<run_id>/<escenario o driver>/`, con el prompt de cada intento
   (`NNN-implement.prompt.md`), la salida cruda y, por verificación, `NNN-verify/error.txt`.
   `.lictor/journal.jsonl` es la bitácora de eventos.
+- Un cambio de estado de Lictor («cambiaron el estado de Lictor», `L0-estado`) nombra lo que cambió,
+  y de `.git/config` sus claves. Lo que un editor con git abierto escribe bajo una rama
+  (`vscode-merge-base`) no cuenta; si sale otra clave sin que ningún control la escriba, puede ser
+  otra herramienta abierta sobre el repositorio: ciérrala y relanza.
 
 | Código | Significa | Qué hacer |
 |---|---|---|
