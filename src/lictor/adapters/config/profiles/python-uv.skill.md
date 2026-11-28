@@ -84,7 +84,7 @@ solo lo ve:
   ["tests/integration/"]}`. Deja de repetirse y solo se cuenta. Luego, `lictor register` de lo que el
   código ya cumple, antes del primer run.
 
-**Controles del perfil:** `lint` (ruff), `format` (`ruff format --check src`), `types` (mypy) y
+**Controles del perfil:** `lint` (ruff), `format` (`ruff format --check`, todo el proyecto según la configuración de ruff), `types` (mypy) y
 `unit` (pytest de `tests/unit`), y la aceptación (pytest de `tests/acceptance`). Además, `coverage` mide la cobertura de `src` en modo
 `measure`: no bloquea nada, y su porcentaje sale en «Puntuaciones» de `report.md` y en
 `lictor check`. No ejecuta nada: lee la ejecución de `unit`, que recibe al final de su comando

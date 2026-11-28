@@ -1243,10 +1243,10 @@ def test_the_profiles_agent_commands_come_from_its_controls(tmp_path: Path) -> N
     """F83: the list `agent_commands` had, in its order, plus the check of what the fix fixes."""
     derived = _derived(load_config(_project(tmp_path)))
 
-    assert derived.fixes == (AgentFix("format", "uv run ruff format src"),)
+    assert derived.fixes == (AgentFix("format", "uv run ruff format"),)
     assert derived.checks == (
-        "uv run ruff check src",
-        "uv run ruff format --check src",
+        "uv run ruff check",
+        "uv run ruff format --check",
         "uv run mypy src",
         "uv run pytest tests/unit -q",
         "uv run pytest tests/acceptance -q",

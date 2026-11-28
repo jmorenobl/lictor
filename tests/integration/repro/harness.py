@@ -47,8 +47,8 @@ STUB = (
 # A `when` step returns the operation and a `then` step runs it, so each scenario reaches exactly
 # the function its outcome is about.
 DRIVER = (
-    "import iva\n"
     "from pytest_bdd import given, parsers, scenario, then, when\n\n"
+    "import iva\n\n"
     'FEATURE = "../../features/iva.feature"\n\n\n'
     '@scenario(FEATURE, "IVA general")\ndef test_iva_001():\n    pass\n\n\n'
     '@scenario(FEATURE, "IVA reducido")\ndef test_iva_002():\n    pass\n\n\n'
