@@ -572,3 +572,4 @@ def test_only_a_coverage_report_that_measured_nothing_is_nothing_to_measure() ->
     assert nothing_to_measure(CommandEntry(lenient, Executed(no_tests, Judged(empty, Failed("x")))))
     assert not nothing_to_measure(CommandEntry(command, Executed(ran, Judged(None, Passed()))))
     assert not nothing_to_measure(CommandEntry(command, Skipped("no")))
+    assert not nothing_to_measure(ReaderEntry(reader, Skipped("no")))

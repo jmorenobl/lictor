@@ -777,19 +777,20 @@ def nothing_to_measure(entry: ControlEntry) -> bool:
     nothing aren't a project without code (Fable's B1 of the PR). A reader ran nothing: the
     tests' own control judges how they ended.
     """
-    outcome = entry.outcome
-    if isinstance(outcome, Read):
-        report: object = outcome.report
-    elif isinstance(outcome, Executed) and isinstance(outcome.judgement, Judged):
-        if not _ended_well(outcome.ran.execution, entry.control):
-            return False
-        report = outcome.judgement.report
+    if isinstance(entry, ReaderEntry):
+        report: object = entry.outcome.report if isinstance(entry.outcome, Read) else None
     else:
-        return False
+        report = _measured_if_ended_well(entry)
     return isinstance(report, CoverageReport) and not report.measured
 
 
-def _ended_well(execution: Execution, control: CommandControl | ReaderControl) -> bool:
-    """Whether a command finished in time with 0, or with a code that means nothing to run."""
-    codes = (0, *control.empty_exit_codes) if isinstance(control, CommandControl) else (0,)
-    return not execution.timed_out and execution.exit_code in codes
+def _measured_if_ended_well(entry: CommandEntry) -> Report | None:
+    """The report of a command that finished in time with 0, or with a code that means
+    nothing to run; None otherwise."""
+    outcome = entry.outcome
+    if not isinstance(outcome, Executed) or not isinstance(outcome.judgement, Judged):
+        return None
+    execution = outcome.ran.execution
+    if execution.timed_out or execution.exit_code not in (0, *entry.control.empty_exit_codes):
+        return None
+    return outcome.judgement.report
