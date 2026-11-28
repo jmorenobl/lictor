@@ -439,6 +439,13 @@ def _green_sections(info: Mapping[str, Any]) -> list[str]:
         "## Verdes colaterales",
         *(sorted(info["collateral"]) or ["- *Ningún verde colateral.*"]),
         "",
+        "## Escenarios retirados",
+        *(
+            [RETIRED_NOTE, *sorted(info["retired"])]
+            if info["retired"]
+            else ["- *Ningún escenario retirado en esta ejecución.*"]
+        ),
+        "",
         "## Ya se cumplían",
         *(
             sorted(info["already_met"])
@@ -474,6 +481,11 @@ def _none_unchecked(info: Mapping[str, Any]) -> str:
     return "- *Ninguno: cada test pendiente del driver se comprobó.*"
 
 
+# What the report says above the scenarios whose tests this run's driver took out (S23).
+RETIRED_NOTE = (
+    "*Estaban en verde y ya no están en features/: el driver de este run quitó sus tests, y el "
+    "commit del driver lo dice en `Lictor-Retired`. Su no regresión deja de comprobarse.*"
+)
 _MEASURES_NOTE = (
     "*Lo que vio el rojo de cada driver nuevo. «Con C» es lo que decidieron los impostores de "
     "stubs (ADR-0012): alguna constante tiene que hacer fallar una aserción del driver en un "
@@ -862,6 +874,7 @@ class BuildReport:
             "stub_unchecked": [],
             "unchecked_why": "",
             "driver_exempt": [],
+            "retired": [],
             "denials": [],
             "driver": {**_new_owner(), "status": "-"},
             # What each refactor ended in and cost, by scenario (ADR-0010): apart from its green.
@@ -990,6 +1003,9 @@ class BuildReport:
         exempt = ev.data.get("driver_exempt")
         if isinstance(exempt, list):
             info["driver_exempt"] = [str(cid) for cid in exempt]
+        retired = ev.data.get("retired")
+        if isinstance(retired, list):
+            info["retired"] = [str(sid) for sid in retired]
         unchecked = ev.data.get("stub_unchecked")
         if isinstance(unchecked, list) and unchecked:
             info["stub_unchecked"] = [str(sid) for sid in unchecked]

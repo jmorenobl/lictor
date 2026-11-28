@@ -180,6 +180,7 @@ class GraphState(TypedDict, total=False):
     seal_ok: bool
     resume_to: str | None
     reopened: list[str]
+    retired: list[str]  # green in git, no longer in the specification (S23)
     # Green when the spec loaded: their commits aren't this run's.
     green_at_load: list[str]
     failures: list[list[str] | None]
@@ -483,6 +484,7 @@ class _GraphNodes:
         reopened = [sid for sid, cls in classes.items() if cls == "reopened"]
         for sid in reopened:
             self._scenario_event(state, "lictor.scenario.reopened.v1", sid, records[sid].commit)
+        retired = list(self.ctx.spec_history.retired({s.id.value for s in scenarios}))
 
         event = new_event(
             self.ctx.clock,
@@ -500,6 +502,7 @@ class _GraphNodes:
                     }
                     for s in scenarios
                 ],
+                "retired": retired,
             },
         )
         self.ctx.event_log.append(event)
@@ -519,6 +522,7 @@ class _GraphNodes:
                 sid: "green" if cls == "green" else "pending" for sid, cls in classes.items()
             },
             "reopened": reopened,
+            "retired": retired,
             "green_at_load": [sid for sid, cls in classes.items() if cls == "green"],
             "seal_ok": seal_ok,
             "driver_fresh": not seal_ok,
@@ -570,6 +574,7 @@ class _GraphNodes:
                 declared_impostors=self.ctx.declared_impostors,
                 green_ids=green_ids,
                 reopened_ids=state.get("reopened", []),
+                retired_ids=state.get("retired", []),
                 driver_attempts=state.get("driver_attempts", 0),
                 last_error=state.get("last_error"),
                 failed_at=state.get("last_failed_at"),
@@ -631,6 +636,7 @@ class _GraphNodes:
                     impostors=self.ctx.impostors,
                     declared_impostors=self.ctx.declared_impostors,
                     controls=self.ctx.controls,
+                    retired_ids=state.get("retired", []),
                     interface_impostor=self.ctx.interface_impostor,
                     suppressions=self.ctx.suppressions,
                     banned_patterns=self.ctx.banned_patterns,

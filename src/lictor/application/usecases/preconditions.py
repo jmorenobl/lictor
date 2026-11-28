@@ -21,6 +21,7 @@ from lictor.application.run_files import (
     verification_tree,
 )
 from lictor.application.skill import skill_stub_warning
+from lictor.application.spec_history import SpecHistory
 from lictor.application.start_survey import StartSurvey
 from lictor.application.usecases.check_project import CheckProject, CheckProjectRequest
 from lictor.application.usecases.verify_attempt import IntegritySnapshot
@@ -68,6 +69,7 @@ from lictor.domain.rules import (
     control_label,
     missing_executables,
     path_within,
+    retired_text,
 )
 from lictor.domain.run_branches import uncommitted_left_out
 from lictor.domain.stages import check_controls_warning
@@ -310,11 +312,13 @@ class CheckPreconditions:
         if self.spec_source is None:
             raise InternalLictorError("Comprobar los escenarios necesita un SpecSource")
         problems = self.spec_source.problems(self.project_root / "features")
-        return PreconditionCheck(
-            "Escenarios",
-            tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking),
-            warnings=tuple(str(p) for p in problems if not p.blocking),
-        )
+        blocking = tuple(PreconditionProblem("config", str(p)) for p in problems if p.blocking)
+        warnings = tuple(str(p) for p in problems if not p.blocking)
+        if not blocking and self.vcs.has_commits():
+            current = {s.id.value for s in self.spec_source.load(self.project_root / "features")}
+            if retired := SpecHistory(self.vcs, self.spec_source).retired(current):
+                warnings = (*warnings, retired_text(retired))
+        return PreconditionCheck("Escenarios", blocking, warnings=warnings)
 
     def _conventions(self) -> PreconditionCheck | None:
         """The rule files of HEAD not reviewed as they are now; nothing without any (F79)."""

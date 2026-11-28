@@ -86,6 +86,7 @@ from lictor.domain.results import verification_duration
 from lictor.domain.rules import (
     ACCEPTANCE_ENV,
     NOT_IMPLEMENTED,
+    RETIRED_TRAILER,
     Impostors,
     MapLink,
     RedOracle,
@@ -186,6 +187,8 @@ class CheckRedRequest:
     banned_patterns: Sequence[str] = ()
     # The `attempt` controls: the blocking ones the driver's commit passes before the seal (G3).
     controls: Sequence[Control] = ()
+    # Green in git, no longer specified: the fresh driver's commit records them (S23).
+    retired_ids: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -876,11 +879,11 @@ class CheckRed:
             return None
         if self.vcs.get_tree("HEAD") == request.tree:
             return None
-        return self.vcs.commit_tree(
-            request.tree,
-            message=DRIVER_COMMIT_MESSAGE,
-            trailers={"Lictor-Run": request.run_id},
-        )
+        trailers: dict[str, str | list[str]] = {"Lictor-Run": request.run_id}
+        if request.retired_ids:
+            # Their tests went with this driver: from here on they are no longer pending.
+            trailers[RETIRED_TRAILER] = list(request.retired_ids)
+        return self.vcs.commit_tree(request.tree, message=DRIVER_COMMIT_MESSAGE, trailers=trailers)
 
     def _check_tree(
         self,
@@ -1476,6 +1479,7 @@ class CheckRed:
                 "stub_impostors": registration.stub_impostors,
                 "stub_unchecked": list(registration.stub_unchecked),
                 "unchecked_why": registration.unchecked_why,
+                "retired": list(request.retired_ids),
                 "driver_exempt": [
                     c.id for c in request.controls if c.mode == "block" and not c.checks_driver
                 ],

@@ -6,11 +6,11 @@ the hash of what it demands now. No trailer carries the hash, so nothing has to 
 forged trailer still needs a tree whose features say the same.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 from lictor.application.ports import SpecSource, Vcs
-from lictor.domain.rules import ScenarioClass, classify_scenarios
+from lictor.domain.rules import RETIRED_TRAILER, ScenarioClass, classify_scenarios
 
 FEATURES_DIR = "features"
 _FEATURE_SUFFIX = ".feature"
@@ -57,6 +57,24 @@ class SpecHistory:
             )
             for sid, sha in latest.items()
         }
+
+    def retired(self, current: Collection[str]) -> tuple[str, ...]:
+        """The scenarios with a green commit that the specification no longer has (S23).
+
+        One stops being retired once a driver's commit after its green names it in its
+        `Lictor-Retired` trailer: that commit took its tests out, and the run said so.
+        """
+        last_retired: dict[str, str] = {}
+        for sha, scenario_ids in self.vcs.trailer_commits(RETIRED_TRAILER):
+            for sid in scenario_ids:
+                last_retired.setdefault(sid, sha)
+        greens = {sid: record.commit for sid, record in self.records().items()}
+        gone = sorted(sid for sid in greens if sid not in current)
+        return tuple(sid for sid in gone if not self._after(greens[sid], last_retired.get(sid)))
+
+    def _after(self, green: str, retired: str | None) -> bool:
+        """Whether a retire commit came after the green, which it descends from."""
+        return retired is not None and self.vcs.merge_base(green, retired) == green
 
     def classify(self, current: Mapping[str, str]) -> dict[str, ScenarioClass]:
         """Say which scenarios are green, which were green for another spec, and which never."""

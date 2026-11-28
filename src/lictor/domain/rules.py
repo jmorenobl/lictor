@@ -1271,3 +1271,26 @@ def acceptance_pending(*, driver_files: bool, any_green: bool, shallow: bool) ->
 # controls' runs of the same runner (S10 of 0.25.0). `LICTOR_*` is reserved to Lictor.
 ACCEPTANCE_VARIABLE = "LICTOR_ACCEPTANCE"
 ACCEPTANCE_ENV = {ACCEPTANCE_VARIABLE: "1"}
+
+
+# The trailer of the driver's commit that took out the tests of scenarios no longer specified (S23).
+RETIRED_TRAILER = "Lictor-Retired"
+
+
+def retired_text(ids: Sequence[str]) -> str:
+    """What `doctor` warns of scenarios green in git that `features/` no longer has (S23)."""
+    return (
+        f"{', '.join(ids)} estaban en verde y ya no están en features/: se retiraron. El próximo "
+        "run quita sus tests del driver y lo deja escrito; hasta entonces, si el driver aún los "
+        "lee, la aceptación no carga. Si no querías retirarlos, devuélvelos a features/."
+    )
+
+
+def retired_rule(ids: Sequence[str]) -> str:
+    """The rule of the driver's order on the scenarios that were retired, or none without any."""
+    if not ids:
+        return ""
+    return (
+        f"- Los escenarios {', '.join(ids)} se retiraron de la especificación: quita del driver "
+        "sus tests y lo que solo usaban ellos. Ningún otro test cambia por eso."
+    )

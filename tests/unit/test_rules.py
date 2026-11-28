@@ -61,6 +61,8 @@ from lictor.domain.rules import (
     registration_subject,
     render_full_error,
     retired_name,
+    retired_rule,
+    retired_text,
     retired_to_prune,
     routes_rejected,
     run_outcome,
@@ -1962,4 +1964,18 @@ def test_the_acceptance_is_pending_only_before_a_first_run(
     assert (
         acceptance_pending(driver_files=driver_files, any_green=any_green, shallow=shallow)
         is pending
+    )
+
+
+def test_what_is_said_of_a_retired_scenario() -> None:
+    """S23: `doctor` warns of it; the driver's order tells it to take its tests out."""
+    assert retired_text(["A-1", "B-2"]) == (
+        "A-1, B-2 estaban en verde y ya no están en features/: se retiraron. El próximo run "
+        "quita sus tests del driver y lo deja escrito; hasta entonces, si el driver aún los lee, "
+        "la aceptación no carga. Si no querías retirarlos, devuélvelos a features/."
+    )
+    assert retired_rule([]) == ""
+    assert retired_rule(["A-1"]) == (
+        "- Los escenarios A-1 se retiraron de la especificación: quita del driver sus tests y lo "
+        "que solo usaban ellos. Ningún otro test cambia por eso."
     )
