@@ -29,6 +29,8 @@ class ScenarioSeen:
     line: int
     tags: tuple[TagSeen, ...] = ()
     outline: bool = False
+    # The line of its first step when that step is an `And`/`But`, which follows nothing (S6).
+    leading_conjunction: int | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,8 @@ class FeatureFile:
     feature_line: int | None = None
     level_tags: tuple[tuple[str, TagSeen], ...] = ()
     scenarios: tuple[ScenarioSeen, ...] = ()
+    # The lines of the backgrounds whose first step is an `And`/`But` (S6).
+    leading_background_conjunctions: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,9 @@ def _scenario_problem(file: str, scenario: ScenarioSeen) -> SpecProblem | None:
     """What keeps one scenario from loading, its ID's uniqueness aside."""
     where = f"el escenario «{scenario.name}»"
     names = [tag.name for tag in scenario.tags]
+    if scenario.leading_conjunction is not None:
+        of = f"del escenario «{scenario.name}»"
+        return _leading_conjunction(file, scenario.leading_conjunction, of)
     if scenario.outline:
         return SpecProblem(
             file,
@@ -127,6 +134,17 @@ def _scenario_problem(file: str, scenario: ScenarioSeen) -> SpecProblem | None:
     return None
 
 
+def _leading_conjunction(file: str, line: int, of: str) -> SpecProblem:
+    """A first step that is an `And`/`But`: it follows no step, so Gherkin says nothing of its
+    kind, and a runner may refuse it (pytest-bdd does, at collection) (S6 of 0.25.0)."""
+    return SpecProblem(
+        file,
+        line,
+        f"el primer paso {of} empieza por «Y» o «Pero», que siguen a otro paso",
+        "Empiézalo por Dado, Cuando o Entonces.",
+    )
+
+
 def _file_problems(feature: FeatureFile, seen: dict[str, tuple[str, int]]) -> list[SpecProblem]:
     if feature.error is not None:
         return [
@@ -148,6 +166,10 @@ def _file_problems(feature: FeatureFile, seen: dict[str, tuple[str, int]]) -> li
             )
         ]
     problems = _level_problems(feature)
+    problems.extend(
+        _leading_conjunction(feature.file, line, "de unos antecedentes")
+        for line in feature.leading_background_conjunctions
+    )
     if not feature.scenarios:
         problems.append(
             SpecProblem(

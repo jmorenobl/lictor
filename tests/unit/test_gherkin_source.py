@@ -783,3 +783,23 @@ def test_load_lists_every_problem_not_only_the_first(tmp_path: Path) -> None:
 
     assert "features/a.feature:2: el escenario «Uno» no tiene ID" in str(exc_info.value)
     assert "features/a.feature:5: el escenario «Dos» no tiene ID" in str(exc_info.value)
+
+
+def test_a_first_step_that_follows_nothing_is_read_where_it_is(tmp_path: Path) -> None:
+    """S6: the background's own and the scenario's, by the keyword's type in any language."""
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "y.feature").write_text(
+        "# language: es\nCaracterística: Y\n\n  Antecedentes:\n    Y una factura\n\n"
+        "  @IVA-001\n  Escenario: Empieza por Y\n    Y una factura con importe 5\n"
+        "    Cuando calculo\n    Entonces el total es 6\n\n"
+        "  @IVA-002\n  Escenario: Bien\n    Dado algo\n    Pero nada más\n",
+        encoding="utf-8",
+    )
+
+    problems = GherkinSource().problems(features_dir)
+
+    assert [(p.line, p.message.split(" empieza")[0]) for p in problems] == [
+        (5, "el primer paso de unos antecedentes"),
+        (9, "el primer paso del escenario «Empieza por Y»"),
+    ]

@@ -291,6 +291,7 @@ def _read_file(path: Path, parser: Parser, root: Path) -> tuple[FeatureFile, Map
             line=int(node.get("location", {}).get("line", 0)),
             tags=_tags(node),
             outline=_is_outline(node),
+            leading_conjunction=_leading_conjunction(node.get("steps", [])),
         )
         for node in (entry.get("scenario") or {} for _b, _r, entry in _scenarios(feature))
     )
@@ -300,8 +301,28 @@ def _read_file(path: Path, parser: Parser, root: Path) -> tuple[FeatureFile, Map
         feature_line=int(feature.get("location", {}).get("line", 1)),
         level_tags=tuple(levels),
         scenarios=scenarios,
+        leading_background_conjunctions=_background_conjunctions(feature),
     )
     return found, feature
+
+
+def _leading_conjunction(steps: Steps) -> int | None:
+    """The line of the first step when it is an `And`/`But`, which follows no step."""
+    if steps and str(steps[0].get("keywordType", "")) == "Conjunction":
+        return int(steps[0].get("location", {}).get("line", 0))
+    return None
+
+
+def _background_conjunctions(feature: Mapping[str, Any]) -> tuple[int, ...]:
+    """The first-step lines of the backgrounds, of the feature and of its rules, that are one."""
+    containers = [feature, *(c["rule"] for c in feature.get("children", []) if "rule" in c)]
+    lines = (
+        _leading_conjunction(child["background"].get("steps", []))
+        for container in containers
+        for child in container.get("children", [])
+        if "background" in child
+    )
+    return tuple(line for line in lines if line is not None)
 
 
 _hash_file = hash_file
