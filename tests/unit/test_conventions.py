@@ -490,3 +490,33 @@ def test_conventions_needs_a_commit(tmp_path: Path) -> None:
     _project(tmp_path)
     with pytest.raises(ConfigError, match="se leen de HEAD"):
         project_conventions(tmp_path)
+
+
+ALIGNED = """{
+  "version": "0.1",
+  "profile": "python-uv@0.2",
+  "controls": [
+    {"id": "lint",   "enabled": false},
+    {"id": "format", "enabled": false}
+  ],
+  "hints": "H"
+}
+"""
+
+
+def test_reviewed_leaves_the_person_s_layout_as_it_was(tmp_path: Path) -> None:
+    """Writing `conventions.reviewed` rewrote all of `lictor.json` in its own form, aligned
+    controls included, though the command says it touches nothing else."""
+    (tmp_path / "lictor.json").write_text(ALIGNED, encoding="utf-8")
+
+    write_reviewed_conventions(tmp_path, {"A.md": DIGEST_A})
+    added = (tmp_path / "lictor.json").read_text(encoding="utf-8")
+    write_reviewed_conventions(tmp_path, {"A.md": DIGEST_B})
+    replaced = (tmp_path / "lictor.json").read_text(encoding="utf-8")
+
+    assert added == ALIGNED.replace(
+        '  "hints": "H"\n',
+        f'  "hints": "H",\n  "conventions": {{\n    "reviewed": {{\n      "A.md": "{DIGEST_A}"\n'
+        "    }\n  }\n",
+    )
+    assert replaced == added.replace(DIGEST_A, DIGEST_B)

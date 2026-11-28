@@ -7,6 +7,12 @@ en su significado se anota en «Cambiado».
 
 ## [Sin publicar]
 
+### Corregido
+
+- **`lictor conventions --reviewed` ya no reescribe `lictor.json` entero**: cambia solo el valor de
+  `conventions.reviewed`, o lo añade tras el último miembro, y deja el resto como lo escribió la
+  persona (controles alineados en una línea incluidos).
+
 ## [0.25.0] - 2026-11-28
 
 Lo que salió de usar Lictor en un proyecto Django real.
