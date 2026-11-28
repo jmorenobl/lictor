@@ -11,6 +11,13 @@ from pathlib import Path
 from lictor.application.ports import TextSearch, Vcs, Worktrees
 from lictor.domain.conventions import TreeEntry
 from lictor.domain.errors import CandidateError, EnvironmentUnavailableError
+from lictor.domain.git_config import (
+    ConfigEntries,
+    changed_keys,
+    config_change_text,
+    config_entries,
+    watched,
+)
 from lictor.domain.model import DELETED_MODE, Candidate, RepoPin, TreeChange
 from lictor.domain.refactor_scope import LineSpan, hunk_span
 from lictor.domain.run_standing import Link
@@ -33,7 +40,8 @@ _INHERITED_LOCATIONS = (
 # A linked worktree has its own directory, `<common>/worktrees/<name>`, and shares the rest; in a
 # normal checkout both are `.git`, and the files are the same as before linked worktrees counted.
 _WORKTREE_FILES = ("HEAD", "config.worktree")
-_COMMON_FILES = ("config",)
+_CONFIG = "config"
+_COMMON_FILES = (_CONFIG,)
 _COMMON_DIRS = ("hooks", "info")
 # What says where the other two are: restored first, so that the rest goes back to its place.
 _POINTERS = (".git", "commondir")
@@ -177,7 +185,15 @@ class GitCli(Vcs, Worktrees, TextSearch):
         for name in sorted(current.keys() | pin.files.keys()):
             if (only is not None and name not in only) or current.get(name) == pin.files.get(name):
                 continue
-            changed.append(name if name == ".git" else f".git/{name}")
+            if name == _CONFIG:
+                keys = self._config_keys(pin, current.get(name))
+                if keys == ():
+                    # Only inert keys changed: what wrote them (an editor, the person's own
+                    # branch) keeps them (S22 of 0.25.0).
+                    continue
+                changed.append(config_change_text(keys or ()))
+            else:
+                changed.append(name if name == ".git" else f".git/{name}")
             target = paths.get(name) or self._common_dir() / name
             if name in pin.files:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +202,19 @@ class GitCli(Vcs, Worktrees, TextSearch):
             else:
                 target.unlink()
         return changed
+
+    def _config_keys(self, pin: RepoPin, now: bytes | None) -> tuple[str, ...] | None:
+        """The guarded keys a change of the config touched; () when only inert ones did, and
+        None when either version can't be read as a config, which is a change all the same."""
+        pinned = pin.files.get(_CONFIG)
+        if pinned is None or now is None:
+            return None  # created or removed: the file itself changed
+        branch = _branch_of(pin.files.get("HEAD", b""))
+        before = _read_config(self._git_binary, pinned)
+        after = _read_config(self._git_binary, now)
+        if before is None or after is None:
+            return None
+        return changed_keys(before, after, branch)
 
     def is_linked_worktree(self) -> bool:
         """A linked worktree's `.git` is a file, and its directory has a `commondir`."""
@@ -247,10 +276,19 @@ class GitCli(Vcs, Worktrees, TextSearch):
             raise CandidateError(f"No se ha borrado la rama {branch}: {deleted.stderr.strip()}")
 
     def fingerprint(self) -> str:
-        """Hash the control files, read as bytes: no git command runs here."""
+        """Hash the control files, read as bytes, and of the config only what Lictor guards.
+
+        No git command runs in the repository: the config is read from a copy, by `git config
+        --file` outside it, which follows no include and runs nothing (S22 of 0.25.0).
+        """
+        files = self._control_files()
+        branch = _branch_of(files.get("HEAD", b""))
         digest = hashlib.sha256()
-        for name, content in sorted(self._control_files().items()):
-            digest.update(name.encode() + b"\0" + content + b"\0")
+        for name, content in sorted(files.items()):
+            hashed = (
+                _guarded_config(self._git_binary, content, branch) if name == _CONFIG else content
+            )
+            digest.update(name.encode() + b"\0" + hashed + b"\0")
         return f"sha256:{digest.hexdigest()}"
 
     def status(self) -> list[str]:
@@ -587,3 +625,46 @@ class GitCli(Vcs, Worktrees, TextSearch):
         """Return the subject line of the HEAD commit."""
         res = self._run_git(["log", "-1", "--format=%s"])
         return res.stdout.strip()
+
+
+def _branch_of(head: bytes) -> str:
+    """The branch a HEAD file names, or "" when it is detached or unreadable."""
+    text = head.decode("utf-8", errors="replace").strip()
+    return text.removeprefix("ref: refs/heads/") if text.startswith("ref: refs/heads/") else ""
+
+
+def _read_config(git: str, content: bytes) -> ConfigEntries | None:
+    """Read a config's entries with git's own parser, from a copy outside every repository.
+
+    `--file` reads that file alone, without includes, and nothing global or of the system: no
+    key of it can make git run anything here. None when git doesn't read it as a config.
+    """
+    with tempfile.TemporaryDirectory(prefix="lictor-config-") as tmp:
+        copy = Path(tmp) / "config"
+        copy.write_bytes(content)
+        env = {
+            **GitCli._git_env(),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CEILING_DIRECTORIES": tmp,
+        }
+        read = subprocess.run(
+            [git, *_HARDENED, "config", "--file", str(copy), "--no-includes", "--list", "-z"],
+            cwd=tmp,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+    if read.returncode != 0:
+        return None
+    return config_entries(read.stdout.decode("utf-8", errors="surrogateescape"))
+
+
+def _guarded_config(git: str, content: bytes, branch: str) -> bytes:
+    """What an anchor hashes of the config: its guarded entries, or its bytes if unreadable."""
+    entries = _read_config(git, content)
+    if entries is None:
+        return content
+    return "\0".join(f"{key}\n{value}" for key, value in watched(entries, branch)).encode(
+        "utf-8", errors="surrogateescape"
+    )

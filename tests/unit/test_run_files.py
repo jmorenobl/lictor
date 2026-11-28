@@ -568,6 +568,23 @@ def test_an_archive_already_kept_is_not_replaced(tmp_path: Path) -> None:
     assert (second / "journal.jsonl").read_text(encoding="utf-8") == "completa\n"
 
 
+def test_each_exit_of_a_run_replaces_its_copy_whole(tmp_path: Path) -> None:
+    """S21: a run copies its evidence at every exit; the newer copy takes the older's place."""
+    worktree, main = tmp_path / "wt", tmp_path / "main"
+    (worktree / ".lictor" / "runs").mkdir(parents=True)
+    (worktree / ".lictor" / "journal.jsonl").write_text("pausa\n", encoding="utf-8")
+    archive_run_evidence(worktree, main, "iva-r1", 10, replace=True)
+    (worktree / ".lictor" / "journal.jsonl").write_text("pausa\nfin\n", encoding="utf-8")
+    (worktree / ".lictor" / "report.md").write_text("# informe\n", encoding="utf-8")
+
+    kept = archive_run_evidence(worktree, main, "iva-r1", 10, replace=True)
+
+    assert kept is not None
+    assert (kept / "journal.jsonl").read_text(encoding="utf-8") == "pausa\nfin\n"
+    assert (kept / "report.md").is_file()
+    assert sorted(p.name for p in kept.parent.iterdir()) == ["iva-r1"]
+
+
 def test_the_tree_on_disk_lists_links_without_following_them(tmp_path: Path) -> None:
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "a" / "b" / "f").write_text("x", encoding="utf-8")

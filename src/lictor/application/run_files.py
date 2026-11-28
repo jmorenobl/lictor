@@ -88,13 +88,17 @@ RETIRED_DIR = "retired"
 RETIRED_EVIDENCE = ("journal.jsonl", "report.md", "runs")
 
 
-def archive_run_evidence(worktree: Path, main_root: Path, name: str, keep: int) -> Path | None:
-    """Copy a run's journal, report and evidence to the checkout before its worktree goes.
+def archive_run_evidence(
+    worktree: Path, main_root: Path, name: str, keep: int, *, replace: bool = False
+) -> Path | None:
+    """Copy a run's journal, report and evidence to the checkout, where they outlive its worktree.
 
     The copy is written beside its place and renamed into it, so a failure halfway leaves nothing
-    that passes for evidence, and one already there is kept. Afterwards only the `keep` most
-    recent stay. Returns the directory, or None when the worktree has nothing to keep. Raises
-    OSError when it can't copy: the caller then refuses to remove the worktree.
+    that passes for evidence. With `replace` (every exit of a run, S21 of 0.25.0) a newer copy
+    takes the place of the one there; without it (`retire`) one already there is kept, since a
+    retire that stopped halfway kept it whole. Afterwards only the `keep` most recent stay.
+    Returns the directory, or None when the worktree has nothing to keep. Raises OSError when it
+    can't copy: `retire` then refuses to remove the worktree.
     """
     source = worktree / ".lictor"
     present = [item for item in RETIRED_EVIDENCE if (source / item).exists()]
@@ -103,7 +107,7 @@ def archive_run_evidence(worktree: Path, main_root: Path, name: str, keep: int) 
     retired = own_dir(main_root) / RETIRED_DIR
     retired.mkdir(exist_ok=True)
     target = retired / name
-    if target.is_dir():
+    if target.is_dir() and not replace:
         # A retire that stopped halfway already kept it whole: what is left now may be less.
         return target
     _copy_into_place(source, present, retired / f".{name}.partial", target)
@@ -122,6 +126,14 @@ def _copy_into_place(source: Path, items: Sequence[str], partial: Path, target: 
             shutil.copytree(source / item, partial / item, symlinks=True)
         else:
             shutil.copy2(source / item, partial / item)
+    if target.is_dir():
+        # The older copy goes aside first: whatever stops here, one whole copy stays.
+        old = target.with_name(f".{target.name}.old")
+        shutil.rmtree(old, ignore_errors=True)
+        target.rename(old)
+        partial.rename(target)
+        shutil.rmtree(old, ignore_errors=True)
+        return
     partial.rename(target)
 
 

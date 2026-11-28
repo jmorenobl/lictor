@@ -1108,7 +1108,7 @@ def baseline_head_accepted(
 
 
 # 0.3.0 also hashes the common directory of a linked worktree; 0.2.0 anchors carry no format.
-ANCHOR_FORMAT = "2"
+ANCHOR_FORMAT = "3"
 
 
 def anchor_from_older_version(anchor: Mapping[str, str]) -> bool:

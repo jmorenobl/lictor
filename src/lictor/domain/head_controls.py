@@ -29,7 +29,9 @@ def head_tampered(changes: Sequence[str]) -> str:
     """Tell that running the controls on HEAD changed Lictor's state, which was restored."""
     return (
         "Los controles cambiaron el estado de Lictor al ejecutarse en HEAD "
-        f"({', '.join(changes)}); se ha restaurado. Algo del proyecto escribe fuera de su árbol."
+        f"({', '.join(changes)}); se ha restaurado. Lo escribió un control o, mientras corrían, "
+        "otro programa abierto sobre el repositorio (un editor con git, otra terminal): vuelve a "
+        "lanzar, y si se repite, es del proyecto."
     )
 
 

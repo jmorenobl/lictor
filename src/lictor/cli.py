@@ -28,6 +28,7 @@ from lictor.application.run_files import (
     exclusive_run,
     holding_project,
     prune_runs,
+    relative_to_project,
     remove_tree,
     sweep_scratch,
     tree_entries_on_disk,
@@ -1084,11 +1085,48 @@ def _execute_run(
         return target
     typer.echo(f"Ejecución en la rama {target.branch}, en {target.worktree}", err=True)
     try:
-        return _run_here(Path(target.worktree), False, progress, run_id=target.run_id)
+        code = _run_here(Path(target.worktree), False, progress, run_id=target.run_id)
     except RunInProgressError as err:
         raise RunInProgressError(
             f"{err} Para lanzar otra en paralelo, dale un nombre: `lictor run --branch <nombre>`."
         ) from err
+    _keep_evidence(target, resolved_cwd)
+    return code
+
+
+def _keep_evidence(target: RunEntry, main_root: Path) -> None:
+    """Copy the run's evidence to the checkout at every exit, pause included (S21 of 0.25.0).
+
+    Integrating the branch with a tool that deletes it can take the worktree and its `.lictor/`
+    with it: what is in the checkout stays. A copy that fails is told, never the end of the run.
+    """
+    worktree = Path(target.worktree)
+    run_id = _current_run_id(worktree) or target.run_id
+    if run_id is None:
+        return
+    name = target.branch.removeprefix(RUN_BRANCH_PREFIX)
+    try:
+        archive_run_evidence(
+            worktree,
+            main_root,
+            retired_name(name, run_id),
+            retired_runs_kept(main_root),
+            replace=True,
+        )
+    except OSError as exc:
+        typer.echo(
+            f"⚠ No se ha podido copiar la evidencia del run a .lictor/{RETIRED_DIR}/ ({exc}): "
+            "sigue en su worktree, y `lictor retire` la copiará.",
+            err=True,
+        )
+
+
+def _current_run_id(worktree: Path) -> str | None:
+    """The run `current_run` names in a worktree, or None when it names none."""
+    try:
+        return (worktree / ".lictor" / "current_run").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 def _run_target(main_root: Path, *, force_new: bool, branch: str | None) -> RunEntry | int:
@@ -1392,6 +1430,7 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
     repository = checkout_repository(main_root)
     if not worktree.is_dir():
         _forget_in_git(repository, worktree)
+        _tell_evidence_of_gone(run, name, main_root)
         return None
     with exclusive_run(worktree, "lictor retire"):
         facts = run_facts(main_root, run, probe_lock=False)
@@ -1416,6 +1455,20 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
         return refused
     typer.echo(f"Worktree retirado: {worktree}")
     return None
+
+
+def _tell_evidence_of_gone(run: RunEntry, name: str, main_root: Path) -> None:
+    """Say where the evidence of a run whose worktree is already gone is, or that it was lost."""
+    kept = aside_dir(main_root, RETIRED_DIR) / retired_name(name, run.run_id)
+    if kept.is_dir():
+        shown = relative_to_project(kept, main_root)
+        typer.echo(f"El worktree ya no existía; su evidencia está en {shown}.")
+        return
+    typer.echo(
+        f"⚠ El worktree de {run.branch} ya no existía, y su evidencia no se había copiado al "
+        "checkout: su evidencia se ha perdido. Retira un run antes de borrar su rama.",
+        err=True,
+    )
 
 
 def _retire_linked(run: RunEntry, name: str, main_root: Path, *, archive: bool) -> int | None:
