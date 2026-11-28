@@ -665,6 +665,7 @@ def _runtime_nodes(tree: ast.Module) -> list[ast.AST]:
                 "collections",
                 "contextlib",
                 "inspect",
+                "os",
                 "pathlib",
                 "pytest",
                 "sys",

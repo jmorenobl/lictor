@@ -294,8 +294,14 @@ class VerificationCommands(Protocol):
         """Build it if needed; say what changed under the last commands, if anything."""
         ...
 
-    def run(self, cmd: Sequence[str], cwd: Path, timeout_s: int | None) -> CommandOutput:
-        """Run a verification command inside the environment."""
+    def run(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        timeout_s: int | None,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> CommandOutput:
+        """Run a verification command inside the environment; `extra_env` is Lictor's own."""
         ...
 
 

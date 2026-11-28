@@ -1265,3 +1265,9 @@ def acceptance_pending(*, driver_files: bool, any_green: bool, shallow: bool) ->
     one would pass for a project that hasn't started.
     """
     return not driver_files and not any_green and not shallow
+
+
+# Set in every run of the acceptance, and only there: the profile's plugins tell it from the
+# controls' runs of the same runner (S10 of 0.25.0). `LICTOR_*` is reserved to Lictor.
+ACCEPTANCE_VARIABLE = "LICTOR_ACCEPTANCE"
+ACCEPTANCE_ENV = {ACCEPTANCE_VARIABLE: "1"}

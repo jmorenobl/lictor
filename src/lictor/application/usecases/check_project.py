@@ -59,6 +59,7 @@ from lictor.domain.results import (
     nothing_to_measure,
 )
 from lictor.domain.rules import (
+    ACCEPTANCE_ENV,
     condense_error,
     control_path_status,
     plugin_skip_reason,
@@ -321,7 +322,9 @@ class CheckProject:
         evidence = self._evidence(req, ACCEPTANCE_ID)
         command = fill_report_paths([(acceptance.run, evidence.report)])
         tree = req.tree or req.project_root
-        cmd_out = self.runner.run(cmd=command, cwd=tree, timeout_s=acceptance.timeout_s)
+        cmd_out = self.runner.run(
+            cmd=command, cwd=tree, timeout_s=acceptance.timeout_s, env=ACCEPTANCE_ENV
+        )
         save_output(evidence.log, command, cmd_out)
         junit = self.readers.junit.read(evidence.report)
         execution = Execution.of(cmd_out, acceptance.timeout_s)

@@ -84,6 +84,7 @@ from lictor.domain.model import Candidate, CommandOutput, ScenarioId, TestCaseRe
 from lictor.domain.reports import JUnitReport
 from lictor.domain.results import verification_duration
 from lictor.domain.rules import (
+    ACCEPTANCE_ENV,
     NOT_IMPLEMENTED,
     Impostors,
     MapLink,
@@ -1316,7 +1317,8 @@ class CheckRed:
 
         lictor_dir = request.project_root / ".lictor"
         snapshot = IntegritySnapshot(lictor_dir, request.project_root, self.vcs)
-        output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s, extra_env)
+        env = {**ACCEPTANCE_ENV, **(extra_env or {})}
+        output = self.environment.run(cmd_args, tree, request.acceptance_timeout_s, env)
         snapshot.verify_and_restore()
         phase = red_check_phase(out_file.parent.name, self._step_name)
         self._runs.append((phase, output.duration_ms))
