@@ -968,7 +968,7 @@ def test_a_plugin_that_changes_a_run_of_the_tests_is_named_only_when_it_loads() 
     noted = {"pytest_randomly": "baraja el orden", "random_order.plugin": "baraja"}
 
     assert noted_plugins(noted, ("pytest_bdd.plugin", "pytest_randomly")) == (
-        "El plugin pytest_randomly está instalado y carga en cada orden de pytest de la "
+        "El plugin pytest_randomly está instalado y carga en cada ejecución de los tests de la "
         "verificación: baraja el orden. Si no lo quieres ahí, ponlo en un grupo de dependencias "
         "que no se instale por defecto.",
     )

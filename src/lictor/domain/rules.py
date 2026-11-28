@@ -1258,13 +1258,16 @@ SHALLOW_HISTORY = (
 )
 
 
-def acceptance_pending(*, driver_files: bool, any_green: bool, shallow: bool) -> bool:
+def acceptance_pending(
+    *, specified: bool, driver_files: bool, any_green: bool, shallow: bool
+) -> bool:
     """Whether the acceptance has nothing to run yet: a project before its first run (S20).
 
-    Only with the whole history: in a shallow clone no green is seen, and a driver deleted after
-    one would pass for a project that hasn't started.
+    Only for a project with scenarios in `features/`: without them the acceptance is the
+    project's own suite, which no run writes. And only with the whole history: in a shallow
+    clone no green is seen, and a driver deleted after one would pass for one that hasn't started.
     """
-    return not driver_files and not any_green and not shallow
+    return specified and not driver_files and not any_green and not shallow
 
 
 # Set in every run of the acceptance, and only there: the profile's plugins tell it from the

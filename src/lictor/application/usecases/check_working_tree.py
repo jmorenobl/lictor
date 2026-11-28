@@ -13,6 +13,7 @@ from pathlib import Path
 from lictor.application.api_baseline import ApiBaseline, resolve_base
 from lictor.application.ports import ReportReaders, Vcs, VerificationCommands
 from lictor.application.run_files import CHECK_DIR, aside_dir, verification_tree
+from lictor.application.spec_history import FEATURES_DIR
 from lictor.application.unexecuted import UnexecutedSurvey
 from lictor.application.usecases.check_project import (
     CheckAcceptanceSpec,
@@ -22,7 +23,7 @@ from lictor.application.usecases.check_project import (
 )
 from lictor.application.verification_env import EnvironmentRunner, VerificationEnvironment
 from lictor.domain.api import ApiBase, UnresolvedBase
-from lictor.domain.controls import Control
+from lictor.domain.controls import Control, check_selection
 from lictor.domain.errors import PreconditionError
 from lictor.domain.model import CommandOutput
 from lictor.domain.rules import NO_COMMITS, NO_DRIVER_YET, SHALLOW_HISTORY, acceptance_pending
@@ -140,20 +141,24 @@ class CheckWorkingTree:
     def _acceptance_state(
         self, req: CheckWorkingTreeRequest, tree: Path
     ) -> tuple[bool, str | None]:
-        """Whether nothing has a driver yet (no file under `paths.driver`, no green in git), and
-        why that can't be told when the clone is shallow."""
-        if req.acceptance is None or not req.driver_paths:
+        """Whether nothing has a driver yet (scenarios, no file under `paths.driver`, no green in
+        git), and why that can't be told when the clone is shallow. Nothing when this check
+        doesn't run the acceptance."""
+        if not _runs_acceptance(req):
             return False, None
+        specified = any((tree / FEATURES_DIR).rglob("*.feature"))
         driver_files = any(
             path.is_file() for root in req.driver_paths for path in (tree / root).rglob("*")
         )
         shallow = self.vcs.is_shallow()
         pending = acceptance_pending(
+            specified=specified,
             driver_files=driver_files,
             any_green=bool(self.vcs.trailer_commits("Scenario")),
             shallow=shallow,
         )
-        return pending, SHALLOW_HISTORY if shallow and not driver_files else None
+        unknown = specified and shallow and not driver_files
+        return pending, SHALLOW_HISTORY if unknown else None
 
     def _unexecuted(
         self, environment: VerificationCommands, base: str | None, rev: str
@@ -213,3 +218,10 @@ class CheckWorkingTree:
             f"árbol de trabajo ({len(changes)} ficheros sin confirmar) sobre HEAD {head[:12]}",
             tuple(change.path for change in changes if change.is_deleted),
         )
+
+
+def _runs_acceptance(req: CheckWorkingTreeRequest) -> bool:
+    """Whether this check runs the acceptance: it has one, and `--level`/`--control` choose it."""
+    if req.acceptance is None or not req.driver_paths:
+        return False
+    return check_selection(req.controls, req.levels, req.control_ids, ()).acceptance

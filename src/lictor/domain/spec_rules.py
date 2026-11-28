@@ -136,7 +136,7 @@ def _scenario_problem(file: str, scenario: ScenarioSeen) -> SpecProblem | None:
 
 def _leading_conjunction(file: str, line: int, of: str) -> SpecProblem:
     """A first step that is an `And`/`But`: it follows no step, so Gherkin says nothing of its
-    kind, and a runner may refuse it (pytest-bdd does, at collection) (S6 of 0.25.0)."""
+    kind, and a runner may refuse it (the profile's does, at collection) (S6 of 0.25.0)."""
     return SpecProblem(
         file,
         line,

@@ -127,9 +127,9 @@ def metadata_facts(metadata: ProjectMetadata | None) -> tuple[str | None, tuple[
 def noted_plugins(noted: Mapping[str, str], installed: Sequence[str]) -> tuple[str, ...]:
     """What `doctor` warns of each installed plugin that changes a run of the tests (S11)."""
     return tuple(
-        f"El plugin {plugin} está instalado y carga en cada orden de pytest de la verificación: "
-        f"{why}. Si no lo quieres ahí, ponlo en un grupo de dependencias que no se instale por "
-        "defecto."
+        f"El plugin {plugin} está instalado y carga en cada ejecución de los tests de la "
+        f"verificación: {why}. Si no lo quieres ahí, ponlo en un grupo de dependencias que no se "
+        "instale por defecto."
         for plugin, why in noted.items()
         if plugin in installed
     )
