@@ -222,6 +222,7 @@ TOOLCHAIN = {
         "test_go_doctor_keeps_its_environment_until_told_otherwise",
         "test_go_a_test_that_skips_with_a_constant_is_rejected_not_sealed",
         "test_go_one_rejection_says_both_the_vacuous_test_and_the_vet_warning",
+        "test_go_constants_that_dont_compile_at_all_are_told_without_blaming_each_test",
     ),
 }
 

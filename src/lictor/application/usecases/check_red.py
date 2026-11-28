@@ -301,6 +301,23 @@ class _DeclaredRuns:
         return [None if run is None else variant_fact(run.get(sid)) for run in self.reported]
 
 
+def _test_lines(
+    registration: _Registration,
+    outcomes: Mapping[str, BasicOutcome],
+    ran: _DeclaredRuns,
+    writable: Sequence[str],
+) -> list[str]:
+    """A line per rejected test: none may let the driver be sealed silently. With no variant that
+    ran, what failed is the variants, said apart, not each test (V1 of Fable's second look)."""
+    ran_some = any(run is not None for run in ran.reported)
+    return [
+        basic_reason(sid, registration.pending_names.get(sid, sid), outcome, writable)
+        for sid, outcome in outcomes.items()
+        if outcome in ("sobrevive", "sigue_sin_implementar")
+        or (outcome == "sin_juzgar" and ran_some)
+    ]
+
+
 def _with_declared(
     registration: _Registration, ran: _DeclaredRuns, outcomes: Mapping[str, BasicOutcome]
 ) -> _Registration:
@@ -610,14 +627,8 @@ class CheckRed:
         ran: "_DeclaredRuns",
     ) -> _Rejection | None:
         """One rejection with every test the basic rule rejected, each with what to change."""
-        lines: list[str] = []
-        left_unjudged = False
-        for sid, outcome in outcomes.items():
-            # Every rejected verdict has its line: none may let the driver be sealed silently.
-            if outcome in ("sobrevive", "sigue_sin_implementar", "sin_juzgar"):
-                name = registration.pending_names.get(sid, sid)
-                lines.append(basic_reason(sid, name, outcome, request.oracle.writable))
-                left_unjudged = left_unjudged or outcome == "sin_juzgar"
+        lines = _test_lines(registration, outcomes, ran, request.oracle.writable)
+        left_unjudged = "sin_juzgar" in outcomes.values()
         if left_unjudged:
             lines.extend(ran.unjudged)
         if not lines:

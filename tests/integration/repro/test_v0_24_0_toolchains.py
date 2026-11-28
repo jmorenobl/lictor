@@ -325,3 +325,20 @@ def test_go_one_rejection_says_both_the_vacuous_test_and_the_vet_warning(tmp_pat
     assert "El commit del driver no pasa el control 'vet'" in told
     assert green_ids(root) == ["NIF-001", "NIF-002"]
     assert go_false_greens(root) == []
+
+
+def test_go_constants_that_dont_compile_at_all_are_told_without_blaming_each_test(
+    tmp_path: Path,
+) -> None:
+    """V1 of Fable's second look: with no variant that ran, no test «passes with the constants
+    that ran»; what the agent hears is why each variant couldn't be judged."""
+    root = go_project(tmp_path / "nif")
+    broken = GO_STUB.replace("return false | return true", 'return "no" | return "sí"')
+    agent = Agent(driver=_driver(go_driver(), stub=broken))
+
+    assert run_lictor(root, agent) == Outcome(10)
+
+    told = agent.prompts["driver"][1]
+    assert "Con la primera constante de cada stub no se pudo juzgar la aceptación" in told
+    assert "Con la segunda constante de cada stub no se pudo juzgar la aceptación" in told
+    assert "pasa con las constantes que se pudieron ejecutar" not in told
