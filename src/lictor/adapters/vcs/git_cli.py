@@ -220,6 +220,10 @@ class GitCli(Vcs, Worktrees, TextSearch):
             return None
         return changed_keys(before, after, branch)
 
+    def main_checkout(self) -> Path:
+        """The checkout whose `.git` this one shares, read from files; itself when not linked."""
+        return self._common_dir().parent if self.is_linked_worktree() else self.repo_dir
+
     def is_linked_worktree(self) -> bool:
         """A linked worktree's `.git` is a file, and its directory has a `commondir`."""
         return (self.repo_dir / ".git").is_file() and (self._git_dir() / "commondir").is_file()

@@ -1091,19 +1091,52 @@ def _execute_run(
                 err=True,
             )
             return int(ExitCode.PRECONDITION)
-        return _run_here(resolved_cwd, force_new, progress)
+        main_root = repository.main_checkout()
+        return _run_keeping(
+            _indexed(main_root, resolved_cwd),
+            main_root,
+            lambda: _run_here(resolved_cwd, force_new, progress),
+        )
 
     target = _run_target(resolved_cwd, force_new=force_new, branch=branch)
     if isinstance(target, int):
         return target
     typer.echo(f"Ejecución en la rama {target.branch}, en {target.worktree}", err=True)
     try:
-        code = _run_here(Path(target.worktree), False, progress, run_id=target.run_id)
+        return _run_keeping(
+            target,
+            resolved_cwd,
+            lambda: _run_here(Path(target.worktree), False, progress, run_id=target.run_id),
+        )
     except RunInProgressError as err:
         raise RunInProgressError(
             f"{err} Para lanzar otra en paralelo, dale un nombre: `lictor run --branch <nombre>`."
         ) from err
-    _keep_evidence(target, resolved_cwd)
+
+
+def _indexed(main_root: Path, worktree: Path) -> RunEntry | None:
+    """The run of the checkout's index that works in this worktree, if one does."""
+    return next(
+        (run for run in read_run_index(main_root) if Path(run.worktree).resolve() == worktree),
+        None,
+    )
+
+
+def _run_keeping(target: RunEntry | None, main_root: Path, run: Callable[[], int]) -> int:
+    """Run, and copy the evidence at every exit: a return, an error, an interrupt (S21).
+
+    Not when another process holds the run: nothing of this one started (Fable's I3 of the PR).
+    """
+    try:
+        code = run()
+    except RunInProgressError:
+        raise
+    except BaseException:
+        if target is not None:
+            _keep_evidence(target, main_root)
+        raise
+    if target is not None:
+        _keep_evidence(target, main_root)
     return code
 
 
@@ -1565,13 +1598,18 @@ def _leftovers_known(run: RunEntry, tracked: set[str] | None) -> LeftoversKnown:
 
 
 def _archive(run: RunEntry, name: str, main_root: Path) -> int | None:
-    """Keep the run's evidence in the checkout, or refuse with 40 having removed nothing."""
+    """Keep the run's evidence in the checkout, or refuse with 40 having removed nothing.
+
+    It replaces the copy each exit of the run left: what came after it (a resume inside the
+    worktree, `register`, `report`) is in the worktree only (Fable's I2 of the PR).
+    """
     try:
         kept = archive_run_evidence(
             Path(run.worktree),
             main_root,
             retired_name(name, run.run_id),
             retired_runs_kept(main_root),
+            replace=True,
         )
     except OSError as exc:
         typer.echo(

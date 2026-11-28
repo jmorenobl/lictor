@@ -89,6 +89,10 @@ class Worktrees(Protocol):
         """Tell, by reading files and not by asking git, whether this checkout is linked."""
         ...
 
+    def main_checkout(self) -> Path:
+        """The checkout whose `.git` this one shares; itself when it isn't linked."""
+        ...
+
     def current_branch(self) -> str:
         """Name the branch HEAD points to, or "" when it is detached."""
         ...
