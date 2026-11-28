@@ -19,17 +19,19 @@ GIT_BRANCH_KEYS: Final = frozenset(
     {"remote", "pushremote", "merge", "mergeoptions", "rebase", "description"}
 )
 
-type ConfigEntries = tuple[tuple[str, str], ...]
+# A key without `=` (`[core] bare`) has no value, which git reads as true; `bare =` is empty,
+# which it reads as false: they differ (Fable's M1 of the PR).
+type ConfigEntries = tuple[tuple[str, str | None], ...]
 
 
 def config_entries(listed: str) -> ConfigEntries:
     """The entries of `git config --list -z`: `key\\nvalue` records ended by NUL; a key alone
     (`[section] key` without `=`) has no value."""
-    entries: list[tuple[str, str]] = []
+    entries: list[tuple[str, str | None]] = []
     for record in listed.split("\0"):
         if record:
-            key, _, value = record.partition("\n")
-            entries.append((key, value))
+            key, newline, value = record.partition("\n")
+            entries.append((key, value if newline else None))
     return tuple(entries)
 
 
@@ -42,9 +44,12 @@ def inert_key(key: str, branch: str) -> bool:
     return subsection != branch or name not in GIT_BRANCH_KEYS
 
 
-def watched(entries: Iterable[tuple[str, str]], branch: str) -> ConfigEntries:
-    """The entries Lictor guards, in their order: what an anchor hashes and a restore compares."""
-    return tuple((key, value) for key, value in entries if not inert_key(key, branch))
+def watched(entries: Iterable[tuple[str, str | None]], branch: str) -> ConfigEntries:
+    """The entries Lictor guards, by key, each key's values in their order: what an anchor
+    hashes. Moving a section (`git remote remove` and `add`) changes no key, so no anchor
+    either (Fable's M2 of the PR)."""
+    kept = [(key, value) for key, value in entries if not inert_key(key, branch)]
+    return tuple(sorted(kept, key=lambda entry: entry[0]))
 
 
 def changed_keys(before: ConfigEntries, after: ConfigEntries, branch: str) -> tuple[str, ...]:
@@ -53,7 +58,7 @@ def changed_keys(before: ConfigEntries, after: ConfigEntries, branch: str) -> tu
     return tuple(sorted(key for key in keys if _values(before, key) != _values(after, key)))
 
 
-def _values(entries: ConfigEntries, key: str) -> list[str]:
+def _values(entries: ConfigEntries, key: str) -> list[str | None]:
     return [value for name, value in entries if name == key]
 
 

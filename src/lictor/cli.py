@@ -28,6 +28,7 @@ from lictor.application.run_files import (
     exclusive_run,
     holding_project,
     prune_runs,
+    recover_aside,
     relative_to_project,
     remove_tree,
     sweep_scratch,
@@ -576,6 +577,7 @@ def check(
                     error_max_chars=config.limits.error_max_chars,
                     api_base=base,
                     driver_paths=config.paths.driver,
+                    driver_exempt_paths=runtime.graph_context.driver_exempt_paths,
                 )
             )
 
@@ -1506,6 +1508,7 @@ def _remove_run_worktree(run: RunEntry, name: str, main_root: Path) -> int | Non
 def _tell_evidence_of_gone(run: RunEntry, name: str, main_root: Path) -> None:
     """Say where the evidence of a run whose worktree is already gone is, or that it was lost."""
     kept = aside_dir(main_root, RETIRED_DIR) / retired_name(name, run.run_id)
+    recover_aside(kept)
     if kept.is_dir():
         shown = relative_to_project(kept, main_root)
         typer.echo(f"El worktree ya no existía; su evidencia está en {shown}.")

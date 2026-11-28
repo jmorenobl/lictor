@@ -112,4 +112,7 @@ agente sin copiar todas las reglas del perfil (S17). Ahora la orden de comprobac
 que bloquea en cada intento, y la de la aceptación, se conceden al agente con una regla exacta
 (`granted_tools`), salvo con `"agent": false` en el control. La orden del agente dice aparte las
 órdenes exactas («y estas órdenes tal cual»), y la `agent_run` de un control concedido no necesita
-regla en `agent_tools`.
+regla en `agent_tools`. Una orden con `*`, `?` o `[` no se concede: en una regla son comodines y
+admitiría más que la orden; `doctor` sigue diciendo que el agente no puede ejecutarla. Un control
+cuya orden no puede pasar en la copia del agente (sin `.git`, o que lee lo que dejó otro control)
+lleva `"agent": false`, como `secrets` y `coverage-domain` en el `lictor.json` de Lictor.

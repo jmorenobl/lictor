@@ -686,6 +686,7 @@ def _guarded_config(git: str, content: bytes, branch: str) -> bytes:
     entries = _read_config(git, content)
     if entries is None:
         return content
-    return "\0".join(f"{key}\n{value}" for key, value in watched(entries, branch)).encode(
-        "utf-8", errors="surrogateescape"
+    records = (
+        key if value is None else f"{key}\n{value}" for key, value in watched(entries, branch)
     )
+    return "\0".join(records).encode("utf-8", errors="surrogateescape")

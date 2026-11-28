@@ -22,9 +22,11 @@ una reanudación, y el mensaje solo decía «`.git/config`».
    `core.*`, `remote.*`, `include.*`, filtros, ganchos.
 2. **Un cambio solo de claves inertes no es manipulación ni se restaura**: lo que lo escribió lo
    conserva. Un cambio de una clave vigilada restaura el fichero entero, como antes, y se nombra por
-   sus claves (`.git/config (core.hookspath)`, hasta cinco y cuántas más).
-3. **La misma regla en el ancla**: la huella hashea las entradas vigiladas, no los bytes. Un
-   comentario o el orden de las líneas no cambian la huella; el formato del ancla pasa a `3`.
+   sus claves (`.git/config (core.hookspath)`, hasta cinco y cuántas más). Una clave sin `=`
+   (verdadera) y una vacía (falsa) son valores distintos.
+3. **La misma regla en el ancla**: la huella hashea las entradas vigiladas por clave, cada clave
+   con sus valores en su orden, no los bytes. Un comentario o mover una sección no cambian la
+   huella; el formato del ancla pasa a `3`.
 4. **Las entradas las lee git, no Lictor**: `git config --file <copia> --no-includes --list -z`,
    sobre una copia, fuera del repositorio y sin configuración global ni del sistema, así que nada
    del repositorio corre al leerlas. Un fichero que git no lee como configuración cuenta como
@@ -35,6 +37,13 @@ una reanudación, y el mensaje solo decía «`.git/config`».
   reanudaciones.
 - Una clave nueva que git lea de una rama, si git la añade, no estará en la lista hasta que se añada:
   se dice de menos solo para la rama vigilada, cuyas claves conocidas siguen vigiladas.
+- **Límite conocido:** las claves que git sí lee de la sección de *otra* rama (`remote`, `merge`,
+  `mergeOptions`, `rebase`) no se vigilan. Un agente que escribiera por ruta absoluta
+  `branch.<rama de la persona>.remote` cambiaría lo que trae el siguiente `git pull` de la
+  persona en su checkout, y Lictor no lo deshace. Vigilar también la rama del checkout volvería a
+  romper un `git push -u` de la persona durante un run, que es S22; queda para el aislamiento del
+  incremento 4, como el resto de lo que el agente alcanza por ruta absoluta (revisión de Fable de
+  la PR #80, I4).
 - La comprobación del ancla ejecuta `git config` (antes no ejecutaba ningún git): solo sobre una
   copia, fuera del repositorio.
 

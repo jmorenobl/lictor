@@ -31,6 +31,7 @@ from lictor.domain.rules import (
     NO_DRIVER_YET,
     SHALLOW_HISTORY,
     acceptance_pending,
+    forbidden_paths,
     project_unstarted,
 )
 from lictor.domain.unexecuted import UnexecutedChanges
@@ -54,6 +55,8 @@ class CheckWorkingTreeRequest:
     api_base: str | None = None
     # Where the driver lives: without a file there nor a green in git, the acceptance waits (S20).
     driver_paths: Sequence[str] = ()
+    # What the profile lets live beside the driver (`conftest.py`): none of it is a driver.
+    driver_exempt_paths: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -159,9 +162,7 @@ class CheckWorkingTree:
         if not _runs_acceptance(req):
             return False, None
         specified = any((tree / FEATURES_DIR).rglob("*.feature"))
-        driver_files = any(
-            path.is_file() for root in req.driver_paths for path in (tree / root).rglob("*")
-        )
+        driver_files = bool(_driver_files(req, tree))
         shallow = self.vcs.is_shallow()
         pending = acceptance_pending(
             specified=specified,
@@ -237,3 +238,17 @@ def _runs_acceptance(req: CheckWorkingTreeRequest) -> bool:
     if req.acceptance is None or not req.driver_paths:
         return False
     return check_selection(req.controls, req.levels, req.control_ids, ()).acceptance
+
+
+def _driver_files(req: CheckWorkingTreeRequest, tree: Path) -> list[str]:
+    """The files under `paths.driver` that the profile doesn't exempt: a `conftest.py` there
+    before the first run is no driver (Fable's M9 of the PR). A path that is a file counts
+    itself (M10)."""
+    found = [
+        path.relative_to(tree).as_posix()
+        for root in req.driver_paths
+        for path in ((tree / root), *(tree / root).rglob("*"))
+        if path.is_file()
+    ]
+    exempt = set(forbidden_paths(found, req.driver_exempt_paths))
+    return [path for path in found if path not in exempt]

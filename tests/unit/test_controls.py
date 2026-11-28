@@ -716,3 +716,8 @@ def test_each_check_every_attempt_runs_is_granted_to_the_agent_exactly() -> None
         "Bash(uv run pytest tests/acceptance)",
     )
     assert granted_tools([], "", tools, ()) == tools
+    # Fable's M3 of the PR: a `*` in a rule is a wildcard, so that command isn't granted.
+    globbed = CommandControl(
+        id="cov", level="L4", run="uv run coverage report --include=*/d/*", report="exit-code"
+    )
+    assert granted_tools([globbed], "", tools, ()) == tools

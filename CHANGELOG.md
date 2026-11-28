@@ -16,7 +16,9 @@ Lo que salió de usar Lictor en un proyecto Django real.
 - **Un escenario en verde que sale de `features/` se retira, y el run siguiente lo dice.**
   `doctor` lo avisa; el driver nuevo lo oye y quita su test; su commit lo registra en
   `Lictor-Retired`, y `report.md` lo lista en «Escenarios retirados». `features/` es el contrato
-  acumulado: lo ya integrado se queda y se vuelve a ejecutar en cada intento.
+  acumulado: lo ya integrado se queda y se vuelve a ejecutar en cada intento. Si la persona quitó
+  el test con el escenario, el commit del driver lo registra igual; un escenario retirado que
+  vuelve es nuevo.
 - **`lictor_with_src`**, un lanzador del perfil `python-uv` para una herramienta que importa el
   proyecto fuera de pytest (import-linter): añade `src` al final del camino de importación.
 - **`"agent": false`** en un control de `lictor.json`, para no concederle al agente su orden.
@@ -27,14 +29,17 @@ Lo que salió de usar Lictor en un proyecto Django real.
 
 - **La orden de cada control que bloquea en cada intento se le concede al agente tal cual**, con
   una regla exacta: un control añadido ya no necesita copiar el `agent_tools` del perfil
-  (ADR-0018, enmienda). La orden del agente dice aparte las órdenes exactas.
+  (ADR-0018, enmienda). La orden del agente dice aparte las órdenes exactas. Una orden con
+  comodines (`*`, `?`, `[`) no se concede.
 - **`.git/config` se vigila por claves** (ADR-0022): lo que un editor escribe bajo una rama, y las
   secciones de otras ramas, no es manipulación ni se deshace; lo demás se nombra por su clave, y
-  la misma regla vale para el ancla de reanudación, que pasa al formato 3.
+  la misma regla vale para el ancla de reanudación, que pasa al formato 3. Las claves que git lee
+  de otra rama quedan sin vigilar: es un límite conocido.
 - **`lint` y `format` de `python-uv` miran todo el proyecto**, según la configuración de ruff, no
   solo `src`. `types` sigue en `src`.
-- **La evidencia de un run se copia al checkout en cada salida** (ADR-0005, enmienda), y `retire`
-  de un worktree que ya no existe dice dónde está o que se perdió.
+- **La evidencia de un run se copia al checkout en cada salida** (ADR-0005, enmienda), también
+  por un error o una interrupción y desde su propio worktree; `retire` la sustituye por la del
+  momento, y de un worktree que ya no existe dice dónde está o que se perdió.
 - **El resumen de `report.md` reparte las llamadas por todos los papeles**, la implementación
   incluida: el reparto suma el total.
 
@@ -45,8 +50,9 @@ Lo que salió de usar Lictor en un proyecto Django real.
   ejecuta como antes y dice por qué.
 - **Un clon superficial se puede verificar**: el clon limpio no traía el commit
   (`--update-shallow`), y `check`, `doctor` y un run acababan en un error interno en la CI.
-- **Un mínimo de cobertura no bloquea un proyecto que aún no tiene código**: en HEAD y en `check`
-  es un aviso; en un intento sigue fallando.
+- **Un mínimo de cobertura no bloquea un proyecto que aún no tiene código**: en HEAD y en `check`,
+  sin ningún verde en git y con tests que acabaron bien, es un aviso; en un intento sigue
+  fallando.
 - **Un corte de pytest-timeout no cuenta como rojo válido en la aceptación**: Lictor la marca con
   `LICTOR_ACCEPTANCE` y el plugin del perfil deja sin temporizador sus tests; la corta Lictor.
 - **`doctor` rechaza un escenario o unos antecedentes que empiezan por «Y» o «Pero»**, que

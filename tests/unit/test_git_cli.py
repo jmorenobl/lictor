@@ -950,9 +950,9 @@ def test_a_normal_checkout_keeps_the_fingerprint_it_had(git_repo: Path) -> None:
         capture_output=True,
         check=True,
     ).stdout
-    guarded = b"\0".join(
-        record.replace(b"\n", b"\n", 1) for record in listed.split(b"\0") if record
-    )
+    # By key, each key's values in their order (Fable's M2 of the PR).
+    records = [record for record in listed.split(b"\0") if record]
+    guarded = b"\0".join(sorted(records, key=lambda record: record.partition(b"\n")[0]))
     digest = hashlib.sha256()
     for name, path in sorted(files.items()):
         if path.is_file():

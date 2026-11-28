@@ -14,7 +14,7 @@ from typer.testing import CliRunner, Result
 
 from lictor.cli import app
 from tests.integration.repro.conftest import ProjectFactory
-from tests.integration.repro.harness import DRIVER_PATH, Agent, Outcome, git, run_lictor
+from tests.integration.repro.harness import DRIVER_PATH, Agent, Outcome, git, run_lictor, write
 
 
 def _check(root: Path, *chosen: str) -> Result:
@@ -32,6 +32,20 @@ def test_check_before_the_first_run_says_the_acceptance_has_no_driver_yet(
     assert result.exit_code == 0, result.output
     assert "- acceptance: sin driver todavía" in result.output
     assert "✗ acceptance" not in result.output
+
+
+def test_a_conftest_beside_where_the_driver_goes_is_no_driver(
+    make_project: ProjectFactory,
+) -> None:
+    """Fable's M9 of the PR: what the profile lets live beside the driver isn't one."""
+    root = make_project()
+    write(root, str(Path(DRIVER_PATH).parent / "conftest.py"), "\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "chore: conftest")
+
+    result = _check(root)
+
+    assert "- acceptance: sin driver todavía" in result.output, result.output
 
 
 def test_a_check_that_doesn_t_choose_the_acceptance_says_nothing_of_it(

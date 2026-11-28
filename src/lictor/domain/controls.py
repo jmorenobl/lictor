@@ -258,7 +258,9 @@ def granted_tools(
 
     Verification runs those commands in every attempt, so the agent may run them too, exactly as
     written: without this a control a project added never reached the agent unless it copied the
-    whole `agent_tools` of its profile. A control with `"agent": false` gets no rule.
+    whole `agent_tools` of its profile. A control with `"agent": false` gets no rule, and nor
+    does a command with `*`, `?` or `[`: in a rule they are wildcards, and it would admit more
+    than the command (Fable's M3 of the PR); `doctor` says it can't run it, as before.
     """
     counting = [c for c in controls if counts_for_agent(c, installed) and _grants(c)]
     checks = [_check_of(c) for c in counting]
@@ -266,9 +268,13 @@ def granted_tools(
     granted = [
         f"Bash({check})"
         for check in dict.fromkeys(c for c in checks if c is not None)
-        if not allowed_by(check, agent_tools)
+        if not allowed_by(check, agent_tools) and not _WILDCARDS & set(check)
     ]
     return (*agent_tools, *granted)
+
+
+# What a rule of the agent's tools reads as a wildcard: a command with them isn't granted as is.
+_WILDCARDS: Final = frozenset("*?[")
 
 
 def _grants(control: Control) -> bool:

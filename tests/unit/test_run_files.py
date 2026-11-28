@@ -19,6 +19,7 @@ from lictor.application.run_files import (
     new_step_dir,
     own_dir,
     prune_runs,
+    recover_aside,
     relative_to_project,
     remove_tree,
     save_output,
@@ -628,3 +629,18 @@ def test_a_directory_permission_cant_fix_fails_once_not_forever(
 
     monkeypatch.undo()
     (env / "cerrado").chmod(0o755)
+
+
+def test_a_copy_moved_aside_by_a_replacement_cut_short_is_put_back(tmp_path: Path) -> None:
+    """Fable's M8 of the PR: between the two renames only the hidden copies are left."""
+    target = tmp_path / "iva-r1"
+    old = tmp_path / ".iva-r1.old"
+    old.mkdir()
+    (old / "journal.jsonl").write_text("{}\n", encoding="utf-8")
+
+    recover_aside(target)
+
+    assert (target / "journal.jsonl").is_file()
+    assert not old.exists()
+    recover_aside(target)
+    assert target.is_dir()

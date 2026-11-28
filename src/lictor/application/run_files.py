@@ -95,8 +95,8 @@ def archive_run_evidence(
 
     The copy is written beside its place and renamed into it, so a failure halfway leaves nothing
     that passes for evidence. With `replace` (every exit of a run, S21 of 0.25.0) a newer copy
-    takes the place of the one there; without it (`retire`) one already there is kept, since a
-    retire that stopped halfway kept it whole. Afterwards only the `keep` most recent stay.
+    takes the place of the one there, also in `retire`: what came after the last exit is only in
+    the worktree. Without it one already there is kept. Afterwards only the `keep` most recent stay.
     Returns the directory, or None when the worktree has nothing to keep. Raises OSError when it
     can't copy: `retire` then refuses to remove the worktree.
     """
@@ -107,6 +107,7 @@ def archive_run_evidence(
     retired = own_dir(main_root) / RETIRED_DIR
     retired.mkdir(exist_ok=True)
     target = retired / name
+    recover_aside(target)
     if target.is_dir() and not replace:
         # A retire that stopped halfway already kept it whole: what is left now may be less.
         return target
@@ -115,6 +116,14 @@ def archive_run_evidence(
     for old in retired_to_prune(entries, keep):
         shutil.rmtree(retired / old, ignore_errors=True)
     return target
+
+
+def recover_aside(target: Path) -> None:
+    """Put back the copy a replacement moved aside, if it stopped before the new one took its
+    place: that one stays the run's evidence (Fable's M8 of the PR)."""
+    old = target.with_name(f".{target.name}.old")
+    if old.is_dir() and not target.exists():
+        old.rename(target)
 
 
 def _copy_into_place(source: Path, items: Sequence[str], partial: Path, target: Path) -> None:

@@ -52,10 +52,14 @@ def test_the_listed_config_reads_keys_values_and_keys_without_a_value() -> None:
 
     assert config_entries(listed) == (
         ("core.bare", "false"),
-        ("branch.x.flag", ""),
+        ("branch.x.flag", None),
         ("remote.origin.url", "https://a\nb"),
     )
     assert config_entries("") == ()
+    # Fable's M1 of the PR: `[core] bare` is true and `bare =` is false; they differ.
+    assert changed_keys(config_entries("core.bare\0"), config_entries("core.bare\n\0"), "x") == (
+        "core.bare",
+    )
 
 
 def test_what_is_watched_and_what_changed_leave_the_inert_out() -> None:
@@ -69,10 +73,12 @@ def test_what_is_watched_and_what_changed_leave_the_inert_out() -> None:
     )
 
     assert watched(after, "lictor/iva") == (
+        ("branch.lictor/iva.remote", "otro"),
         ("core.bare", "false"),
         ("core.hookspath", "/srv/h"),
-        ("branch.lictor/iva.remote", "otro"),
     )
+    # Fable's M2 of the PR: moving a section changes no key, so nothing to hash differently.
+    assert watched(tuple(reversed(after)), "lictor/iva") == watched(after, "lictor/iva")
     assert changed_keys(before, after, "lictor/iva") == (
         "branch.lictor/iva.remote",
         "core.hookspath",
