@@ -11,6 +11,7 @@ from lictor.domain.head_controls import (
     head_control_problem,
     head_not_started,
     head_tampered,
+    not_measured_yet,
 )
 
 
@@ -77,4 +78,11 @@ def test_the_driver_hears_why_its_commit_must_pass_a_control() -> None:
         "línea de un stub, algo que choca con las instrucciones del driver), cambia una de las dos "
         'cosas: el control, o acceptance.driver_hints; o escribe "driver": false en ese control de '
         "lictor.json, y el commit del driver dejará de pasarlo antes del sello."
+    )
+
+
+def test_a_minimum_with_no_code_yet_is_told_not_failed() -> None:
+    assert not_measured_yet(["coverage"]) == (
+        "'coverage' no midió nada: el proyecto aún no tiene código que medir. No bloquea hasta "
+        "que lo haya; desde el primer verde tendrá que llegar a su mínimo."
     )

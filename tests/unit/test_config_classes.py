@@ -365,3 +365,27 @@ def test_a_control_whose_check_the_person_keeps_from_the_agent_reaches_the_domai
 
     assert grants["lint"] is False
     assert grants["secretos"] is True
+
+
+def test_the_agent_run_of_a_granted_control_loads_without_agent_tools(tmp_path: Path) -> None:
+    """S19 with S17: a control the agent checks through the profile's launcher needs no rule."""
+    imports = {
+        "id": "imports",
+        "level": "L4",
+        "run": "uv run python -I -B -m lictor_with_src lint-imports",
+        "report": "exit-code",
+        "agent_run": "uv run python -I -B {lictor_files}/lictor_with_src.py lint-imports",
+    }
+    config = load_config(_write(tmp_path, profile="python-uv@0.2", controls=[imports]))
+
+    (control,) = [c for c in domain_controls(config) if c.id == "imports"]
+
+    assert control.agent_run == imports["agent_run"]
+    with pytest.raises(ConfigError, match="agent_run"):
+        load_config(
+            _write(
+                tmp_path / "otro",
+                profile="python-uv@0.2",
+                controls=[{**imports, "agent": False}],
+            )
+        )

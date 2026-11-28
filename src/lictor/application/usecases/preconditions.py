@@ -49,6 +49,7 @@ from lictor.domain.head_controls import (
     head_control_problem,
     head_not_started,
     head_tampered,
+    not_measured_yet,
 )
 from lictor.domain.model import CommandOutput, PreconditionProblem
 from lictor.domain.proof_level import (
@@ -602,6 +603,8 @@ class CheckPreconditions:
             )
             for failure in result.blocked
         ]
+        if result.not_measured:
+            notes = (*notes, not_measured_yet(result.not_measured))
         if snapshot.changes:
             problems.append(PreconditionProblem("config", head_tampered(snapshot.changes)))
         if tampered := environment.ensure(_env_id(req)):

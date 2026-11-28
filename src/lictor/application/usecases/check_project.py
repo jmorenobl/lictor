@@ -56,6 +56,7 @@ from lictor.domain.results import (
     acceptance_cases,
     consequence,
     failure_of,
+    nothing_to_measure,
 )
 from lictor.domain.rules import (
     condense_error,
@@ -142,6 +143,8 @@ class CheckProjectResult:
     lent: Mapping[str, str] = field(default_factory=dict)
     # Each control that ran and failed, in the order they ran, whatever its mode.
     failures: tuple[ControlFailure, ...] = ()
+    # The coverage controls that measured nothing: a project with no code yet (S18).
+    not_measured: tuple[str, ...] = ()
 
     @property
     def blocked(self) -> tuple[ControlFailure, ...]:
@@ -181,15 +184,21 @@ class CheckProject:
         lent: dict[str, str] = {}
         first_failure: tuple[str, Block] | None = None
         failures: list[ControlFailure] = []
+        not_measured: list[str] = []
 
         for step in steps:
             ctrl_run = take_turn(step, readings, lambda run: self._control(req, run, readings))
             entries.append(ctrl_run.entry)
             if note := lent_note(step, ctrl_run.entry):
                 lent[step.control.id] = note
-            failures.extend(self._failures(req, step, ctrl_run))
             failure = _blocking(consequence(ctrl_run.entry, ctrl_run.output))
-            if failure is not None:
+            unmeasured = failure is not None and nothing_to_measure(ctrl_run.entry)
+            found = self._failures(req, step, ctrl_run)
+            # A minimum before there is code to measure doesn't block here (S18 of 0.25.0).
+            failures.extend(replace(f, mode="measure") if unmeasured else f for f in found)
+            if unmeasured:
+                not_measured.append(step.control.id)
+            elif failure is not None:
                 reason = failure_reason(step, ctrl_run.entry, failure.reason)
                 failure = replace(failure, reason=reason)
                 first_failure = first_failure or (step.control.id, failure)
@@ -223,6 +232,7 @@ class CheckProject:
             added=selection.added,
             lent=lent,
             failures=tuple(failures),
+            not_measured=tuple(not_measured),
         )
         if first_failure is None:
             return done

@@ -561,3 +561,37 @@ def test_every_control_that_fails_says_why_whatever_its_mode(tmp_path: Path) -> 
     assert not res.failures[0].condensed().startswith("Falló")
     whole = tmp_path / ".lictor" / "check" / "mutation.error.txt"
     assert whole.read_text(encoding="utf-8").startswith("Falló mutation\n")
+
+
+def test_a_minimum_of_coverage_with_no_code_to_measure_doesnt_block_the_check(
+    tmp_path: Path,
+) -> None:
+    """S18: a base just set up has nothing to measure; its minimum waits for the first green."""
+    reader = replace(_READER, min_score=90.0, mode="block")
+
+    result, _ = _check(
+        tmp_path,
+        Leaves(junit=_GREEN, coverage=coverage_json(0, 0)),
+        controls=(_LINT, _UNIT, reader),
+        control_ids=["coverage"],
+    )
+
+    assert result.ok
+    assert result.not_measured == ("coverage",)
+    assert result.blocked == ()
+    assert [(f.id, f.mode) for f in result.failures] == [("coverage", "measure")]
+
+
+def test_a_minimum_of_coverage_that_measured_code_still_blocks(tmp_path: Path) -> None:
+    reader = replace(_READER, min_score=90.0, mode="block")
+
+    result, _ = _check(
+        tmp_path,
+        Leaves(junit=_GREEN, coverage=coverage_json(1, 2)),
+        controls=(_LINT, _UNIT, reader),
+        control_ids=["coverage"],
+    )
+
+    assert not result.ok
+    assert result.not_measured == ()
+    assert [f.id for f in result.blocked] == ["coverage"]

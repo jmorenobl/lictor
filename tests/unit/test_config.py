@@ -60,6 +60,7 @@ from lictor.adapters.config.profiles.python_uv import (
     lictor_outcome,
     lictor_project_path,
     lictor_survey,
+    lictor_with_src,
 )
 from lictor.adapters.config.profiles.python_uv.lictor_project_path import (
     pytest_load_initial_conftests,
@@ -603,6 +604,7 @@ def test_profile_reaches_the_sources_only_after_the_tool_has_started() -> None:
         "lictor_coverage.py",
         "lictor_survey.py",
         "lictor_api.py",
+        "lictor_with_src.py",
     ]
     assert all(path.is_file() for path in spec.files)
     assert spec.files_dir_command.startswith("{env_dir}/bin/python -I -B -c")
@@ -1028,6 +1030,7 @@ def test_a_new_defence_reaches_a_project_initialized_before_it(tmp_path: Path) -
         lictor_coverage.__file__,
         lictor_survey.__file__,
         lictor_api.__file__,
+        lictor_with_src.__file__,
     ):
         (profiles / "python_uv" / Path(plugin).name).write_text("", encoding="utf-8")
 

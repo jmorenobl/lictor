@@ -114,3 +114,12 @@ def driver_controls_note(control_ids: Sequence[str]) -> str:
         'el control, o acceptance.driver_hints; o escribe "driver": false en ese control de '
         "lictor.json, y el commit del driver dejará de pasarlo antes del sello."
     )
+
+
+def not_measured_yet(control_ids: Sequence[str]) -> str:
+    """What `doctor` tells of a coverage control with a minimum before the project has code."""
+    names = ", ".join(f"'{cid}'" for cid in control_ids)
+    return (
+        f"{names} no midió nada: el proyecto aún no tiene código que medir. No bloquea hasta "
+        "que lo haya; desde el primer verde tendrá que llegar a su mínimo."
+    )
